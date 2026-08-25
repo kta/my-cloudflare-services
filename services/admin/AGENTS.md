@@ -11,7 +11,7 @@ adminは運営コンソールであり、次の唯一の源泉である。
 - login、access token、refresh token rotation/revocation、rate limit
 - domain serviceへのorganization同期と日次reconciliation
 
-React SPAとHono APIを1 Workerで配信し、admin専用D1と `AUTH_RL` KVを所有する。`EXAMPLE_SERVICE` と `NOTIFIER` は外向きservice bindingであり、他domain DBを直接読まない。
+React SPAとHono APIを1 Workerで配信し、admin専用D1と `AUTH_RL` KVを所有する。Cloudflare には admin だけをデプロイし、他 Worker への service binding は持たない。
 
 ## 構成と入口
 

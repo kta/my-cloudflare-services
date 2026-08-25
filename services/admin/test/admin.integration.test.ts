@@ -2,7 +2,6 @@ import { env, SELF } from 'cloudflare:test'
 import { drizzle } from 'drizzle-orm/d1'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ROTATION_GRACE_SECONDS, refresh as refreshSvc } from '../src/worker/auth/service'
-import worker from '../src/worker/index'
 
 const BASE = 'https://admin.test'
 const JSON_HEADERS = { 'content-type': 'application/json' }
@@ -152,19 +151,12 @@ describe('admin API auth gate (default-deny + operator)', () => {
 })
 
 describe('organizations (operator-protected)', () => {
-  it('creates an org, persists it, and syncs to example_service', async () => {
-    const fetchSpy = vi
-      .spyOn(env.EXAMPLE_SERVICE, 'fetch')
-      .mockResolvedValue(new Response('{}', { status: 200 }) as never)
+  it('creates an org and persists it without calling another Worker', async () => {
     const token = await adminToken()
     const org = await createOrg(token, 'Acme')
     expect(org.name).toBe('Acme')
     expect(org.plan).toBe('free')
-    expect(fetchSpy).toHaveBeenCalledTimes(1)
-    const arg = fetchSpy.mock.calls[0]?.[0]
-    expect(String(typeof arg === 'string' ? arg : (arg as Request).url)).toContain(
-      '/api/internal/organizations',
-    )
+    expect(org).not.toHaveProperty('synced')
 
     const list = await SELF.fetch(`${BASE}/api/organizations`, {
       headers: { authorization: `Bearer ${token}` },
@@ -179,19 +171,7 @@ describe('organizations (operator-protected)', () => {
     expect(res.status).toBe(400)
   })
 
-  it('still returns 201 when the sync fails (best-effort)', async () => {
-    vi.spyOn(env.EXAMPLE_SERVICE, 'fetch').mockResolvedValue(
-      new Response('err', { status: 500 }) as never,
-    )
-    vi.spyOn(console, 'error').mockImplementation(() => {})
-    const org = await createOrg(await adminToken(), 'BestEffort')
-    expect(org.name).toBe('BestEffort')
-  })
-
-  it('DELETE disables the org (audit row kept) and re-syncs', async () => {
-    const spy = vi
-      .spyOn(env.EXAMPLE_SERVICE, 'fetch')
-      .mockResolvedValue(new Response('{}', { status: 200 }) as never)
+  it('DELETE disables the org and returns no sync result', async () => {
     const token = await adminToken()
     const org = await createOrg(token, 'ToDelete')
     const res = await SELF.fetch(`${BASE}/api/organizations/${org.id}`, {
@@ -199,9 +179,7 @@ describe('organizations (operator-protected)', () => {
       headers: { authorization: `Bearer ${token}` },
     })
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ id: org.id, isDisabled: true, synced: true })
-    // create + delete → 2 sync upserts
-    expect(spy).toHaveBeenCalledTimes(2)
+    expect(await res.json()).toEqual({ id: org.id, isDisabled: true })
     // org は無効化されて一覧に残る(監査のため物理削除しない)
     const list = await SELF.fetch(`${BASE}/api/organizations`, {
       headers: { authorization: `Bearer ${token}` },
@@ -210,7 +188,7 @@ describe('organizations (operator-protected)', () => {
     expect(rows.find((r) => r.id === org.id)?.isDisabled).toBe(true)
   })
 
-  it('PATCH updates plan and re-syncs (single UPDATE..RETURNING)', async () => {
+  it('PATCH updates plan without a sync result (single UPDATE..RETURNING)', async () => {
     const token = await adminToken()
     const org = await createOrg(token, 'Planned')
     const res = await SELF.fetch(`${BASE}/api/organizations/${org.id}`, {
@@ -219,7 +197,9 @@ describe('organizations (operator-protected)', () => {
       body: JSON.stringify({ plan: 'contracted' }),
     })
     expect(res.status).toBe(200)
-    expect(((await res.json()) as { plan: string }).plan).toBe('contracted')
+    const body = (await res.json()) as { plan: string; synced?: unknown }
+    expect(body.plan).toBe('contracted')
+    expect(body).not.toHaveProperty('synced')
   })
 
   it('PATCH unknown org is 404', async () => {
@@ -234,12 +214,12 @@ describe('organizations (operator-protected)', () => {
 })
 
 describe('invitations', () => {
-  it('returns the acceptUrl when notify fails (link fallback), based on the request origin', async () => {
+  it('returns the manual acceptUrl without attempting email delivery', async () => {
     const token = await adminToken()
     const org = await createOrg(token, 'InviteCo')
     const { status, body } = await invite(token, org.id, 'staff@org.test')
     expect(status).toBe(201)
-    expect(body.emailed).toBe(false) // NOTIFIER stub → 404
+    expect(body.emailed).toBe(false)
     // INVITE_BASE_URL 未設定 → リクエスト origin から導出(localhost 固定ではない)
     expect(body.acceptUrl).toContain(`${BASE}/invite?token=`)
   })
@@ -456,50 +436,6 @@ describe('public auth cookie flow', () => {
   it('login for an unknown email is 401', async () => {
     const { status } = await publicLogin('ghost@none.test', 'x')
     expect(status).toBe(401)
-  })
-})
-
-describe('scheduled reconcile', () => {
-  it('detects orgs missing on the domain side, re-syncs, and notifies ops.sync_drift', async () => {
-    // example_service の同期行一覧は空 → admin の org が全てドリフト扱い
-    vi.spyOn(env.EXAMPLE_SERVICE, 'fetch').mockImplementation(((
-      input: string | Request,
-      init?: RequestInit,
-    ) => {
-      const method = init?.method ?? (typeof input === 'string' ? 'GET' : (input as Request).method)
-      const body = method.toUpperCase() === 'GET' ? '[]' : '{}'
-      return Promise.resolve(new Response(body, { status: 200 }))
-    }) as never)
-    const notifySpy = vi
-      .spyOn(env.NOTIFIER, 'fetch')
-      .mockResolvedValue(new Response('{}', { status: 200 }) as never)
-    vi.spyOn(console, 'warn').mockImplementation(() => {})
-
-    const token = await adminToken()
-    await createOrg(token, 'DriftOrg')
-    await worker.scheduled?.(
-      {} as never,
-      env as unknown as Parameters<NonNullable<typeof worker.scheduled>>[1],
-      {} as never,
-    )
-    const driftCall = notifySpy.mock.calls.find((c) =>
-      String((c[1] as RequestInit)?.body ?? '').includes('ops.sync_drift'),
-    )
-    expect(driftCall).toBeDefined()
-    // 冪等キーは日次スロット(再実行で連打しない)
-    expect(String((driftCall?.[1] as RequestInit)?.body ?? '')).toContain('ops.sync_drift:')
-  })
-
-  it('does not throw when the domain Worker is unreachable (scaffold not deployed)', async () => {
-    vi.spyOn(env.EXAMPLE_SERVICE, 'fetch').mockRejectedValue(new Error('no such worker') as never)
-    vi.spyOn(console, 'error').mockImplementation(() => {})
-    await expect(
-      worker.scheduled?.(
-        {} as never,
-        env as unknown as Parameters<NonNullable<typeof worker.scheduled>>[1],
-        {} as never,
-      ),
-    ).resolves.toBeUndefined()
   })
 })
 

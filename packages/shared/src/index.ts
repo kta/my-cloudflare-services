@@ -18,7 +18,7 @@ export {
   toJstDateString,
   toJstMonthKey,
 } from './dates'
-export { internalAuth, sendNotification } from './internal'
+export { internalAuth } from './internal'
 export {
   ACCESS_TTL_SECONDS,
   type AccessClaims,

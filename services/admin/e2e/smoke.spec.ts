@@ -33,10 +33,8 @@ test('未認証はログインへ誘導される', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'ログイン', exact: true })).toBeVisible()
 })
 
-test('組織作成 → notifier unavailable fallback → プラン切替 → 無効化', async ({
-  page,
-  request,
-}) => {
+// @e2e-covers AC-ADMIN-01 AC-ADMIN-02 AC-ADMIN-03
+test('組織作成 → 手動招待リンク → プラン切替 → 無効化', async ({ page, request }) => {
   const operatorOrgId = unique('operator-e2e')
   const token = await mintAdminToken(request, operatorOrgId)
   await signIn(page, token)
@@ -54,7 +52,7 @@ test('組織作成 → notifier unavailable fallback → プラン切替 → 無
   const row = page.locator('li', { hasText: name })
   await expect(row).toBeVisible()
 
-  // notifier 未到達でも招待作成自体は 201。手動共有用の acceptUrl をダイアログで返す。
+  // 招待は常に手動共有用の acceptUrl をダイアログで返す。
   await row.getByRole('button', { name: '招待' }).click()
   const inviteDialog = page.getByRole('dialog', { name: `担当者を招待 — ${name}` })
   const invitee = `${unique('staff')}@example.test`
@@ -72,7 +70,7 @@ test('組織作成 → notifier unavailable fallback → プラン切替 → 無
   expect(invitation.emailed).toBe(false)
   expect(invitation.acceptUrl).toMatch(/^http:\/\/localhost:4174\/invite\?token=/)
   await expect(inviteDialog.getByRole('alert')).toContainText(
-    'メール送信に失敗しました。以下のリンクを手動で共有してください',
+    '以下のリンクを手動で共有してください',
   )
   await expect(inviteDialog.getByText(invitation.acceptUrl ?? '', { exact: true })).toBeVisible()
   await page.keyboard.press('Escape')

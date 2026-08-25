@@ -1,0 +1,30 @@
+- ステータス: Approved
+
+# 眼鏡予約モックの移植
+
+## WHAT / WHY
+
+- US-GLASSES-01: 眼鏡店スタッフは、電話中に顧客を照会し予約候補を選び、予約を確定できる。
+- US-GLASSES-02: 眼鏡店スタッフは、予約台帳で予約の確認、変更、取消を試せる。
+- AC-GLASSES-01: Given 初期ホーム When 新規予約を開き既存顧客・日時・用件・候補を選んで確定 Then 予約一覧に確定通知とその予約が表示される。
+- AC-GLASSES-02: Given 予約台帳の予約 When 詳細を開き変更を保存して取消 Then 変更通知と取消通知が表示され、予約は台帳から除かれる。
+- AC-GLASSES-03: Given 電話予約入力 When 既存電話番号の一部を入力 Then 顧客候補が表示され、選ぶと氏名と電話番号が入力される。
+- AC-GLASSES-04: Given 顧客カルテ、予約一覧、ダッシュボード When ナビゲーションまたはメニューを操作 Then 対応する画面に遷移し、タブ・絞り込み・一覧遷移が使える。
+
+スコープ外: D1、Hono API、認証、admin同期、通知、Terraform、永続化。
+
+## HOW
+
+- `services/glasses_reservation/` にReact + Vite + Cloudflare Vite pluginによる静的SPAを追加する。
+- 元モックの画面構造・文言・操作をReactコンポーネントとブラウザ内状態へ移植する。
+- API契約、Drizzleスキーマ、Worker routeは追加しない。Worker entryはアセット配信用の最小実装にする。
+- UI unit testとE2Eをテスト先行で移植し、元モックの主要フロー、レスポンシブ表示、アクセシビリティを固定する。
+- 却下: 単一HTMLをそのまま配置（モノレポのReact構成と検証基盤に合わない）。
+- 却下: 通常サービス雛形のD1/APIを追加（モックのままという要件を超える）。
+
+## TASKS
+
+- [ ] T-001: 静的SPA用のサービス設定、最小Worker、テスト設定を追加する。
+- [ ] T-002: 主要ユーザーフローの失敗するReact unit testとPlaywright E2Eを追加する。
+- [ ] T-003: ホーム、電話予約、台帳、一覧、カルテ、ダッシュボードを移植する。
+- [ ] T-004: レスポンシブ・フォーカス・reduced-motionを検証し、品質ゲートを実行する。

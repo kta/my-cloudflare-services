@@ -14,7 +14,7 @@ fail() {
 [[ "$(readlink CLAUDE.md)" == "AGENTS.md" ]] || fail "CLAUDE.md must point to AGENTS.md"
 [[ -r CLAUDE.md ]] || fail "CLAUDE.md link is broken"
 
-for service in admin example_service notifier ops; do
+for service in admin example_service; do
   agents="services/$service/AGENTS.md"
   claude="services/$service/CLAUDE.md"
   [[ -f "$agents" && ! -L "$agents" ]] || fail "$agents must be the canonical regular file"

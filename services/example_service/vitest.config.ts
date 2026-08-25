@@ -18,9 +18,6 @@ export default defineConfig({
           JWT_SECRET: 'dev-jwt-secret-change-me',
           AUTH_DEV_GRANT: 'true',
         },
-        // Stub the notifier binding so the isolate starts; the create test spies
-        // on env.NOTIFIER.fetch to assert the notification call.
-        serviceBindings: { NOTIFIER: () => new Response('{}', { status: 200 }) },
       },
     }),
   ],
