@@ -58,7 +58,7 @@ select:focus-visible {
   );
 }
 .app-header.home-context {
-  background: var(--color-glass-green-900);
+  background: var(--color-glass-home-canvas);
 }
 .brand-mark {
   position: relative;
@@ -341,8 +341,9 @@ a {
   min-height: 68px;
   padding: 0 30px;
   gap: 28px;
-  position: relative;
-  z-index: 20;
+  position: sticky;
+  top: 0;
+  z-index: 40;
 }
 .brand {
   display: inline-flex;
@@ -1641,47 +1642,53 @@ a {
 /* High-visibility call recording panel and step-by-step booking hierarchy. */
 .recording-panel {
   position: fixed;
+  right: 24px;
+  bottom: 24px;
   z-index: 35;
   display: flex;
   align-items: center;
-  gap: 30px;
-  width: min(570px, calc(100vw - 64px));
-  min-height: 140px;
-  padding: 22px 26px;
+  gap: 8px;
+  width: min(240px, calc(100vw - 32px));
+  min-height: 60px;
+  padding: 8px 10px;
   border: 1px solid color-mix(in srgb, var(--color-paper) 16%, transparent);
   border-radius: var(--radius-ctl);
   background: var(--color-glass-recording-bg);
   color: var(--color-paper);
   box-shadow: 0 10px 28px color-mix(in srgb, var(--color-pine-deep) 24%, transparent);
+  pointer-events: none;
+}
+.booking-form {
+  padding-bottom: 100px;
 }
 .recording-copy {
-  min-width: 190px;
+  min-width: 90px;
 }
 .recording-title {
   display: flex;
   align-items: center;
-  gap: 11px;
+  gap: 6px;
   white-space: nowrap;
 }
 .recording-title strong {
   color: var(--color-paper);
-  font-size: 22px;
+  font-size: 14px;
   letter-spacing: 0.03em;
 }
 .recording-dot {
-  width: 14px;
-  height: 14px;
+  width: 8px;
+  height: 8px;
   flex: 0 0 auto;
   border-radius: var(--radius-circle);
   background: var(--color-glass-recording-dot);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-glass-recording-dot) 16%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-glass-recording-dot) 16%, transparent);
   animation: recording-dot-pulse 1.35s ease-in-out infinite;
 }
 .recording-elapsed {
   display: block;
-  margin-top: 8px;
+  margin-top: 2px;
   color: var(--color-glass-recording-muted);
-  font-size: 26px;
+  font-size: 15px;
   font-variant-numeric: tabular-nums;
   font-weight: 800;
   letter-spacing: 0.08em;
@@ -1691,14 +1698,14 @@ a {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  width: 130px;
-  height: 62px;
+  gap: 2px;
+  width: 52px;
+  height: 28px;
 }
 .recording-waveform .wave-bar {
   display: block;
-  width: 7px;
-  height: 56px;
+  width: 4px;
+  height: 24px;
   border-radius: var(--radius-ctl);
   background: var(--color-glass-recording-wave);
   transform: scaleY(0.28);
@@ -1731,8 +1738,8 @@ a {
   --wave-delay: -0.52s;
 }
 .recording-stop {
-  width: 52px;
-  height: 52px;
+  width: 32px;
+  height: 32px;
   flex: 0 0 auto;
   border: 1px solid color-mix(in srgb, var(--color-paper) 35%, transparent);
   border-radius: var(--radius-circle);
@@ -1816,37 +1823,39 @@ a {
 }
 @media (max-width: 640px) {
   .booking-recording-flow {
-    margin-bottom: 20px;
+    margin-bottom: 0;
   }
   .recording-panel {
-    position: static;
-    width: 100%;
-    min-height: 112px;
-    gap: 12px;
-    padding: 16px;
+    position: fixed;
+    right: 16px;
+    bottom: 16px;
+    width: min(240px, calc(100vw - 32px));
+    min-height: 60px;
+    gap: 6px;
+    padding: 8px 10px;
   }
   .recording-copy {
     min-width: 0;
     flex: 1 1 auto;
   }
   .recording-title strong {
-    font-size: 18px;
+    font-size: 13px;
   }
   .recording-elapsed {
-    font-size: 24px;
+    font-size: 15px;
   }
   .recording-waveform {
-    width: 82px;
-    height: 48px;
-    gap: 4px;
+    width: 48px;
+    height: 26px;
+    gap: 2px;
   }
   .recording-waveform .wave-bar {
-    width: 6px;
-    height: 42px;
+    width: 3px;
+    height: 22px;
   }
   .recording-stop {
-    width: 44px;
-    height: 44px;
+    width: 30px;
+    height: 30px;
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -1861,7 +1870,7 @@ a {
   min-height: calc(100dvh - 68px);
   padding: 1.7rem 2rem 2rem;
   color: var(--color-surface);
-  background: var(--color-glass-green-900);
+  background: var(--color-glass-home-canvas);
 }
 .home-inner {
   width: 100%;
@@ -2091,7 +2100,7 @@ a {
   min-height: calc(100dvh - 68px);
   padding: 0 32px 18px;
   color: var(--color-paper);
-  background: var(--color-glass-green-900);
+  background: var(--color-glass-home-canvas);
 }
 .home-inner {
   min-height: calc(100dvh - 86px);

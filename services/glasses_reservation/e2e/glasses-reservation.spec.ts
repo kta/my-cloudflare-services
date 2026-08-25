@@ -26,7 +26,7 @@ test('source parity: all views retain the source landmarks and mobile reception 
     await page.goto(`/?view=${view}`)
     expect((await page.locator('.app-header').boundingBox())?.height).toBe(68)
     if (view === 'home') {
-      await expect(page.locator('.app-header')).toHaveCSS('background-color', 'rgb(35, 86, 38)')
+      await expect(page.locator('.app-header')).toHaveCSS('background-color', 'rgb(23, 107, 91)')
       expect((await page.locator('.home-inner').boundingBox())?.width).toBeLessThanOrEqual(900)
     } else {
       await expect(page.locator('.app-header')).toHaveCSS('background-image', /linear-gradient/)
@@ -98,47 +98,54 @@ test('source parity: booking has six purposes, three staff modes, three side car
   await expect(page.locator('.recording-widget')).toBeVisible()
 })
 
-test('bookingの録音widgetと段階入力はdesktop/mobileで遮蔽せず読みやすい', async ({ page }) => {
+test('bookingの録音widgetはdesktop/mobileで右下に固定されコンパクトに表示される', async ({
+  page,
+}) => {
   await page.setViewportSize({ width: 1440, height: 1024 })
   await page.goto('/?view=booking')
   const widget = page.locator('.recording-widget')
-  expect((await widget.boundingBox())?.width).toBeGreaterThanOrEqual(560)
-  expect((await widget.boundingBox())?.height).toBeGreaterThanOrEqual(130)
+  const desktopBox = await widget.boundingBox()
+  if (!desktopBox) throw new Error('desktop recording geometry missing')
+  expect(desktopBox.width).toBeLessThanOrEqual(240)
+  expect(desktopBox.height).toBeLessThanOrEqual(60)
+  expect(1440 - (desktopBox.x + desktopBox.width)).toBeCloseTo(24, 0)
+  expect(1024 - (desktopBox.y + desktopBox.height)).toBeCloseTo(24, 0)
+  await expect(widget).toHaveCSS('position', 'fixed')
   await expect(widget).toHaveCSS('background-color', 'rgb(35, 86, 38)')
-  await expect(widget.locator('.recording-title strong')).toHaveCSS('font-size', '22px')
-  await expect(widget.locator('.recording-elapsed')).toHaveCSS('font-size', '26px')
+  await expect(widget.locator('.recording-title strong')).toHaveCSS('font-size', '14px')
+  await expect(widget.locator('.recording-elapsed')).toHaveCSS('font-size', '15px')
   await expect(widget.locator('.recording-dot')).toHaveCSS('background-color', 'rgb(237, 106, 96)')
-  await expect(widget.locator('.wave-bar').first()).toHaveCSS('width', '7px')
-  await expect(widget.locator('.recording-toggle')).toHaveCSS('width', '52px')
-  await expect(widget.locator('.recording-toggle')).toHaveCSS('height', '52px')
-  await expect(page.locator('.form-question').first()).toHaveCSS('font-size', '17px')
-  await expect(page.locator('.field-label').first()).toHaveCSS('font-size', '14px')
-  await expect(page.locator('.booking-input').first()).toHaveCSS('font-size', '14px')
+  await expect(widget.locator('.recording-toggle')).toHaveCSS('width', '32px')
+  await expect(widget.locator('.recording-toggle')).toHaveCSS('height', '32px')
+  await expect(widget).toHaveCSS('pointer-events', 'none')
+  await expect(page.locator('.booking-form')).toHaveCSS('padding-bottom', '100px')
 
   await page.setViewportSize({ width: 600, height: 450 })
   await page.goto('/?view=booking')
   const mobileWidget = page.locator('.recording-widget')
-  const box = await mobileWidget.boundingBox()
-  expect(box?.x).toBeGreaterThanOrEqual(0)
-  expect(box?.y).toBeGreaterThanOrEqual(0)
-  expect((box?.x ?? 0) + (box?.width ?? 0)).toBeLessThanOrEqual(600)
-  expect((box?.y ?? 0) + (box?.height ?? 0)).toBeLessThanOrEqual(450)
+  const mobileBox = await mobileWidget.boundingBox()
+  if (!mobileBox) throw new Error('mobile recording geometry missing')
+  expect(mobileBox.x).toBeGreaterThanOrEqual(0)
+  expect(mobileBox.x + mobileBox.width).toBeLessThanOrEqual(600)
+  expect(mobileBox.y + mobileBox.height).toBeLessThanOrEqual(450)
+  expect(600 - (mobileBox.x + mobileBox.width)).toBeCloseTo(16, 0)
+  expect(450 - (mobileBox.y + mobileBox.height)).toBeCloseTo(16, 0)
+  expect(mobileBox.width).toBeLessThanOrEqual(568)
+  await expect(mobileWidget).toHaveCSS('position', 'fixed')
   await expect(mobileWidget.getByText('通話を記録中')).toBeVisible()
   await expect(mobileWidget.getByText('00:00')).toBeVisible()
   await expect(mobileWidget.locator('.recording-toggle')).toBeVisible()
-  const mobileWidgetBox = await mobileWidget.boundingBox()
-  const firstQuestionBox = await page.locator('.form-question').first().boundingBox()
-  const dateInputBox = await page.getByLabel('日付').boundingBox()
-  if (!mobileWidgetBox || !firstQuestionBox || !dateInputBox)
-    throw new Error('booking geometry missing')
-  expect(
-    mobileWidgetBox.y + mobileWidgetBox.height <= firstQuestionBox.y ||
-      firstQuestionBox.y + firstQuestionBox.height <= mobileWidgetBox.y,
-  ).toBeTruthy()
-  expect(
-    mobileWidgetBox.y + mobileWidgetBox.height <= dateInputBox.y ||
-      dateInputBox.y + dateInputBox.height <= mobileWidgetBox.y,
-  ).toBeTruthy()
+})
+
+test('全viewのヘッダーはスクロール後もviewport上端にstickyする', async ({ page }) => {
+  await page.setViewportSize({ width: 600, height: 450 })
+  await page.goto('/?view=booking')
+  const header = page.locator('.app-header')
+  await expect(header).toHaveCSS('position', 'sticky')
+  await expect(header).toHaveCSS('top', '0px')
+  await expect(header).toHaveCSS('z-index', '40')
+  await page.evaluate('window.scrollTo(0, document.body.scrollHeight)')
+  expect((await header.boundingBox())?.y).toBe(0)
 })
 
 test('候補枠は手順5と手順6の間にあり、クリックで選択内容を確認できる', async ({ page }) => {
@@ -363,7 +370,11 @@ test('メニューから顧客カルテとダッシュボードへ遷移でき�
 test('ホームと予約入力は600x450で操作でき、reduced-motionを尊重する', async ({ page }) => {
   await page.setViewportSize({ width: 600, height: 450 })
   await page.goto('/')
-  await expect(page.locator('.home-page')).toHaveCSS('background-color', 'rgb(35, 86, 38)')
+  await expect(page.locator('.home-page')).toHaveCSS('background-color', 'rgb(23, 107, 91)')
+  await expect(page.locator('.app-header.home-context')).toHaveCSS(
+    'background-color',
+    'rgb(23, 107, 91)',
+  )
   for (const name of ['新規予約', '予約変更', '受付履歴'])
     await expect(page.getByRole('button', { name })).toBeInViewport()
   await expect(page.locator('.home-date-strip')).toBeInViewport()
@@ -372,6 +383,22 @@ test('ホームと予約入力は600x450で操作でき、reduced-motionを尊�
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await expect(page.locator('.recording-widget')).toBeVisible()
   await expect(page.locator('.recording-widget')).toHaveCSS('animation-name', 'none')
+})
+
+test('ホームの明るい黄緑配色はdesktopでもhome限定で、予約画面は従来色を保つ', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/')
+  await expect(page.locator('.home-page')).toHaveCSS('background-color', 'rgb(23, 107, 91)')
+  await expect(page.locator('.app-header.home-context')).toHaveCSS(
+    'background-color',
+    'rgb(23, 107, 91)',
+  )
+  await page.goto('/?view=booking')
+  await expect(page.locator('.page-area')).toHaveCSS('background-color', 'rgb(246, 248, 244)')
+  await expect(page.locator('.app-header:not(.home-context)')).toHaveCSS(
+    'background-image',
+    /linear-gradient/,
+  )
 })
 
 test('ホームは元モックのdesktop/mobile構造とテーマを保つ', async ({ page }) => {
@@ -386,7 +413,7 @@ test('ホームは元モックのdesktop/mobile構造とテーマを保つ', asy
   expect(desktopActions?.y).toBeLessThan(desktopDate?.y ?? Number.POSITIVE_INFINITY)
   expect(desktopDate?.y).toBeGreaterThan(640)
   expect(desktopDate?.y).toBeLessThan(670)
-  await expect(page.locator('.app-header')).toHaveCSS('background-color', 'rgb(35, 86, 38)')
+  await expect(page.locator('.app-header')).toHaveCSS('background-color', 'rgb(23, 107, 91)')
 
   await page.goto('/?view=ledger')
   await expect(page.locator('.app-header')).toHaveCSS('background-image', /linear-gradient/)
@@ -476,16 +503,11 @@ test('ロゴ、menu全行先、予約中止が機能する', async ({ page }) =>
   await expect(page.getByRole('button', { name: '新規予約' })).toBeVisible()
 })
 
-test('録音widgetはbooking限定で6本波形とpause/resumeを持つ', async ({ page }) => {
+test('録音widgetはbooking限定で6本波形の非操作状態バッジとして表示する', async ({ page }) => {
   await page.goto('/?view=booking')
   const widget = page.locator('.recording-widget')
   await expect(widget.locator('.wave-bar')).toHaveCount(6)
-  await page.getByRole('button', { name: '録音を一時停止' }).click()
-  await expect(page.getByRole('button', { name: '録音を再開' })).toHaveAttribute(
-    'aria-pressed',
-    'true',
-  )
-  await page.getByRole('button', { name: '録音を再開' }).click()
+  await expect(widget).toHaveCSS('pointer-events', 'none')
   await page.setViewportSize({ width: 600, height: 450 })
   await expect(widget).toHaveCSS('right', '16px')
   await page.goto('/?view=list')

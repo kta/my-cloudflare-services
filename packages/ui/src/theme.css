@@ -41,6 +41,7 @@
   /* Glasses reservation source-parity roles: translated from the static
      reception mock so service CSS never needs raw palette values. */
   --color-glass-canvas: #f6f8f4;
+  --color-glass-home-canvas: #176b5b;
   --color-glass-paper: #fffefd;
   --color-glass-green-050: #f4f9f1;
   --color-glass-green-100: #e9f3e5;
