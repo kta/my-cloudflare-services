@@ -1,13 +1,12 @@
+@import "tailwindcss";
+@import "@app/ui/theme.css";
+
 :root {
-  --color-paper: var(--color-surface);
   --color-canvas: var(--color-paper);
   --color-brand: var(--color-pine-deep);
   --color-accent: var(--color-pine);
-  --color-ink: var(--color-ink);
   --color-muted: var(--color-ink-muted);
-  --color-line: var(--color-line);
   --font-body: var(--font-sans);
-  --radius-ctl: var(--radius-ctl);
 }
 * {
   box-sizing: border-box;
@@ -51,7 +50,36 @@ select:focus-visible {
   gap: 1.5rem;
   padding: 0 2rem;
   color: var(--color-paper);
-  background: var(--color-brand);
+  background: linear-gradient(100deg, var(--color-pine-deep), var(--color-pine));
+}
+.brand-mark {
+  position: relative;
+  display: inline-block;
+  width: 2.2rem;
+  height: 1.35rem;
+}
+.brand-mark::before,
+.brand-mark::after {
+  content: "";
+  position: absolute;
+  top: 0.2rem;
+  width: 0.95rem;
+  height: 0.7rem;
+  border: 2px solid currentColor;
+  border-radius: 0.7rem 0.7rem 0.55rem 0.55rem;
+}
+.brand-mark::before {
+  left: 0;
+}
+.brand-mark::after {
+  right: 0;
+}
+.brand-mark span {
+  position: absolute;
+  top: 0.55rem;
+  left: 0.85rem;
+  width: 0.5rem;
+  border-top: 2px solid currentColor;
 }
 .brand {
   color: inherit;
@@ -90,6 +118,9 @@ select:focus-visible {
   flex: 1;
   padding: 2rem;
 }
+.page-area:has(.home-page) {
+  padding: 0;
+}
 .home-page {
   overflow: hidden;
   min-height: calc(100dvh - 68px);
@@ -106,6 +137,16 @@ select:focus-visible {
 .home-actions button {
   min-height: 75px;
   text-align: left;
+}
+.home-action {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.home-action-icon {
+  width: 2rem;
+  text-align: center;
+  font-size: 1.5rem;
 }
 .primary {
   background: var(--color-accent);
@@ -267,5 +308,229 @@ td {
   *::after {
     animation-duration: 0.01ms;
     transition-duration: 0.01ms;
+  }
+}
+
+/* Home layout follows the original reception mock while using shared semantic tokens. */
+.home-page {
+  min-height: calc(100dvh - 68px);
+  padding: 1.7rem 2rem 2rem;
+  color: var(--color-surface);
+  background: var(--color-pine-deep);
+}
+.home-inner {
+  width: 100%;
+  max-width: 900px;
+  min-height: calc(100dvh - 68px);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+}
+.home-heading {
+  display: none;
+}
+.home-eyebrow {
+  margin: 0 0 0.45rem;
+  color: var(--color-paper);
+  font-size: 0.7rem;
+  letter-spacing: 0.12em;
+}
+.home-heading h1 {
+  margin: 0;
+  font-size: clamp(1.7rem, 3vw, 2.5rem);
+  letter-spacing: -0.04em;
+}
+.home-subtitle {
+  margin: 0.55rem 0 0;
+  color: var(--color-paper);
+}
+.home-agent {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid var(--color-pine);
+  border-radius: var(--radius-ctl);
+  color: var(--color-paper);
+}
+.home-agent small {
+  color: var(--color-paper);
+}
+.home-avatar {
+  display: grid;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 50%;
+  background: var(--color-pine);
+  color: var(--color-surface);
+}
+.home-date-strip {
+  order: 3;
+  width: 760px;
+  max-width: 100%;
+  display: grid;
+  grid-template-columns: 2rem repeat(5, minmax(0, 1fr)) 2rem 3rem;
+  gap: 0.4rem;
+  margin: 16.2rem 0 0;
+}
+.home-date-strip button {
+  min-height: 3.4rem;
+  padding: 0.35rem;
+  border-color: var(--color-pine);
+  color: var(--color-surface);
+  background: var(--color-pine);
+}
+.home-date-strip button:hover,
+.home-date-strip button:focus-visible {
+  background: var(--color-surface);
+  color: var(--color-pine-deep);
+}
+.home-date-strip strong {
+  margin-top: 0.1rem;
+  font-size: 1.1rem;
+}
+.home-actions {
+  order: 2;
+  width: 760px;
+  max-width: 100%;
+  height: 300px;
+  display: grid;
+  grid-template-columns: 360px 360px;
+  grid-template-rows: 128px 44px 128px;
+  gap: 0 40px;
+}
+.home-action {
+  min-height: 0;
+  width: 100%;
+  padding: 1rem 1.2rem;
+  border: 1px solid var(--color-surface);
+  border-radius: var(--radius-ctl);
+  text-align: left;
+  color: var(--color-surface);
+  background: transparent;
+}
+.home-action.primary {
+  grid-column: 1;
+  background: var(--color-surface);
+  color: var(--color-pine-deep);
+}
+.home-action.primary:nth-child(1) {
+  grid-row: 1;
+}
+.home-action:nth-child(2) {
+  grid-column: 1;
+  grid-row: 3;
+  background: var(--color-surface);
+  color: var(--color-pine-deep);
+}
+.home-action.utility {
+  grid-column: 2;
+  display: flex;
+  align-items: center;
+  border-width: 0 0 1px;
+  border-radius: 0;
+  border-color: var(--color-pine);
+}
+.home-action.utility:nth-child(3) {
+  grid-row: 1;
+}
+.home-action.utility:nth-child(4) {
+  grid-row: 2;
+}
+.home-action.utility:nth-child(5) {
+  grid-row: 3;
+}
+.home-action-icon {
+  flex: 0 0 2.3rem;
+  width: 2.3rem;
+  color: currentColor;
+}
+.home-action-copy {
+  display: grid;
+  gap: 0.2rem;
+}
+.home-action-copy strong {
+  font-size: 1.1rem;
+}
+.home-action-copy small {
+  color: var(--color-ink-muted);
+}
+.home-action.utility .home-action-copy small {
+  color: var(--color-paper);
+}
+.home-action-arrow {
+  margin-left: auto;
+  font-size: 1.35rem;
+}
+.home-foot {
+  display: none;
+}
+.home-foot strong {
+  color: var(--color-surface);
+  font-size: 1.1rem;
+}
+.home-foot-links {
+  margin-left: auto;
+}
+
+@media (max-width: 640px) {
+  .app-header {
+    min-height: 56px;
+    padding: 0 1rem;
+    gap: 0.5rem;
+  }
+  .header-title,
+  .header-tools > button:first-child,
+  .header-tool {
+    display: none;
+  }
+  .home-page {
+    min-height: calc(100dvh - 56px);
+    padding: 1rem;
+  }
+  .home-inner {
+    min-height: calc(100dvh - 88px);
+  }
+  .home-heading,
+  .home-foot {
+    display: none;
+  }
+  .home-actions {
+    order: 1;
+    width: 100%;
+    height: 17rem;
+    grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+    grid-template-rows: 116px 24px 116px;
+    gap: 0.4rem 0.65rem;
+  }
+  .home-action {
+    padding: 0.65rem;
+  }
+  .home-action-copy strong {
+    font-size: 0.9rem;
+  }
+  .home-action-copy small {
+    display: none;
+  }
+  .home-action-icon {
+    flex-basis: 1.6rem;
+    width: 1.6rem;
+    font-size: 1.2rem;
+  }
+  .home-date-strip {
+    order: 2;
+    width: 100%;
+    grid-template-columns: 1.6rem repeat(5, minmax(0, 1fr)) 1.6rem 2.4rem;
+    gap: 0.2rem;
+    margin-top: 0.75rem;
+  }
+  .home-date-strip button {
+    min-height: 3rem;
+    padding: 0.2rem;
+    font-size: 0.65rem;
+  }
+  .home-date-strip strong {
+    font-size: 0.95rem;
   }
 }

@@ -56,6 +56,7 @@ test('メニューから顧客カルテとダッシュボードへ遷移でき�
 test('ホームと予約入力は600x450で操作でき、reduced-motionを尊重する', async ({ page }) => {
   await page.setViewportSize({ width: 600, height: 450 })
   await page.goto('/')
+  await expect(page.locator('.home-page')).toHaveCSS('background-color', 'rgb(33, 64, 47)')
   for (const name of ['新規予約', '予約変更', '受付履歴'])
     await expect(page.getByRole('button', { name })).toBeInViewport()
   await expect(page.locator('.home-date-strip')).toBeInViewport()
@@ -64,6 +65,30 @@ test('ホームと予約入力は600x450で操作でき、reduced-motionを尊�
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await expect(page.locator('.recording-widget')).toBeVisible()
   await expect(page.locator('.recording-widget')).toHaveCSS('animation-name', 'none')
+})
+
+test('ホームは元モックのdesktop/mobile構造とテーマを保つ', async ({ page }) => {
+  await page.setViewportSize({ width: 1366, height: 768 })
+  await page.goto('/')
+  await expect(page.locator('.home-inner')).toHaveCSS('max-width', '900px')
+  await expect(page.locator('.home-heading')).toBeHidden()
+  await expect(page.locator('.home-foot')).toBeHidden()
+  await expect(page.locator('.home-action.primary')).toHaveCount(2)
+  const desktopDate = await page.locator('.home-date-strip').boundingBox()
+  const desktopActions = await page.locator('.home-actions').boundingBox()
+  expect(desktopActions?.y).toBeLessThan(desktopDate?.y ?? Number.POSITIVE_INFINITY)
+  expect(desktopDate?.y).toBeGreaterThan(640)
+  expect(desktopDate?.y).toBeLessThan(670)
+  await expect(page.locator('.app-header')).toHaveCSS('background-image', /linear-gradient/)
+
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.reload()
+  await expect(page.locator('.home-heading')).toBeHidden()
+  const mobileActions = await page.locator('.home-actions').boundingBox()
+  const mobileDate = await page.locator('.home-date-strip').boundingBox()
+  expect(mobileActions?.y).toBeLessThan(mobileDate?.y ?? Number.POSITIVE_INFINITY)
+  await expect(page.locator('.home-action.primary')).toHaveCount(2)
+  await expect(page.locator('.home-action.utility')).toHaveCount(3)
 })
 
 test('主要画面の移植classと候補選択状態を維持する', async ({ page }) => {
