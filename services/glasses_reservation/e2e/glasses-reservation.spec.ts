@@ -44,7 +44,8 @@ test('source parity: all views retain the source landmarks and mobile reception 
   await page.goto('/?view=booking')
   await expect(page.locator('.booking-grid')).toBeVisible()
   await expect(page.locator('.form-section')).toHaveCount(6)
-  await expect(page.locator('.booking-side .side-card')).toHaveCount(3)
+  await expect(page.locator('.booking-side .side-card')).toHaveCount(2)
+  await expect(page.locator('.booking-slot-section')).toBeVisible()
   await expect(page.locator('.recording-widget')).toBeVisible()
   await expect(page.locator('.wave-bar')).toHaveCount(6)
 })
@@ -95,6 +96,73 @@ test('source parity: booking has six purposes, three staff modes, three side car
   await expect(page.getByRole('button', { name: /指名なし/ })).toBeVisible()
   await expect(page.getByRole('button', { name: '別の担当者を希望' })).toBeVisible()
   await expect(page.locator('.recording-widget')).toBeVisible()
+})
+
+test('bookingの録音widgetと段階入力はdesktop/mobileで遮蔽せず読みやすい', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1024 })
+  await page.goto('/?view=booking')
+  const widget = page.locator('.recording-widget')
+  expect((await widget.boundingBox())?.width).toBeGreaterThanOrEqual(560)
+  expect((await widget.boundingBox())?.height).toBeGreaterThanOrEqual(130)
+  await expect(widget).toHaveCSS('background-color', 'rgb(35, 86, 38)')
+  await expect(widget.locator('.recording-title strong')).toHaveCSS('font-size', '22px')
+  await expect(widget.locator('.recording-elapsed')).toHaveCSS('font-size', '26px')
+  await expect(widget.locator('.recording-dot')).toHaveCSS('background-color', 'rgb(237, 106, 96)')
+  await expect(widget.locator('.wave-bar').first()).toHaveCSS('width', '7px')
+  await expect(widget.locator('.recording-toggle')).toHaveCSS('width', '52px')
+  await expect(widget.locator('.recording-toggle')).toHaveCSS('height', '52px')
+  await expect(page.locator('.form-question').first()).toHaveCSS('font-size', '17px')
+  await expect(page.locator('.field-label').first()).toHaveCSS('font-size', '14px')
+  await expect(page.locator('.booking-input').first()).toHaveCSS('font-size', '14px')
+
+  await page.setViewportSize({ width: 600, height: 450 })
+  await page.goto('/?view=booking')
+  const mobileWidget = page.locator('.recording-widget')
+  const box = await mobileWidget.boundingBox()
+  expect(box?.x).toBeGreaterThanOrEqual(0)
+  expect(box?.y).toBeGreaterThanOrEqual(0)
+  expect((box?.x ?? 0) + (box?.width ?? 0)).toBeLessThanOrEqual(600)
+  expect((box?.y ?? 0) + (box?.height ?? 0)).toBeLessThanOrEqual(450)
+  await expect(mobileWidget.getByText('通話を記録中')).toBeVisible()
+  await expect(mobileWidget.getByText('00:00')).toBeVisible()
+  await expect(mobileWidget.locator('.recording-toggle')).toBeVisible()
+  const mobileWidgetBox = await mobileWidget.boundingBox()
+  const firstQuestionBox = await page.locator('.form-question').first().boundingBox()
+  const dateInputBox = await page.getByLabel('日付').boundingBox()
+  if (!mobileWidgetBox || !firstQuestionBox || !dateInputBox)
+    throw new Error('booking geometry missing')
+  expect(
+    mobileWidgetBox.y + mobileWidgetBox.height <= firstQuestionBox.y ||
+      firstQuestionBox.y + firstQuestionBox.height <= mobileWidgetBox.y,
+  ).toBeTruthy()
+  expect(
+    mobileWidgetBox.y + mobileWidgetBox.height <= dateInputBox.y ||
+      dateInputBox.y + dateInputBox.height <= mobileWidgetBox.y,
+  ).toBeTruthy()
+})
+
+test('候補枠は手順5と手順6の間にあり、クリックで選択内容を確認できる', async ({ page }) => {
+  await page.goto('/?view=booking')
+  await page.getByLabel('日付').fill('2025-05-20')
+  await page.getByLabel('開始時間').selectOption('14:00')
+  await page.getByRole('button', { name: 'メガネの作製・ご相談' }).click()
+
+  const slotSection = page.locator('.booking-slot-section')
+  await expect(slotSection).toBeVisible()
+  const slotBox = await slotSection.boundingBox()
+  const fiveBox = await page
+    .getByRole('heading', { name: '担当者のご要望はありますか？' })
+    .boundingBox()
+  const sixBox = await page.getByRole('heading', { name: '内容を復唱・確認します' }).boundingBox()
+  if (!slotBox || !fiveBox || !sixBox) throw new Error('booking step geometry missing')
+  expect(slotBox.y).toBeGreaterThan(fiveBox.y)
+  expect(slotBox.y).toBeLessThan(sixBox.y)
+
+  const candidate = page.getByRole('button', { name: /14:00 〜 15:30/ })
+  await candidate.click()
+  await expect(candidate).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.locator('.slot-card.selected')).toContainText('14:00 〜 15:30')
+  await expect(page.locator('.form-section')).toHaveCount(6)
 })
 
 test('source parity: initial ledger data, customer history and dashboard visual data match the mock', async ({
@@ -344,7 +412,7 @@ test('主要画面の移植classと候補選択状態を維持する', async ({ 
   await page.getByRole('button', { name: '検眼・カウンセリング' }).click()
   await expect(page.locator('.slot-card')).toHaveCount(5)
   await page.getByRole('button', { name: '14:00 〜 15:30' }).click()
-  await expect(page.locator('.booking-side')).toContainText('14:00 〜 15:30')
+  await expect(page.locator('.booking-slot-section')).toContainText('14:00 〜 15:30')
   await page.goto('/?view=ledger')
   await expect(page.locator('.global-nav')).toBeVisible()
   await expect(page.locator('.grid-header')).toHaveCount(6)

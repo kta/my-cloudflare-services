@@ -34,6 +34,25 @@ describe('glasses reservation app', () => {
     expect(screen.getByRole('button', { name: '録音を一時停止' })).toBeVisible()
   })
 
+  it('録音widgetは視認性の高いパネル構造を持つ', () => {
+    render(<App initialView="booking" />)
+    const widget = screen.getByRole('complementary', { name: '通話録音状態' })
+    expect(widget).toHaveClass('recording-panel')
+    expect(screen.getByText('通話を記録中')).toBeVisible()
+    expect(screen.getByText('00:00')).toBeVisible()
+    expect(widget.querySelectorAll('.wave-bar')).toHaveLength(6)
+    expect(screen.getByRole('button', { name: '録音を一時停止' })).toHaveClass('recording-stop')
+  })
+
+  it('予約フォームは質問、必須表示、入力を読みやすい順で提示する', () => {
+    render(<App initialView="booking" />)
+    expect(screen.getByRole('heading', { name: 'お日にちはいつですか？' })).toHaveClass(
+      'form-question',
+    )
+    expect(screen.getAllByText('必須').length).toBeGreaterThanOrEqual(3)
+    expect(screen.getByLabelText('日付')).toHaveClass('booking-input')
+  })
+
   it('source parity: every desktop view exposes source page chrome and primary region', () => {
     const views = [
       ['home', '新規予約'],

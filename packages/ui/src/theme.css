@@ -57,6 +57,10 @@
   --color-glass-blue: #4c88bd;
   --color-glass-blue-light: #93b9d9;
   --color-glass-green-150: #d9e7cd;
+  --color-glass-recording-bg: #235626;
+  --color-glass-recording-dot: #ed6a60;
+  --color-glass-recording-wave: #9ed582;
+  --color-glass-recording-muted: #b8d0b3;
 
   /* --- Shape. Controls share one radius; anything larger must be earned. --- */
   --radius-ctl: 0.3125rem;

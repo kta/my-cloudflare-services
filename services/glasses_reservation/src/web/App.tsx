@@ -76,7 +76,6 @@ export function App({ initialView }: { initialView?: View } = {}) {
           )}
         </main>
       </div>
-      {state.view === 'booking' && <Recording paused={state.recordingPaused} dispatch={dispatch} />}
       {selected && !changeTarget && (
         <DetailDrawer
           reservation={selected}
@@ -222,12 +221,14 @@ function PageChrome({
   eyebrow,
   actions,
   notice,
+  beforeChildren,
   children,
 }: {
   label: string
   eyebrow: string
   actions?: ReactNode
   notice?: string
+  beforeChildren?: ReactNode
   children: ReactNode
 }) {
   return (
@@ -246,6 +247,7 @@ function PageChrome({
           <div className="page-actions">{actions}</div>
         </div>
         {notice && <div className="notice">{notice}</div>}
+        {beforeChildren}
         {children}
       </div>
     </>
@@ -593,7 +595,7 @@ function Booking({
         <label className="field">
           <span className="field-label">日付</span>
           <input
-            className="input"
+            className="input booking-input"
             type="date"
             aria-label="日付"
             value={state.draft.date}
@@ -610,7 +612,7 @@ function Booking({
         <label className="field">
           <span className="field-label">開始時間</span>
           <select
-            className="input"
+            className="input booking-input"
             aria-label="開始時間"
             value={state.draft.startTime}
             onChange={(e) =>
@@ -634,7 +636,7 @@ function Booking({
           <label className="field">
             <span className="field-label">お名前</span>
             <input
-              className="input"
+              className="input booking-input"
               aria-label="お名前"
               value={queryName}
               placeholder="例）佐藤 みどり様"
@@ -647,7 +649,7 @@ function Booking({
           <label className="field">
             <span className="field-label">電話番号</span>
             <input
-              className="input"
+              className="input booking-input"
               aria-label="電話番号"
               value={queryPhone}
               placeholder="例）090-1234-5678"
@@ -735,6 +737,7 @@ function Booking({
           ))}
         </div>
       </FormSection>
+      <BookingSlots state={state} dispatch={dispatch} canSlots={canSlots} />
       <FormSection number="6" title="内容を復唱・確認します">
         <div className={`confirmation-placeholder ${state.draftCustomer ? 'confirmed' : ''}`}>
           <div className="mic-icon">{state.draftCustomer ? '✓' : '♩'}</div>
@@ -784,6 +787,11 @@ function Booking({
       label="電話予約入力"
       eyebrow="CALL RESERVATION"
       notice={state.notice}
+      beforeChildren={
+        <div className="booking-recording-flow">
+          <Recording paused={state.recordingPaused} dispatch={dispatch} />
+        </div>
+      }
       actions={
         <>
           <button
@@ -802,7 +810,7 @@ function Booking({
     >
       <div className="booking-grid">
         {form}
-        <BookingSide state={state} dispatch={dispatch} canSlots={canSlots} />
+        <BookingSide state={state} dispatch={dispatch} />
       </div>
     </PageChrome>
   )
@@ -824,7 +832,7 @@ function FormSection({
     <section className="form-section">
       <div className="form-section-heading">
         <span className="number-badge">{number}</span>
-        <h3>{title}</h3>
+        <h3 className="form-question">{title}</h3>
         {required && <span className="required">必須</span>}
         {optional && <span className="optional">任意</span>}
       </div>
@@ -832,15 +840,7 @@ function FormSection({
     </section>
   )
 }
-function BookingSide({
-  state,
-  dispatch,
-  canSlots,
-}: {
-  state: State
-  dispatch: Send
-  canSlots: boolean
-}) {
+function BookingSide({ state, dispatch }: { state: State; dispatch: Send }) {
   const customer = state.draftCustomer
   return (
     <aside className="booking-side">
@@ -916,62 +916,75 @@ function BookingSide({
           </div>
         </dl>
       </section>
-      <section className="side-card">
-        <div className="side-card-header">
-          <h3 className="side-card-title">
-            予約可能な候補 <small>（5 件）</small>
-          </h3>
-          <button
-            className="btn small"
-            type="button"
-            onClick={() => dispatch({ type: 'setNotice', notice: '候補枠を更新しました' })}
-          >
-            ↻ 更新
-          </button>
-        </div>
-        {canSlots ? (
-          <div className="slot-list">
-            {slots.map((slot) => (
-              <button
-                className={`slot-card ${state.draft.selectedSlot === slot.time ? 'selected' : ''}`}
-                aria-label={slot.time}
-                aria-pressed={state.draft.selectedSlot === slot.time}
-                type="button"
-                key={slot.time}
-                onClick={() => dispatch({ type: 'selectSlot', slot: slot.time, staff: slot.staff })}
-              >
-                <span className="slot-radio">✓</span>
-                <span className="slot-main">
-                  <strong>
-                    {slot.time} <small>（{slot.duration}）</small>
-                  </strong>
-                  <small>
-                    {slot.room}　担当：{slot.staff}
-                  </small>
-                </span>
-                <span className="slot-status">空き</span>
-              </button>
-            ))}
-          </div>
-        ) : (
-          <div className="slot-empty">日付・時間・ご用件を選ぶと候補を表示します</div>
-        )}
-        <button
-          className="btn block small side-footer-btn"
-          type="button"
-          onClick={() => dispatch({ type: 'setNotice', notice: '他の時間帯を表示しています' })}
-        >
-          他の時間も見る　⌄
-        </button>
-      </section>
     </aside>
+  )
+}
+
+function BookingSlots({
+  state,
+  dispatch,
+  canSlots,
+}: {
+  state: State
+  dispatch: Send
+  canSlots: boolean
+}) {
+  return (
+    <section className="booking-slot-section" aria-label="予約可能な候補">
+      <div className="side-card-header">
+        <h3 className="side-card-title">
+          予約可能な候補 <small>（5 件）</small>
+        </h3>
+        <button
+          className="btn small"
+          type="button"
+          onClick={() => dispatch({ type: 'setNotice', notice: '候補枠を更新しました' })}
+        >
+          ↻ 更新
+        </button>
+      </div>
+      {canSlots ? (
+        <div className="slot-list">
+          {slots.map((slot) => (
+            <button
+              className={`slot-card ${state.draft.selectedSlot === slot.time ? 'selected' : ''}`}
+              aria-label={slot.time}
+              aria-pressed={state.draft.selectedSlot === slot.time}
+              type="button"
+              key={slot.time}
+              onClick={() => dispatch({ type: 'selectSlot', slot: slot.time, staff: slot.staff })}
+            >
+              <span className="slot-radio">✓</span>
+              <span className="slot-main">
+                <strong>
+                  {slot.time} <small>（{slot.duration}）</small>
+                </strong>
+                <small>
+                  {slot.room}　担当：{slot.staff}
+                </small>
+              </span>
+              <span className="slot-status">空き</span>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="slot-empty">日付・時間・ご用件を選ぶと候補を表示します</div>
+      )}
+      <button
+        className="btn block small side-footer-btn"
+        type="button"
+        onClick={() => dispatch({ type: 'setNotice', notice: '他の時間帯を表示しています' })}
+      >
+        他の時間も見る　⌄
+      </button>
+    </section>
   )
 }
 
 function Recording({ paused, dispatch }: { paused: boolean; dispatch: Send }) {
   return (
     <aside
-      className={`recording-widget ${paused ? 'is-paused' : ''}`}
+      className={`recording-widget recording-panel ${paused ? 'is-paused' : ''}`}
       aria-live="polite"
       aria-label="通話録音状態"
     >
@@ -988,7 +1001,7 @@ function Recording({ paused, dispatch }: { paused: boolean; dispatch: Send }) {
         ))}
       </div>
       <button
-        className="recording-toggle"
+        className="recording-toggle recording-stop"
         type="button"
         aria-label={paused ? '録音を再開' : '録音を一時停止'}
         aria-pressed={paused}
