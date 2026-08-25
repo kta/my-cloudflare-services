@@ -1,5 +1,15 @@
 export type View = 'home' | 'booking' | 'ledger' | 'list' | 'customer' | 'dashboard'
-export type Customer = { id: string; name: string; phone: string; gender: string; age: string }
+export type Customer = {
+  id: string
+  name: string
+  phone: string
+  gender: string
+  age: string
+  birthday: string
+  lastVisit: string
+  memberId: string
+  purpose: string
+}
 type Reservation = {
   id: string
   date: string
@@ -9,6 +19,7 @@ type Reservation = {
   staff: string
   room: string
   status: '確定' | '仮予約'
+  tone: 'green' | 'blue' | 'orange'
 }
 type DraftCustomer = { name: string; phone: string }
 type AppointmentDraft = {

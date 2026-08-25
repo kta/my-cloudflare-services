@@ -38,6 +38,36 @@
   --color-amber-deep: #8a6712; /* amber legible at small sizes (warning text on soft fills) */
   --color-danger: #a2372c;
 
+  /* Glasses reservation source-parity roles: translated from the static
+     reception mock so service CSS never needs raw palette values. */
+  --color-glass-canvas: #f6f8f4;
+  --color-glass-home-canvas: #176b5b;
+  --color-glass-paper: #fffefd;
+  --color-glass-green-050: #f4f9f1;
+  --color-glass-green-100: #e9f3e5;
+  --color-glass-green-600: #59a648;
+  --color-glass-green-500: #82ae6f;
+  --color-glass-green-700: #3f8a36;
+  --color-glass-green-800: #2f702e;
+  --color-glass-green-900: #235626;
+  --color-glass-green-source-mid: #347b2c;
+  --color-glass-green-source-end: #448b35;
+  --color-glass-line-strong: #d6ded3;
+  --color-glass-warm: #fff8eb;
+  --color-glass-warning: #c9822a;
+  --color-glass-blue: #4c88bd;
+  --color-glass-blue-light: #93b9d9;
+  --color-glass-green-150: #d9e7cd;
+  --color-glass-recording-bg: #235626;
+  --color-glass-recording-dot: #ed6a60;
+  --color-glass-recording-wave: #9ed582;
+  --color-glass-recording-muted: #b8d0b3;
+
   /* --- Shape. Controls share one radius; anything larger must be earned. --- */
   --radius-ctl: 0.3125rem;
+  --radius-none: 0;
+  --radius-full: 9999px;
+  --radius-circle: 50%;
+  --radius-pill: 9999px;
+  --radius-brand: 0.7rem 0.7rem 0.55rem 0.55rem;
 }

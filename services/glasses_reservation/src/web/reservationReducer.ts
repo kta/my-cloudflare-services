@@ -1,14 +1,38 @@
 import type { Customer, ReservationState, View } from './model'
 
 export const customers: Customer[] = [
-  { id: 'customer-sato', name: '佐藤 みどり', phone: '090-0000-0000', gender: '女性', age: '50代' },
-  { id: 'customer-tanaka', name: '田中 花子', phone: '080-1234-5678', gender: '女性', age: '40代' },
+  {
+    id: 'customer-sato',
+    name: '佐藤 みどり',
+    phone: '090-0000-0000',
+    gender: '女性',
+    age: '50代',
+    birthday: '1971/04/12',
+    lastVisit: '2024/12/15（日）',
+    memberId: '1000123',
+    purpose: 'メガネの作製（遠近両用）',
+  },
+  {
+    id: 'customer-tanaka',
+    name: '田中 花子',
+    phone: '080-1234-5678',
+    gender: '女性',
+    age: '40代',
+    birthday: '1984/09/20',
+    lastVisit: '2025/03/08（土）',
+    memberId: '1000210',
+    purpose: 'メガネの調整',
+  },
   {
     id: 'customer-yamamoto',
     name: '山本 太郎',
     phone: '070-3456-7890',
     gender: '男性',
     age: '30代',
+    birthday: '1990/07/18',
+    lastVisit: '2025/04/22（火）',
+    memberId: '1000311',
+    purpose: 'コンタクト相談',
   },
 ]
 const initialReservations = [
@@ -21,6 +45,7 @@ const initialReservations = [
     staff: '鈴木 明日香',
     room: '検眼室 1',
     status: '確定' as const,
+    tone: 'blue' as const,
   },
   {
     id: 'r2',
@@ -31,6 +56,7 @@ const initialReservations = [
     staff: '田中 健一',
     room: '検眼室 2',
     status: '確定' as const,
+    tone: 'green' as const,
   },
   {
     id: 'r3',
@@ -41,6 +67,7 @@ const initialReservations = [
     staff: '鈴木 明日香',
     room: '検眼室 1',
     status: '仮予約' as const,
+    tone: 'green' as const,
   },
   {
     id: 'r4',
@@ -51,6 +78,7 @@ const initialReservations = [
     staff: '佐藤 美咲',
     room: '検眼室 2',
     status: '確定' as const,
+    tone: 'orange' as const,
   },
   {
     id: 'r5',
@@ -61,6 +89,7 @@ const initialReservations = [
     staff: '田中 健一',
     room: '検眼室 1',
     status: '確定' as const,
+    tone: 'blue' as const,
   },
   {
     id: 'r6',
@@ -71,6 +100,7 @@ const initialReservations = [
     staff: '鈴木 明日香',
     room: '検眼室 1',
     status: '確定' as const,
+    tone: 'green' as const,
   },
 ]
 export const initialReservationState: ReservationState = {
@@ -88,19 +118,29 @@ export const initialReservationState: ReservationState = {
   customerTab: 'visit',
   homeCalendarOpen: false,
   homeDate: '20',
-  listDate: 'すべて',
+  listDate: '2025/05/20 (火)',
 }
 export type Action =
   | { type: 'setView'; view: View }
   | { type: 'openBooking' }
   | { type: 'setCustomerQuery'; field: 'name' | 'phone'; value: string }
   | { type: 'selectCustomer'; customerId: string }
-  | { type: 'registerCustomer'; name: string; phone: string }
+  | {
+      type: 'registerCustomer'
+      name: string
+      phone: string
+      gender: string
+      age: string
+      birthday: string
+      memberId: string
+      lastVisit: string
+      purpose: string
+    }
   | { type: 'setAppointment'; field: 'date' | 'startTime' | 'purpose' | 'staff'; value: string }
   | { type: 'selectSlot'; slot: string; staff: string }
   | { type: 'confirmReservation' }
   | { type: 'openReservation'; reservationId: string }
-  | { type: 'saveReservationChange'; time?: string; staff?: string }
+  | { type: 'saveReservationChange'; date?: string; time?: string; staff?: string }
   | { type: 'cancelReservation'; reservationId: string }
   | { type: 'setRecordPaused' }
   | { type: 'setCustomerTab'; tab: string }
@@ -110,6 +150,21 @@ export type Action =
   | { type: 'setListDate'; date: string }
   | { type: 'setNotice'; notice: string }
 const normalize = (value: string) => value.replace(/[\s-]/g, '').toLowerCase()
+const reservationDate = (value: string) => {
+  const [year = 0, month = 1, day = 1] = value.split('-').map(Number)
+  const weekday = ['日', '月', '火', '水', '木', '金', '土'][
+    new Date(Date.UTC(year, month - 1, day)).getUTCDay()
+  ]
+  return `${year}/${String(month).padStart(2, '0')}/${String(day).padStart(2, '0')} (${weekday})`
+}
+const customerDate = (value: string, fallback: string) => {
+  if (!value) return fallback
+  const [year = 0, month = 1, day = 1] = value.split('-').map(Number)
+  const weekday = ['日', '月', '火', '水', '木', '金', '土'][
+    new Date(Date.UTC(year, month - 1, day)).getUTCDay()
+  ]
+  return `${year}/${String(month).padStart(2, '0')}/${String(day).padStart(2, '0')}（${weekday}）`
+}
 export function reservationReducer(state: ReservationState, action: Action): ReservationState {
   switch (action.type) {
     case 'setView':
@@ -149,10 +204,14 @@ export function reservationReducer(state: ReservationState, action: Action): Res
     case 'registerCustomer': {
       const customer = {
         id: `customer-${state.customers.length + 1}`,
-        name: action.name,
-        phone: action.phone,
-        gender: '未入力',
-        age: '—',
+        name: action.name || '新しいお客様',
+        phone: action.phone || '未入力',
+        gender: action.gender || '未入力',
+        age: action.age || '—',
+        birthday: customerDate(action.birthday, '—'),
+        memberId: action.memberId || '新規',
+        lastVisit: customerDate(action.lastVisit, '本日'),
+        purpose: action.purpose || 'ご相談',
       }
       return {
         ...state,
@@ -174,8 +233,17 @@ export function reservationReducer(state: ReservationState, action: Action): Res
         },
       }
     case 'confirmReservation': {
-      if (!state.draftCustomer) return { ...state, notice: 'お客様情報を確認してください' }
-      const slot = state.draft.selectedSlot || '14:00 〜 15:30'
+      if (
+        !state.draftCustomer ||
+        !state.draft.date ||
+        !state.draft.startTime ||
+        !state.draft.purpose ||
+        !state.draft.selectedSlot ||
+        !state.draft.staff
+      ) {
+        return { ...state, notice: '予約に必要な情報を入力してください' }
+      }
+      const slot = state.draft.selectedSlot
       return {
         ...state,
         view: 'list',
@@ -185,10 +253,11 @@ export function reservationReducer(state: ReservationState, action: Action): Res
             date: state.draft.date || '2025/05/20 (火)',
             time: slot,
             name: state.draftCustomer.name,
-            purpose: state.draft.purpose || '検眼・カウンセリング',
-            staff: state.draft.staff || '鈴木 明日香',
+            purpose: state.draft.purpose,
+            staff: state.draft.staff,
             room: '検眼室 1',
             status: '確定',
+            tone: 'green',
           },
           ...state.reservations,
         ],
@@ -202,7 +271,13 @@ export function reservationReducer(state: ReservationState, action: Action): Res
         ...state,
         reservations: state.reservations.map((r) =>
           r.id === state.detailId
-            ? { ...r, time: action.time || r.time, staff: action.staff || r.staff, status: '確定' }
+            ? {
+                ...r,
+                date: action.date ? reservationDate(action.date) : r.date,
+                time: action.time || r.time,
+                staff: action.staff || r.staff,
+                status: '確定',
+              }
             : r,
         ),
         changeOpen: false,
