@@ -36,7 +36,7 @@ export function App({ initialView }: { initialView?: View } = {}) {
   }
   return (
     <div className="app">
-      <header className="app-header">
+      <header className={`app-header ${state.view === 'home' ? 'home-context' : ''}`}>
         <a
           className="brand"
           href="?view=home"
@@ -46,11 +46,24 @@ export function App({ initialView }: { initialView?: View } = {}) {
             setView('home')
           }}
         >
-          ◉ EYEX予約
+          <span className="brand-mark" aria-hidden="true">
+            <span />
+          </span>
+          <span>EYEX予約</span>
         </a>
         <span className="header-title">電話予約システム</span>
         <div className="header-tools">
           <button type="button">通話メモ</button>
+          <a
+            className="header-tool"
+            href="?view=ledger"
+            onClick={(e) => {
+              e.preventDefault()
+              setView('ledger')
+            }}
+          >
+            ▣ 予約履歴
+          </a>
           <button type="button" aria-label="メニュー" onClick={() => setMenu(true)}>
             ☰
           </button>
@@ -122,63 +135,147 @@ function Home({
 }) {
   return (
     <section className="home-page">
-      <h1>今日はどのご用件ですか？</h1>
-      <div className="home-actions">
-        <button type="button" className="primary" onClick={() => onView('booking')}>
-          新規予約
-        </button>
-        <button type="button" onClick={() => onView('list')}>
-          予約変更
-        </button>
-        <button type="button" onClick={() => onView('list')}>
-          受付履歴
-        </button>
-        <button type="button" onClick={() => onView('list')}>
-          予約を検索
-        </button>
-        <button type="button" onClick={() => onView('customer')}>
-          顧客台帳
-        </button>
-      </div>
-      <div className="home-date-strip">
-        <button type="button" aria-label="前の日">
-          ‹
-        </button>
-        <button type="button">
-          月曜日<strong>19</strong>
-        </button>
-        <button type="button">
-          火曜日<strong>20</strong>
-        </button>
-        <button type="button">
-          水曜日<strong>21</strong>
-        </button>
-        <button type="button" aria-label="次の日">
-          ›
-        </button>
-        <button
-          type="button"
-          aria-label="カレンダーを開く"
-          aria-expanded={state.homeCalendarOpen}
-          onClick={() => dispatch({ type: 'toggleHomeCalendar' })}
-        >
-          ▣
-        </button>
-      </div>
-      {state.homeCalendarOpen && (
-        <div className="home-calendar-popover" role="dialog" aria-label="日付カレンダー">
-          <strong>日付を選択</strong>
-          <button type="button" onClick={() => dispatch({ type: 'setHomeDate', date: '19' })}>
-            19日
+      <div className="home-inner">
+        <div className="home-heading">
+          <div>
+            <p className="home-eyebrow">SMART RECEPTION / 2025.05.20</p>
+            <h1>今日はどのご用件ですか？</h1>
+            <p className="home-subtitle">お客様との会話を、次の一歩へつなげます。</p>
+          </div>
+          <div className="home-agent">
+            <span className="home-avatar">鈴</span>
+            <span>
+              鈴木 明日香
+              <br />
+              <small>青山店・受付中</small>
+            </span>
+          </div>
+        </div>
+        <div className="home-date-strip">
+          <button type="button" aria-label="前の日">
+            ‹
           </button>
-          <button type="button" onClick={() => dispatch({ type: 'setHomeDate', date: '20' })}>
-            20日
+          <button type="button">
+            月曜日<strong>19</strong>
           </button>
-          <button type="button" onClick={() => dispatch({ type: 'setHomeDate', date: '21' })}>
-            21日
+          <button type="button">
+            火曜日<strong>20</strong>
+          </button>
+          <button type="button">
+            水曜日<strong>21</strong>
+          </button>
+          <button type="button">
+            木曜日<strong>22</strong>
+          </button>
+          <button type="button">
+            金曜日<strong>23</strong>
+          </button>
+          <button type="button" aria-label="次の日">
+            ›
+          </button>
+          <button
+            type="button"
+            aria-label="カレンダーを開く"
+            aria-expanded={state.homeCalendarOpen}
+            onClick={() => dispatch({ type: 'toggleHomeCalendar' })}
+          >
+            ▣
           </button>
         </div>
-      )}
+        <div className="home-actions">
+          <button
+            type="button"
+            aria-label="新規予約"
+            className="home-action primary"
+            onClick={() => onView('booking')}
+          >
+            <span className="home-action-icon" aria-hidden="true">
+              ＋
+            </span>
+            <span className="home-action-copy">
+              <strong>新規予約</strong>
+              <small>お電話での予約を受け付ける</small>
+            </span>
+            <span className="home-action-arrow" aria-hidden="true">
+              →
+            </span>
+          </button>
+          <button
+            type="button"
+            aria-label="予約変更"
+            className="home-action primary"
+            onClick={() => onView('list')}
+          >
+            <span className="home-action-icon" aria-hidden="true">
+              ↻
+            </span>
+            <span className="home-action-copy">
+              <strong>予約変更</strong>
+              <small>日時や内容を変更する</small>
+            </span>
+            <span className="home-action-arrow" aria-hidden="true">
+              →
+            </span>
+          </button>
+          <button type="button" className="home-action utility" onClick={() => onView('list')}>
+            <span className="home-action-icon" aria-hidden="true">
+              ▤
+            </span>
+            <span className="home-action-copy">
+              <strong>受付履歴</strong>
+              <small>今日の受付状況を見る</small>
+            </span>
+            <span className="home-action-arrow" aria-hidden="true">
+              →
+            </span>
+          </button>
+          <button type="button" className="home-action utility" onClick={() => onView('list')}>
+            <span className="home-action-icon" aria-hidden="true">
+              ⌕
+            </span>
+            <span className="home-action-copy">
+              <strong>予約を検索</strong>
+              <small>予約情報を探す</small>
+            </span>
+            <span className="home-action-arrow" aria-hidden="true">
+              →
+            </span>
+          </button>
+          <button type="button" className="home-action utility" onClick={() => onView('customer')}>
+            <span className="home-action-icon" aria-hidden="true">
+              ♙
+            </span>
+            <span className="home-action-copy">
+              <strong>顧客台帳</strong>
+              <small>お客様の情報を確認する</small>
+            </span>
+            <span className="home-action-arrow" aria-hidden="true">
+              →
+            </span>
+          </button>
+        </div>
+        <div className="home-foot">
+          <span>
+            本日の予約 <strong>6</strong>件
+          </span>
+          <span>受付担当: 鈴木 明日香</span>
+          <span className="home-foot-links">ダッシュボード　予約台帳</span>
+        </div>
+        {state.homeCalendarOpen && (
+          <div className="home-calendar-popover" role="dialog" aria-label="日付カレンダー">
+            <strong>日付を選択</strong>
+            <button type="button" onClick={() => dispatch({ type: 'setHomeDate', date: '19' })}>
+              19日
+            </button>
+            <button type="button" onClick={() => dispatch({ type: 'setHomeDate', date: '20' })}>
+              20日
+            </button>
+            <button type="button" onClick={() => dispatch({ type: 'setHomeDate', date: '21' })}>
+              21日
+            </button>
+          </div>
+        )}
+      </div>
     </section>
   )
 }
