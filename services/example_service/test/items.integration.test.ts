@@ -88,34 +88,6 @@ describe('example_service API (integration, real D1 in workerd)', () => {
     })
     expect(res.status).toBe(400)
   })
-
-  it('notifies via the notifier binding on item creation', async () => {
-    const sendSpy = vi
-      .spyOn(env.NOTIFIER, 'fetch')
-      .mockResolvedValue(new Response('{"status":"sent"}', { status: 200 }) as never)
-    const res = await SELF.fetch(`${BASE}/api/items`, {
-      method: 'POST',
-      headers: await authHeaders(),
-      body: JSON.stringify({ title: 'notify me', body: '' }),
-    })
-    expect(res.status).toBe(201)
-    expect(sendSpy).toHaveBeenCalledTimes(1)
-    const [url, init] = sendSpy.mock.calls[0] as [string, RequestInit]
-    expect(String(url)).toContain('/api/internal/send')
-    const job = JSON.parse(String(init.body)) as { id: string; type: string }
-    expect(job.type).toBe('item.created')
-    expect(job.id.startsWith('item.created:')).toBe(true)
-  })
-
-  it('notification is best-effort: create still succeeds when the notifier is down', async () => {
-    vi.spyOn(env.NOTIFIER, 'fetch').mockRejectedValue(new Error('notifier unreachable') as never)
-    const res = await SELF.fetch(`${BASE}/api/items`, {
-      method: 'POST',
-      headers: await authHeaders(),
-      body: JSON.stringify({ title: 'still created', body: '' }),
-    })
-    expect(res.status).toBe(201)
-  })
 })
 
 describe('tenant auth middleware (tenantAuth + requireActiveOrg)', () => {

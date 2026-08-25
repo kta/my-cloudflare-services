@@ -36,7 +36,6 @@
     "zod": "catalog:"
   },
   "devDependencies": {
-    "@app/example_service": "workspace:*",
     "@cloudflare/vite-plugin": "catalog:",
     "@cloudflare/vitest-pool-workers": "catalog:",
     "@cloudflare/workers-types": "catalog:",

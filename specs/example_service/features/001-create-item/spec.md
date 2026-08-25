@@ -18,7 +18,6 @@
 - AC-ITEM-02: Given JWT 無し, When `GET/POST /api/items`, Then 401。
 - AC-ITEM-03: Given title 空 / 200 文字超, When `POST /api/items`, Then 400。
 - AC-ITEM-04: Given 別組織の item, When `GET /api/items`, Then 返らない（テナント分離）。
-- AC-ITEM-05: Given item 作成成功, When 作成直後, Then 通知ジョブが notifier へ同期送信される（送信失敗でも 201 = best-effort）。
 
 **スコープ外**: 編集・削除、検索、本番認証（dev トークンのまま）。
 

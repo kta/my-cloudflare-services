@@ -76,9 +76,9 @@ jobs:
           path: ${{ matrix.dir }}/playwright-report/
           retention-days: 7
 
-  # Deploy each service on push to main. Set CLOUDFLARE_API_TOKEN (scoped:
-  # Workers Scripts/D1/KV/R2 Edit + Account Read — no Queues permission: this
-  # template does not use Queues) + CLOUDFLARE_ACCOUNT_ID as repo secrets. Each service
+  # Deploy admin on push to main. Set CLOUDFLARE_API_TOKEN (scoped:
+  # Workers Scripts/D1/KV Edit + Account Read) + CLOUDFLARE_ACCOUNT_ID as repo secrets.
+  # The service
   # deploys its SPA and API together (one Worker), so no per-SPA API-origin
   # variables are needed. Prerequisite: `terraform apply` (infra) before the
   # first deploy.
@@ -96,20 +96,13 @@ jobs:
     strategy:
       fail-fast: false
       max-parallel: 1
-      # Binding-aware order: notifier (no deps) → admin (binds example_service +
-      # notifier) → ops (binds notifier + admin, so deploys last). On the very
-      # first deploy a service may reference a not-yet-created binding target
-      # (wrangler deploys anyway; the binding resolves once both exist).
-      # NOTE: example_service is the template SCAFFOLD (copy source for
-      # new-service) — it is verified/e2e'd but NOT deployed to prod. Your real
-      # domain services (copied from it) go in this matrix instead. Secrets are
-      # never committed: dev values live in each service's .dev.vars (local
+      # example_service is a template scaffold and is never deployed. Secrets
+      # are never committed: dev values live in each service's .dev.vars (local
       # only); prod values are set once via `wrangler secret put` (deploy.md).
       matrix:
         include:
-          - { pkg: '@app/notifier' }
           - { pkg: '@app/admin' }
-          - { pkg: '@app/ops' }
+          - { pkg: '@app/glasses_reservation' }
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

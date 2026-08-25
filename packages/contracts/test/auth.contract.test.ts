@@ -6,7 +6,6 @@ import {
   InviteRequest,
   IssueTokenRequest,
   LoginRequest,
-  NotificationJob,
   Organization,
 } from '../src/index'
 
@@ -14,21 +13,12 @@ describe('Zod 4 migration semantics', () => {
   it.each([
     ['AuthUser.id', AuthUser, { email: 'a@example.com', role: 'staff' }],
     ['CreateItem.title', CreateItem, { body: '' }],
-    ['NotificationJob.to', NotificationJob, { id: 'job-1', type: 'user.invited' }],
   ])('%s は省略できない', (_name, schema, input) => {
     expect(schema.safeParse(input).success).toBe(false)
   })
 
   it('default と optionality を適用した出力キーを固定する', () => {
     expect(CreateItem.parse({ title: 'Item' })).toEqual({ title: 'Item', body: '' })
-    expect(
-      NotificationJob.parse({ id: 'job-1', type: 'user.invited', to: 'a@example.com' }),
-    ).toEqual({
-      id: 'job-1',
-      type: 'user.invited',
-      to: 'a@example.com',
-      payload: {},
-    })
   })
 })
 
@@ -99,21 +89,5 @@ describe('Organization(同期 upsert 契約)', () => {
     })
     expect(parsed.plan).toBe('free')
     expect(parsed.isDisabled).toBe(false)
-  })
-})
-
-describe('NotificationJob(同期送信 API の body)', () => {
-  it('ops 系の通知型を受け付ける', () => {
-    const parsed = NotificationJob.safeParse({
-      id: 'job-1',
-      type: 'ops.capacity_warning',
-      to: 'ops@example.com',
-    })
-    expect(parsed.success).toBe(true)
-  })
-  it('未知の type は弾く', () => {
-    expect(NotificationJob.safeParse({ id: 'j', type: 'unknown.type', to: 'x' }).success).toBe(
-      false,
-    )
   })
 })

@@ -4,7 +4,6 @@ import {
   InviteRequest,
   IssueTokenRequest,
   LoginRequest,
-  type NotificationJob,
   Organization,
   Plan,
 } from '@app/contracts'
@@ -15,13 +14,12 @@ import {
   internalAuth,
   REFRESH_TTL_SECONDS,
   requireRole,
-  sendNotification,
   signAccessToken,
   tenantAuth,
 } from '@app/shared'
-import type { D1Database, Fetcher, KVNamespace } from '@cloudflare/workers-types'
+import type { D1Database, KVNamespace } from '@cloudflare/workers-types'
 import { zValidator } from '@hono/zod-validator'
-import { desc, eq, lt } from 'drizzle-orm'
+import { desc, eq } from 'drizzle-orm'
 import { drizzle } from 'drizzle-orm/d1'
 import { Hono, type MiddlewareHandler } from 'hono'
 import { except } from 'hono/combine'
@@ -29,28 +27,19 @@ import { deleteCookie, getCookie, setCookie } from 'hono/cookie'
 import { HTTPException } from 'hono/http-exception'
 import { z } from 'zod'
 import { type AuthDeps, acceptInvite, login, refresh, revokeOne } from './auth/service'
-import { authEvents, invitations, organizations, users } from './db/schema'
-import { reconcileOrgs } from './reconcile'
-import { listDomainOrgs, type SyncEnv, syncOrgToExampleService } from './sync'
+import { invitations, organizations, users } from './db/schema'
 
 // The admin SPA is served by this same Worker (same origin) — no CORS.
 export type Bindings = {
   DB: D1Database
   // Rate-limit / lockout counters for login.
   AUTH_RL: KVNamespace
-  // Service binding to the domain Worker (example_service): org sync + reconcile.
-  EXAMPLE_SERVICE: Fetcher
-  // Service binding to the notifier Worker (invite / ops mail, best-effort).
-  NOTIFIER: Fetcher
-  INTERNAL_KEY: string
   JWT_SECRET: string
   AUTH_PEPPER: string
   AUTH_DEV_GRANT?: string
   // 招待リンクの基底 URL の明示オーバーライド(プロキシ/カスタムドメイン用)。
   // 未設定ならリクエストの origin から導出する(/invite はこの SPA 自身が配信)。
   INVITE_BASE_URL?: string
-  // 日次照合ドリフト通知の宛先(検証済み実メール)。未設定なら通知をスキップ。
-  OPS_ALERT_EMAIL?: string
 }
 
 const REFRESH_COOKIE = 'rt'
@@ -233,11 +222,7 @@ const routes = app
         createdAt: new Date().toISOString(),
       }
       await db.insert(organizations).values(org)
-      // Reconcile into the domain D1 via the typed service binding (best-effort).
-      // 結果は `synced` で応答に載せる — 失敗を握りつぶすと、無効化やプラン変更が
-      // ドメイン側に届いていないことに次の日次照合までオペレータが気づけない。
-      const synced = await syncOrgToExampleService(c.env, toOrganization(org))
-      return c.json({ ...toOrganization(org), synced }, 201)
+      return c.json(toOrganization(org), 201)
     },
   )
   .patch(
@@ -265,14 +250,10 @@ const routes = app
         .returning()
       const row = updated[0]
       if (!row) return c.json({ error: 'not_found' }, 404)
-      const merged = toOrganization(row)
-      const synced = await syncOrgToExampleService(c.env, merged)
-      return c.json({ ...merged, synced })
+      return c.json(toOrganization(row))
     },
   )
-  // Delete an organization: disable it + sync, keeping the canonical row as an
-  // audit trail. 実プロダクトではここでドメイン側のデータ purge(service binding
-  // の internal API)を呼ぶ — このテンプレートは無効化 + 同期のみに留める。
+  // Delete an organization: disable it while keeping the canonical row as an audit trail.
   .delete('/api/organizations/:id', async (c) => {
     const db = drizzle(c.env.DB)
     const id = c.req.param('id')
@@ -283,13 +264,9 @@ const routes = app
       .returning()
     const row = updated[0]
     if (!row) return c.json({ error: 'not_found' }, 404)
-    // synced=false は「admin では無効化済みだがドメイン側はまだ有効」— 次の日次照合
-    // までその org の API アクセスが生き残ることを意味する。UI が警告を出せるよう返す。
-    const synced = await syncOrgToExampleService(c.env, toOrganization(row))
-    return c.json({ id, isDisabled: true as const, synced })
+    return c.json({ id, isDisabled: true as const })
   })
-  // Invite a user (staff by default) to an org: user(hash=null) + invitation +
-  // best-effort notify. On notify failure, return the link for manual delivery.
+  // Invite a user (staff by default) to an org and return a manual-share link.
   .post(
     '/api/organizations/:id/invitations',
     // 契約は Zod 単一ソース(@app/contracts の InviteRequest)— インラインで
@@ -339,97 +316,10 @@ const routes = app
       // 本番でデッドリンクを配る事故になるので置かない)。
       const base = c.env.INVITE_BASE_URL || new URL(c.req.url).origin
       const acceptUrl = `${base}/invite?token=${token}`
-      const emailed = await notify(c.env, {
-        id: crypto.randomUUID(),
-        type: 'user.invited',
-        to: email,
-        payload: { acceptUrl },
-      })
-      return c.json({ emailed, ...(emailed ? {} : { acceptUrl }) }, 201)
+      return c.json({ emailed: false as const, acceptUrl }, 201)
     },
   )
 
 export type AppType = typeof routes
 
-// --- helpers (module scope; not part of the RPC chain) ---
-
-/** best-effort 通知(@app/shared の sendNotification に委譲)。 */
-function notify(env: Bindings, job: NotificationJob): Promise<boolean> {
-  return sendNotification(env.NOTIFIER, env.INTERNAL_KEY, job)
-}
-
-/** auth_events(監査ログ)の保持日数。日次 Cron が超過分を削除する。 */
-const AUTH_EVENTS_RETENTION_DAYS = 90
-
-/**
- * Daily org reconcile (Cron) + auth_events retention. Re-syncs any
- * admin↔domain drift; notifies once per day slot. reconcile 部分は try/catch —
- * ドメイン Worker 未デプロイ等でリストが取れないトポロジ(雛形を実サービスへ
- * 差し替える前)でも cron を throw させないが、失敗自体は通知する(照合が
- * 落ち続けるとドリフトが無限に見えなくなるため)。
- */
-async function scheduled(_event: unknown, env: Bindings, _ctx?: unknown): Promise<void> {
-  const db = drizzle(env.DB)
-
-  // 監査ログの保持期間掃除。insert-only のまま放置すると攻撃的なログイン試行で
-  // 無制限に育ち、D1 容量(無料枠 500MB/DB)とバックアップを圧迫する。
-  try {
-    const cutoff = new Date(
-      Date.now() - AUTH_EVENTS_RETENTION_DAYS * 24 * 60 * 60 * 1000,
-    ).toISOString()
-    await db.delete(authEvents).where(lt(authEvents.createdAt, cutoff))
-  } catch (err) {
-    console.error('auth_events retention cleanup failed', err)
-  }
-
-  try {
-    const syncEnv: SyncEnv = {
-      EXAMPLE_SERVICE: env.EXAMPLE_SERVICE,
-      INTERNAL_KEY: env.INTERNAL_KEY,
-    }
-    const result = await reconcileOrgs({
-      // 全行を 1 クエリで取り、resync にそのまま持ち回す(org ごとの再 SELECT = N+1
-      // を避ける。全 org ドリフト時に D1 の 50 クエリ/呼 上限を踏まないため)。
-      listAdminOrgs: async () => {
-        const rows = await db.select().from(organizations)
-        return rows.map((r) => ({
-          id: r.id,
-          name: r.name,
-          plan: r.plan,
-          isDisabled: r.isDisabled === '1',
-          row: r,
-        }))
-      },
-      listDomainOrgs: () => listDomainOrgs(syncEnv),
-      resync: (o) => syncOrgToExampleService(syncEnv, toOrganization(o.row)),
-      notifyDrift: async ({ drift, failed, truncated }) => {
-        if (!env.OPS_ALERT_EMAIL) {
-          console.warn('sync drift detected but OPS_ALERT_EMAIL is unset', drift)
-          return
-        }
-        // 冪等キーは日次スロット(再実行・リトライで連打しない)。
-        await notify(env, {
-          id: `ops.sync_drift:${new Date().toISOString().slice(0, 10)}`,
-          type: 'ops.sync_drift',
-          to: env.OPS_ALERT_EMAIL,
-          payload: { organizationIds: drift, count: drift.length, failed, truncated },
-        })
-      },
-    })
-    if (result.drift.length > 0) console.warn('org sync drift reconciled', result)
-  } catch (err) {
-    // 照合そのものの失敗(ドメイン側ダウン・INTERNAL_KEY 不一致等)。ドリフト通知は
-    // 照合成功時にしか出ないので、ここで通知しないと壊れた同期が永久に無音になる。
-    console.error('daily reconcile failed', err)
-    if (env.OPS_ALERT_EMAIL) {
-      await notify(env, {
-        id: `ops.sync_drift:failed:${new Date().toISOString().slice(0, 10)}`,
-        type: 'ops.sync_drift',
-        to: env.OPS_ALERT_EMAIL,
-        payload: { reason: 'reconcile_failed', message: err instanceof Error ? err.message : '' },
-      })
-    }
-  }
-}
-
-export default { fetch: app.fetch, scheduled }
+export default { fetch: app.fetch }

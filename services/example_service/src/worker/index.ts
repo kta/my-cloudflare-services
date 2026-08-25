@@ -4,11 +4,10 @@ import {
   internalAuth,
   type OrgResolver,
   requireActiveOrg,
-  sendNotification,
   signAccessToken,
   tenantAuth,
 } from '@app/shared'
-import type { D1Database, Fetcher } from '@cloudflare/workers-types'
+import type { D1Database } from '@cloudflare/workers-types'
 import { zValidator } from '@hono/zod-validator'
 import { desc, eq } from 'drizzle-orm'
 import { drizzle } from 'drizzle-orm/d1'
@@ -23,9 +22,6 @@ import { items, organizations } from './db/schema'
 // so there is no CORS anywhere in this service.
 export type Bindings = {
   DB: D1Database
-  // Notifier Worker: POST NotificationJob to /api/internal/send (this template does
-  // not use Queues by design). Best-effort; the request still succeeds if it fails.
-  NOTIFIER: Fetcher
   // Guards /api/internal/* (called by other Workers via a service binding).
   INTERNAL_KEY: string
   // HS256 signing secret for access JWTs. Must match the admin Worker's (the
@@ -168,21 +164,6 @@ const routes = app
       createdAt: new Date().toISOString(),
     }
     await db.insert(items).values(row)
-
-    // Notify via the notifier binding (best-effort; the request still succeeds
-    // if it fails — sendNotification logs non-2xx and never throws). No queue by
-    // design. The job id is derived from the item id so the notifier
-    // dedupes redeliveries. waitUntil keeps the 201 from blocking on the
-    // notifier — the item row is already committed, so a slow/hung notifier
-    // must not stall every item creation.
-    c.executionCtx.waitUntil(
-      sendNotification(c.env.NOTIFIER, c.env.INTERNAL_KEY, {
-        id: `item.created:${row.id}`,
-        type: 'item.created',
-        to: 'team@example.com',
-        payload: { itemId: row.id, title: row.title },
-      }),
-    )
 
     return c.json(row, 201)
   })

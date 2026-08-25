@@ -26,11 +26,11 @@ dev/example_service:
 
 ## dev/admin: run admin — SPA + API in one dev server (:5174)
 dev/admin:
-	pnpm --filter @app/admin dev
+	 pnpm --filter @app/admin dev
 
-## dev/notifier: run the notifier Worker (sync send API)
-dev/notifier:
-	pnpm --filter @app/notifier dev
+## dev/glasses_reservation: run glasses reservation mock SPA (:5175)
+dev/glasses_reservation:
+	pnpm --filter @app/glasses_reservation dev
 
 ## dev/all: run admin (:5174) + example_service (:5173) together — service bindings resolve across dev servers
 dev/all:
@@ -77,14 +77,6 @@ check:
 deploy/admin:
 	pnpm --filter @app/admin run deploy
 
-## deploy/notifier: deploy the notifier Worker (sync send API)
-deploy/notifier:
-	pnpm --filter @app/notifier run deploy
-
-## deploy/ops: deploy the ops Worker (backup + monitoring)
-deploy/ops:
-	pnpm --filter @app/ops run deploy
-
 ## worktree/new: isolated worktree for a parallel agent (name=<branch>)
 worktree/new:
 	git worktree add -b "$(name)" "../$(notdir $(CURDIR))-worktrees/$(name)" HEAD
@@ -98,6 +90,6 @@ worktree/rm:
 help:
 	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/## //' | awk -F': ' '{printf "  \033[36m%-26s\033[0m %s\n", $$1, $$2}'
 
-.PHONY: init dev/example_service dev/admin dev/all dev/notifier db/generate db/migrate/local db/migrate/remote db/seed/local \
-	build test typecheck lint check dev-vars deploy/admin deploy/notifier deploy/ops \
+.PHONY: init dev/example_service dev/admin dev/glasses_reservation dev/all db/generate db/migrate/local db/migrate/remote db/seed/local \
+	build test typecheck lint check dev-vars deploy/admin \
 	worktree/new worktree/rm help

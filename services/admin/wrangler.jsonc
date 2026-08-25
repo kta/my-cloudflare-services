@@ -14,32 +14,19 @@
     {
       "binding": "DB",
       "database_name": "admin",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "0388dd19-68f7-4d34-a5bb-818b84205548",
       "migrations_dir": "migrations"
     }
   ],
   // Rate-limit / lockout counters for login (email+IP window). Free tier.
-  "kv_namespaces": [{ "binding": "AUTH_RL", "id": "00000000000000000000000000000000" }],
-  // Service bindings (no internet hop). EXAMPLE_SERVICE: org sync + daily
-  // reconcile. NOTIFIER: invite / ops mails via POST /api/internal/send.
-  // フォーク時: example_service は本番にデプロイされない(CI deploy matrix 対象外)
-  // ため、この binding は本番では宙に浮く。雛形を自ドメインサービスへ差し替える
-  // 際に service 名を必ず張り替えること(docs/howto/deploy.md §4)。
-  "services": [
-    { "binding": "EXAMPLE_SERVICE", "service": "example-service" },
-    { "binding": "NOTIFIER", "service": "notifier" }
-  ],
-  // Daily org reconcile (admin ↔ domain sync-drift check). JST 03:00 = UTC 18:00.
-  "triggers": { "crons": ["0 18 * * *"] },
+  "kv_namespaces": [{ "binding": "AUTH_RL", "id": "ec31896881954c4aa932a4a72b1a08be" }],
   // No secrets in `vars` (official guidance): INTERNAL_KEY / JWT_SECRET /
   // AUTH_PEPPER / AUTH_DEV_GRANT live in .dev.vars for local dev (copied from
   // .dev.vars.example by `make init`) and are set via `wrangler secret put` in
   // prod. Until secrets are set, everything fails closed. See docs/howto/deploy.md.
   "vars": {
-    // 日次照合ドリフト通知の宛先(非機密)。空 = 通知スキップ(warn ログのみ)。
-    // 本番は検証済み実メールを設定する。
-    "OPS_ALERT_EMAIL": ""
     // INVITE_BASE_URL(任意): 招待リンクの基底 URL の明示オーバーライド。
     // 既定はリクエスト origin から導出されるので通常は不要。
+    "INVITE_BASE_URL": ""
   }
 }

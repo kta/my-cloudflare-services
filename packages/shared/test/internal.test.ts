@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
-import { describe, expect, it, vi } from 'vitest'
-import { internalAuth, sendNotification } from '../src/internal'
+import { describe, expect, it } from 'vitest'
+import { internalAuth } from '../src/internal'
 
 const KEY = 'secret-internal-key'
 
@@ -47,43 +47,5 @@ describe('internalAuth', () => {
       { INTERNAL_KEY: '' },
     )
     expect(res.status).toBe(401)
-  })
-})
-
-describe('sendNotification', () => {
-  const job = { id: 'j1', type: 'item.created' as const, to: 'a@b.test', payload: {} }
-
-  it('2xx で true、x-internal-key とタイムアウト signal を付けて POST する', async () => {
-    const fetchSpy = vi.fn(async () => ({ ok: true, status: 200 }))
-    const ok = await sendNotification({ fetch: fetchSpy }, KEY, job)
-    expect(ok).toBe(true)
-    const [url, init] = fetchSpy.mock.calls[0] as unknown as [
-      string,
-      { headers: Record<string, string>; signal?: unknown },
-    ]
-    expect(url).toContain('/api/internal/send')
-    expect(init.headers['x-internal-key']).toBe(KEY)
-    // ハングした notifier が呼び出し側の本処理を無期限に道連れにしないための signal
-    expect(init.signal).toBeInstanceOf(AbortSignal)
-  })
-
-  it('非 2xx は false(throw しない — best-effort 規約)', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {})
-    const ok = await sendNotification({ fetch: async () => ({ ok: false, status: 502 }) }, KEY, job)
-    expect(ok).toBe(false)
-  })
-
-  it('fetch が throw しても false(呼び出し側の本処理を止めない)', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {})
-    const ok = await sendNotification(
-      {
-        fetch: async () => {
-          throw new Error('binding down')
-        },
-      },
-      KEY,
-      job,
-    )
-    expect(ok).toBe(false)
   })
 })

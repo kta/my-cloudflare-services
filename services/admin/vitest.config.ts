@@ -11,19 +11,9 @@ export default defineConfig({
         bindings: {
           TEST_MIGRATIONS: migrations,
           // wrangler vars から機密を撤去したぶん、テストは自前で dev 値を供給する
-          INTERNAL_KEY: 'dev-internal-key',
           JWT_SECRET: 'dev-jwt-secret-change-me',
           AUTH_PEPPER: 'dev-auth-pepper-change-me',
           AUTH_DEV_GRANT: 'true',
-          OPS_ALERT_EMAIL: 'ops@admin.test',
-        },
-        // Stub the cross-service bindings so the isolate starts; tests spy on
-        // env.EXAMPLE_SERVICE.fetch / env.NOTIFIER.fetch to assert calls.
-        serviceBindings: {
-          EXAMPLE_SERVICE: () => new Response('{}', { status: 200 }),
-          // notifier defaults to failure so the invite flow exercises its
-          // link-fallback path (tests override per-case).
-          NOTIFIER: () => new Response('not_found', { status: 404 }),
         },
       },
     }),
