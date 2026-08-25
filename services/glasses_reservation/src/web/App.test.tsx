@@ -1,9 +1,61 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 import { App } from './App'
 
 describe('glasses reservation app', () => {
+  it('source parity: booking exposes the complete source form and side summaries', async () => {
+    render(<App initialView="booking" />)
+
+    expect(screen.getByRole('heading', { name: '電話予約入力' })).toBeVisible()
+    expect(screen.getByText('CALL RESERVATION')).toBeVisible()
+    expect(screen.getByText('お名前と電話番号を伺えますか？')).toBeVisible()
+    expect(screen.getByText('ご希望・ご用件を伺います')).toBeVisible()
+    expect(screen.getByText('内容を復唱・確認します')).toBeVisible()
+
+    for (const purpose of [
+      '検眼・カウンセリング',
+      'メガネの作製・ご相談',
+      'メガネの調整・フィッティング',
+      'メガネの修理・クリーニング',
+      'コンタクトレンズの相談・購入',
+      'その他',
+    ]) {
+      expect(screen.getByRole('button', { name: purpose })).toBeVisible()
+    }
+
+    for (const staffChoice of ['前回と同じ', '指名なし', '別の担当者を希望']) {
+      expect(screen.getByRole('button', { name: new RegExp(staffChoice) })).toBeVisible()
+    }
+
+    expect(screen.getByRole('heading', { name: /お客様情報/ })).toBeVisible()
+    expect(screen.getByRole('heading', { name: /選択中の条件/ })).toBeVisible()
+    expect(screen.getByRole('heading', { name: /予約可能な候補/ })).toBeVisible()
+    expect(screen.getByRole('button', { name: '録音を一時停止' })).toBeVisible()
+  })
+
+  it('source parity: every desktop view exposes source page chrome and primary region', () => {
+    const views = [
+      ['home', '新規予約'],
+      ['booking', '電話予約入力'],
+      ['ledger', '予約台帳'],
+      ['list', '予約一覧'],
+      ['customer', '顧客カルテ'],
+      ['dashboard', 'ダッシュボード'],
+    ] as const
+
+    for (const [view, heading] of views) {
+      const { unmount } = render(<App initialView={view} />)
+      if (view !== 'home') expect(screen.getByRole('heading', { name: heading })).toBeVisible()
+      if (view === 'home') {
+        expect(screen.getByRole('button', { name: heading })).toBeVisible()
+      } else {
+        expect(screen.getByText(/電話応対中のお客様の予約を入力しています/)).toBeVisible()
+      }
+      unmount()
+    }
+  })
+
   it('必要な条件が揃うまで候補を出さず、揃うと5候補を表示する', async () => {
     const user = userEvent.setup()
     render(<App />)
@@ -31,8 +83,43 @@ describe('glasses reservation app', () => {
     await user.click(screen.getByRole('button', { name: '情報を検索' }))
     await user.type(screen.getByLabelText('登録氏名'), '高橋 あかり')
     await user.type(screen.getByLabelText('登録電話番号'), '090-1111-2222')
+    await user.selectOptions(screen.getByLabelText('登録性別'), '女性')
+    await user.selectOptions(screen.getByLabelText('登録年代'), '30代')
+    await user.type(screen.getByLabelText('登録生年月日'), '1990-04-12')
+    await user.type(screen.getByLabelText('登録会員ID'), 'M-9001')
+    await user.type(screen.getByLabelText('登録最終来店日'), '2025-08-20')
+    await user.type(screen.getByLabelText('登録用件'), 'メガネの作製')
     await user.click(screen.getByRole('button', { name: '顧客を登録する' }))
     expect(screen.getByText('顧客情報を登録しました')).toBeVisible()
+  })
+
+  it('ヘッダー、サポート、一覧更新、カルテ編集を通知する', async () => {
+    const user = userEvent.setup()
+    render(<App initialView="booking" />)
+    await user.click(screen.getByRole('button', { name: '通話メモ' }))
+    expect(screen.getByText('通話メモを保存しました')).toBeVisible()
+
+    await user.click(screen.getByRole('link', { name: 'EYEX予約 ホーム' }))
+    await user.click(screen.getByRole('button', { name: 'メニュー' }))
+    await user.click(
+      within(screen.getByRole('dialog', { name: 'メインメニュー' })).getByRole('link', {
+        name: '予約台帳',
+      }),
+    )
+    await user.click(screen.getByRole('button', { name: '？ サポート' }))
+    expect(screen.getByText('サポートを表示しました')).toBeVisible()
+
+    await user.click(screen.getByRole('link', { name: /予約一覧/ }))
+    await user.click(screen.getByRole('button', { name: '↻ 更新' }))
+    expect(screen.getByText('予約一覧を更新しました')).toBeVisible()
+    await user.click(screen.getByRole('link', { name: '顧客カルテ' }))
+    await user.click(screen.getByRole('button', { name: '顧客情報を編集' }))
+    expect(screen.getByText('顧客情報を編集しました')).toBeVisible()
+    const editButtons = screen.getAllByRole('button', { name: '編集' })
+    const noteEdit = editButtons.at(-1)
+    if (!noteEdit) throw new Error('note edit button is missing')
+    await user.click(noteEdit)
+    expect(screen.getByText('メモ編集を開きました')).toBeVisible()
   })
 
   it('予約確定後に一覧通知と予約行を表示する', async () => {
@@ -86,6 +173,7 @@ describe('glasses reservation app', () => {
 
   it('ホームの日付カレンダーを開閉し、予約入力を一時保存できる', async () => {
     const user = userEvent.setup()
+    window.history.replaceState({}, '', '/')
     render(<App />)
     await user.click(screen.getByRole('button', { name: 'カレンダーを開く' }))
     expect(screen.getByRole('dialog', { name: '日付カレンダー' })).toBeVisible()
