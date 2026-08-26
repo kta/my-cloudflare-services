@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="ja">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>EYEX mock capture</title>
+<style>*{box-sizing:border-box}html,body,iframe{width:100%;height:100%;margin:0;border:0;overflow:hidden}</style></head>
+<body><iframe id="target" title="EYEX予約モック撮影対象"></iframe><script>
+const query = new URLSearchParams(location.search);
+const source = query.get("source");
+const state = query.get("state");
+if (source && state && /^[a-z0-9-]+\.html$/.test(source) && /^[a-z0-9-]+$/.test(state)) {
+  document.querySelector("#target").src = `${source}#${state}`;
+}
+</script></body></html>
