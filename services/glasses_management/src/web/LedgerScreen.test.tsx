@@ -28,6 +28,7 @@ function reservation(overrides: Partial<Extract<LedgerEntry, { entryType: 'reser
     assignedStaffId: STAFF_ID,
     assignedEquipmentIds: [EQUIPMENT_ID],
     nextGuidance: '測定機Aへご案内',
+    purposeNames: ['視力測定'],
     warnings: [],
     version: 3,
     ...overrides,
@@ -115,8 +116,8 @@ test('shows web, staff-taken and walk-in entries on one time axis with a text so
   await screen.findByText('田中 花子')
   expect(api).toHaveBeenCalledWith(`/api/staff/stores/${STORE_ID}/ledger?date=${DATE}`)
   const ledger = screen.getByRole('table', { name: '予約台帳' })
-  // Source is readable as text, never as colour alone.
-  expect(within(ledger).getByText('店頭・電話')).toBeInTheDocument()
+  // 予約元は色ではなく文字で読める。セルはモックどおり「目的 · 予約元」の 1 行。
+  expect(within(ledger).getByText('視力測定 · 店頭・電話')).toBeInTheDocument()
   expect(within(ledger).getByText('ウォークイン 3')).toBeInTheDocument()
   expect(within(ledger).getByRole('columnheader', { name: '10:00' })).toBeInTheDocument()
 })
@@ -154,10 +155,15 @@ test('draws the now line at the current JST time on today, clear of the time hea
   const api = mockApi(() => json([reservation()]))
   renderLedger(api)
 
-  const chip = await screen.findByText('現在 11:08')
-  // The chip belongs to the now line, not to the header row that it must not cover.
-  expect(chip.closest('[data-now-line]')).not.toBeNull()
-  expect(chip.closest('[role="columnheader"]')).toBeNull()
+  await screen.findByText('田中 花子')
+  /*
+   * チップは「現在」(和文 sans) と時刻 (mono) の 2 ノードに分かれているので、
+   * 文字列一致ではなく現在線そのものの textContent で見る。
+   */
+  const nowLine = document.querySelector('[data-now-line]')
+  expect(nowLine?.textContent).toBe('現在 11:08')
+  // 現在線は覆ってはいけない時刻見出しの外にある。
+  expect(nowLine?.closest('[role="columnheader"]')).toBeNull()
 })
 
 test('omits the now line on another day (AC-EYEX-19)', async () => {
@@ -172,16 +178,17 @@ test('switches between the staff view and the equipment view, both named (UC-EYE
   const api = mockApi(() => json([reservation()]))
   renderLedger(api)
 
-  const equipmentView = await screen.findByRole('button', { name: '設備で見る' })
-  expect(screen.getByRole('button', { name: '担当者で見る' })).toHaveAttribute(
-    'aria-pressed',
-    'true',
-  )
+  /*
+   * 軸の切り替えはツールバーではなくレーン見出しのセル自身が担う（承認済みモック
+   * には段が 1 つしかない）。ボタンは 1 個で、名前が現在の軸を名乗る。
+   */
+  const toggle = await screen.findByRole('button', { name: '担当者で見る（設備に切り替え）' })
+  expect(toggle).toHaveAttribute('aria-pressed', 'true')
   expect(screen.getByRole('rowheader', { name: '佐藤 美咲' })).toBeInTheDocument()
 
-  fireEvent.click(equipmentView)
+  fireEvent.click(toggle)
 
-  expect(equipmentView).toHaveAttribute('aria-pressed', 'true')
+  expect(screen.getByRole('button', { name: '設備で見る（担当者に切り替え）' })).toBeInTheDocument()
   expect(screen.getByRole('rowheader', { name: '測定機A' })).toBeInTheDocument()
   expect(screen.queryByRole('rowheader', { name: '佐藤 美咲' })).not.toBeInTheDocument()
 })
@@ -197,37 +204,24 @@ test('opens an entry detail beside the ledger without hiding it (UC-EYEX-046)', 
   expect(screen.getByRole('table', { name: '予約台帳' })).toBeInTheDocument()
 })
 
-test('receives a walk-in with no customer record and shows it waiting (UC-EYEX-047, AC-EYEX-11)', async () => {
-  const api = mockApi(
-    () => json([]),
-    () =>
-      json(
-        {
-          id: WALKIN_ID,
-          entryType: 'walkin',
-          provisionalLabel: 'ウォークイン 3',
-          customerId: null,
-          progress: 'waiting',
-          status: 'active',
-          arrivedAt: '2026-08-27T02:30:00.000Z',
-          version: 1,
-        },
-        201,
-      ),
-    () => json([walkin()]),
-  )
+/*
+ * 受付そのものは接客画面の主要動作へ移った（承認済みモック JOURNEY-DEFAULT）ので、
+ * 台帳の責務は「受け付けた店頭客が未登録のまま並ぶ」ことに絞られる。工程はセルを
+ * 2 行に保つため右パネルが受け持つ。
+ */
+test('shows a received walk-in with no customer record, waiting (UC-EYEX-047, AC-EYEX-11)', async () => {
+  const api = mockApi(() => json([walkin()]))
   renderLedger(api)
 
-  fireEvent.click(await screen.findByRole('button', { name: '店頭のお客様を受け付ける' }))
-
-  await screen.findByText('ウォークイン 3')
-  expect(api).toHaveBeenCalledWith(
-    `/api/staff/stores/${STORE_ID}/walkins`,
-    expect.objectContaining({ method: 'POST', body: '{}' }),
-  )
-  const ledger = screen.getByRole('table', { name: '予約台帳' })
+  const ledger = await screen.findByRole('table', { name: '予約台帳' })
+  expect(within(ledger).getByText('ウォークイン 3')).toBeInTheDocument()
   expect(within(ledger).getByText('顧客未登録')).toBeInTheDocument()
-  expect(within(ledger).getByText('お待ち')).toBeInTheDocument()
+
+  fireEvent.click(within(ledger).getByRole('button', { name: /ウォークイン 3/ }))
+
+  expect(
+    within(screen.getByRole('region', { name: '選択中の予約' })).getByText('お待ち'),
+  ).toBeInTheDocument()
 })
 
 test('links a walk-in to an existing customer found by name (UC-EYEX-048, AC-EYEX-12, AC-EYEX-17)', async () => {
@@ -351,7 +345,9 @@ test('keeps a departed, still unlinked walk-in on the ledger (UC-EYEX-050, AC-EY
   const ledger = await screen.findByRole('table', { name: '予約台帳' })
   expect(within(ledger).getByText('ウォークイン 3')).toBeInTheDocument()
   expect(within(ledger).getByText('顧客未登録')).toBeInTheDocument()
-  expect(within(ledger).getByText('退店')).toBeInTheDocument()
+  // 退店したことは、セルではなく選択中の右パネルが名乗る。
+  const detail = within(screen.getByRole('region', { name: '選択中の予約' }))
+  expect(detail.getAllByText('退店').length).toBeGreaterThan(0)
 })
 
 test('refuses a stale save and compares the latest content with this terminal’s input (UC-EYEX-172, UC-EYEX-173, AC-EYEX-110)', async () => {

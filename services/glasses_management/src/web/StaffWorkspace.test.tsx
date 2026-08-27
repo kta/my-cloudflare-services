@@ -221,9 +221,10 @@ test('interrupts a store switch while the booking flow still holds unsaved input
   fireEvent.click(screen.getByRole('button', { name: /銀座店/ }))
   fireEvent.click(screen.getByRole('button', { name: /^丸の内店/ }))
 
-  expect(await screen.findByRole('dialog')).toHaveTextContent(
-    '未保存の入力を破棄して丸の内店へ切り替えますか',
-  )
+  // 文言は承認済みモック `#unsaved-store-switch` のもの。
+  const dialog = await screen.findByRole('dialog')
+  expect(dialog).toHaveTextContent('店舗を切り替える前に確認してください')
+  expect(dialog).toHaveTextContent('入力内容と録音は丸の内店へ持ち越しません。')
 })
 
 const RECORDING_ROW = {

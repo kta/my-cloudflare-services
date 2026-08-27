@@ -7,6 +7,9 @@ const store = {
   contactPhone: '03-0000-0000',
   region: '東京都',
   nearestStation: '銀座駅',
+  // 検索カードは詳細を開かずにアクセス文と本日営業を読ませる（契約の既定値つき）。
+  accessText: '銀座駅 A3出口 徒歩2分',
+  todayBusinessHours: '10:00–19:00',
 }
 
 test('validates a published-store response and encodes the public availability query', async () => {

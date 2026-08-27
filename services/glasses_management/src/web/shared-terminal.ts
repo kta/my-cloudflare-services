@@ -14,6 +14,8 @@ type SharedTerminalDailyState = {
 type SharedTerminalStart = {
   token: string
   terminalId: string
+  /** 端末の呼び名。ロック画面が名乗るので、セッション開始時に受け取る。 */
+  terminalName?: string
   storeId: string
   expiresAt: string
   idleTimeoutSeconds: number
@@ -31,6 +33,9 @@ type SharedTerminalSnapshot = {
   reason?: SharedTerminalReason
   token?: string
   terminalId?: string
+  terminalName?: string
+  /** 無操作で伏せるまでの秒数。ロック画面が「2分間」と言うために要る。 */
+  idleTimeoutSeconds?: number
   storeId?: string
   expiresAt?: string
   dailyState: SharedTerminalDailyState
@@ -71,6 +76,12 @@ export function createSharedTerminalController(clock: SharedTerminalClock) {
       status: reason === 'terminal_revoked' ? 'revoked' : 'locked',
       reason,
       terminalId: state.terminalId,
+      /*
+       * 端末名と無操作秒数だけはロック後も残す。ロック画面はこの 2 つを名乗る
+       * 必要があり、どちらも端末の設定値であって顧客の情報ではない。
+       */
+      terminalName: state.terminalName,
+      idleTimeoutSeconds: state.idleTimeoutSeconds,
       storeId: state.storeId,
       expiresAt: state.expiresAt,
       dailyState: {},

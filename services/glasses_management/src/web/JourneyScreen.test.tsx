@@ -27,6 +27,7 @@ function reservation(overrides: Partial<Extract<LedgerEntry, { entryType: 'reser
     assignedStaffId: null,
     assignedEquipmentIds: [],
     nextGuidance: null,
+    purposeNames: ['視力測定'],
     warnings: [],
     version: 3,
     ...overrides,

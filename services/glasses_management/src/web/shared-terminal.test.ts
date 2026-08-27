@@ -42,6 +42,8 @@ describe('memory-only shared terminal session', () => {
       status: 'locked',
       reason: 'idle',
       terminalId: 'terminal-a',
+      // 端末の設定値（PII ではない）はロック画面が名乗るために残る。
+      idleTimeoutSeconds: 120,
       storeId: 'store-a',
       expiresAt: '2026-09-01T00:00:00.000Z',
       dailyState: {},
@@ -92,6 +94,7 @@ describe('memory-only shared terminal session', () => {
         status: error === 'terminal_revoked' ? 'revoked' : 'locked',
         reason: error,
         terminalId: 'terminal-a',
+        idleTimeoutSeconds: 120,
         storeId: 'store-a',
         expiresAt: '2026-09-01T00:00:00.000Z',
         dailyState: {},

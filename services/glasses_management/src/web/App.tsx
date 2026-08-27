@@ -1,6 +1,9 @@
-import { Button, Card, Notice } from '@app/ui'
+import { Notice } from '@app/ui'
 import { type ReactNode, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { barFor, barOverlay } from './app-chrome'
+import { PlainBar, Screen } from './design/chrome'
+import { Action } from './design/controls'
+import { ExceptionContent, FullScreenState } from './design/layouts'
 import { bindSharedTerminalLifecycle, type createSharedTerminalController } from './shared-terminal'
 import type { createStaffNavigation, StaffLocation } from './staff-navigation'
 import type { createStoreSwitchController, SelectedStore } from './store-switch'
@@ -30,6 +33,13 @@ const inactiveSharedTerminalSnapshot = { status: 'inactive' as const, dailyState
 
 type AppProps = {
   sharedTerminalController?: SharedTerminalController
+  /*
+   * 例外・回復の面が呼ぶ出口。App は「どう見せるか」だけを持ち、再開・個人モード・
+   * 再登録が何をするかは呼び出し側の責務なので、注入で受ける。
+   */
+  onResumeSharedSession?: () => void
+  onStartPersonalMode?: () => void
+  onReregisterTerminal?: () => void
   storeSwitchController?: ReturnType<typeof createStoreSwitchController>
   accessibleStores?: SelectedStore[]
   navigation?: ReturnType<typeof createStaffNavigation>
@@ -50,6 +60,9 @@ type AppProps = {
 
 export function App({
   sharedTerminalController,
+  onResumeSharedSession,
+  onStartPersonalMode,
+  onReregisterTerminal,
   storeSwitchController,
   accessibleStores = [],
   navigation,
@@ -95,21 +108,45 @@ export function App({
 
   if (snapshot.status === 'locked' || snapshot.status === 'revoked') {
     const revoked = snapshot.status === 'revoked'
+    /*
+     * 承認済みモック `exception-states-approved.html#shared-lock` のバーは、
+     * 「どの店舗の、どの端末か」を名乗る。失効した端末は店舗も端末名も信じられ
+     * ないので、モック `#session-revoked` どおり「共有iPad」とだけ言う。
+     */
+    const named = [storeSnapshot?.selectedStore.name, snapshot.terminalName]
+      .filter((part): part is string => part !== undefined && part !== '')
+      .join(' ')
+    const subtitle = revoked || named === '' ? '共有iPad' : `${named} · 完全共有`
+    // 無操作の秒数は端末の設定値。何分で伏せたのかを本文で名乗る。
+    const idleMinutes = Math.round((snapshot.idleTimeoutSeconds ?? 0) / 60)
     return (
-      <main className="mx-auto flex min-h-dvh max-w-2xl flex-col justify-center gap-5 px-6 py-12">
-        <Card className="flex flex-col gap-5">
-          <p className="font-sans text-sm text-ink-muted">EYEX予約 · 完全共有端末</p>
-          <h1 className="font-display text-3xl font-semibold tracking-tight text-ink">
-            {revoked ? 'この端末の利用は停止されています' : '顧客情報を隠しました'}
-          </h1>
-          <Notice tone={revoked ? 'danger' : 'info'}>
-            {revoked
-              ? '共有セッションが失効しました。端末を再登録してください。'
-              : '画面非表示または無操作のため、端末をロックしました。'}
-          </Notice>
-          <Button>{revoked ? '端末を再登録する' : '業務を再開する'}</Button>
-        </Card>
-      </main>
+      <Screen>
+        <PlainBar subtitle={subtitle} />
+        {revoked ? (
+          <FullScreenState glyph="!" title="この端末の利用は停止されています">
+            <p>
+              共有セッションが管理者によって失効されました。未送信の顧客情報や録音は送信されません。
+            </p>
+            {/* 失効した端末に残る道は再登録の 1 つだけ。業務へ戻る口は出さない。 */}
+            <Action size="roomy" variant="primary" onClick={onReregisterTerminal}>
+              端末を再登録する
+            </Action>
+          </FullScreenState>
+        ) : (
+          <FullScreenState glyph="●" title="顧客情報を隠しました">
+            <p>{`画面が非表示になったか、${idleMinutes}分間操作がなかったためロックしました。`}</p>
+            <Action size="roomy" variant="primary" onClick={onResumeSharedSession}>
+              業務を再開する
+            </Action>
+            {/* 個人モードは 1 段離す。共有端末では再開が既定で、これは選ぶもの。 */}
+            <p>
+              <Action size="roomy" onClick={onStartPersonalMode}>
+                個人モードで開始
+              </Action>
+            </p>
+          </FullScreenState>
+        )}
+      </Screen>
     )
   }
   if (storeSnapshot && storeSwitchController) {
@@ -138,9 +175,61 @@ export function App({
       if (result.kind === 'confirm_discard') {
         setDiscardConfirmation(result)
         setPendingAudit({ fromStoreId, toStoreId: store.id })
+        setStorePickerOpen(false)
       } else {
         void recordThenCommit(fromStoreId, store)
       }
+    }
+    if (discardConfirmation) {
+      /*
+       * 承認済みモック `exception-states-approved.html#unsaved-store-switch`。
+       * 判断が済むまで台帳へは戻れないので、業務クロムごと差し替える（店舗
+       * ピッカーもここで閉じる — 幕を 2 枚重ねない）。
+       */
+      const commit = () => {
+        if (pendingAudit) {
+          const nextStore = accessibleStores.find((store) => store.id === pendingAudit.toStoreId)
+          if (nextStore) void recordThenCommit(pendingAudit.fromStoreId, nextStore)
+        }
+        setDiscardConfirmation(undefined)
+        setPendingAudit(undefined)
+      }
+      return (
+        <Screen>
+          <PlainBar subtitle={`${discardConfirmation.fromStore} · 入力中の予約あり`} />
+          <ExceptionContent dialogLabelledBy="unsaved-store-switch-title">
+            <h1 id="unsaved-store-switch-title">店舗を切り替える前に確認してください</h1>
+            {/*
+             * 失敗ではなく警告なので琥珀。design/layouts の Panel と同じ見た目だが、
+             * 読み上げでは「注意書き」と分かる必要があるので role を持たせる。
+             */}
+            <section
+              role="note"
+              aria-label={`${discardConfirmation.fromStore}で入力中の予約があります`}
+              className="mt-4.5 rounded-panel border border-amber-line bg-amber-soft p-6"
+            >
+              <b>{`${discardConfirmation.fromStore}で入力中の予約があります`}</b>
+              <p>{`入力内容と録音は${discardConfirmation.toStore}へ持ち越しません。`}</p>
+            </section>
+            <div className="mt-5 flex flex-wrap justify-end gap-3">
+              {/* 危険な方を既定にしない: 主操作は入力を守る側に置く。 */}
+              <Action
+                size="roomy"
+                variant="primary"
+                onClick={() => {
+                  setDiscardConfirmation(undefined)
+                  setPendingAudit(undefined)
+                }}
+              >
+                {`${discardConfirmation.fromStore}で入力を続ける`}
+              </Action>
+              <Action size="roomy" variant="danger" disabled={isSwitching} onClick={commit}>
+                {`入力を破棄して${discardConfirmation.toStore}へ切り替える`}
+              </Action>
+            </div>
+          </ExceptionContent>
+        </Screen>
+      )
     }
     /* 緑バーの中身は面ごとに違う。承認済みモックの実測は app-chrome が持つ。 */
     const bar = barFor(location ?? { screen: 'home' }, storeSnapshot.selectedStore, today)
@@ -298,54 +387,6 @@ export function App({
                   </li>
                 ))}
               </ul>
-            </section>
-          </div>
-        )}
-        {discardConfirmation && (
-          <div
-            className="fixed inset-0 z-20 flex items-center justify-center bg-ink/40 p-5"
-            role="presentation"
-          >
-            <section
-              role="dialog"
-              aria-modal="true"
-              aria-labelledby="discard-title"
-              className="w-full max-w-md rounded-ctl bg-surface p-6 shadow-lg"
-            >
-              <h2 id="discard-title" className="font-display text-xl font-semibold">
-                未保存の入力を破棄して{discardConfirmation.toStore}へ切り替えますか
-              </h2>
-              <p className="mt-3 text-sm text-ink-muted">
-                {discardConfirmation.fromStore}
-                で選択中の予約、検索条件、入力内容はすべて破棄されます。
-              </p>
-              <div className="mt-6 flex justify-end gap-3">
-                <Button
-                  variant="ghost"
-                  disabled={isSwitching}
-                  onClick={() => {
-                    setDiscardConfirmation(undefined)
-                    setPendingAudit(undefined)
-                  }}
-                >
-                  現在の店舗で続ける
-                </Button>
-                <Button
-                  disabled={isSwitching}
-                  onClick={() => {
-                    if (pendingAudit) {
-                      const nextStore = accessibleStores.find(
-                        (store) => store.id === pendingAudit.toStoreId,
-                      )
-                      if (nextStore) void recordThenCommit(pendingAudit.fromStoreId, nextStore)
-                    }
-                    setDiscardConfirmation(undefined)
-                    setPendingAudit(undefined)
-                  }}
-                >
-                  破棄して切り替える
-                </Button>
-              </div>
             </section>
           </div>
         )}
