@@ -3183,10 +3183,17 @@ function isResourceClaimConflict(error: unknown): boolean {
 function selectClaimUnit(
   resourceKind: 'equipment' | 'purpose',
   resourceId: string,
-  capacity: number,
+  /*
+   * 設定から引いた収容数。割当は同じ設定から計算しているので、ここが未定義に
+   * なるのは設定と割当が食い違っているとき、つまり呼び出し側の誤りである。
+   * 黙って 1 とみなすと二重予約が通ってしまうので、その場で落とす。
+   */
+  capacity: number | undefined,
   claimSlots: readonly string[],
   occupied: ReadonlySet<string>,
 ): string {
+  if (capacity === undefined)
+    throw new Error(`${resourceKind} ${resourceId} は選択中店舗の設定に存在しない`)
   for (let unit = 0; unit < capacity; unit += 1) {
     const candidate = `${resourceId}:${unit}`
     if (
