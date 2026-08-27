@@ -199,12 +199,20 @@ test('店舗上書きが無い場合は組織既定を適用中と示す (UC-EYE
   expect(section).toHaveTextContent('店舗上書きなし')
 })
 
-test('無操作ロック時間が渡されないときは未取得と明示する (UC-EYEX-152)', async () => {
+/*
+ * モック `DEVICE-LIST` の無操作ロックは `既定 2分` のように、分かっている事実
+ * だけを書いている。「未取得 / この画面から取得できません」はモックの語彙に
+ * 無い失敗文言なので、値が来ていないあいだは値を書かない（推測した既定値を
+ * 描かないという意図は、黙ることでも同じように守れる）。
+ */
+test('無操作ロック時間が渡されないときは値を書かない (UC-EYEX-152)', async () => {
   const api = vi.fn(async () => jsonResponse([registerDesk]))
   renderScreen(api)
 
   const section = await screen.findByRole('region', { name: '無操作ロック' })
-  expect(section).toHaveTextContent('未取得')
+  expect(section).not.toHaveTextContent('未取得')
+  expect(section).not.toHaveTextContent('取得できません')
+  expect(section).not.toHaveTextContent('既定')
   fireEvent.click(within(section).getByRole('button', { name: '変更' }))
   expect(within(section).getByRole('status')).toHaveTextContent(/管理コンソールで行います/)
 })

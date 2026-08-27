@@ -1,5 +1,6 @@
 import { expect, test } from 'vitest'
-import { barFor, barOverlay, sidebarFor } from './app-chrome'
+import { barFor, barOverlay, sidebarCurrentScreen, sidebarFor } from './app-chrome'
+import type { StaffLocation } from './staff-navigation'
 
 const store = { name: '銀座店', isActive: true }
 
@@ -9,7 +10,6 @@ test('主操作は面ごとに文言まで変わる', () => {
   )
   // 来店受付の主操作は予約ではなく店頭客の受付である。
   expect(barFor({ screen: 'journey' }, store).primary?.label).toBe('＋ 店頭のお客様を受付')
-  expect(barFor({ screen: 'customers' }, store).primary).toBeUndefined()
 })
 
 test('予約フローはタブも主操作も持たず、副題が工程を名乗る', () => {
@@ -75,8 +75,6 @@ test('受付履歴と予約検索でも、その場で予約を取れる', () =>
    */
   expect(barFor({ screen: 'reception-history' }, store).primary?.label).toBe('＋ 予約を取る')
   expect(barFor({ screen: 'reservation-search' }, store).primary?.label).toBe('＋ 予約を取る')
-  // 顧客台帳はモックに主操作が無い。検索と同じ枝に置いて巻き込まない。
-  expect(barFor({ screen: 'customers' }, store).primary).toBeUndefined()
 })
 
 /* ------------------------------------------------------------------ *
@@ -140,4 +138,56 @@ test('サイドバーが面を持つので、バーはタブを持たない', ()
     { screen: 'settings' },
   ] as const)
     expect(barFor(location, store).tabs).toEqual([])
+})
+
+test('顧客台帳の緑バーにも「予約を取る」がある', () => {
+  /*
+   * 基準画像 `ref--CUSTOMER-CURRENT.png` の緑バーは右肩に `＋ 予約を取る` を
+   * 持つ。顧客の記録を見ながら「では予約を」と言われる面なので、ここで主操作を
+   * 落とすと台帳へ戻らないと予約が取れない。
+   */
+  expect(barFor({ screen: 'customers' }, store).primary?.label).toBe('＋ 予約を取る')
+})
+
+test('面の中の面でも、サイドバーの現在地は親の行き先を指す', () => {
+  /*
+   * 注意事項の確認面や予約の詳細面はサイドバーに行き先を持たない。現在地の
+   * 判定を面の名前の一致だけで行うと、そこへ入った瞬間に柱のどの行も光らなく
+   * なり、「今どこにいるか」が読めなくなる。
+   */
+  expect(
+    sidebarCurrentScreen({ screen: 'attention-review', customerId: 'c1', customerName: 'x' }),
+  ).toBe('attention-settings')
+  expect(sidebarCurrentScreen({ screen: 'reservation-detail', reservationId: 'r1' })).toBe('ledger')
+  // 柱に行き先を持つ面はそのまま自分を指す。
+  expect(sidebarCurrentScreen({ screen: 'audit' })).toBe('audit')
+})
+
+test('サイドバーの行き先は、柱を出すすべての面から現在地を決められる', () => {
+  /*
+   * 柱を出す面が増えたときに取りこぼさないための表。柱を出さないのはホームと
+   * 予約フローだけなので、それ以外の面はすべてサイドバーのどれかへ帰着する。
+   */
+  const destinations = new Set(
+    sidebarFor('2026-08-27').flatMap((group) => group.items.map((item) => item.to.screen)),
+  )
+  const withSidebar: StaffLocation[] = [
+    { screen: 'ledger', date: '2026-08-27' },
+    { screen: 'journey' },
+    { screen: 'reception-history' },
+    { screen: 'reservation-search' },
+    { screen: 'reservation-detail', reservationId: 'r1' },
+    { screen: 'customers' },
+    { screen: 'shared-terminals' },
+    { screen: 'settings' },
+    { screen: 'attention-settings' },
+    { screen: 'attention-review', customerId: 'c1', customerName: 'x' },
+    { screen: 'audit' },
+    { screen: 'customer-merge' },
+    { screen: 'recording-ops' },
+    { screen: 'analytics' },
+    { screen: 'alerts' },
+  ]
+  for (const location of withSidebar)
+    expect(destinations.has(sidebarCurrentScreen(location))).toBe(true)
 })

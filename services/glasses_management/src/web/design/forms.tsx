@@ -1,11 +1,6 @@
 import { cn } from '@app/ui'
-import type {
-  InputHTMLAttributes,
-  ReactNode,
-  Ref,
-  SelectHTMLAttributes,
-  TextareaHTMLAttributes,
-} from 'react'
+import type { InputHTMLAttributes, ReactNode, Ref, TextareaHTMLAttributes } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 /*
  * 入力の語彙。承認済みモックが持つ入力は `operations-approved.html#reauth` の
@@ -118,26 +113,169 @@ export function TextAreaField({
   )
 }
 
-export function SelectField({
+export type PickerOption = { value: string; label: string }
+
+/*
+ * 選択の欄（`<select>` の置き換え）。
+ *
+ * ブラウザ既定の `<select>` は、地域設定の書体・既定の三角・既定の選択色を
+ * 面へ持ち込む。承認済みモックにその姿は 1 つも無く、同じ役割はすべて押し
+ * ボタンで描かれている。だからここも「今の値を名乗る押しボタン」と、押すと
+ * 開く候補の板だけで組む。地色・罫・角丸はモックの入力と候補行に揃える。
+ *
+ * 値は選択肢の `value` のまま返す。送信・検証の経路は 1 つも変わらない。
+ * 読み上げは combobox + listbox の対応で、焦点は引き金に置いたまま
+ * `aria-activedescendant` で今どこを見ているかを伝える（焦点が候補へ飛ぶと、
+ * 閉じたときに戻す先を毎回作ることになり、取りこぼしが出る）。
+ */
+export function PickerField({
   id,
   label,
   error,
   hideLabel = false,
+  options,
+  value,
+  onChange,
+  disabled = false,
   className,
-  children,
-  ...props
-}: SelectHTMLAttributes<HTMLSelectElement> & FieldExtras) {
+}: FieldExtras & {
+  options: PickerOption[]
+  value: string
+  onChange?: (next: string) => void
+  disabled?: boolean
+  className?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const [active, setActive] = useState(0)
+  const rootRef = useRef<HTMLDivElement>(null)
+
+  const selectedIndex = options.findIndex((option) => option.value === value)
+  const selected = selectedIndex < 0 ? undefined : options[selectedIndex]
+  const listId = `${id}-listbox`
+
+  // 面の外を押したら閉じる。開いたままだと、下の面の操作が板に隠れる。
+  useEffect(() => {
+    if (!open) return undefined
+    const onDocument = (event: MouseEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDocument)
+    return () => document.removeEventListener('mousedown', onDocument)
+  }, [open])
+
+  const openAt = (index: number) => {
+    setActive(index < 0 ? 0 : index)
+    setOpen(true)
+  }
+
+  const choose = (index: number) => {
+    const option = options[index]
+    setOpen(false)
+    if (option !== undefined && option.value !== value) onChange?.(option.value)
+  }
+
+  const onKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (disabled) return
+    if (!open) {
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter') {
+        event.preventDefault()
+        openAt(selectedIndex)
+      }
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      setOpen(false)
+      return
+    }
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      choose(active)
+      return
+    }
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      setActive((current) => Math.min(current + 1, options.length - 1))
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      setActive((current) => Math.max(current - 1, 0))
+      return
+    }
+    if (event.key === 'Home') {
+      event.preventDefault()
+      setActive(0)
+      return
+    }
+    if (event.key === 'End') {
+      event.preventDefault()
+      setActive(options.length - 1)
+    }
+  }
+
   const control = (
-    <select
-      id={id}
-      aria-label={hideLabel ? label : undefined}
-      aria-invalid={describedBy(id, error) ? true : undefined}
-      aria-describedby={describedBy(id, error)}
-      className={cn(CONTROL, className)}
-      {...props}
-    >
-      {children}
-    </select>
+    <div ref={rootRef} className="relative">
+      <button
+        type="button"
+        id={id}
+        role="combobox"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={listId}
+        aria-activedescendant={open ? `${id}-option-${active}` : undefined}
+        aria-label={hideLabel ? label : undefined}
+        aria-invalid={describedBy(id, error) ? true : undefined}
+        aria-describedby={describedBy(id, error)}
+        disabled={disabled}
+        onClick={() => {
+          if (disabled) return
+          if (open) setOpen(false)
+          else openAt(selectedIndex)
+        }}
+        onKeyDown={onKeyDown}
+        className={cn(CONTROL, 'text-left', className)}
+      >
+        {selected?.label ?? ''}
+      </button>
+      {open && (
+        <div
+          id={listId}
+          // 引き金が名前を持つので、板は同じ名前を指し直すだけにする。
+          aria-label={label}
+          role="listbox"
+          className="absolute top-full left-0 z-10 mt-1 w-full overflow-hidden rounded-ctl border border-line bg-surface"
+        >
+          {options.map((option, index) => {
+            const on = option.value === value
+            return (
+              <button
+                key={option.value}
+                id={`${id}-option-${index}`}
+                /* button にするのは、候補そのものが押せる要素だと要素の意味でも
+                   分かるようにするため（role は listbox の子として上書きする）。 */
+                type="button"
+                tabIndex={-1}
+                role="option"
+                aria-selected={on}
+                /* 押し下げで焦点が引き金から外れると、離す前に板が閉じる。
+                   選ぶのは click、焦点は動かさない。 */
+                onMouseDown={(event) => event.preventDefault()}
+                onMouseEnter={() => setActive(index)}
+                onClick={() => choose(index)}
+                className={cn(
+                  'flex min-h-11 w-full cursor-pointer items-center px-3 py-2 text-left font-sans text-body',
+                  on ? 'bg-pine text-on-pine' : 'text-ink',
+                  !on && index === active && 'bg-side',
+                )}
+              >
+                {option.label}
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
   )
   if (hideLabel) return control
   return (

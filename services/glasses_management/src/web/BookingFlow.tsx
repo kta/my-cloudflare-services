@@ -30,6 +30,7 @@ import { FailureNotice } from './design/notices'
 import { Card, Notice } from './design/surfaces'
 import { createMicrophoneRecorder } from './microphone'
 import {
+  BookingRecordingRail,
   type MicrophonePermissionResult,
   RecordingIndicator,
   RecordingUploadFailedScreen,
@@ -165,7 +166,9 @@ export function BookingFlow({
   const [sessionId] = useState(newRecordingSessionId)
   const [recordingState, setRecordingState] = useState<RecordingState>('permission_check')
   const recordingRef = useRef<RecordingState>('permission_check')
-  const [_permissionResult, setPermissionResult] = useState<MicrophonePermissionResult | null>(null)
+  /** 一度ブラウザに拒否されたか。要求前と拒否後で脇の列の言うことが変わる。 */
+  const [permissionDenied, setPermissionDenied] = useState(false)
+  /** スタッフが「録音せず続ける」を選ぶまで、録音の面は脇の列に立っている。 */
   const [recordingOffered, setRecordingOffered] = useState(true)
   const [requestingPermission, setRequestingPermission] = useState(false)
   const [recordingId, setRecordingId] = useState<string | null>(null)
@@ -342,13 +345,16 @@ export function BookingFlow({
   }
 
   const applyPermissionResult = (result: MicrophonePermissionResult) => {
-    setPermissionResult(result)
-    // 拒否は録音の失敗ではない。まだ何も収録していないので、受付は止めずに
-    // 下部バーの表示だけを 録音なし に落とす。
+    /*
+     * 拒否は録音の失敗ではない。まだ何も収録していないので受付は止めず、
+     * 脇の列を回復手順（Safari の設定）へ入れ替えるだけにする。録音なしで
+     * 続けるかどうかは、スタッフがその面で決める（UC-EYEX-177 / AC-EYEX-114）。
+     */
     if (result !== 'granted') {
-      setRecordingOffered(false)
+      setPermissionDenied(true)
       return
     }
+    setPermissionDenied(false)
     setStartedAt(clock())
     moveRecording('recording')
   }
@@ -364,15 +370,13 @@ export function BookingFlow({
   }
 
   /*
-   * 録音の許可は入力の裏で一度だけ求める。許可を待つ間も日付から入力でき、
-   * 拒否されたときは下部バーが 録音なし に変わるだけで受付は止まらない。
+   * ブラウザの権限要求は、脇の列の「録音を開始する」からしか開かない。画面を
+   * 開いただけで求めると、何のために録るかを説明する前に許可を尋ねることに
+   * なる（AC-EYEX-113）。
    */
-  const permissionRequested = useRef(false)
-  useEffect(() => {
-    if (!mayRecord || permissionRequested.current) return
-    permissionRequested.current = true
-    void requestPermission()
-  })
+  const declineRecording = () => {
+    setRecordingOffered(false)
+  }
 
   const sendRecording = async (reservationId: string | null, endReason: RecordingEndReason) => {
     if (!moveRecording('uploading')) return
@@ -570,14 +574,34 @@ export function BookingFlow({
    * 2 列 + 下部バー
    * ---------------------------------------------------------------- */
 
-  const railTitle =
+  /*
+   * 録音の面は予約入力の列を取らず、脇の列に立つ（AC-EYEX-05）。予約が確定して
+   * いない段階でも保存失敗が見えるのは、この面が受付の最初から最後まで同じ
+   * 場所に居続けるからである（UC-EYEX-034）。
+   */
+  const recordingRail =
+    mayRecord && recordingOffered ? (
+      <BookingRecordingRail
+        state={recordingState}
+        denied={permissionDenied}
+        requesting={requestingPermission}
+        onStart={() => void requestPermission()}
+        onDecline={declineRecording}
+        onRetryUpload={() => void retryUpload()}
+      />
+    ) : null
+
+  const summaryTitle =
     step === 'recital'
       ? '確保する接客資源'
       : step === 'purpose' && draft.alternatives.length > 0
         ? '代替時刻'
         : 'ここまでの内容'
+  const showSummary = step !== 'complete' && (contextChip !== '' || step === 'recital')
+  // 要約が空でも録音の面だけは残る。そのときは列そのものが録音の列になる。
+  const railTitle = showSummary ? summaryTitle : '録音'
 
-  const showRail = step !== 'complete' && (contextChip !== '' || step === 'recital')
+  const showRail = showSummary || recordingRail !== null
 
   const main = (
     <>
@@ -781,7 +805,9 @@ export function BookingFlow({
     <>
       <h2>{railTitle}</h2>
 
-      {step === 'purpose' && draft.alternatives.length > 0 && (
+      {recordingRail}
+
+      {showSummary && step === 'purpose' && draft.alternatives.length > 0 && (
         /*
          * 候補どうしの間に空白を置かない。モックは inline-block を隙間なく
          * 並べており、間に改行が入ると 4px の空白で 2 つ目が折り返す。
@@ -798,7 +824,7 @@ export function BookingFlow({
         </fieldset>
       )}
 
-      {step === 'recital' && (
+      {showSummary && step === 'recital' && (
         <>
           <RailSummary>
             {/*
@@ -825,7 +851,7 @@ export function BookingFlow({
         </>
       )}
 
-      {railTitle === 'ここまでの内容' && (
+      {showSummary && summaryTitle === 'ここまでの内容' && (
         <>
           {draft.date && <RailSummary>{japaneseDayLabel(draft.date)}</RailSummary>}
           {draft.startTime && step !== 'time' && <RailSummary>{draft.startTime}</RailSummary>}
@@ -906,6 +932,8 @@ export function BookingFlow({
         back={step !== 'complete' ? <FlowButton onClick={back}>戻る</FlowButton> : undefined}
         record={
           <RecordingIndicator
+            // `iPad録音` を名乗るのは脇の列の面。バーは同じ状態の短い写しである。
+            name="録音の経過"
             state={recordingOffered && mayRecord ? recordingState : null}
             elapsedSeconds={elapsedSeconds}
           />

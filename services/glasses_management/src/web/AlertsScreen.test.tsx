@@ -187,11 +187,11 @@ test('the inbox can be filtered by kind and by status', async () => {
   const { api, calls } = defaultApi()
   renderScreen(api)
   await screen.findByText('待ち時間が閾値を超えています')
-  fireEvent.change(screen.getByLabelText('種別'), { target: { value: 'alert' } })
+  fireEvent.click(screen.getByRole('button', { name: 'アラートのみ' }))
   await waitFor(() => {
     expect(calls.some((call) => call.url.includes('kind=alert'))).toBe(true)
   })
-  fireEvent.change(screen.getByLabelText('状態'), { target: { value: 'unresolved' } })
+  fireEvent.click(screen.getByRole('button', { name: '未対応のみ' }))
   await waitFor(() => {
     expect(calls.some((call) => call.url.includes('status=unresolved'))).toBe(true)
   })
@@ -291,7 +291,7 @@ test('該当が無ければ理由と回復操作を出す (UC-EYEX-178)', async 
   })
   renderScreen(api)
 
-  fireEvent.change(await screen.findByLabelText('状態'), { target: { value: 'unread' } })
+  fireEvent.click(await screen.findByRole('button', { name: '未読のみ' }))
   const empty = await screen.findByRole('region', {
     name: '条件に一致するお知らせ・アラートはありません',
   })
@@ -299,11 +299,15 @@ test('該当が無ければ理由と回復操作を出す (UC-EYEX-178)', async 
     '検索語またはフィルターを変更してください。履歴自体は削除されていません。',
   )
   // 空は「空の一覧」ではなく、面ごと入れ替わる全画面の状態。
-  expect(screen.queryByLabelText('状態')).toBeNull()
+  expect(screen.queryByRole('group', { name: '状態' })).toBeNull()
 
   fireEvent.click(screen.getByRole('button', { name: 'フィルターをすべて解除' }))
   await waitFor(() => {
-    expect(screen.getByLabelText('状態')).toHaveValue('all')
+    // 押されているピルが「今の条件」を名乗る（畳んだ値ではなく開いたまま出す）。
+    expect(screen.getByRole('button', { name: 'すべての状態' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
   })
   expect(screen.getByText('待ち時間が閾値を超えています')).toBeTruthy()
 })

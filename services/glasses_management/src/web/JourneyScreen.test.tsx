@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { expect, type Mock, test, vi } from 'vitest'
 import { JourneyScreen } from './JourneyScreen'
 import type { StaffApi } from './staff-screen'
+import { choosePickerOption } from './test/picker'
 
 const STORE_ID = '11111111-1111-4111-8111-111111111111'
 const RESERVATION_ID = '22222222-2222-4222-8222-222222222222'
@@ -275,7 +276,7 @@ test('updates stage, staff, equipment and the next guidance together (UC-EYEX-05
   renderJourney(api)
 
   fireEvent.click(await screen.findByRole('button', { name: /田中 花子/ }))
-  fireEvent.change(screen.getByLabelText('店内工程'), { target: { value: 'service_in_progress' } })
+  choosePickerOption(screen.getByRole('combobox', { name: '店内工程' }), '接客中')
   fireEvent.change(screen.getByLabelText('担当者ID'), { target: { value: STAFF_ID } })
   fireEvent.change(screen.getByLabelText('設備ID'), { target: { value: EQUIPMENT_ID } })
   fireEvent.change(screen.getByLabelText('次のご案内'), {
@@ -309,7 +310,7 @@ test('updates a walk-in stage through the walk-in endpoint (UC-EYEX-052)', async
   renderJourney(api)
 
   fireEvent.click(await screen.findByRole('button', { name: /ウォークイン 3/ }))
-  fireEvent.change(screen.getByLabelText('店内工程'), { target: { value: 'service_in_progress' } })
+  choosePickerOption(screen.getByRole('combobox', { name: '店内工程' }), '接客中')
   fireEvent.click(screen.getByRole('button', { name: '接客の状況を保存する' }))
 
   await waitFor(() =>
@@ -364,7 +365,7 @@ test('refuses a stale save and compares the latest content with this terminal’
   renderJourney(api)
 
   fireEvent.click(await screen.findByRole('button', { name: /田中 花子/ }))
-  fireEvent.change(screen.getByLabelText('店内工程'), { target: { value: 'service_completed' } })
+  choosePickerOption(screen.getByRole('combobox', { name: '店内工程' }), '接客完了')
   fireEvent.click(screen.getByRole('button', { name: '接客の状況を保存する' }))
 
   const conflict = await screen.findByRole('region', { name: '別の端末で先に更新されています' })

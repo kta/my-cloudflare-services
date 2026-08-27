@@ -19,7 +19,14 @@ export function AppSidebar({ children }: { children: ReactNode }) {
   return (
     <nav
       aria-label="画面の一覧"
-      className="min-h-0 shrink-0 overflow-auto border-line border-r bg-side p-4.5"
+      /*
+       * 13 の行き先と、開いている面の節が iPad 横向き（814px、緑バーを引いて
+       * 738px）に収まらなければならない。18px の内側余白と 48px 行のままだと
+       * 行き先だけで 764px になり、末尾の「お知らせ」が常に切れる。48px は
+       * 運用面の 4 項目向けの寸法で、13 項目の柱には合っていないので、余白と
+       * 行高を詰めて全部を一度に見せる（`SidebarItem` / `SidebarSection`）。
+       */
+      className="min-h-0 shrink-0 overflow-auto border-line border-r bg-side p-3"
       style={{ width: '250px' }}
     >
       {children}
@@ -30,8 +37,8 @@ export function AppSidebar({ children }: { children: ReactNode }) {
 /** 行き先の群。業務と設定・運用を分けて、どちらの話かを先に言う。 */
 export function SidebarGroup({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="mt-4.5 first:mt-0">
-      <p className="px-2.5 pb-1 font-sans text-ink-muted text-note">{label}</p>
+    <div className="mt-3 first:mt-0">
+      <p className="my-0 px-2.5 pb-0.5 font-sans text-ink-muted text-note">{label}</p>
       {children}
     </div>
   )
@@ -53,7 +60,9 @@ export function SidebarItem({
       aria-current={current ? 'page' : undefined}
       onClick={onClick}
       className={cn(
-        'min-h-12 w-full whitespace-nowrap rounded-ctl p-2.5 text-left font-sans text-body',
+        // 36px 行。13 項目 + 節を 738px に収めるための寸法で、モックの 48px は
+        // 4 項目しか無い運用面の値だった。
+        'min-h-9 w-full whitespace-nowrap rounded-ctl px-2.5 py-1 text-left font-sans text-body',
         current ? 'bg-surface font-bold text-pine' : 'bg-transparent text-ink',
       )}
     >
@@ -76,20 +85,25 @@ export function SidebarSections({ children }: { children: ReactNode }) {
 export function SidebarSection({
   children,
   current = false,
+  name,
   onClick,
 }: {
   children: ReactNode
   current?: boolean
+  /** 読み上げ上の名前。字面に出さない状態語（`完了` / `編集中`）をここへ持たせる。 */
+  name?: string
   onClick?: () => void
 }) {
   return (
     <button
       type="button"
       aria-current={current ? 'true' : undefined}
+      aria-label={name}
       onClick={onClick}
       disabled={onClick === undefined}
       className={cn(
-        'min-h-11 w-full whitespace-nowrap rounded-ctl px-2.5 py-1.5 text-left font-sans text-note',
+        // 28px 行。節は行き先より一段小さく、開いている面の分だけ足される。
+        'min-h-7 w-full whitespace-nowrap rounded-ctl px-2.5 py-0.5 text-left font-sans text-note',
         current ? 'font-bold text-pine' : 'text-ink-muted',
       )}
     >

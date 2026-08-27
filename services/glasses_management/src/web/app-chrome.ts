@@ -96,11 +96,16 @@ export function barFor(location: StaffLocation, store: StoreSummary): BarSpec {
         primary: { label: '＋ 予約を取る', to: { screen: 'booking' } },
       }
     case 'customers':
-      // 顧客台帳のモックはタブだけで主操作を持たない。検索と同じ枝に置かない。
+      /*
+       * 基準画像 `ref--CUSTOMER-CURRENT.png` の緑バーは右肩に `＋ 予約を取る`
+       * を持つ。お客様の記録を読みながら「では予約を」と言われる面なので、
+       * ここで主操作を落とすと台帳へ戻らないと予約が取れない。
+       */
       return {
         kind: 'business',
         subtitle: `${name} · 顧客台帳`,
         tabs: [],
+        primary: { label: '＋ 予約を取る', to: { screen: 'booking' } },
       }
     case 'reservation-detail':
       return { kind: 'plain', subtitle: `${name} · 予約`, tabs: [] }
@@ -165,6 +170,24 @@ export function sidebarFor(today: string | undefined): SidebarGroup[] {
   ]
 }
 
+/**
+ * 開いている面が、柱のどの行き先に属するか。
+ *
+ * 現在地を面の名前の一致だけで決めると、柱に行き先を持たない面（注意事項の
+ * 確認・予約の詳細）へ入った瞬間にどの行も光らなくなり、「今どこにいるか」が
+ * 読めなくなる。そういう面は親の行き先へ帰着させる。
+ */
+const SIDEBAR_PARENT: Partial<Record<StaffLocation['screen'], StaffLocation['screen']>> = {
+  // 注意事項の確認は、権限設定の面から辿る同じ話の続きである。
+  'attention-review': 'attention-settings',
+  // 予約 1 件の詳細は台帳の中の 1 行を開いた姿である。
+  'reservation-detail': 'ledger',
+}
+
+export function sidebarCurrentScreen(location: StaffLocation): StaffLocation['screen'] {
+  return SIDEBAR_PARENT[location.screen] ?? location.screen
+}
+
 /* ------------------------------------------------------------------ *
  * 面からバーへ書き込む値
  * ------------------------------------------------------------------ */
@@ -210,10 +233,30 @@ export const barOverlay = createBarOverlay()
  * して、その面の節は開いている行き先の下へ入れる。どの節を出すかは面しか
  * 知らないので、面が書きサイドバーが読む。
  */
-export type ScreenSection = { label: string; to?: StaffLocation; current?: boolean }
+export type ScreenSection = {
+  label: string
+  to?: StaffLocation
+  current?: boolean
+  /**
+   * 読み上げ上の名前。柱に出る字は工程の番号と名前だけなので、「完了 / 編集中」
+   * のような状態語はここへ持たせる（色に頼らず語で伝える）。
+   */
+  name?: string
+  /**
+   * 押すと同じ面の中で見る対象が変わる節（設定の工程・分析の観点）。何をするかは
+   * 面しか知らないので、押されたことだけを `select` で面へ返す。
+   */
+  selectable?: boolean
+}
 
 function createSectionStore() {
   let current: ScreenSection[] = []
+  /*
+   * 節を押したときの処理は面が持つ。値として節に混ぜると、同じ並びのときに
+   * 古い関数が残る（`same` が真になり書き換えないため）。比較する値とは別の
+   * 場所に、購読者を起こさずに毎回上書きして持つ。
+   */
+  let handler: ((label: string) => void) | undefined
   const listeners = new Set<() => void>()
   const same = (next: ScreenSection[]) =>
     next.length === current.length &&
@@ -221,10 +264,18 @@ function createSectionStore() {
       (section, index) =>
         section.label === current[index]?.label &&
         section.current === current[index]?.current &&
+        section.name === current[index]?.name &&
+        section.selectable === current[index]?.selectable &&
         section.to?.screen === current[index]?.to?.screen,
     )
   return {
     snapshot: () => current,
+    bindSelect(next: ((label: string) => void) | undefined) {
+      handler = next
+    },
+    select(label: string) {
+      handler?.(label)
+    },
     subscribe(listener: () => void) {
       listeners.add(listener)
       return () => {

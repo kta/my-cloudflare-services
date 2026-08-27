@@ -565,8 +565,9 @@ test('tells the workspace when the draft holds work a store switch would destroy
 /*
  * 録音の配線 (UC-EYEX-031 / 033 / 034 / 041 / 177)。
  *
- * モックでは、権限の説明と拒否は「全画面の状態」であり、録音中の表示は下部
- * 進捗バーの右端の `● mm:ss` だけである。脇の列に録音カードは無い。
+ * モックの全画面同意面（BOOK-MIC-PERMISSION / EX-MIC-DENIED）は実アプリでは
+ * 使わない。説明・権限要求・拒否時の回復・保存失敗は脇の列（`aside`）が持ち、
+ * 下部進捗バーの右端は同じ状態の短い写し（`● mm:ss`）だけを出す。
  */
 const RECORDING_PERMISSIONS = ['recording.read'] as const
 
@@ -585,32 +586,50 @@ function renderRecordingFlow(
   return { ...result, requestMicrophonePermission }
 }
 
-/** 権限説明の全画面を通り抜けて、1 工程目に立つ。 */
+/** 脇の列の説明を読み、明示操作で録音を始める。 */
 async function grantMicrophone() {
-  // 許可は入力の裏で自動的に求めるので、待つのは入力の先頭が出ることだけ。
   await screen.findByRole('heading', { name: 'ご来店予定の日を伺えますか？' })
+  click('録音を開始する')
   await waitFor(() => {
     expect(screen.getByTestId('recording-state')).toHaveTextContent('録音中')
   })
 }
 
-// AC-EYEX-05: 録音は入力列を取らず、下部バーの右端にだけ出る
-test('録音状態は下部の進捗バーの右端に出る', async () => {
+// AC-EYEX-05: 録音は入力列を取らず、脇の列と下部バーの右端にだけ出る
+test('録音の面は脇の列に立ち、下部バーの右端に状態が写る', async () => {
   renderRecordingFlow()
   await grantMicrophone()
-  const status = screen.getByRole('status', { name: 'iPad録音' })
-  expect(status.closest('footer')).not.toBeNull()
+  const panel = screen.getByRole('status', { name: 'iPad録音' })
+  expect(panel.closest('aside')).not.toBeNull()
+  // 録音中は説明も操作も畳み、状態だけを残す。
+  expect(within(panel).queryAllByRole('button')).toHaveLength(0)
+  const bar = screen.getByTestId('recording-state')
+  expect(bar.closest('footer')).not.toBeNull()
   expect(
-    within(status.closest('footer') as HTMLElement).getByRole('list', { name: '予約入力の工程' }),
+    within(bar.closest('footer') as HTMLElement).getByRole('list', { name: '予約入力の工程' }),
   ).toBeVisible()
-  expect(screen.queryByRole('region', { name: 'iPad録音' })).toBeNull()
+})
+
+// UC-EYEX-033 / AC-EYEX-113: 要求の前に取得目的・閲覧者・最低保持期間を説明する
+test('権限を求める前に取得目的・閲覧者・最低保持期間を説明する', async () => {
+  const { requestMicrophonePermission } = renderRecordingFlow()
+  await screen.findByRole('heading', { name: 'ご来店予定の日を伺えますか？' })
+  const panel = screen.getByRole('status', { name: 'iPad録音' })
+  expect(panel).toHaveTextContent('予約内容の復唱を、聞き間違いの確認のために記録します。')
+  expect(panel).toHaveTextContent('再生できるのは選択中の店舗で録音を扱えるスタッフだけです。')
+  expect(panel).toHaveTextContent(
+    '成立した予約の録音は録音完了から最低30日、破棄した受付の録音は録音終了から最低24時間保持します。',
+  )
+  // 画面を開いただけでは要求しない。
+  expect(requestMicrophonePermission).not.toHaveBeenCalled()
 })
 
 // BOOK-MIC-PERMISSION: 録音の確認で受付を止めない
-test('録音の許可は入力を止めずに裏で求める', async () => {
+test('録音の説明は全画面にならず、入力は最初の工程から始まる', async () => {
   renderRecordingFlow()
   expect(await screen.findByRole('heading', { name: 'ご来店予定の日を伺えますか？' })).toBeVisible()
   expect(screen.queryByRole('heading', { name: '予約内容の復唱を記録します' })).toBeNull()
+  expect(screen.getByRole('button', { name: '8月27日（木）' })).toBeVisible()
 })
 
 // UC-EYEX-033 / AC-EYEX-113: navigator には触れず、注入された権限要求だけを使う
@@ -623,20 +642,48 @@ test('マイク権限は注入された関数だけで要求し、許可され�
   expect(requestMicrophonePermission).toHaveBeenCalledTimes(1)
 })
 
-// UC-EYEX-177 / EX-MIC-DENIED: 拒否されても録音状態は権限確認のまま
-test('権限が拒否されても入力は進み、録音状態は進めない', async () => {
-  renderRecordingFlow({}, {}, 'denied')
-  expect(await screen.findByRole('heading', { name: 'ご来店予定の日を伺えますか？' })).toBeVisible()
+// UC-EYEX-177 / AC-EYEX-114: 拒否されたら回復手順と録音なし継続の可否を出す
+test('権限が拒否されるとSafariの回復手順と録音なし継続の可否を脇の列に出す', async () => {
+  const { requestMicrophonePermission } = renderRecordingFlow({}, {}, 'denied')
+  await screen.findByRole('heading', { name: 'ご来店予定の日を伺えますか？' })
+  click('録音を開始する')
+  const panel = await screen.findByRole('status', { name: 'iPad録音' })
   await waitFor(() => {
-    expect(screen.getByTestId('recording-state')).toHaveTextContent('録音なし')
+    expect(panel).toHaveTextContent(
+      'Safariでマイクが許可されていません。iPadの「設定」→「Safari」→「マイク」でEYEX予約へのアクセスを許可してから、もう一度お試しください。',
+    )
   })
+  expect(panel).toHaveTextContent('この店舗では録音なしで予約受付を続けられます。')
+  // 再確認はもう一度ブラウザへ問い合わせる。
+  click('権限を再確認する')
+  await waitFor(() => expect(requestMicrophonePermission).toHaveBeenCalledTimes(2))
+  // 入力は止まっていない。
+  expect(screen.getByRole('button', { name: '8月27日（木）' })).toBeVisible()
+})
+
+// UC-EYEX-177: 録音なしを選ぶと面ごと畳まれ、受付はそのまま続く
+test('録音なしで続けると録音の面は畳まれ、下部バーは録音なしになる', async () => {
+  renderRecordingFlow({}, {}, 'denied')
+  await screen.findByRole('heading', { name: 'ご来店予定の日を伺えますか？' })
+  click('録音を開始する')
+  await screen.findByRole('button', { name: '録音なしで続ける' })
+  click('録音なしで続ける')
+  await waitFor(() => {
+    expect(screen.queryByRole('status', { name: 'iPad録音' })).toBeNull()
+  })
+  expect(screen.getByTestId('recording-state')).toHaveTextContent('録音なし')
 })
 
 // UC-EYEX-177: 録音できないときも下部バーは 録音なし のまま入力を続けられる
 test('録音なしのまま復唱まで進める', async () => {
   renderRecordingFlow({}, {}, 'denied')
   await screen.findByRole('heading', { name: 'ご来店予定の日を伺えますか？' })
-  expect(screen.getByTestId('recording-state')).toHaveTextContent('録音なし')
+  click('録音を開始する')
+  await screen.findByRole('button', { name: '録音なしで続ける' })
+  click('録音なしで続ける')
+  await waitFor(() => {
+    expect(screen.getByTestId('recording-state')).toHaveTextContent('録音なし')
+  })
   await pickDayAndTime()
   click(/メガネを新しく作りたい/)
   expect(screen.getByRole('button', { name: 'お客様情報へ進む' })).toBeEnabled()
@@ -646,6 +693,8 @@ test('録音なしのまま復唱まで進める', async () => {
 test('権限拒否でも入力画面から予約入力を破棄できる', async () => {
   renderRecordingFlow({}, {}, 'denied')
   await screen.findByRole('heading', { name: 'ご来店予定の日を伺えますか？' })
+  click('録音を開始する')
+  await screen.findByRole('button', { name: '録音なしで続ける' })
   click('戻る')
   expect(await screen.findByRole('alertdialog', { name: '入力を破棄しますか？' })).toBeVisible()
 })
@@ -728,6 +777,9 @@ test('録音の保存に失敗したら予約は成立しましたと再試行�
 test('録音を開始していなければ確定しても録音メタデータを送らない', async () => {
   const { calls } = renderRecordingFlow({}, {}, 'denied')
   await screen.findByRole('heading', { name: 'ご来店予定の日を伺えますか？' })
+  click('録音を開始する')
+  await screen.findByRole('button', { name: '録音なしで続ける' })
+  click('録音なしで続ける')
   await pickDayAndTime()
   click(/メガネを新しく作りたい/)
   click('お客様情報へ進む')
@@ -742,12 +794,14 @@ test('録音を開始していなければ確定しても録音メタデータ�
 
 test('予約入力は録音の確認画面で塞がれず、最初の工程から始まる', async () => {
   // 電話を受けた直後に開く画面なので、録音の可否を先に問う全画面が挟まると
-  // 受付そのものが止まる。録音状態は下部バーの表示だけで足りる。
+  // 受付そのものが止まる。説明も操作も脇の列に置き、入力列は取らない。
   renderFlow({}, { permissions: ['reservation.write', 'recording.read'] })
 
   expect(
     await screen.findByRole('heading', { name: 'ご来店予定の日を伺えますか？' }),
   ).toBeInTheDocument()
   expect(screen.queryByRole('heading', { name: /予約内容の復唱を記録します/ })).toBeNull()
-  expect(screen.queryByRole('button', { name: '録音を開始する' })).toBeNull()
+  // 開始の操作は脇の列にしか無い。
+  const start = screen.getByRole('button', { name: '録音を開始する' })
+  expect(start.closest('aside')).not.toBeNull()
 })

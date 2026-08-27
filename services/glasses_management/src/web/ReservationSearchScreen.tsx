@@ -12,7 +12,7 @@ import {
 import { TextAreaField, TextField } from './design/forms'
 import { FullScreenState, Panel, Workspace } from './design/layouts'
 import { FailureNotice } from './design/notices'
-import { Card, ListRow, Waveform } from './design/surfaces'
+import { Card, CardColumns, ListRow, Waveform } from './design/surfaces'
 import type { StaffScreenProps } from './staff-screen'
 
 /**
@@ -209,7 +209,6 @@ export const FOCUS_RING =
  * `design/surfaces` の語彙が持っている。ここに写しを置くと同じ実測値が 2 か所に
  * 増えてどちらが正か読めなくなるので、この面が固有に持つのは `.audio` だけ。
  */
-const WORKSPACE_COLUMNS = { gridTemplateColumns: '390px 1fr' }
 /**
  * `.audio{border:1px solid var(--l);padding:14px;border-radius:9px;margin-top:14px}`
  * モックの `.audio` は地色を持たない。台紙の色をそのまま透かす。
@@ -752,8 +751,7 @@ export function ReservationSearchScreen({
             <>
               <section aria-label="予約詳細">
                 <h1>{formatJstHeading(selected.startAt)}</h1>
-                {/* `.card` 自身が margin-top:10px を持つので、格子側は間隔を足さない。 */}
-                <div className="grid grid-cols-3 gap-3">
+                <CardColumns>
                   <Card className="mt-2.5">
                     <b>予約内容</b>
                     <CardRow label="来店日時">{formatJstDateTime(selected.startAt)}</CardRow>
@@ -772,7 +770,7 @@ export function ReservationSearchScreen({
                     <span className="mt-1 block">{STATUS_LABEL[selected.status]}</span>
                     <span className="block">{SOURCE_LABEL[selected.source]}</span>
                   </Card>
-                </div>
+                </CardColumns>
               </section>
               <RecordingPanel recording={recording} permissions={permissions} />
               <FilterLine>

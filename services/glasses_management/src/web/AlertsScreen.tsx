@@ -15,7 +15,7 @@ import {
   alertResolutionLabel,
   formatJstDateTime,
 } from './analytics-view'
-import { Action, Actions, FilterLine, FilterSelect } from './design/controls'
+import { Action, Actions, FilterGroup, FilterLine } from './design/controls'
 import { Modal } from './design/dialogs'
 import { CheckToggle, TextField } from './design/forms'
 import { FullScreenState } from './design/layouts'
@@ -246,30 +246,18 @@ export function AlertsScreen({ storeId, api, permissions, navigate }: Props) {
       <h1>お知らせとアラート</h1>
 
       <FilterLine>
-        <FilterSelect
-          id="alert-kind"
+        <FilterGroup
           label="種別"
           value={kind}
+          options={KIND_OPTIONS}
           onChange={(next) => setKind(next as 'all' | AlertKind)}
-        >
-          {KIND_OPTIONS.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </FilterSelect>
-        <FilterSelect
-          id="alert-status"
+        />
+        <FilterGroup
           label="状態"
           value={status}
+          options={STATUS_OPTIONS}
           onChange={(next) => setStatus(next as StatusFilter)}
-        >
-          {STATUS_OPTIONS.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </FilterSelect>
+        />
       </FilterLine>
 
       {listFailed && <FailureNotice>{LIST_FAILURE}</FailureNotice>}

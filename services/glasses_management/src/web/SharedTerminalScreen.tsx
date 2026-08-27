@@ -279,13 +279,14 @@ export function SharedTerminalScreen({ storeId, storeName, api, now, idleLockSec
           <Card label="無操作ロック">
             <b>無操作ロック</b>
             <br />
-            {idleLockSeconds === undefined ? (
-              <>
-                未取得
-                <br />
-                無操作ロック時間はこの画面から取得できません。
-              </>
-            ) : (
+            {/*
+              値が来ていないあいだは黙る。モック `DEVICE-LIST` のこのカードは
+              `既定 2分` のように分かっている事実だけを書いており、
+              「未取得 / この画面から取得できません」はモックの語彙に無い
+              失敗文言だった。推測した既定値を描かない意図は、書かないことで
+              同じように守れる（下の変更導線はそのまま残る）。
+            */}
+            {idleLockSeconds === undefined ? null : (
               <>
                 {`既定 ${formatMinutes(idleLockSeconds.organizationDefault)}`}
                 <br />

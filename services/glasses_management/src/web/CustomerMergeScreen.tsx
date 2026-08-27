@@ -11,7 +11,7 @@ import { useState } from 'react'
 import { mergeImpactRows, mergeImpactTotal } from './attention-view'
 import { Action, Actions } from './design/controls'
 import { Modal } from './design/dialogs'
-import { SelectField, TextAreaField, TextField } from './design/forms'
+import { PickerField, TextAreaField, TextField } from './design/forms'
 import { Compare, FullScreenState } from './design/layouts'
 import { FailureNotice, StatusNotice } from './design/notices'
 import { Card, CardGrid, FieldCard } from './design/surfaces'
@@ -29,6 +29,12 @@ const AUDIT_FAILURE =
   '監査記録に残せなかったため、この操作は成立していません。入力はそのまま保持しています。'
 const GENERIC_FAILURE = '操作を完了できませんでした。通信を確認してもう一度お試しください。'
 const REASON_REQUIRED = '理由を入力してください。'
+
+/* 選択肢は描く場所ではなくここで組む。値は契約の文字列そのまま。 */
+const ENTRY_TYPE_OPTIONS = [
+  { value: 'reservation', label: '予約' },
+  { value: 'walkin', label: 'ウォークイン' },
+]
 const IMPACT_CHANGED = '影響件数が変わりました。最新の影響を確認してからもう一度実行してください。'
 
 async function readJson(response: Response): Promise<unknown> {
@@ -346,17 +352,13 @@ export function CustomerMergeScreen({ storeId, api, permissions, navigate }: Pro
       <Card className="mt-4.5" label="誤った顧客関連を解除">
         <b>誤った顧客関連を解除</b>
         <div className="mt-3.5 grid grid-cols-2 gap-3">
-          <SelectField
+          <PickerField
             id="release-entry-type"
             value={entryType}
-            onChange={(event) =>
-              setEntryType(event.target.value as CustomerLinkReleaseInput['entryType'])
-            }
+            options={ENTRY_TYPE_OPTIONS}
+            onChange={(next) => setEntryType(next as CustomerLinkReleaseInput['entryType'])}
             label="受付種別"
-          >
-            <option value="reservation">予約</option>
-            <option value="walkin">ウォークイン</option>
-          </SelectField>
+          />
           <TextField
             id="release-entry-id"
             value={entryId}

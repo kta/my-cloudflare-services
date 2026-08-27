@@ -1,0 +1,192 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>EYEX予約 — 予約の変更・取消とお知らせ</title><style>
+:root{--g:#1f604b;--gs:#e1efe8;--bg:#eef2ef;--w:#fff;--i:#17251f;--m:#52655c;--l:#cbd6d0;--warn:#8b3b2c;--amber:#7a5415;--focus:#005fcc}
+*{box-sizing:border-box}body{margin:0;background:#dce3df;color:var(--i);font:16px/1.5 "IBM Plex Sans JP",sans-serif}
+.page{width:1194px;margin:28px auto}.page>h1{font-size:28px}
+.ipad{height:832px;border:9px solid #101513;border-radius:28px;overflow:hidden;background:var(--bg);margin:18px 0 42px;position:relative}
+.bar{height:76px;background:var(--g);color:#fff;display:flex;align-items:center;gap:12px;padding:0 20px}
+.brand{font-size:19px;font-weight:700}.brand small{display:block;font-weight:400}
+.bar button{min-height:44px;min-width:44px;border:0;border-radius:8px;padding:0 14px;font:inherit;background:transparent;color:#fff}
+.bar .on,.bar .primary{background:#fff;color:var(--g);font-weight:700}.push{margin-left:auto}
+.workspace{height:calc(100% - 76px);display:grid;grid-template-columns:440px 1fr}
+.workspace.narrow{grid-template-columns:300px 1fr}
+.side{padding:20px;background:#e7ede9;border-right:1px solid var(--l);overflow:auto}
+.detail{padding:20px 26px;overflow:auto}
+.full{height:calc(100% - 76px);padding:20px 26px 100px;overflow:auto}
+.detail.pb{padding-bottom:100px}
+h2{font-size:26px;margin:0 0 8px}.side h2{font-size:20px}h3{font-size:17px;margin:16px 0 8px}
+.lead{margin:0 0 12px;color:var(--m)}
+.card{background:#fff;border:1px solid var(--l);border-radius:9px;padding:14px;margin-top:10px}
+.card dl{margin:0}.card dt{color:var(--m);font-size:14px;margin-top:8px}.card dt:first-child{margin-top:0}.card dd{margin:0;font-weight:700}
+.days{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:0 0 6px}
+.days button{min-height:64px;border:1px solid var(--l);background:#fff;border-radius:8px;font:inherit;color:var(--i)}
+.days .sel{border:3px solid var(--g);background:var(--gs);font-weight:700}
+.slots{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.slot{min-height:76px;border:1px solid var(--l);border-radius:9px;background:#fff;padding:12px;text-align:left;font:inherit;color:var(--i)}
+.slot b{display:block;font-size:20px}.slot small{color:var(--m)}
+.slot.sel{border:3px solid var(--g);background:var(--gs)}.slot.sel small{color:var(--g);font-weight:700}
+.slot.off{background:#f0f5f2;color:var(--m)}
+.ok{background:var(--gs);border:1px solid var(--g);border-radius:9px;padding:14px;margin-top:14px}
+.notice{background:#fff7e9;border:1px solid var(--amber);border-radius:9px;padding:14px;margin-top:10px}
+.notice b{color:var(--amber)}
+.actions{display:flex;justify-content:flex-end;gap:12px;margin-top:16px}
+.act{min-height:52px;border:1px solid var(--l);border-radius:8px;background:#fff;padding:0 20px;font:inherit;color:var(--i)}
+.act.primary-act{background:var(--g);color:#fff;border-color:var(--g);font-weight:700}
+.act.danger{background:#fff;color:var(--warn);border:2px solid var(--warn);font-weight:700}
+.footbar{position:absolute;left:0;right:0;bottom:0;min-height:88px;background:#fff;border-top:1px solid var(--l);display:flex;align-items:center;gap:14px;padding:0 26px}
+.record{font:700 16px ui-monospace,monospace;color:var(--warn);margin-left:14px}
+.dangerbox{display:flex;align-items:center;gap:12px}.dangerbox span{color:var(--warn);font-size:14px;max-width:230px}
+.diff{display:grid;grid-template-columns:150px 1fr 1fr;gap:1px;background:var(--l);border:1px solid var(--l);border-radius:9px;overflow:hidden}
+.diff div{background:#fff;padding:10px 12px;min-height:54px;font-size:15px}
+.diff .h{background:#dce5e0;font-weight:700;min-height:38px}
+.diff .chg{background:var(--gs)}.diff .tag{display:inline-block;background:var(--g);color:#fff;font-size:13px;font-weight:700;padding:1px 8px;border-radius:6px;margin-right:6px}
+.pair{display:grid;grid-template-columns:1.4fr 1fr;gap:14px;margin-top:14px;align-items:start}
+.readout{font-size:25px;line-height:1.8;background:#fff;border:1px solid var(--l);border-radius:12px;padding:28px}
+.reasons{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+.reason{min-height:64px;border:1px solid var(--l);border-radius:9px;background:#fff;padding:12px;text-align:left;font:inherit;color:var(--i)}
+.reason.sel{border:3px solid var(--g);background:var(--gs);font-weight:700}
+.after{margin:0;padding:0;list-style:none}
+.after li{background:#fff;border:1px solid var(--l);border-radius:9px;padding:12px 14px;margin-top:8px}
+.tabs{display:grid;gap:10px}
+.tab{min-height:56px;border:1px solid var(--l);border-radius:9px;background:#fff;padding:0 14px;text-align:left;font:inherit;color:var(--i)}
+.tab.sel{border:3px solid var(--g);background:var(--gs);font-weight:700}
+.item{background:#fff;border:1px solid var(--l);border-radius:9px;padding:14px 16px;margin-top:10px;display:grid;grid-template-columns:1fr 200px;gap:14px;align-items:center}
+.item.alert{border:2px solid var(--warn);background:#fff1ed}
+.meta{color:var(--m);font-size:14px}
+.kind{display:inline-block;font-size:13px;font-weight:700;border:1px solid var(--l);border-radius:6px;padding:1px 8px;margin-right:8px}
+.kind.a{color:var(--warn);border-color:var(--warn)}.kind.n{color:var(--g);border-color:var(--g)}
+.unread{display:inline-block;font-size:13px;font-weight:700;background:var(--g);color:#fff;border-radius:6px;padding:1px 8px;margin-left:8px}
+.read{display:inline-block;font-size:13px;color:var(--m);margin-left:8px}
+.item .act{min-height:48px;width:100%}
+:focus-visible{outline:3px solid var(--focus);outline-offset:3px}
+</style></head><body><main class="page">
+<h1>EYEX予約 — 予約の変更・取消とお知らせ</h1>
+
+<section class="ipad" id="change-datetime">
+<header class="bar"><div class="brand">EYEX予約<small>銀座店 · 予約の変更</small></div><button>予約台帳</button><button class="on">予約検索</button><button>顧客台帳</button><button class="primary push">＋ 予約を取る</button></header>
+<div class="workspace">
+<aside class="side">
+<h2>変更前の予約</h2>
+<div class="card"><dl>
+<dt>日時</dt><dd>8月27日（水）11:00–12:00</dd>
+<dt>お客様</dt><dd>田中 花子 様</dd>
+<dt>来店目的</dt><dd>視力測定・新調相談</dd>
+<dt>担当・設備</dt><dd>佐藤 美咲 / 視力測定機 A</dd>
+<dt>受付の経路</dt><dd>電話予約</dd>
+</dl></div>
+<p class="lead">変更を確定するまで、この予約はそのまま残ります。</p>
+</aside>
+<section class="detail">
+<h2>新しい日時を選んでください</h2>
+<p class="lead">お客様のご希望を伺いながら、受付できる時刻を選びます。</p>
+<h3>日付</h3>
+<div class="days" aria-label="日付の候補">
+<button class="sel">27 水<br><small>選択中</small></button><button>28 木</button><button>29 金</button><button>30 土</button><button>31 日</button>
+</div>
+<h3>時刻</h3>
+<div class="slots" aria-label="時刻の候補">
+<button class="slot"><b>10:00</b><small>受付可能</small></button>
+<button class="slot"><b>11:00</b><small>受付可能</small></button>
+<button class="slot sel"><b>14:00</b><small>受付可能 · 選択中</small></button>
+<button class="slot off"><b>15:30</b><small>担当者が埋まっています</small></button>
+<button class="slot"><b>16:00</b><small>受付可能</small></button>
+</div>
+<div class="ok"><b>14:00 は 60分の受付ができます。</b><br>佐藤 美咲・視力測定機 A・相談カウンター 2 を確保します。</div>
+<div class="actions"><button class="act">やめる</button><button class="act primary-act">変更内容を確認する</button></div>
+</section>
+</div>
+</section>
+
+<section class="ipad" id="change-diff">
+<header class="bar"><div class="brand">EYEX予約<small>銀座店 · 予約の変更</small></div><button>予約台帳</button><button class="on">予約検索</button><button>顧客台帳</button><button class="primary push">＋ 予約を取る</button></header>
+<div class="full">
+<h2>変更内容の確認</h2>
+<p class="lead">田中 花子 様 · 8月27日（水）の予約　変わる項目には「変更」と表示しています。</p>
+<div class="diff">
+<div class="h">項目</div><div class="h">変更前</div><div class="h">変更後</div>
+<div class="chg">日時</div><div class="chg">8月27日（水）11:00–12:00</div><div class="chg"><span class="tag">変更</span>8月27日（水）14:00–15:00</div>
+<div>来店目的</div><div>視力測定・新調相談</div><div>視力測定・新調相談（変わりません）</div>
+<div>担当</div><div>佐藤 美咲</div><div>佐藤 美咲（変わりません）</div>
+<div class="chg">設備</div><div class="chg">視力測定機 A</div><div class="chg"><span class="tag">変更</span>視力測定機 A・相談カウンター 2</div>
+<div>所要時間</div><div>約60分</div><div>約60分（変わりません）</div>
+</div>
+<div class="pair">
+<div>
+<h3>お客様へお伝えする文章</h3>
+<p class="readout">「8月27日水曜日、午後2時に変更いたしました。担当は佐藤、所要時間は約60分でございます。」</p>
+</div>
+<div>
+<h3>お知らせの扱い</h3>
+<div class="notice"><b>電話予約のため、この場で口頭でお伝えします。メールは送りません。</b><br>Web予約のお客様には、変更後の内容をメールでお送りします。</div>
+</div>
+</div>
+</div>
+<footer class="footbar"><button class="act">戻る</button><button class="act primary-act push">変更を確定する</button><div class="record" aria-label="録音中 1分12秒">● 01:12</div></footer>
+</section>
+
+<section class="ipad" id="cancel-confirm">
+<header class="bar"><div class="brand">EYEX予約<small>銀座店 · 予約の取り消し</small></div><button>予約台帳</button><button class="on">予約検索</button><button>顧客台帳</button><button class="primary push">＋ 予約を取る</button></header>
+<div class="workspace">
+<aside class="side">
+<h2>取り消す予約</h2>
+<div class="card"><dl>
+<dt>日時</dt><dd>8月27日（水）11:00–12:00</dd>
+<dt>お客様</dt><dd>田中 花子 様</dd>
+<dt>来店目的</dt><dd>視力測定・新調相談</dd>
+<dt>担当・設備</dt><dd>佐藤 美咲 / 視力測定機 A</dd>
+<dt>受付の経路</dt><dd>電話予約</dd>
+</dl></div>
+</aside>
+<section class="detail pb">
+<h2>この予約を取り消します</h2>
+<p class="lead">取り消した予約は元に戻せません。お客様のご意向を確かめてから進めてください。</p>
+<h3>取り消しの理由を選んでください</h3>
+<div class="reasons" aria-label="取り消しの理由">
+<button class="reason sel">お客様都合<br><small>選択中</small></button>
+<button class="reason">店舗都合</button>
+<button class="reason">重複予約</button>
+<button class="reason">無断キャンセル</button>
+</div>
+<h3>取り消したあとの扱い</h3>
+<ul class="after">
+<li>予約枠はすぐに空きます。</li>
+<li>受付時の録音は最低30日保存します。</li>
+<li>Web予約の場合はお客様へ取消のお知らせを送ります。</li>
+</ul>
+</section>
+</div>
+<footer class="footbar"><button class="act primary-act push">取り消さずに戻る</button><div class="dangerbox"><span>取り消す前にお客様へお伝えください</span><button class="act danger">予約を取り消す</button></div></footer>
+</section>
+
+<section class="ipad" id="notifications">
+<header class="bar"><div class="brand">EYEX予約<small>銀座店 · お知らせとアラート</small></div><button>予約台帳</button><button class="on">予約検索</button><button>顧客台帳</button><button class="primary push">＋ 予約を取る</button></header>
+<div class="workspace narrow">
+<aside class="side">
+<h2>種別</h2>
+<div class="tabs" aria-label="種別の絞り込み">
+<button class="tab sel">すべて　3件<br><small>選択中</small></button>
+<button class="tab">お知らせ　2件</button>
+<button class="tab">アラート　1件</button>
+<button class="tab">完了済み</button>
+</div>
+<p class="lead">銀座店の3台の端末で同じ内容が表示されます。</p>
+</aside>
+<section class="detail">
+<h2>お知らせ 2件 / アラート 1件</h2>
+<p class="lead">8月27日（水）11:08 現在　対応が終わったものは完了済みへ移ります。</p>
+<article class="item alert">
+<div><span class="kind a">アラート</span><span class="meta">11:02 発生</span><span class="unread">未読</span><br><b>録音 EY-R-1482 の保存に3回失敗しました（予約は成立済み）</b><br><span class="meta">田中 花子 様 · 8月27日 11:00 の受付　予約そのものは成立しています。</span></div>
+<button class="act">再試行する</button>
+</article>
+<article class="item">
+<div><span class="kind n">お知らせ</span><span class="meta">10:41 発生</span><span class="unread">未読</span><br><b>Web予約 2件が確認待ちです（8/29 13:30 伊藤 健 様 ほか）</b><br><span class="meta">担当と設備の割り当てが済んでいません。</span></div>
+<button class="act">予約台帳で確認する</button>
+</article>
+<article class="item">
+<div><span class="kind n">お知らせ</span><span class="meta">9:15 発生</span><span class="read">既読</span><br><b>視力測定機 B の点検が 8月30日 に予定されています</b><br><span class="meta">点検中は視力測定機 A のみになります。</span></div>
+<button class="act">影響する予約を見る</button>
+</article>
+</section>
+</div>
+</section>
+
+</main></body></html>

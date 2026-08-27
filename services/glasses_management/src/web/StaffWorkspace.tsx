@@ -524,7 +524,7 @@ export function StaffWorkspace({
         <Card className="w-full space-y-5">
           <div>
             <p className="text-sm text-ink-muted">EYEX予約</p>
-            <h1 className="font-display text-3xl font-semibold">スタッフログイン</h1>
+            <h1 className="font-sans text-3xl font-semibold">スタッフログイン</h1>
             <p className="mt-2 text-sm text-ink-muted">
               担当店舗の予約・受付を開くには個人アカウントでログインしてください。
             </p>

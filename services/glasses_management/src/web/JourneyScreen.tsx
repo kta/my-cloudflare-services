@@ -1,7 +1,7 @@
 import { AvailabilityStoreSettings, LedgerEntry, type ReceptionProgress } from '@app/contracts'
 import { type ReactNode, useCallback, useEffect, useState } from 'react'
 import { Action } from './design/controls'
-import { SelectField, TextAreaField, TextField } from './design/forms'
+import { PickerField, TextAreaField, TextField } from './design/forms'
 import { JourneyBoard, type JourneyCell } from './design/ledger'
 import { Card, StatePill, TitleRow } from './design/surfaces'
 import { ConflictPanel } from './LedgerScreen'
@@ -429,18 +429,16 @@ export function JourneyScreen({
                 </div>
               )}
 
-              <SelectField
+              <PickerField
                 id="journey-stage"
                 value={stage}
-                onChange={(event) => setStage(event.target.value as ReceptionProgress)}
+                options={STAGE_OPTIONS.map((option) => ({
+                  value: option.key,
+                  label: option.label,
+                }))}
+                onChange={(next) => setStage(next as ReceptionProgress)}
                 label="店内工程"
-              >
-                {STAGE_OPTIONS.map((option) => (
-                  <option key={option.key} value={option.key}>
-                    {option.label}
-                  </option>
-                ))}
-              </SelectField>
+              />
 
               {selected.entryType === 'reservation' && (
                 <>

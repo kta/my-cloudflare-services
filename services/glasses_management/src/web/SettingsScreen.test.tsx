@@ -1,7 +1,9 @@
 import type { StorePermission } from '@app/contracts'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
+import { screenSections } from './app-chrome'
 import { SettingsScreen } from './SettingsScreen'
+import { choosePickerOption } from './test/picker'
 
 const STORE_ID = '00000000-0000-4000-8000-000000000010'
 const TODAY = '2026-08-27'
@@ -123,8 +125,18 @@ function settingsApi(body: unknown = settings) {
   return vi.fn(async () => jsonResponse(body))
 }
 
+/**
+ * 6 工程は面の中ではなく全画面共通の柱にある（柱を 2 本立てない）。面だけを
+ * 描くテストからは、柱が押したときと同じ口を叩いて工程を選ぶ。
+ */
 async function openStep(name: RegExp) {
-  fireEvent.click(await screen.findByRole('button', { name }))
+  await waitFor(() => {
+    expect(screenSections.snapshot().some((section) => name.test(section.name ?? ''))).toBe(true)
+  })
+  const step = screenSections.snapshot().find((section) => name.test(section.name ?? ''))
+  act(() => {
+    screenSections.select(step?.label ?? '')
+  })
 }
 
 /**
@@ -142,36 +154,37 @@ afterEach(() => {
 test('六工程が定められた順に表示され、Web予約は略されない (AC-EYEX-40, 74)', async () => {
   renderScreen(settingsApi())
 
-  const nav = await screen.findByRole('navigation', { name: '設定の工程' })
-  const steps = within(nav).getAllByRole('button')
-  expect(steps).toHaveLength(6)
-  expect(steps.map((step) => step.getAttribute('aria-label'))).toEqual([
-    '工程1 店舗と営業時間 編集中',
-    '工程2 来店目的 完了',
-    '工程3 スタッフと技能 完了',
-    '工程4 設備と点検 完了',
-    '工程5 Web予約 未完了',
-    '工程6 影響確認と公開 未完了',
-  ])
+  // 設定を読み終えるまでは全工程が未完了なので、状態が定まるまで待つ。
+  await waitFor(() => {
+    expect(screenSections.snapshot().map((step) => step.name)).toEqual([
+      '工程1 店舗と営業時間 編集中',
+      '工程2 来店目的 完了',
+      '工程3 スタッフと技能 完了',
+      '工程4 設備と点検 完了',
+      '工程5 Web予約 未完了',
+      '工程6 影響確認と公開 未完了',
+    ])
+  })
+  const steps = screenSections.snapshot()
   // 略語 `Web` 単体はどの幅でも出さない。
-  expect(within(nav).queryByText('Web')).not.toBeInTheDocument()
-  // レールに出るのは番号か ✓ と工程名だけ。承認済みモックに状態語は無い。
-  expect(steps[0]?.textContent).toBe('1\u3000店舗と営業時間')
-  expect(steps[1]?.textContent).toBe('✓\u3000来店目的')
-  expect(steps[4]?.textContent).toBe('5\u3000Web予約')
+  expect(steps.map((step) => step.label)).not.toContain('Web')
+  // 柱に出るのは番号か ✓ と工程名だけ。承認済みモックに状態語は無い。
+  expect(steps[0]?.label).toBe('1\u3000店舗と営業時間')
+  expect(steps[1]?.label).toBe('✓\u3000来店目的')
+  expect(steps[4]?.label).toBe('5\u3000Web予約')
 })
 
 test('工程の状態は色ではなく語で読み取れる (AC-EYEX-41)', async () => {
   renderScreen(settingsApi())
 
-  // 状態は色ではなく語で読める。ただしレールの見た目はモックどおり番号と ✓
+  // 状態は色ではなく語で読める。ただし柱の見た目はモックどおり番号と ✓
   // だけなので、語は読み上げの名前が持つ。
-  const nav = await screen.findByRole('navigation', { name: '設定の工程' })
-  expect(within(nav).getByRole('button', { name: '工程2 来店目的 完了' })).toBeInTheDocument()
-  expect(within(nav).getByRole('button', { name: '工程5 Web予約 未完了' })).toBeInTheDocument()
-  expect(
-    within(nav).getByRole('button', { name: '工程1 店舗と営業時間 編集中' }),
-  ).toBeInTheDocument()
+  await waitFor(() => {
+    expect(screenSections.snapshot().map((step) => step.name)).toContain('工程2 来店目的 完了')
+  })
+  const names = screenSections.snapshot().map((step) => step.name)
+  expect(names).toContain('工程5 Web予約 未完了')
+  expect(names).toContain('工程1 店舗と営業時間 編集中')
 })
 
 test('日常の修正はガイドを最初から進めずに対象工程へ直接移動できる (AC-EYEX-47)', async () => {
@@ -180,8 +193,11 @@ test('日常の修正はガイドを最初から進めずに対象工程へ直�
   await openStep(/工程4 設備と点検/)
 
   expect(screen.getByRole('heading', { level: 1, name: '設備と点検' })).toBeInTheDocument()
-  const nav = screen.getByRole('navigation', { name: '設定の工程' })
-  expect(within(nav).getByRole('button', { name: '工程4 設備と点検 編集中' })).toBeInTheDocument()
+  await waitFor(() => {
+    expect(screenSections.snapshot().map((step) => step.name)).toContain('工程4 設備と点検 編集中')
+  })
+  // 柱の現在地は開いている工程を指す。
+  expect(screenSections.snapshot().find((step) => step.current)?.label).toBe('4\u3000設備と点検')
 })
 
 test('SP幅の固定ステッパーは番号・全6工程・残り工程数・状態を色なしで示す (AC-EYEX-72, 73)', async () => {
@@ -418,9 +434,9 @@ test('Web予約の公開状態・公開期間・公開する来店目的はそ�
 
   await openEditor()
   const web = screen.getByRole('region', { name: 'Web予約設定' })
-  const status = within(web).getByLabelText('公開状態')
-  expect(status).toHaveValue('hidden')
-  fireEvent.change(status, { target: { value: 'published' } })
+  const status = within(web).getByRole('combobox', { name: '公開状態' })
+  expect(status).toHaveTextContent('非公開')
+  choosePickerOption(status, '公開')
   expect(within(web).getByText('公開中')).toBeInTheDocument()
 
   fireEvent.change(screen.getByLabelText('受付終了日時（JST）'), {
@@ -451,9 +467,15 @@ test('Web予約公開APIが未提供のあいだは未取得と明示する (AC-
   expect(screen.getByText('Web予約の公開設定はまだ取得できていません。')).toBeInTheDocument()
 })
 
-test('全店共通値と店舗上書きは適用元を区別して示し、未提供なら未取得と出す (AC-EYEX-48, 69)', async () => {
+/*
+ * モックのこの位置（`.title` の右端）には `下書き保存 14:32` のような分かって
+ * いる事実しか無い。`適用元: 未取得` はモックの語彙に無い失敗文言なので、
+ * 適用元が渡されるまでは何も名乗らない（推測した既定値も描かない）。
+ */
+test('適用元が渡されないうちは適用元を名乗らない (AC-EYEX-48, 69)', async () => {
   renderScreen(settingsApi())
-  expect(await screen.findByText('適用元: 未取得')).toBeInTheDocument()
+  await screen.findByRole('region', { name: '店舗設定' })
+  expect(screen.queryByText(/適用元:/)).toBeNull()
 })
 
 test('全店共通の適用元が渡されると上書き項目を区別できる (AC-EYEX-48, 69)', async () => {

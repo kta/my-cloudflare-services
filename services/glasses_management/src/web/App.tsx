@@ -1,5 +1,5 @@
 import { type ReactNode, useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { barFor, barOverlay, screenSections, sidebarFor } from './app-chrome'
+import { barFor, barOverlay, screenSections, sidebarCurrentScreen, sidebarFor } from './app-chrome'
 import { AppBar, BarButton, BarPush, PlainBar, Screen, Wordmark } from './design/chrome'
 import { Action, SearchField } from './design/controls'
 import { SwitchOption, SwitchSheet } from './design/dialogs'
@@ -284,7 +284,10 @@ export function App({
               {sidebarFor(today).map((group) => (
                 <SidebarGroup key={group.label} label={group.label}>
                   {group.items.map((item) => {
-                    const current = item.to.screen === location?.screen
+                    /* 柱に行き先を持たない面（注意事項の確認・予約の詳細）でも、
+                       親の行き先が現在地として光る。 */
+                    const current =
+                      location !== undefined && item.to.screen === sidebarCurrentScreen(location)
                     return (
                       <div key={item.label}>
                         <SidebarItem
@@ -300,10 +303,13 @@ export function App({
                                 key={section.label}
                                 current={section.current === true}
                                 onClick={
-                                  section.to === undefined
-                                    ? undefined
-                                    : () => navigation?.navigate(section.to as StaffLocation)
+                                  section.to !== undefined
+                                    ? () => navigation?.navigate(section.to as StaffLocation)
+                                    : section.selectable
+                                      ? () => screenSections.select(section.label)
+                                      : undefined
                                 }
+                                name={section.name}
                               >
                                 {section.label}
                               </SidebarSection>

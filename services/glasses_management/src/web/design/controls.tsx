@@ -252,29 +252,38 @@ export function SearchField({
 const FILTER_FIELD =
   'min-h-11 rounded-ctl border border-line bg-surface px-3 font-sans text-body text-ink'
 
-export function FilterSelect({
+/**
+ * 絞り込みの選択（押した時点で効くもの）。
+ *
+ * ネイティブの `<select>` は既定の三角・既定の選択色・地域設定の書体を
+ * 絞り込みの列へ持ち込む。モックの `.filter` は押しボタンの並びなので、
+ * 候補が少なく押した時点で効く絞り込みは、値を畳まずピルとして開いたまま
+ * 並べる。返す値は今までと同じ選択肢の文字列で、取得の経路は変わらない。
+ */
+export function FilterGroup({
   label,
-  id,
+  options,
   value,
-  children,
   onChange,
 }: {
   label: string
-  id?: string
+  options: { value: string; label: string }[]
   value: string
-  children: ReactNode
   onChange?: (next: string) => void
 }) {
   return (
-    <select
-      id={id}
-      aria-label={label}
-      value={value}
-      onChange={(event) => onChange?.(event.target.value)}
-      className={FILTER_FIELD}
-    >
-      {children}
-    </select>
+    // 「1 つを選ぶ」関係を要素の意味で持たせる。既定の枠と余白は面に無いので落とす。
+    <fieldset aria-label={label} className="m-0 flex flex-wrap gap-2 border-0 p-0">
+      {options.map((option) => (
+        <FilterToggle
+          key={option.value}
+          pressed={option.value === value}
+          onToggle={() => onChange?.(option.value)}
+        >
+          {option.label}
+        </FilterToggle>
+      ))}
+    </fieldset>
   )
 }
 

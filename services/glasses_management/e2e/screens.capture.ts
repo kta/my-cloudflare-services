@@ -679,6 +679,11 @@ async function captureRecordingScreens(browser: Browser) {
     await stubMicrophone(page, 'granted')
     await mockBookingRecordingApi(page, { recordingPostStatus: 503 })
     const indicator = await openBooking(page)
+    // 録音は脇の列の明示操作でだけ始まる (AC-EYEX-113)。
+    await page
+      .getByRole('status', { name: 'iPad録音' })
+      .getByRole('button', { name: '録音を開始する' })
+      .click()
     await indicator.filter({ hasText: '録音中' }).waitFor()
     await reachRecital(page)
     await page.getByRole('button', { name: '復唱を終えて予約を確定する' }).click()
@@ -1344,11 +1349,18 @@ async function openSettings(page: Page) {
   return screen
 }
 
+/**
+ * 工程を開く。
+ *
+ * iPad 幅では工程は全画面共通の柱（`画面の一覧`）の中、設定ガイドの下に節として
+ * 並ぶ。SP 幅だけが本文先頭に自前の工程レールを持つ。撮影はどちらの幅でも走るので
+ * 両方を見る。
+ */
 async function goToStep(page: Page, pattern: RegExp) {
-  await page
-    .getByRole('navigation', { name: '設定の工程' })
-    .getByRole('button', { name: pattern })
-    .click()
+  const sidebar = page.getByRole('navigation', { name: '画面の一覧' })
+  const rail = page.getByRole('navigation', { name: '設定の工程' })
+  const from = (await sidebar.count()) > 0 ? sidebar : rail
+  await from.getByRole('button', { name: pattern }).click()
   await page.waitForTimeout(200)
 }
 

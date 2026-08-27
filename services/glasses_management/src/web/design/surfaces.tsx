@@ -220,6 +220,29 @@ export function CardGrid({
   )
 }
 
+/*
+ * `.customer-top{grid-template-columns:repeat(3,1fr)}` — 3 枚組のカード。
+ *
+ * モックは 1176px の全幅に 390px の一覧列だけを置いていたが、実アプリは
+ * 全画面共通の 250px の柱をさらに引くので、詳細列は 490px ほどしか残らない。
+ * 3 等分すると 1 枚 150px となり、「タナカ ハナコ」「銀座店」のような短い値まで
+ * 折り返す。入る枚数を幅から決め、和文を語の途中で折らない。
+ */
+const CARD_COLUMNS: CSSProperties = {
+  gridTemplateColumns: 'repeat(auto-fit, minmax(228px, 1fr))',
+  // 和文は既定でどの文字の間でも折れる。名前や店舗名が語中で割れないようにする。
+  wordBreak: 'keep-all',
+}
+
+export function CardColumns({ children }: { children: ReactNode }) {
+  /* `.card` 自身が margin-top:10px を持つので、格子側は間隔を足さない。 */
+  return (
+    <div className="grid gap-3" style={CARD_COLUMNS}>
+      {children}
+    </div>
+  )
+}
+
 /** 見出し行（`.title`）。右端へ寄せたい要素は `push` に入れる。 */
 export function TitleRow({
   children,

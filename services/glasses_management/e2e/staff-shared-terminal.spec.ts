@@ -584,8 +584,15 @@ test('共有iPadは店舗と端末として名乗り、個人を推測しない�
 
   // 受付を 1 件通す。録音の主体は端末であり、担当者名を当て推量しない。
   await page.getByRole('button', { name: '新しい予約を取る' }).click()
-  // 録音は工程に入った時点で自動的に始まる（開始ボタンは無い）。下部バーの
-  // 状態表示だけが「今 iPad が録っている」ことを名乗る。
+  /*
+   * 録音は勝手に始まらない。脇の列が取得目的・閲覧者・最低保持期間を説明し、
+   * スタッフの明示操作でだけブラウザ権限を開く (AC-EYEX-113)。共有 iPad でも
+   * 同じで、録り始めてから下部バーが「今 iPad が録っている」ことを名乗る。
+   */
+  await page
+    .getByRole('status', { name: 'iPad録音' })
+    .getByRole('button', { name: '録音を開始する' })
+    .click()
   await expect(page.getByTestId('recording-state')).toContainText('録音中')
   await page.getByRole('button', { name: dayLabel(jstToday()) }).click()
   await page.getByRole('button', { name: '11:30', exact: true }).click()

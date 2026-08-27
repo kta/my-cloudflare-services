@@ -26,7 +26,7 @@ import { AttentionCard, Candidate, RailSummary } from './design/booking'
 import { Action, Actions, SearchField } from './design/controls'
 import { BookingLayout, Workspace } from './design/layouts'
 import { FailureNotice } from './design/notices'
-import { Card, ListRow, Notice } from './design/surfaces'
+import { Card, CardColumns, ListRow, Notice } from './design/surfaces'
 import type { StaffScreenProps } from './staff-screen'
 
 /*
@@ -415,8 +415,7 @@ export function CustomerPanel({
                 <Card className="mt-2.5">顧客情報は未取得です</Card>
               ) : (
                 <>
-                  {/* `.card` 自身が margin-top:10px を持つので、格子側は間隔を足さない。 */}
-                  <div className="grid grid-cols-3 gap-3">
+                  <CardColumns>
                     {detail.currentPrescription !== null && (
                       <Region label="現在の度数">
                         <PrescriptionLines prescription={detail.currentPrescription} />
@@ -447,7 +446,7 @@ export function CustomerPanel({
                         </ul>
                       </Region>
                     )}
-                  </div>
+                  </CardColumns>
                   {attentionNotes.length > 0 && (
                     /*
                      * 接客の直前に読むものなので、時系列（履歴）の後ろへ回さず

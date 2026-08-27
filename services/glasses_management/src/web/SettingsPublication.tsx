@@ -14,7 +14,7 @@ import {
 import { type ReactNode, useCallback, useEffect, useId, useState } from 'react'
 import { Action, Actions } from './design/controls'
 import { Modal } from './design/dialogs'
-import { SelectField, TextAreaField, TextField } from './design/forms'
+import { PickerField, TextAreaField, TextField } from './design/forms'
 import { FailureNotice, StatusNotice } from './design/notices'
 import { Card, CardGrid, FieldCard, Preview, StatePill, TitleRow } from './design/surfaces'
 import {
@@ -679,21 +679,19 @@ export function SettingsPublication({
         <Modal title="影響予約の解消を記録" titleId={resolveTitleId}>
           <p>{resolving.message}</p>
           <div className="flex flex-col gap-3">
-            <SelectField
+            <PickerField
               id="resolution-kind"
               label="対応"
               value={resolution}
-              onChange={(event) => {
-                const next = RESOLUTION_OPTIONS.find((kind) => kind === event.target.value)
+              options={RESOLUTION_OPTIONS.map((kind) => ({
+                value: kind,
+                label: RESOLUTION_LABEL[kind],
+              }))}
+              onChange={(value) => {
+                const next = RESOLUTION_OPTIONS.find((kind) => kind === value)
                 if (next !== undefined) setResolution(next)
               }}
-            >
-              {RESOLUTION_OPTIONS.map((kind) => (
-                <option key={kind} value={kind}>
-                  {RESOLUTION_LABEL[kind]}
-                </option>
-              ))}
-            </SelectField>
+            />
             <TextAreaField
               id="resolution-note"
               label="メモ"

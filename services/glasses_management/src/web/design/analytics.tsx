@@ -69,47 +69,29 @@ export function VizPill({ children }: { children: ReactNode }) {
 
 /** `.diagbody` — 指標 / レポート / 点検欄 の 3 列。 */
 const DIAGNOSIS_COLUMNS: CSSProperties = { gridTemplateColumns: '220px 1fr 275px' }
+/*
+ * 実アプリでは観点の列を全画面共通の柱へ預けるので、レポートと点検欄の 2 列に
+ * なる。柱を 2 本立てると本文が 415px まで潰れる（`docs/frontend/REBUILD.md`）。
+ */
+const DIAGNOSIS_COLUMNS_WITHOUT_NAV: CSSProperties = { gridTemplateColumns: '1fr 275px' }
 
-export function VizBody({ children }: { children: ReactNode }) {
+export function VizBody({ children, nav = true }: { children: ReactNode; nav?: boolean }) {
   return (
-    <div className="grid min-h-0 flex-1" style={DIAGNOSIS_COLUMNS}>
+    <div
+      className="grid min-h-0 flex-1"
+      style={nav ? DIAGNOSIS_COLUMNS : DIAGNOSIS_COLUMNS_WITHOUT_NAV}
+    >
       {children}
     </div>
   )
 }
 
-/** `.metriclist` — 掘り下げる指標をひとつだけ選ばせる列。 */
-export function VizMetricList({ children }: { children: ReactNode }) {
-  return (
-    <nav aria-label="指標" className="min-h-0 overflow-auto bg-viz-panel p-3.5">
-      {children}
-    </nav>
-  )
-}
-
-export function VizMetricItem({
-  children,
-  on,
-  onClick,
-}: {
-  children: ReactNode
-  on: boolean
-  onClick: () => void
-}) {
-  return (
-    <button
-      type="button"
-      aria-current={on ? 'page' : undefined}
-      onClick={onClick}
-      className={cn(
-        'min-h-11 w-full rounded-ctl p-2.75 text-left text-viz-body',
-        on ? 'bg-surface font-bold text-viz-pine' : 'text-viz-ink',
-      )}
-    >
-      {children}
-    </button>
-  )
-}
+/*
+ * `.metriclist` / `.metric` — モックが持っていた観点の列。実アプリでは観点を
+ * 全画面共通の柱へ預けたので、この語彙はもう誰も使わない（柱を 2 本立てない）。
+ * 残しておくと「まだ面の中に列がある」と読めてしまうので消す。地色 `viz-panel`
+ * はモックの記録として `theme.css` に残る。
+ */
 
 /** `.report` — 選んだ指標を掘り下げる中央の列。 */
 export function VizReport({ label, children }: { label: string; children: ReactNode }) {

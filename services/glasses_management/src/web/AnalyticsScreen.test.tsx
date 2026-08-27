@@ -1,7 +1,8 @@
 import type { AnalyticsReport } from '@app/contracts'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import { AnalyticsScreen } from './AnalyticsScreen'
+import { screenSections } from './app-chrome'
 
 const STORE_ID = '00000000-0000-4000-8000-000000000010'
 const OTHER_STORE_ID = '00000000-0000-4000-8000-000000000011'
@@ -205,8 +206,14 @@ function renderScreen(
  * 形なので、どの観点の数字を読むテストなのかを必ず明示する。
  */
 async function openSection(label: string) {
-  await screen.findByRole('navigation', { name: '指標' })
-  fireEvent.click(screen.getByRole('button', { name: label }))
+  /*
+   * 観点の列は面の中ではなく全画面共通の柱にある（柱を 2 本立てない）。面だけを
+   * 描くテストからは、柱が押したときと同じ口を叩いて選ぶ。
+   */
+  await screen.findByRole('region', { name: 'レポート' })
+  act(() => {
+    screenSections.select(label)
+  })
 }
 
 afterEach(() => {
@@ -486,12 +493,11 @@ test('指標一覧・レポート・確認することの3列で組む', async (
   renderScreen(api)
   await screen.findByText('対象件数 214件')
 
-  const metrics = screen.getByRole('navigation', { name: '指標' })
-  expect(within(metrics).getByRole('button', { name: '予約と来店' })).toHaveAttribute(
-    'aria-current',
-    'page',
+  /* 観点の列は全画面共通の柱にある（柱を 2 本立てない）。面が渡した節を見る。 */
+  expect(screenSections.snapshot().find((section) => section.current)?.label).toBe('予約と来店')
+  expect(screenSections.snapshot().map((section) => section.label)).toContain(
+    '取消・無断キャンセル',
   )
-  expect(within(metrics).getByRole('button', { name: '取消・無断キャンセル' })).toBeTruthy()
 
   const inspector = screen.getByRole('complementary', { name: '確認すること' })
   expect(within(inspector).getByRole('region', { name: '対象データ' })).toHaveTextContent(
@@ -547,12 +553,7 @@ test('左列はモックの6観点で、選んだ観点だけを中央に掘り�
   renderScreen(api)
   await screen.findByText('対象件数 214件')
 
-  const metrics = screen.getByRole('navigation', { name: '指標' })
-  expect(
-    within(metrics)
-      .getAllByRole('button')
-      .map((button) => button.textContent),
-  ).toEqual([
+  expect(screenSections.snapshot().map((section) => section.label)).toEqual([
     '予約と来店',
     '待ち時間',
     '工程所要時間',
@@ -566,7 +567,7 @@ test('左列はモックの6観点で、選んだ観点だけを中央に掘り�
   expect(within(report).getByRole('heading', { name: '予約' })).toBeInTheDocument()
   expect(within(report).queryByRole('heading', { name: '無断キャンセル' })).toBeNull()
 
-  fireEvent.click(within(metrics).getByRole('button', { name: '取消・無断キャンセル' }))
+  await openSection('取消・無断キャンセル')
   expect(within(report).getByRole('heading', { name: '無断キャンセル' })).toBeInTheDocument()
   expect(within(report).queryByRole('heading', { name: '予約' })).toBeNull()
 })
@@ -580,7 +581,7 @@ test('観点ごとに柱のグラフを持ち、目標線と超過の符号を�
   const chart = await screen.findByRole('figure', { name: '時間帯の内訳' })
   expect(within(chart).getAllByRole('listitem').length).toBeGreaterThan(0)
 
-  fireEvent.click(screen.getByRole('button', { name: '待ち時間' }))
+  await openSection('待ち時間')
   const wait = await screen.findByRole('figure', { name: '受付から接客開始まで の分布' })
   expect(within(wait).getByText('10分以上')).toBeInTheDocument()
 })

@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { afterEach, expect, test, vi } from 'vitest'
 import { AttentionSettingsScreen } from './AttentionSettingsScreen'
 import { screenSections } from './app-chrome'
+import { choosePickerOption } from './test/picker'
 
 const STORE_ID = '00000000-0000-4000-8000-000000000010'
 const TODAY = '2026-08-27'
@@ -46,7 +47,7 @@ function renderScreen(
   api: ReturnType<typeof createApi>['api'],
   permissions: readonly string[] = MANAGER_PERMISSIONS,
 ) {
-  render(
+  return render(
     <AttentionSettingsScreen
       storeId={STORE_ID}
       storeName="銀座店"
@@ -97,9 +98,12 @@ test('ロール×操作の許可表をモックどおりに出す (UC-EYEX-140, 
   expect(origins).toHaveTextContent('組織共通')
   expect(origins).toHaveTextContent('店舗上書き')
 
-  expect(screen.getByLabelText('公開に必要なロール')).toHaveValue('store_manager')
-  expect(screen.getByLabelText('公開方式')).toHaveValue('review_required')
-  expect(screen.getByLabelText('共有範囲')).toHaveValue('permitted_stores')
+  /* 選択は `<select>` ではなく、今の値を名乗る押しボタン（combobox）である。 */
+  expect(screen.getByRole('combobox', { name: '公開に必要なロール' })).toHaveTextContent(
+    '店舗管理者以上',
+  )
+  expect(screen.getByRole('combobox', { name: '公開方式' })).toHaveTextContent('管理者確認後に公開')
+  expect(screen.getByRole('combobox', { name: '共有範囲' })).toHaveTextContent('権限のある店舗')
 })
 
 /** 承認済みモックの副タブ・節・3 カード */
@@ -130,10 +134,11 @@ test('公開方式と能力ロールを組織共通として保存する (UC-EYE
   )
   renderScreen(api)
 
-  fireEvent.change(await screen.findByLabelText('公開方式'), { target: { value: 'immediate' } })
-  fireEvent.change(screen.getByLabelText('非表示化に必要なロール'), {
-    target: { value: 'organization_admin' },
-  })
+  choosePickerOption(await screen.findByRole('combobox', { name: '公開方式' }), '即時公開')
+  choosePickerOption(
+    screen.getByRole('combobox', { name: '非表示化に必要なロール' }),
+    '本部管理者以上',
+  )
   fireEvent.click(screen.getByRole('button', { name: '設定を保存する' }))
 
   await screen.findByText('設定を保存しました。')
@@ -164,7 +169,7 @@ test('店舗上書きとして保存できる (UC-EYEX-139)', async () => {
   )
   renderScreen(api)
 
-  fireEvent.change(await screen.findByLabelText('設定範囲'), { target: { value: 'store' } })
+  choosePickerOption(await screen.findByRole('combobox', { name: '設定範囲' }), '店舗上書き')
   fireEvent.click(screen.getByRole('button', { name: '設定を保存する' }))
 
   await screen.findByText('設定を保存しました。')
@@ -188,7 +193,7 @@ test('共有範囲の変更は影響件数を確認するまで適用しない (
   })
   renderScreen(api)
 
-  fireEvent.change(await screen.findByLabelText('共有範囲'), { target: { value: 'chain' } })
+  choosePickerOption(await screen.findByRole('combobox', { name: '共有範囲' }), 'チェーン全体')
   fireEvent.click(screen.getByRole('button', { name: '設定を保存する' }))
 
   const dialog = await screen.findByRole('dialog', { name: '共有範囲の変更を確認' })
@@ -226,7 +231,7 @@ test('影響確認をやめれば共有範囲は変わらない (AC-EYEX-118)', 
   )
   renderScreen(api)
 
-  fireEvent.change(await screen.findByLabelText('共有範囲'), { target: { value: 'chain' } })
+  choosePickerOption(await screen.findByRole('combobox', { name: '共有範囲' }), 'チェーン全体')
   fireEvent.click(screen.getByRole('button', { name: '設定を保存する' }))
   const dialog = await screen.findByRole('dialog', { name: '共有範囲の変更を確認' })
   expect(
@@ -253,14 +258,14 @@ test('監査に残せない変更は成立させず、入力を保持して再�
   })
   renderScreen(api)
 
-  fireEvent.change(await screen.findByLabelText('公開方式'), { target: { value: 'immediate' } })
+  choosePickerOption(await screen.findByRole('combobox', { name: '公開方式' }), '即時公開')
   fireEvent.click(screen.getByRole('button', { name: '設定を保存する' }))
 
   await screen.findByText(
     '監査記録に残せなかったため、この変更は成立していません。入力はそのまま保持しています。',
   )
   // 入力は失われない。
-  expect(screen.getByLabelText('公開方式')).toHaveValue('immediate')
+  expect(screen.getByRole('combobox', { name: '公開方式' })).toHaveTextContent('即時公開')
 
   fireEvent.click(screen.getByRole('button', { name: '再試行する' }))
   await screen.findByText('設定を保存しました。')
@@ -298,6 +303,37 @@ test('端末に設定内容を残さない (完全共有iPad)', async () => {
   renderScreen(api)
 
   await screen.findByRole('table', { name: '注意事項の権限' })
-  fireEvent.change(screen.getByLabelText('公開方式'), { target: { value: 'immediate' } })
+  choosePickerOption(screen.getByRole('combobox', { name: '公開方式' }), '即時公開')
   expect(setItem).not.toHaveBeenCalled()
+})
+
+/*
+ * 承認済みモック `ATTENTION-PERMISSIONS` の権限表は読み取り専用で、右上には
+ * 緑の `組織共通値` ピルしか無い。表の中や見出しの行に選択を置くと、読む面に
+ * 書き換えの操作が紛れる（実際に列幅が押し広げられて右端が切れていた）。
+ * 変更操作は表の外のカードに置く。
+ */
+test('表と見出しの行に操作を置かず、右上は状態ピルのままにする (AC-EYEX-84)', async () => {
+  const { api } = createApi(() => jsonResponse(settings))
+  renderScreen(api)
+
+  const table = await screen.findByRole('table', { name: '注意事項の権限' })
+  expect(within(table).queryAllByRole('combobox')).toHaveLength(0)
+  expect(within(table).queryAllByRole('button')).toHaveLength(0)
+  const title = screen.getByRole('heading', { name: '注意事項の権限' }).parentElement as HTMLElement
+  expect(within(title).queryByRole('combobox')).toBeNull()
+  expect(within(title).getByText('組織共通値')).toBeInTheDocument()
+
+  // 設定範囲は表の外のカードで選ぶ。
+  const scope = screen.getByRole('region', { name: '設定範囲の選択' })
+  expect(within(scope).getByRole('combobox', { name: '設定範囲' })).toBeInTheDocument()
+})
+
+/** ブラウザ既定の `<select>` は 1 つも描かない（既定の三角と既定の選択色を持ち込む）。 */
+test('面のどこにもネイティブの select を置かない', async () => {
+  const { api } = createApi(() => jsonResponse(settings))
+  const { container } = renderScreen(api)
+
+  await screen.findByRole('table', { name: '注意事項の権限' })
+  expect(container.querySelector('select')).toBeNull()
 })

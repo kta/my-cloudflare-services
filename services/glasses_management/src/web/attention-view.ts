@@ -333,6 +333,31 @@ export function auditValueText(value: unknown): string {
 
 export type AuditDiffRow = { key: string; before: string; after: string }
 
+/**
+ * 監査の 1 行をどう読ませるか (AC-EYEX-102)。
+ *
+ * 承認済みモック `AUDIT-DETAIL` の変更前後は「確認待ち」「公開済み」と日本語で
+ * 書かれている。`status pending_review` のような生値を出すと、監査を読む人が
+ * 画面の言葉と突き合わせられない。日本語の言い方が決まっている鍵はその言葉
+ * だけを置き、決まっていない鍵は鍵と値をそのまま並べる（勝手に訳して
+ * 元の値が読めなくなる方が困る）。
+ */
+const AUDIT_STATUS_TEXT: Record<string, string> = {
+  draft: '下書き',
+  pending_review: '確認待ち',
+  returned: '差し戻し',
+  published: '公開済み',
+  hidden: '非表示',
+}
+
+export function auditDiffLineText(key: string, value: string): string {
+  if (key === 'status') {
+    const text = AUDIT_STATUS_TEXT[value]
+    if (text !== undefined) return text
+  }
+  return `${key} ${value}`
+}
+
 /** 変更前後を同じ鍵で突き合わせて並べる (AC-EYEX-102)。 */
 export function auditDiffRows(event: AuditEventView): AuditDiffRow[] {
   const before = event.before ?? {}

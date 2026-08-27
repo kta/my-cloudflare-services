@@ -23,7 +23,7 @@ import {
 } from './attention-view'
 import { Action, Actions } from './design/controls'
 import { Modal } from './design/dialogs'
-import { CheckToggle, SelectField } from './design/forms'
+import { CheckToggle, PickerField } from './design/forms'
 import { AdminLayout, AdminSurface } from './design/layouts'
 import { MatrixCell, MatrixRow, MatrixTable } from './design/matrix'
 import { FailureNotice, StatusNotice } from './design/notices'
@@ -55,6 +55,22 @@ const REVIEW_MODE_LABEL: Record<AttentionReviewMode, string> = {
   review_required: '管理者確認後に公開',
   immediate: '即時公開',
 }
+
+/* 選択肢は描く場所ではなくここで組む。値は契約の文字列そのままで、
+   画面が持つのは「その値を日本語で何と呼ぶか」だけ。 */
+const ROLE_OPTIONS = ROLES.map((role) => ({ value: role, label: `${roleLabel(role)}以上` }))
+const REVIEW_MODE_OPTIONS = REVIEW_MODES.map((mode) => ({
+  value: mode,
+  label: REVIEW_MODE_LABEL[mode],
+}))
+const SCOPE_OPTIONS = SCOPES.map((scope) => ({
+  value: scope,
+  label: sharingScopeLabel(scope),
+}))
+const SCOPE_ORIGIN_OPTIONS: { value: AttentionSettingsOrigin; label: string }[] = [
+  { value: 'organization', label: '組織共通値' },
+  { value: 'store', label: '店舗上書き' },
+]
 
 const AUDIT_FAILURE =
   '監査記録に残せなかったため、この変更は成立していません。入力はそのまま保持しています。'
@@ -266,26 +282,10 @@ export function AttentionSettingsScreen({ storeId, api, permissions, navigate }:
       >
         <TitleRow
           gap={0}
-          push={
-            settings && draft && mayManage ? (
-              /* モックの `.state` と同じ位置（見出しと同じ行の右端）に置くので、
-                 可視ラベルは重ねず名前は入力自身に持たせる。 */
-              <SelectField
-                hideLabel
-                id="attention-scope"
-                label="設定範囲"
-                value={draft.scope}
-                onChange={(event) =>
-                  setDraft({ ...draft, scope: event.target.value as AttentionSettingsOrigin })
-                }
-              >
-                <option value="organization">組織共通値</option>
-                <option value="store">店舗上書き</option>
-              </SelectField>
-            ) : (
-              settings && <StatePill>{`${originLabel(settings.origin)}値`}</StatePill>
-            )
-          }
+          /* モックの右上は緑の状態ピルだけ（`ATTENTION-PERMISSIONS` の
+             `組織共通値`）。ここで設定範囲を変えさせると、読む面の右上に
+             書き換えの操作が紛れる。設定範囲はカードとして表の下へ置く。 */
+          push={settings && <StatePill>{`${originLabel(settings.origin)}値`}</StatePill>}
         >
           {/* `.title h2{margin:0}` — 表がすぐ下に続くので既定の余白を落とす。 */}
           <h1 className="my-0">注意事項の権限</h1>
@@ -345,25 +345,22 @@ export function AttentionSettingsScreen({ storeId, api, permissions, navigate }:
                   <b>{row.label}</b>
                   <br />
                   {mayManage ? (
-                    <SelectField
+                    <PickerField
                       hideLabel
                       id={`attention-role-${row.capability}`}
                       label={`${row.label}に必要なロール`}
                       value={draft.capabilities[row.capability]}
-                      onChange={(event) => {
-                        const minimumRole = event.target.value as AttentionRole
+                      options={ROLE_OPTIONS}
+                      onChange={(next) =>
                         setDraft({
                           ...draft,
-                          capabilities: { ...draft.capabilities, [row.capability]: minimumRole },
+                          capabilities: {
+                            ...draft.capabilities,
+                            [row.capability]: next as AttentionRole,
+                          },
                         })
-                      }}
-                    >
-                      {ROLES.map((role) => (
-                        <option key={role} value={role}>
-                          {roleLabel(role)}以上
-                        </option>
-                      ))}
-                    </SelectField>
+                      }
+                    />
                   ) : (
                     `${row.roleLabel}以上`
                   )}
@@ -378,21 +375,16 @@ export function AttentionSettingsScreen({ storeId, api, permissions, navigate }:
                 <b>登録方式</b>
                 <br />
                 {mayManage ? (
-                  <SelectField
+                  <PickerField
                     hideLabel
                     id="attention-review-mode"
                     label="公開方式"
                     value={draft.reviewMode}
-                    onChange={(event) =>
-                      setDraft({ ...draft, reviewMode: event.target.value as AttentionReviewMode })
+                    options={REVIEW_MODE_OPTIONS}
+                    onChange={(next) =>
+                      setDraft({ ...draft, reviewMode: next as AttentionReviewMode })
                     }
-                  >
-                    {REVIEW_MODES.map((mode) => (
-                      <option key={mode} value={mode}>
-                        {REVIEW_MODE_LABEL[mode]}
-                      </option>
-                    ))}
-                  </SelectField>
+                  />
                 ) : (
                   REVIEW_MODE_LABEL[settings.reviewMode]
                 )}
@@ -401,26 +393,36 @@ export function AttentionSettingsScreen({ storeId, api, permissions, navigate }:
                 <b>共有範囲</b>
                 <br />
                 {mayManage ? (
-                  <SelectField
+                  <PickerField
                     hideLabel
                     id="attention-sharing-scope"
                     label="共有範囲"
                     value={draft.sharingScope}
-                    onChange={(event) =>
-                      setDraft({
-                        ...draft,
-                        sharingScope: event.target.value as AttentionSharingScope,
-                      })
+                    options={SCOPE_OPTIONS}
+                    onChange={(next) =>
+                      setDraft({ ...draft, sharingScope: next as AttentionSharingScope })
                     }
-                  >
-                    {SCOPES.map((scope) => (
-                      <option key={scope} value={scope}>
-                        {sharingScopeLabel(scope)}
-                      </option>
-                    ))}
-                  </SelectField>
+                  />
                 ) : (
                   sharingScopeLabel(settings.sharingScope)
+                )}
+              </Card>
+              <Card label="設定範囲の選択">
+                <b>設定範囲</b>
+                <br />
+                {mayManage ? (
+                  <PickerField
+                    hideLabel
+                    id="attention-scope"
+                    label="設定範囲"
+                    value={draft.scope}
+                    options={SCOPE_ORIGIN_OPTIONS}
+                    onChange={(next) =>
+                      setDraft({ ...draft, scope: next as AttentionSettingsOrigin })
+                    }
+                  />
+                ) : (
+                  `${originLabel(settings.origin)}値`
                 )}
               </Card>
               <Card label="店舗上書き">

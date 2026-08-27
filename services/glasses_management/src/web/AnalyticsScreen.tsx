@@ -28,8 +28,6 @@ import {
   VizFinding,
   VizFlag,
   VizInspector,
-  VizMetricItem,
-  VizMetricList,
   VizNote,
   VizPeriodField,
   VizPill,
@@ -39,6 +37,7 @@ import {
   VizTitleBar,
 } from './design/analytics'
 import { Action, Actions } from './design/controls'
+import { usePublishedSections } from './design/layouts'
 import { FailureNotice, StatusNotice } from './design/notices'
 import type { StaffScreenProps } from './staff-screen'
 
@@ -244,6 +243,25 @@ export function AnalyticsScreen({ storeId, api, permissions, today, navigate }: 
     }
   }, [api, storeId, granularity, date, mayRead, reloadToken])
 
+  /*
+   * 6 つの観点は 220px の 2 本目の柱ではなく、全画面共通の柱の「分析」の下へ
+   * 一段下げて入れる（`docs/frontend/REBUILD.md` の決定）。柱を 2 本立てると
+   * レポート列が 415px まで潰れ、数字と柱のグラフが並ばなくなる。
+   */
+  usePublishedSections(
+    mayRead
+      ? SECTIONS.map((item) => ({
+          label: item.label,
+          current: item.id === section,
+          selectable: true,
+        }))
+      : undefined,
+    (label) => {
+      const picked = SECTIONS.find((item) => item.label === label)
+      if (picked) setSection(picked.id)
+    },
+  )
+
   // 権限が無い操作者には、集計の存在も内容もこれ以上見せない
   // (`exception-states-approved.html#permission-denied`)。
   if (!mayRead) return <PermissionDenied onReturnHome={() => navigate({ screen: 'home' })} />
@@ -310,19 +328,7 @@ export function AnalyticsScreen({ storeId, api, permissions, today, navigate }: 
         )}
       </VizTitleBar>
 
-      <VizBody>
-        <VizMetricList>
-          {SECTIONS.map((item) => (
-            <VizMetricItem
-              key={item.id}
-              on={item.id === section}
-              onClick={() => setSection(item.id)}
-            >
-              {item.label}
-            </VizMetricItem>
-          ))}
-        </VizMetricList>
-
+      <VizBody nav={false}>
         <VizReport label="レポート">
           {/* 対象件数と比較対象は、どの観点を見ていても同じ場所に出る
               (AC-EYEX-49)。帯のピルに全部詰めると 58px の 1 段に収まらない。 */}

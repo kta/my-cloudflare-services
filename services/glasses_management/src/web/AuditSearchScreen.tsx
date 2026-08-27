@@ -1,7 +1,12 @@
 import { type AuditActorType, AuditEventView, type StorePermission } from '@app/contracts'
 import { useCallback, useEffect, useState } from 'react'
 import { EmptyResult, PermissionDenied } from './admin-chrome'
-import { auditDiffRows, formatJstInstant, jstWallClockToInstant } from './attention-view'
+import {
+  auditDiffLineText,
+  auditDiffRows,
+  formatJstInstant,
+  jstWallClockToInstant,
+} from './attention-view'
 import { Action, Actions } from './design/controls'
 import { DateTimeField, TextField, ToggleFilter } from './design/forms'
 import { AdminLayout, AdminSurface } from './design/layouts'
@@ -219,7 +224,7 @@ export function AuditSearchScreen({ storeId, storeName, api, permissions, naviga
                       <b>{side === 'before' ? '変更前' : '変更後'}</b>
                       {auditDiffRows(detail).map((row) => (
                         <span key={row.key} className="block">
-                          {`${row.key} ${side === 'before' ? row.before : row.after}`}
+                          {auditDiffLineText(row.key, side === 'before' ? row.before : row.after)}
                         </span>
                       ))}
                     </Card>

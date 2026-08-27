@@ -9,8 +9,8 @@ import {
 } from '@app/contracts'
 import { Fragment, type ReactNode, useEffect, useState } from 'react'
 import { Action, Actions, FilterLine } from './design/controls'
-import { CheckToggle, SelectField, TextField, ToggleFilter } from './design/forms'
-import { FullScreenState, GuideLayout, GuideStep } from './design/layouts'
+import { CheckToggle, PickerField, TextField, ToggleFilter } from './design/forms'
+import { FullScreenState, GuideLayout } from './design/layouts'
 import { FailureNotice, StatusNotice } from './design/notices'
 import { Card, CardGrid, FieldCard, Preview, TitleRow } from './design/surfaces'
 import { SettingsPublication } from './SettingsPublication'
@@ -100,6 +100,21 @@ function fromJstWallClock(value: string): string | null {
 }
 
 const UNKNOWN = '未取得'
+
+/* 選択肢は描く場所ではなくここで組む。値は契約の文字列そのまま。 */
+const EXCEPTION_MODE_OPTIONS = [
+  { value: 'closed', label: '休業' },
+  { value: 'open', label: '臨時営業' },
+  { value: 'paused', label: '受付停止' },
+]
+const RECEPTION_STATUS_OPTIONS = [
+  { value: 'open', label: '受付中' },
+  { value: 'paused', label: '受付停止' },
+]
+const WEB_STATUS_OPTIONS = [
+  { value: 'published', label: '公開' },
+  { value: 'hidden', label: '非公開' },
+]
 const EXCEPTION_MODE_LABEL: Record<AvailabilityExceptionMode, string> = {
   closed: '休業',
   open: '臨時営業',
@@ -396,31 +411,42 @@ export function SettingsScreen({
 
   /* ---------------- 工程レール（モックの `.steps`） ---------------- */
 
-  const rail = (
-    <>
-      {/*
-       * SP 幅だけに出す固定ステッパーの要約（AC-EYEX-72, 73）。iPad 幅の
-       * モックには無い段なので、そこでは出さない。
-       */}
-      <div className="md:hidden">
-        <p className="my-0 flex items-baseline justify-between gap-2 text-note">
-          <span className="font-bold text-pine">{summary.headline}</span>
-          <span>{summary.remainingLabel}</span>
-        </p>
-        <p className="my-0 text-note">{`現在の状態: ${summary.stateLabel}`}</p>
-      </div>
-      {SETTINGS_STEPS.map((candidate) => (
-        <GuideStep
-          key={candidate.id}
-          index={candidate.number}
-          label={candidate.label}
-          state={RAIL_STATE[states[candidate.id]]}
-          // レールに出る字は番号か ✓ と工程名だけ。状態の語は読み上げの名前が持つ。
-          name={`工程${candidate.number} ${candidate.label} ${STEP_STATE_LABEL[states[candidate.id]]}`}
-          onClick={() => goToStep(candidate.id)}
-        />
-      ))}
-    </>
+  /*
+   * 6 工程は 260px の 2 本目の柱ではなく、全画面共通の柱の「設定ガイド」の下へ
+   * 一段下げて入れる（`docs/frontend/REBUILD.md` の決定）。柱を 2 本立てると
+   * 本文が 666px まで潰れる。
+   *
+   * 柱に出る字はモックどおり番号か ✓ と工程名だけ。状態の語は読み上げの名前が
+   * 持つ（色に頼らず語で伝える）。
+   */
+  const sections = SETTINGS_STEPS.map((candidate) => {
+    const state = RAIL_STATE[states[candidate.id]]
+    return {
+      label: `${state === 'done' ? '✓' : candidate.number}\u3000${candidate.label}`,
+      name: `工程${candidate.number} ${candidate.label} ${STEP_STATE_LABEL[states[candidate.id]]}`,
+      current: state === 'current',
+      selectable: true,
+    }
+  })
+  const selectSection = (label: string) => {
+    const index = sections.findIndex((section) => section.label === label)
+    const step = SETTINGS_STEPS[index]
+    if (step) goToStep(step.id)
+  }
+
+  /*
+   * SP 幅だけに出す固定ステッパーの要約（AC-EYEX-72, 73）。iPad 幅のモックには
+   * 無い段なので、そこでは出さない。柱が出ない幅では、今どの工程かを名乗る
+   * ものがここしか無い。
+   */
+  const stepper = (
+    <nav aria-label="設定の工程" className="md:hidden">
+      <p className="my-0 flex items-baseline justify-between gap-2 text-note">
+        <span className="font-bold text-pine">{summary.headline}</span>
+        <span>{summary.remainingLabel}</span>
+      </p>
+      <p className="my-0 text-note">{`現在の状態: ${summary.stateLabel}`}</p>
+    </nav>
   )
 
   /* ---------------- 工程 1: 店舗と営業時間 ---------------- */
@@ -531,18 +557,13 @@ export function SettingsScreen({
               value={exceptionDate}
               onChange={(event) => setExceptionDate(event.target.value)}
             />
-            <SelectField
+            <PickerField
               id="exception-mode"
               label="区分"
               value={exceptionMode}
-              onChange={(event) =>
-                setExceptionMode(event.target.value as AvailabilityExceptionMode)
-              }
-            >
-              <option value="closed">休業</option>
-              <option value="open">臨時営業</option>
-              <option value="paused">受付停止</option>
-            </SelectField>
+              options={EXCEPTION_MODE_OPTIONS}
+              onChange={(next) => setExceptionMode(next as AvailabilityExceptionMode)}
+            />
             <TextField
               id="exception-reason"
               label="理由"
@@ -571,20 +592,18 @@ export function SettingsScreen({
             </Action>
           </div>
 
-          <SelectField
+          <PickerField
             id="reception-status"
             label="受付状態"
             value={draft.receptionStatus}
-            onChange={(event) =>
+            options={RECEPTION_STATUS_OPTIONS}
+            onChange={(next) =>
               update((previous) => ({
                 ...previous,
-                receptionStatus: event.target.value === 'paused' ? 'paused' : 'open',
+                receptionStatus: next === 'paused' ? 'paused' : 'open',
               }))
             }
-          >
-            <option value="open">受付中</option>
-            <option value="paused">受付停止</option>
-          </SelectField>
+          />
           <p className="my-0">
             受付停止は新しいWeb予約だけを止めます。既存予約は取り消されません。
           </p>
@@ -983,21 +1002,19 @@ export function SettingsScreen({
         )}
         {editing && canManage && webDraft && (
           <Editor label="Web予約の編集">
-            <SelectField
+            <PickerField
               id="web-publish-status"
               hideLabel
               label="公開状態"
               value={webDraft.status}
-              onChange={(event) =>
+              options={WEB_STATUS_OPTIONS}
+              onChange={(next) =>
                 setWebDraft({
                   ...webDraft,
-                  status: event.target.value === 'published' ? 'published' : 'hidden',
+                  status: next === 'published' ? 'published' : 'hidden',
                 })
               }
-            >
-              <option value="published">公開</option>
-              <option value="hidden">非公開</option>
-            </SelectField>
+            />
             <TextField
               id="web-starts-at"
               hideLabel
@@ -1060,19 +1077,27 @@ export function SettingsScreen({
 
   const heading =
     current === 'purposes' && selectedPurpose ? selectedPurpose.staffName : activeStep.label
+  /*
+   * 適用元がまだ分からないときは何も言わない。モックのこの位置（`.title` の
+   * 右端）には `下書き保存 14:32` のような「分かっている事実」しか無く、
+   * `適用元: 未取得` はモックの語彙に無い失敗文言だった。推測した既定値を
+   * 描かないという当初の意図は、黙ることでも同じように守れる。
+   */
   const originLabel = chainDefaults
     ? chainDefaults.source === 'chain'
       ? '全店共通'
       : '店舗設定'
-    : UNKNOWN
+    : undefined
 
   return (
     <section aria-label="店舗設定" className="flex min-h-full flex-col font-sans">
-      <GuideLayout steps={rail}>
+      <GuideLayout sections={sections} onSelectSection={selectSection} stepper={stepper}>
         {/* 第6工程は公開画面が自分の見出しを持つ（モックどおり見出しを重ねない）。 */}
         {current !== 'impact' && (
           <>
-            <TitleRow push={<span>{`適用元: ${originLabel}`}</span>}>
+            <TitleRow
+              push={originLabel === undefined ? undefined : <span>{`適用元: ${originLabel}`}</span>}
+            >
               <h1>{heading}</h1>
             </TitleRow>
             {chainDefaults && chainDefaults.overriddenFields.length > 0 && (

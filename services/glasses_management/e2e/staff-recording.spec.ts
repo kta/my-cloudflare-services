@@ -1,4 +1,4 @@
-import { expect, type Page, test } from '@playwright/test'
+import { expect, type Locator, type Page, test } from '@playwright/test'
 
 /*
  * EYEX スタッフ端末の「録音運用」の E2E。
@@ -604,7 +604,7 @@ test('録音を扱える店舗スタッフは再生・一時停止・シーク�
  * 予約受付中の録音面と、受付履歴からの再生。
  *
  * ここから下は「録音運用」ではなく、電話・店頭予約のフロー（`BookingFlow` の
- * aside に出る `RecordingIndicator`）と、受付履歴の iPad録音 パネルを扱う。
+ * 脇の列に出る録音の面）と、受付履歴の iPad録音 パネルを扱う。
  * ブラウザのマイク権限は `navigator.mediaDevices.getUserMedia` を
  * `addInitScript` で差し替えて駆動する。SPA 側は `requestMicrophonePermission`
  * 経由でしかマイクへ触れないので、この 1 点が実機と同じ唯一の境界になる。
@@ -855,7 +855,8 @@ function microphoneCalls(page: Page) {
 /**
  * ホーム → 主操作「新しい予約を取る」まで進め、録音面を返す。
  *
- * 録音の面は下部進捗バーの `status[name="iPad録音"]` に移った。
+ * 録音の面は脇の列（`aside`）の `status[name="iPad録音"]` にある。下部進捗バーは
+ * 同じ状態の短い写し（`● mm:ss`）だけを持つ。
  */
 async function openBooking(page: Page) {
   await page.setViewportSize(VIEWPORT)
@@ -867,6 +868,15 @@ async function openBooking(page: Page) {
     .click()
   await expect(page.getByRole('heading', { name: 'ご来店予定の日を伺えますか？' })).toBeVisible()
   return page.getByRole('status', { name: 'iPad録音' })
+}
+
+/**
+ * 脇の列の説明を読んでから録音を始める。ブラウザの権限はこの明示操作でだけ
+ * 開く (AC-EYEX-113)。
+ */
+async function beginRecording(indicator: Locator) {
+  await indicator.getByRole('button', { name: '録音を開始する' }).click()
+  await expect(indicator).toContainText('録音中')
 }
 
 /** 日 → 時刻 → 来店目的 → お客様情報 → 復唱 まで進める。 */
@@ -975,7 +985,7 @@ test('録音メタデータは受付セッション・店舗・録音主体・�
   await stubMicrophone(page, 'granted')
   await mockBookingApi(page, mocks)
   const indicator = await openBooking(page)
-  await expect(indicator).toContainText('録音中')
+  await beginRecording(indicator)
   await reachRecital(page)
   await page.getByRole('button', { name: '復唱を終えて予約を確定する' }).click()
   await expect(indicator).toContainText('保存済み')
@@ -1006,7 +1016,7 @@ test('録音メタデータは受付セッション・店舗・録音主体・�
   // 受付セッション ID を持つ (AC-EYEX-89)。
   mocks.requests.length = 0
   const second = await openBooking(page)
-  await expect(second).toContainText('録音中')
+  await beginRecording(second)
   // 受付を打ち切る口は下部バーの「戻る」。最初の工程でもう一度押すと確認が出る。
   await page.getByRole('button', { name: dayLabel(jstToday()) }).click()
   await page.getByRole('button', { name: '戻る' }).click()
@@ -1037,7 +1047,7 @@ test('録音の保存失敗は予約が確定していない段階で見え、�
   await stubMicrophone(page, 'granted')
   await mockBookingApi(page, mocks)
   const indicator = await openBooking(page)
-  await expect(indicator).toContainText('録音中')
+  await beginRecording(indicator)
 
   // 復唱の前に受付を打ち切ると、録音はそこで終わる。
   // 受付を打ち切る口は下部バーの「戻る」。最初の工程でもう一度押すと確認が出る。
@@ -1082,6 +1092,7 @@ test('予約成立と録音送信中は別々の事実として並び、確定�
   await stubMicrophone(page, 'granted')
   await mockBookingApi(page, mocks)
   const indicator = await openBooking(page)
+  await beginRecording(indicator)
   await reachRecital(page)
   await page.getByRole('button', { name: '復唱を終えて予約を確定する' }).click()
 
@@ -1248,7 +1259,7 @@ test('録音本体はメタデータとは別に非公開の保管先へ送ら�
   await stubMicrophone(page, 'granted')
   await mockBookingApi(page, mocks)
   const indicator = await openBooking(page)
-  await expect(indicator).toContainText('録音中')
+  await beginRecording(indicator)
   await reachRecital(page)
   await page.getByRole('button', { name: '復唱を終えて予約を確定する' }).click()
   await expect(indicator).toContainText('保存済み')

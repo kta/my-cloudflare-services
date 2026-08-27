@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import { CustomerMergeScreen } from './CustomerMergeScreen'
+import { choosePickerOption } from './test/picker'
 
 const STORE_ID = '00000000-0000-4000-8000-000000000010'
 const PRIMARY_ID = '00000000-0000-4000-8000-000000000401'
@@ -198,7 +199,7 @@ test('誤関連解除は明示操作と理由を要求する (UC-EYEX-181, AC-EY
   )
   renderScreen(api)
 
-  fireEvent.change(screen.getByLabelText('受付種別'), { target: { value: 'reservation' } })
+  choosePickerOption(screen.getByRole('combobox', { name: '受付種別' }), '予約')
   fireEvent.change(screen.getByLabelText('受付ID'), { target: { value: RESERVATION_ID } })
   fireEvent.click(screen.getByRole('button', { name: '誤関連を解除する' }))
 

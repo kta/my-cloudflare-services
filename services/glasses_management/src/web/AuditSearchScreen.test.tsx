@@ -144,11 +144,18 @@ test('変更前後と相関IDを詳細で読める (UC-EYEX-155, AC-EYEX-102)', 
   expect(detail).toHaveTextContent('correlation_id: corr-6f82')
   expect(detail).toHaveTextContent('occurred_at: 2026年8月26日 17:42')
 
+  /*
+   * 承認済みモック `AUDIT-DETAIL` の変更前後は「確認待ち」「公開済み」と日本語で
+   * 書かれている。生値のまま出すと、監査を読む人が画面の言葉と突き合わせられない。
+   * 日本語の言い方が決まっていない鍵（version）は鍵と値をそのまま並べる。
+   */
   const before = within(detail).getByRole('region', { name: '変更前' })
-  expect(before).toHaveTextContent('status pending_review')
+  expect(before).toHaveTextContent('確認待ち')
+  expect(before).not.toHaveTextContent('pending_review')
   expect(before).toHaveTextContent('version 2')
   const after = within(detail).getByRole('region', { name: '変更後' })
-  expect(after).toHaveTextContent('status published')
+  expect(after).toHaveTextContent('公開済み')
+  expect(after).not.toHaveTextContent('published')
   expect(after).toHaveTextContent('version 3')
 })
 

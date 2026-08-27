@@ -53,11 +53,43 @@ export function Workspace({
   )
 }
 
+/**
+ * 面の節を全画面共通の柱へ渡す。
+ *
+ * 節は描画の結果ではなく面の持ち物なので、描画中ではなく効果で書く。面を
+ * 離れたら空にして、前の面の節が残らないようにする。
+ *
+ * 面は描画のたびに新しい配列を作るので、配列そのものを依存にすると効果が
+ * 毎回動いて描画が止まらなくなる。中身を綴った文字列を挟み、その文字列から
+ * 節を組み直して渡す（同じ並びなら文字列も同じで、効果は動かない）。
+ */
+export function usePublishedSections(
+  sections: ScreenSection[] | undefined,
+  onSelectSection?: (label: string) => void,
+) {
+  const signature = sections === undefined ? undefined : JSON.stringify(sections)
+  useEffect(() => {
+    if (signature === undefined) return
+    screenSections.set(JSON.parse(signature) as ScreenSection[])
+    return () => screenSections.set([])
+  }, [signature])
+  /*
+   * 押されたときの処理は比較する値に混ぜられない（同じ並びのときに書き換えられ
+   * ず、古い関数が残る）。購読者を起こさない別の口へ毎描画で置き直す。
+   */
+  useEffect(() => {
+    if (sections === undefined) return
+    screenSections.bindSelect(onSelectSection)
+    return () => screenSections.bindSelect(undefined)
+  })
+}
+
 /** 運用面: 250px の節ナビ + 本文。 */
 export function AdminLayout({
   nav,
   navLabel,
   sections,
+  onSelectSection,
   children,
 }: {
   /** モックどおり自前の柱を描く（突き合わせ台がこちらを使う）。 */
@@ -69,22 +101,11 @@ export function AdminLayout({
    * 本文が半分になってしまう。
    */
   sections?: ScreenSection[]
+  /** `selectable` な節が押されたとき。同じ面の中で見る対象を変える。 */
+  onSelectSection?: (label: string) => void
   children: ReactNode
 }) {
-  /*
-   * 節は描画の結果ではなく面の持ち物なので、描画中ではなく効果で書く。
-   * 面を離れたら空にして、前の面の節が残らないようにする。
-   *
-   * 面は描画のたびに新しい配列を作るので、配列そのものを依存にすると効果が
-   * 毎回動いて描画が止まらなくなる。中身を綴った文字列を挟み、その文字列から
-   * 節を組み直して渡す（同じ並びなら文字列も同じで、効果は動かない）。
-   */
-  const signature = sections === undefined ? undefined : JSON.stringify(sections)
-  useEffect(() => {
-    if (signature === undefined) return
-    screenSections.set(JSON.parse(signature) as ScreenSection[])
-    return () => screenSections.set([])
-  }, [signature])
+  usePublishedSections(sections, onSelectSection)
 
   if (sections !== undefined)
     return <section className="min-h-0 flex-1 overflow-auto px-7.5 py-6">{children}</section>
@@ -128,7 +149,36 @@ export function SideNavItem({
 }
 
 /** 設定ガイド: 260px の工程レール + 本文。 */
-export function GuideLayout({ steps, children }: { steps: ReactNode; children: ReactNode }) {
+export function GuideLayout({
+  steps,
+  sections,
+  onSelectSection,
+  stepper,
+  children,
+}: {
+  /** モックどおり自前の工程レールを描く（突き合わせ台がこちらを使う）。 */
+  steps?: ReactNode
+  /**
+   * 実アプリはこちらを使う。柱は全画面共通の 1 本しかないので、6 工程はそこへ
+   * 渡して開いている行き先の下へ入れてもらう。260px の柱を 2 本立てると本文が
+   * 666px まで潰れる。
+   */
+  sections?: ScreenSection[]
+  onSelectSection?: (label: string) => void
+  /** SP 幅だけに出す工程の要約。柱を持たない幅で今どこかを名乗る。 */
+  stepper?: ReactNode
+  children: ReactNode
+}) {
+  usePublishedSections(sections, onSelectSection)
+
+  if (sections !== undefined)
+    return (
+      <section className="min-h-0 flex-1 overflow-auto px-8.5 py-6.5">
+        {stepper}
+        {children}
+      </section>
+    )
+
   return (
     <div className="grid min-h-0 flex-1" style={{ gridTemplateColumns: '260px 1fr' }}>
       <nav aria-label="設定の工程" className="min-h-0 overflow-auto bg-steps p-4.5">

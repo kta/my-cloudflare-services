@@ -123,11 +123,24 @@ export function Candidate({
  * 実アプリのレールは中身が工程ごとに入れ替わるので、読み上げが「今どの要約を
  * 読んでいるか」を言えなければならない。名前は画素を持たない。
  */
-export function RailSummary({ children, label }: { children: ReactNode; label?: string }) {
+export function RailSummary({
+  children,
+  label,
+  live = false,
+}: {
+  children: ReactNode
+  label?: string
+  /*
+   * 中身が操作ではなく「今どうなっているか」で入れ替わる要約に渡す（録音の面）。
+   * 読み上げが状態の変化に追随できないと、画面を見ていないスタッフが録音の
+   * 開始・失敗を取り逃す。役割は画素を持たないので、モックの絵は動かない。
+   */
+  live?: boolean
+}) {
   const classes = 'mb-3.5 rounded-card border border-line bg-surface p-4.5 font-sans'
   if (label === undefined) return <div className={classes}>{children}</div>
   return (
-    <section aria-label={label} className={classes}>
+    <section aria-label={label} role={live ? 'status' : undefined} className={classes}>
       {children}
     </section>
   )
@@ -215,11 +228,24 @@ export function ProgressFooter({
  * 読み上げに残す。書体はモックが書いたとおりの `--font-timer`（予備を持たない系統の等幅）で、
  * IBM Plex Mono には寄せない。桁幅と ● の大きさが変わってしまうため。
  */
-export function RecordIndicator({ elapsed, label }: { elapsed?: string; label: string }) {
+export function RecordIndicator({
+  elapsed,
+  label,
+  name = 'iPad録音',
+}: {
+  elapsed?: string
+  label: string
+  /*
+   * 読み上げ上の名前。録音の説明・回復・保存失敗を脇の列が受け持つ面では、
+   * そちらが `iPad録音` を名乗る。同じ名前を 2 つ置くと、どちらを読んでいるのか
+   * 分からなくなる。
+   */
+  name?: string
+}) {
   return (
     <p
       role="status"
-      aria-label="iPad録音"
+      aria-label={name}
       data-testid="recording-state"
       className="text-right font-bold font-timer text-body text-record"
     >
