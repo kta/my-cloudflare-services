@@ -93,7 +93,7 @@ const headingFormat = new Intl.DateTimeFormat('ja-JP', {
 })
 
 /** `8月27日（木）11:00` — the approved mock's detail heading. */
-export function formatJstHeading(iso: string): string {
+function formatJstHeading(iso: string): string {
   const at = new Date(iso)
   const parts = Object.fromEntries(
     headingFormat.formatToParts(at).map((part) => [part.type, part.value]),
@@ -110,7 +110,7 @@ export function formatJstDayHeading(iso: string): string {
 }
 
 /** `8/27 11:00` — the compact form the approved `.row` uses. */
-export function formatJstRowDateTime(iso: string): string {
+function formatJstRowDateTime(iso: string): string {
   const at = new Date(iso)
   const parts = Object.fromEntries(
     headingFormat.formatToParts(at).map((part) => [part.type, part.value]),
@@ -204,13 +204,13 @@ export const LIST_PANE = 'overflow-auto border-line border-r bg-panel p-4'
 /** `.detail{padding:22px;overflow:auto}` */
 export const DETAIL_PANE = 'overflow-auto p-5.5'
 /** `.search{min-height:48px;border:2px solid var(--g);background:#fff;border-radius:8px;padding:12px}` */
-export const SEARCH_FIELD = `min-h-12 w-full rounded-ctl border-2 border-pine bg-surface px-3 py-3 font-sans text-ink placeholder:text-ink-muted ${FOCUS_RING}`
+const SEARCH_FIELD = `min-h-12 w-full rounded-ctl border-2 border-pine bg-surface px-3 py-3 font-sans text-ink placeholder:text-ink-muted ${FOCUS_RING}`
 /** `.filterline{display:flex;gap:8px;margin:10px 0}` */
 export const FILTER_LINE = 'mt-2.5 flex flex-wrap items-center gap-2'
 /** `.filter{min-height:44px;border:1px solid var(--l);background:#fff;border-radius:8px;padding:0 12px}` */
 export const FILTER = `min-h-11 rounded-ctl border border-line bg-surface px-3 font-sans text-ink text-sm ${FOCUS_RING}`
 /** `.filter.danger{color:var(--warn);border:1px solid var(--warn);background:#fff}` */
-export const FILTER_DANGER = `min-h-11 rounded-ctl border border-danger bg-surface px-3 font-sans text-danger text-sm ${FOCUS_RING}`
+const FILTER_DANGER = `min-h-11 rounded-ctl border border-danger bg-surface px-3 font-sans text-danger text-sm ${FOCUS_RING}`
 /** `.row{background:#fff;border:1px solid var(--l);border-radius:9px;padding:14px;margin-top:10px}` */
 export const ROW = `mt-2.5 block w-full rounded-card border border-line bg-surface p-3.5 text-left font-sans ${FOCUS_RING}`
 /** `.row.selected{border:3px solid var(--g);background:var(--gs)}` */
@@ -218,9 +218,9 @@ export const ROW_SELECTED = `mt-2.5 block w-full rounded-card border-[3px] borde
 /** `.card{background:#fff;border:1px solid var(--l);border-radius:9px;padding:14px}` */
 export const CARD = 'rounded-card border border-line bg-surface p-3.5 font-sans text-ink'
 /** `.audio{border:1px solid var(--l);padding:14px;border-radius:9px;margin-top:14px}` */
-export const AUDIO = 'mt-3.5 rounded-card border border-line bg-surface p-3.5'
+const AUDIO = 'mt-3.5 rounded-card border border-line bg-surface p-3.5'
 /** `.audio button{width:44px;height:44px;border-radius:50%;background:var(--g);color:#fff}` */
-export const AUDIO_PLAY = `size-11 shrink-0 rounded-circle bg-pine text-on-pine ${FOCUS_RING}`
+const AUDIO_PLAY = `size-11 shrink-0 rounded-circle bg-pine text-on-pine ${FOCUS_RING}`
 
 /**
  * exception-states-approved.html `#empty` / `#permission-denied`。
@@ -393,7 +393,7 @@ export function RecordingPanel({
 }
 
 /** A labelled card. `Card` takes no aria-label, and these panels need a name. */
-export function Panel({
+function Panel({
   label,
   className,
   children,

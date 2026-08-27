@@ -3,17 +3,23 @@ import { expect, test, vi } from 'vitest'
 import { PublicBooking, type PublicBookingApi } from './PublicBooking'
 import { PublicBookingRequestError } from './public-booking-client'
 
+/*
+ * 承認済みモックの検索カードは、詳細を開かせずにアクセス文と本日の営業時間を
+ * 読ませる。契約もそのとおり一覧に持たせているので、一覧の見本も両方を持つ。
+ */
 const store = {
   slug: 'ginza',
   name: '銀座店',
   contactPhone: '03-0000-0000',
   region: '東京都',
   nearestStation: '銀座駅',
+  accessText: '銀座駅 A3出口から徒歩2分',
+  todayBusinessHours: '10:00–19:00',
 }
 const detail = {
   ...store,
-  accessText: '銀座駅 A3出口から徒歩2分',
   notice: 'ご来店前に確認してください。',
+  services: ['メガネ新調', '視力測定', 'フィッティング調整'],
   businessHours: [{ dayOfWeek: 1, periods: [{ startTime: '10:00', endTime: '19:00' }] }],
   purposes: [
     {

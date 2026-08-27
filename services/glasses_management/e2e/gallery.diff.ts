@@ -52,6 +52,15 @@ function sizeOf(id: string) {
   return SIZES[id] ?? IPAD
 }
 
+/**
+ * 画素 1 つを読む。`noUncheckedIndexedAccess` の下では添字が undefined を
+ * 返しうるので、範囲外は 0（透明・黒）として扱う。画像の範囲内しか読まない
+ * ため、この既定値が結果に混ざることはない。
+ */
+function at(data: Buffer, index: number) {
+  return data[index] ?? 0
+}
+
 /** 画素単位で比べる。位置がずれた時点で違いなので、寛容な閾値は置かない。 */
 function compare(id: string, actual: Buffer) {
   const reference = PNG.sync.read(readFileSync(`${REF}/ref--${id}.png`))
@@ -66,9 +75,9 @@ function compare(id: string, actual: Buffer) {
   let differing = 0
   for (let i = 0; i < reference.data.length; i += 4) {
     const distance =
-      Math.abs(reference.data[i] - mine.data[i]) +
-      Math.abs(reference.data[i + 1] - mine.data[i + 1]) +
-      Math.abs(reference.data[i + 2] - mine.data[i + 2])
+      Math.abs(at(reference.data, i) - at(mine.data, i)) +
+      Math.abs(at(reference.data, i + 1) - at(mine.data, i + 1)) +
+      Math.abs(at(reference.data, i + 2) - at(mine.data, i + 2))
     /*
      * 字の輪郭の反エイリアスだけを逃がす。ここを広く取ると、面の塗りが
      * 少しだけ違う（罫線の hex が 1〜2 違うなど）のを見逃す。実際 40 では

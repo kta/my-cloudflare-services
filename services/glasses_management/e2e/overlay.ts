@@ -22,12 +22,20 @@ import { PNG } from 'pngjs'
 const REF = '../../docs/frontend/reference'
 const OUT = '../../docs/frontend/overlay'
 
+/**
+ * 画素 1 つを読む。`noUncheckedIndexedAccess` の下では添字が undefined を
+ * 返しうるので、範囲外は 0 として扱う。範囲内しか読まないため結果に混ざらない。
+ */
+function at(data: Buffer, index: number) {
+  return data[index] ?? 0
+}
+
 /** 画素 1 つの距離。色の違いをまとめて 1 つの数にする。 */
 function distance(a: PNG, b: PNG, index: number) {
   return (
-    Math.abs(a.data[index] - b.data[index]) +
-    Math.abs(a.data[index + 1] - b.data[index + 1]) +
-    Math.abs(a.data[index + 2] - b.data[index + 2])
+    Math.abs(at(a.data, index) - at(b.data, index)) +
+    Math.abs(at(a.data, index + 1) - at(b.data, index + 1)) +
+    Math.abs(at(a.data, index + 2) - at(b.data, index + 2))
   )
 }
 
@@ -43,8 +51,8 @@ function overlay(reference: PNG, mine: PNG) {
   const out = new PNG({ width: reference.width, height: reference.height })
   for (let i = 0; i < reference.data.length; i += 4) {
     // それぞれの明るさだけを取り出し、赤版と青版に振り分ける。
-    const left = (reference.data[i] + reference.data[i + 1] + reference.data[i + 2]) / 3
-    const right = (mine.data[i] + mine.data[i + 1] + mine.data[i + 2]) / 3
+    const left = (at(reference.data, i) + at(reference.data, i + 1) + at(reference.data, i + 2)) / 3
+    const right = (at(mine.data, i) + at(mine.data, i + 1) + at(mine.data, i + 2)) / 3
     out.data[i] = left
     out.data[i + 1] = Math.round((left + right) / 2)
     out.data[i + 2] = right
@@ -84,9 +92,9 @@ function bestShift(reference: PNG, mine: PNG, radius = 8) {
           const left = (y * reference.width + x) * 4
           const right = ((y + dy) * mine.width + (x + dx)) * 4
           const d =
-            Math.abs(reference.data[left] - mine.data[right]) +
-            Math.abs(reference.data[left + 1] - mine.data[right + 1]) +
-            Math.abs(reference.data[left + 2] - mine.data[right + 2])
+            Math.abs(at(reference.data, left) - at(mine.data, right)) +
+            Math.abs(at(reference.data, left + 1) - at(mine.data, right + 1)) +
+            Math.abs(at(reference.data, left + 2) - at(mine.data, right + 2))
           if (d > TOLERANCE) differing += 1
         }
       if (differing < best.differing) best = { dx, dy, differing }
@@ -106,7 +114,7 @@ function contactSheet(panes: PNG[], gap = 8) {
       for (let x = 0; x < pane.width; x += 1) {
         const from = (y * pane.width + x) * 4
         const to = (y * width + x + offset) * 4
-        for (let k = 0; k < 4; k += 1) sheet.data[to + k] = pane.data[from + k]
+        for (let k = 0; k < 4; k += 1) sheet.data[to + k] = at(pane.data, from + k)
       }
     offset += pane.width + gap
   }
@@ -134,7 +142,13 @@ export type Report = {
  */
 function flatFills(reference: PNG, mine: PNG) {
   const hex = (png: PNG, index: number) =>
-    `#${[0, 1, 2].map((k) => png.data[index + k].toString(16).padStart(2, '0')).join('')}`
+    `#${[0, 1, 2]
+      .map((k) =>
+        at(png.data, index + k)
+          .toString(16)
+          .padStart(2, '0'),
+      )
+      .join('')}`
   const area = new Map<string, number>()
   for (let i = 0; i < reference.data.length; i += 4) {
     for (const png of [reference, mine]) {
@@ -186,7 +200,7 @@ export function compare(id: string, implPath: string): Report {
         const from = ((y + shift.dy) * mine.width + (x + shift.dx)) * 4
         const to = (y * reference.width + x) * 4
         if (from < 0 || from >= mine.data.length) continue
-        for (let k = 0; k < 4; k += 1) shifted.data[to + k] = mine.data[from + k]
+        for (let k = 0; k < 4; k += 1) shifted.data[to + k] = at(mine.data, from + k)
       }
 
   writeFileSync(

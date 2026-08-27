@@ -30,9 +30,14 @@
         "src/web/**/*.test.{ts,tsx}",
         // 画面証跡の撮影スクリプト。spec ではないので Playwright は収集しないが、
         // 手動で実行する入口なので未使用ではない。
-        "e2e/screens.capture.ts"
+        "e2e/screens.capture.ts",
+        // 承認済みモックとの突き合わせ一式。同じく手動で実行する入口。
+        "e2e/mock-reference.capture.ts",
+        "e2e/gallery.diff.ts",
+        "e2e/overlay.ts",
+        "e2e/*.mjs"
       ],
-      "project": ["src/**/*.{ts,tsx,css}", "test/**/*.ts", "e2e/**/*.ts", "*.ts"],
+      "project": ["src/**/*.{ts,tsx,css}", "test/**/*.ts", "e2e/**/*.{ts,mjs}", "*.ts"],
       "vitest": false
     },
     "services/example_service": {

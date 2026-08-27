@@ -16,7 +16,7 @@ import type { CSSProperties, ReactNode } from 'react'
 import type { StaffLocation } from './staff-navigation'
 
 /** `.card` — 白・1px line・角丸 9px・内側 14px。 */
-export const ADMIN_CARD = 'rounded-card border border-line bg-surface p-3.5'
+const ADMIN_CARD = 'rounded-card border border-line bg-surface p-3.5'
 
 /** `.row` の grid-template-columns。トークンを持たない純粋なレイアウト値。 */
 const ROW_COLUMNS: CSSProperties = { gridTemplateColumns: '1.4fr 1fr 1fr auto' }

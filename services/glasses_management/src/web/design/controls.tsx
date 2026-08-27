@@ -140,7 +140,7 @@ export function FilterLine({ children }: { children: ReactNode }) {
  *   一覧    `.search{min-height:48px;border:2px solid var(--g);…;padding:12px}`
  *   予約入力 `.search{min-height:56px;border-radius:9px;padding:15px;font-size:20px}`
  */
-export function SearchBox({
+function SearchBox({
   value,
   placeholder,
   label,

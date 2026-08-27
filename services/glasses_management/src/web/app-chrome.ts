@@ -10,7 +10,7 @@ import type { StaffLocation } from './staff-navigation'
  * - 予約フローと設定ガイドはバーに操作を持たない。副題だけが今どこかを名乗る。
  */
 
-export type BarTab = { label: string; to: StaffLocation }
+type BarTab = { label: string; to: StaffLocation }
 
 export type BarSpec = {
   /** `home` だけが お知らせ / アラート / 設定 の 3 つを出す。 */
@@ -131,7 +131,7 @@ export function barFor(
  * 面が持つ下書きに依存する値なので、`barFor` では決められない。面が書き、
  * バーが読む小さな置き場をひとつだけ用意する。
  */
-export type BarOverlay = { chip?: string; subtitle?: string }
+type BarOverlay = { chip?: string; subtitle?: string }
 
 function createBarOverlay() {
   let current: BarOverlay = {}

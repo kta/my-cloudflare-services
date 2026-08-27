@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import { createPublicBookingDraft, publicBookingReducer } from './public-booking'
 
+/* 一覧の店舗はアクセス文と本日の営業時間まで持つ（承認済みモックの検索カード）。 */
 const store = {
   slug: 'ginza',
   name: '銀座店',
   contactPhone: '03-0000-0000',
   region: '東京都',
   nearestStation: '銀座駅',
+  accessText: '銀座駅 A3出口から徒歩2分',
+  todayBusinessHours: '10:00–19:00',
 }
 const purpose = {
   id: '00000000-0000-4000-8000-000000000001',

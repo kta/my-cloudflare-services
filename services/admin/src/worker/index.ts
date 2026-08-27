@@ -226,7 +226,7 @@ app.use(
  * 自分の標準ロールを本部管理者へ書き換えられてしまう。標準ロールはサーバが
  * D1 から引き直して判定する。
  */
-function requireHeadOfficeAdmin(): MiddlewareHandler<{ Bindings: Bindings; Variables: Variables }> {
+function requireHeadOfficeAdmin(): MiddlewareHandler<{ Bindings: Bindings; Variables: AuthVariables }> {
   return async (c, next) => {
     const { organizationId, userId } = actor(c as AdminContext)
     const self = await getUser(userAdminDeps(c as AdminContext), organizationId, userId)

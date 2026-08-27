@@ -135,13 +135,13 @@ const ROLE_RANK: Record<AttentionRole, number> = {
 }
 
 /** 表に並ぶロールの順序。モックと同じ 3 段。 */
-export const ATTENTION_ROLES: readonly AttentionRole[] = Object.freeze([
+const ATTENTION_ROLES: readonly AttentionRole[] = Object.freeze([
   'staff',
   'store_manager',
   'organization_admin',
 ] as const)
 
-export type AttentionMatrixCell = {
+type AttentionMatrixCell = {
   capability: AttentionCapability
   /** `許可` / `確認待ち` / `不可` のいずれか。色ではなく文字が可否を運ぶ。 */
   label: string

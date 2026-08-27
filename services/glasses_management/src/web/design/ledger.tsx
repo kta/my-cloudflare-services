@@ -22,7 +22,7 @@ import type { ReactNode } from 'react'
  * 「1 日が 1 画面に収まる」という台帳の主題が崩れる。
  */
 
-export type LedgerCell = {
+type LedgerCell = {
   /** 何列ぶんを占めるか。予約の長さがそのまま幅になる。 */
   span?: number
   tone?: 'plain' | 'appointment' | 'walkin'
