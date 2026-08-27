@@ -14,8 +14,8 @@ export type PinDeps = {
   now: Date
 }
 
-export const MAX_PIN_FAILURES = 5
-export const PIN_LOCKOUT_WINDOW_SECONDS = 15 * 60
+const MAX_PIN_FAILURES = 5
+const PIN_LOCKOUT_WINDOW_SECONDS = 15 * 60
 
 type PinIdentity = {
   organizationId: string

@@ -48,6 +48,12 @@ export function createStoreSwitchController(
       state = { ...state, draftState: { ...state.draftState, ...next } }
       publish()
     },
+    /** Withdraw the claim that unsaved work exists, once it no longer does. */
+    clearDraftState() {
+      if (Object.keys(state.draftState).length === 0) return
+      state = { ...state, draftState: {} }
+      publish()
+    },
     /** Preview a cross-store change without mutating client state or drafts. */
     prepareSwitch(
       nextStore: SelectedStore,

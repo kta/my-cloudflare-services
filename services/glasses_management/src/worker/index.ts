@@ -1,4 +1,41 @@
 import {
+  type AlertCode,
+  AlertCondition,
+  AlertEvaluationResult,
+  AlertListQuery,
+  AlertRecord,
+  AlertResolveInput,
+  AlertSettings,
+  AlertSettingsInput,
+  type AnalyticsBreakdown,
+  type AnalyticsCauseCandidate,
+  type AnalyticsExclusion,
+  type AnalyticsFunnel,
+  AnalyticsFunnelEventInput,
+  AnalyticsFunnelEventResult,
+  type AnalyticsMetricValue,
+  type AnalyticsPeriod,
+  type AnalyticsQualityWarning,
+  AnalyticsQuery,
+  AnalyticsReport,
+  AnalyticsSettings,
+  AnalyticsSettingsInput,
+  type AnalyticsStage,
+  AnalyticsTarget,
+  type AttentionCapability,
+  AttentionHideInput,
+  AttentionNoteInput,
+  AttentionNoteRecord,
+  AttentionNoteRevisionInput,
+  AttentionReviewInput,
+  type AttentionSettings,
+  AttentionSettingsInput,
+  type AttentionSharingScope,
+  AttentionSharingScopeImpact,
+  AttentionSharingScopeImpactRequest,
+  AttentionVersionConflict,
+  AuditEventView,
+  AuditSearchQuery,
   AvailabilityBusinessHours,
   AvailabilityEquipment,
   AvailabilityException,
@@ -11,6 +48,14 @@ import {
   AvailabilityStaffShift,
   AvailabilityStoreSettings,
   CustomerCandidate,
+  CustomerDetail,
+  CustomerLinkReleaseInput,
+  CustomerLinkReleaseResult,
+  type CustomerMergeImpact,
+  CustomerMergeInput,
+  CustomerMergePreview,
+  CustomerMergePreviewRequest,
+  CustomerMergeResult,
   CustomerSearchQuery,
   LedgerEntry,
   LedgerQuery,
@@ -21,8 +66,9 @@ import {
   NotificationResult,
   OrganizationSync,
   PinVerificationResponse,
-  PublicAvailabilityQuery,
   PublicAvailabilityResponse,
+  PublicOffersQuery,
+  PublicOffersResponse,
   PublicBookingCreate,
   PublicBookingResult,
   PublicReservationCancel,
@@ -39,6 +85,18 @@ import {
   PublicStoreSummary,
   ReceptionHistoryEntry,
   ReceptionHistoryQuery,
+  Recording,
+  RecordingHoldInput,
+  RecordingHoldRelease,
+  RecordingListQuery,
+  RecordingMetadataCreate,
+  RecordingReconciliationMismatch,
+  RecordingReconciliationReport,
+  RecordingReconciliationRequest,
+  RecordingReservationLink,
+  RecordingRetentionSettings,
+  RecordingRetentionSettingsInput,
+  type RecordingState,
   RefreshResponse,
   Reservation,
   ReservationCancelInput,
@@ -47,17 +105,34 @@ import {
   ReservationNoShowInput,
   ReservationProgressPatch,
   ReservationSearchQuery,
+  SettingsChainDefault,
+  SettingsConflictResolution,
+  SettingsConflictResolutionInput,
+  SettingsConflictResolutionKind,
+  SettingsDraft,
+  SettingsDraftInput,
+  type SettingsImpactReport,
+  SettingsOrigin,
+  SettingsOverrideRelease,
+  SettingsOverrideView,
+  SettingsPublication,
+  SettingsPublicationPatch,
+  SettingsPublicationRequest,
+  SettingsVersionDetail,
+  SettingsVersionSummary,
   SharedTerminal,
   SharedTerminalCreateInput,
   SharedTerminalIssue,
   SharedTerminalReauthenticationInput,
   SharedTerminalReauthenticationIssue,
   StaffReservationCreate,
-  StoreMembershipSync,
+  Store,
+  StoreMembership,
   StorePatch,
   StorePermission,
+  type StorePermission as StorePermissionValue,
   StoreSwitchInput,
-  StoreSync,
+  VersionConflict,
   Walkin,
   WalkinCreate,
   WalkinCustomerPatch,
@@ -71,6 +146,7 @@ import {
   REFRESH_TTL_SECONDS,
   requireActiveOrg,
   tenantAuth,
+  toJstDateString,
 } from '@app/shared'
 import type { D1Database, Fetcher, KVNamespace, R2Bucket } from '@cloudflare/workers-types'
 import { zValidator } from '@hono/zod-validator'
@@ -102,6 +178,9 @@ import {
   type StoreContext,
 } from './auth'
 import {
+  alertSettings,
+  analyticsSettings,
+  attentionSettings,
   auditEvents,
   availabilityBookings,
   availabilityBusinessHours,
@@ -111,13 +190,26 @@ import {
   availabilitySettings,
   availabilityStaff,
   availabilityStaffShifts,
+  customerAttentionNotes,
+  customerNotes,
+  customerOwnedGlasses,
+  customerPrescriptions,
   customers,
   idempotencyRecords,
+  operationalAlerts,
   organizations,
+  recordingRetentionSettings,
+  recordings,
   reservationChanges,
   reservationProgressEvents,
   reservationResourceAllocations,
   reservations,
+  settingsChainDefaults,
+  settingsDraftConflictResolutions,
+  settingsDrafts,
+  settingsPublications,
+  settingsPublicationTargets,
+  settingsVersions,
   sharedTerminalReauthSessions,
   sharedTerminals,
   storeMemberships,
@@ -126,12 +218,34 @@ import {
   walkinDailySequences,
   walkinEvents,
   walkins,
+  webBookingFunnelEvents,
   webBookingManagementCodeIssues,
   webBookingNotificationAttempts,
   webBookingPublications,
   webBookingRecords,
   webBookingVerifiedSessions,
 } from './db/schema'
+import {
+  type AlertDescriptor,
+  DEFAULT_ALERT_CONDITIONS,
+  longWaitAlerts,
+  recordingFailureAlerts,
+  settingsContradictionAlerts,
+} from './domain/alerts'
+import {
+  applySmallSampleSuppression,
+  jstPeriod,
+  previousJstPeriod,
+  stageDistribution,
+} from './domain/analytics'
+import {
+  ATTENTION_ORGANIZATION_SCOPE,
+  attentionRoleFor,
+  mayUseAttentionCapability,
+  noteDifferences,
+  resolveAttentionSettings,
+  serializeAttentionCapabilities,
+} from './domain/attention'
 import { AuditAppendError, writeAuditBatch } from './domain/audit'
 import {
   type AvailabilityBooking,
@@ -139,7 +253,7 @@ import {
   calculateAvailability,
   selectAvailabilityAllocation,
 } from './domain/availability'
-import { type Clock, nowIso, systemClock } from './domain/clock'
+import { type Clock, jstDateKey, nowIso, systemClock } from './domain/clock'
 import {
   IdempotencyConflictError,
   IdempotencyInProgressError,
@@ -156,7 +270,28 @@ import {
   verifiedReservationSessionAccessError,
 } from './domain/management-code'
 import { distanceKilometers } from './domain/public-location'
+import { isOfferableSlot, upcomingJstDates } from './domain/public-offers'
 import { publicationUnavailableReason } from './domain/publication'
+import {
+  assertRecordingTransition,
+  MINIMUM_CONFIRMED_RETENTION_DAYS,
+  MINIMUM_DISCARDED_RETENTION_HOURS,
+  minimumRetentionDeadline,
+  RecordingTransitionError,
+  recordingKeySecret,
+  recordingStorageKey,
+  retentionDeadline,
+  retentionIsActive,
+} from './domain/recording'
+import {
+  changedSettingsFields,
+  deriveStoreScopedSettings,
+  evaluateSettingsImpact,
+  instantToJstDateTime,
+  isPublicationDue,
+  jstDateTimeToInstant,
+  settingsDiff,
+} from './domain/settings-publication'
 import {
   hashSharedTerminalToken,
   issueSharedTerminalToken,
@@ -199,6 +334,11 @@ type PublicVerifiedSessionAccess =
 
 const app = new Hono<{ Bindings: Bindings; Variables: AppVariables }>()
 
+/*
+ * The one clock every handler must use. Reading the wall clock directly makes
+ * JST day boundaries — which decide the ledger day, the reception-history day
+ * and every expiry deadline — untestable and silently machine-dependent.
+ */
 function requestClock(c: AppContext): Clock {
   const fixed = c.env.TEST_CLOCK_NOW
   if (fixed === undefined) return systemClock()
@@ -311,7 +451,7 @@ async function listPublicStores(
       isNull(availabilitySettings.receptionStatus),
       eq(availabilitySettings.receptionStatus, 'open'),
     ),
-    ...publicPublicationWindow(nowIso(systemClock())),
+    ...publicPublicationWindow(nowIso(requestClock(c))),
   ]
   if (query.q) {
     const pattern = `%${query.q}%`
@@ -328,6 +468,9 @@ async function listPublicStores(
       contactPhone: webBookingPublications.contactPhone,
       region: webBookingPublications.region,
       nearestStation: webBookingPublications.nearestStation,
+      accessText: webBookingPublications.accessText,
+      organizationId: stores.organizationId,
+      storeId: stores.id,
       latitude: webBookingPublications.latitude,
       longitude: webBookingPublications.longitude,
     })
@@ -377,9 +520,85 @@ async function listPublicStores(
               : Number.POSITIVE_INFINITY
           return leftDistance - rightDistance
         })
-  return PublicStoreSummary.array().parse(
-    ordered.map(({ latitude: _latitude, longitude: _longitude, ...store }) => store),
+  /*
+   * 承認済みモックの検索カードは「本日営業 10:00–19:00」を詳細を開く前に出す。
+   * 曜日は JST で決まるので、Worker が動く UTC の曜日ではなく JST の曜日で引く。
+   * 例外日（臨時休業・特別営業）は 1 日ぶんの空き計算にしか効かないため、カードは
+   * 定常の営業時間だけを名乗る。空きの有無は次の工程が答える。
+   */
+  const todayHours = await readTodayBusinessHours(
+    db,
+    ordered.map((store) => ({ organizationId: store.organizationId, storeId: store.storeId })),
+    requestClock(c),
   )
+  return PublicStoreSummary.array().parse(
+    ordered.map(
+      ({
+        latitude: _latitude,
+        longitude: _longitude,
+        organizationId,
+        storeId,
+        ...store
+      }) => ({
+        ...store,
+        todayBusinessHours: todayHours.get(`${organizationId}:${storeId}`) ?? null,
+      }),
+    ),
+  )
+}
+
+/** 営業時間の表示（"10:00–19:00"）。複数区間は中黒でつなぐ。区間なしは null。 */
+function businessHoursText(periodsJson: unknown): string | null {
+  if (!Array.isArray(periodsJson)) return null
+  const ranges = periodsJson
+    .map((period) =>
+      typeof period === 'object' &&
+      period !== null &&
+      'startTime' in period &&
+      'endTime' in period &&
+      typeof period.startTime === 'string' &&
+      typeof period.endTime === 'string'
+        ? `${period.startTime}\u2013${period.endTime}`
+        : undefined,
+    )
+    .filter((range): range is string => range !== undefined)
+  return ranges.length === 0 ? null : ranges.join(' / ')
+}
+
+async function readTodayBusinessHours(
+  db: ReturnType<typeof drizzle>,
+  scopes: readonly { organizationId: string; storeId: string }[],
+  clock: Clock,
+): Promise<Map<string, string>> {
+  if (scopes.length === 0) return new Map()
+  const dayOfWeek = new Date(`${jstDateKey(clock)}T00:00:00.000Z`).getUTCDay()
+  const rows = await db
+    .select({
+      organizationId: availabilityBusinessHours.organizationId,
+      storeId: availabilityBusinessHours.storeId,
+      periodsJson: availabilityBusinessHours.periodsJson,
+    })
+    .from(availabilityBusinessHours)
+    .where(
+      and(
+        eq(availabilityBusinessHours.dayOfWeek, dayOfWeek),
+        inArray(
+          availabilityBusinessHours.storeId,
+          scopes.map((scope) => scope.storeId),
+        ),
+      ),
+    )
+  const allowed = new Set(scopes.map((scope) => `${scope.organizationId}:${scope.storeId}`))
+  const byStore = new Map<string, string>()
+  for (const row of rows) {
+    const key = `${row.organizationId}:${row.storeId}`
+    // storeId で絞ったうえで organization も突き合わせる。テナント跨ぎの id 衝突を
+    // 表示だけとはいえ通すと、他テナントの営業時間が公開面に出る。
+    if (!allowed.has(key)) continue
+    const text = businessHoursText(parseJson(row.periodsJson, 'public business hours'))
+    if (text !== null) byStore.set(key, text)
+  }
+  return byStore
 }
 
 async function readPublicStore(c: AppContext, slug: string) {
@@ -403,6 +622,7 @@ async function readPublicStore(c: AppContext, slug: string) {
       nearestStation: webBookingPublications.nearestStation,
       publicPurposeIdsJson: webBookingPublications.publicPurposeIdsJson,
       publicPurposesJson: webBookingPublications.publicPurposesJson,
+      publicServicesJson: webBookingPublications.publicServicesJson,
     })
     .from(stores)
     .innerJoin(organizations, eq(organizations.id, stores.organizationId))
@@ -437,7 +657,7 @@ async function readPublicStore(c: AppContext, slug: string) {
       startsAt: store.startsAt,
       endsAt: store.endsAt,
     },
-    systemClock().now(),
+    requestClock(c).now(),
   )
   if (reason)
     return c.json(
@@ -472,6 +692,14 @@ async function readPublicStore(c: AppContext, slug: string) {
       : PublicStorePurpose.array().parse(
           parseJson(store.publicPurposesJson, 'public purpose snapshot'),
         )
+  const parsedServices =
+    store.publicServicesJson === null
+      ? []
+      : parseJson(store.publicServicesJson, 'public services')
+  if (!Array.isArray(parsedServices) || !parsedServices.every((s) => typeof s === 'string')) {
+    throw new Error('invalid public services')
+  }
+  const publicServices: string[] = parsedServices
   const businessHours = await db
     .select({
       dayOfWeek: availabilityBusinessHours.dayOfWeek,
@@ -499,6 +727,11 @@ async function readPublicStore(c: AppContext, slug: string) {
         periods: parseJson(hour.periodsJson, 'public business hours'),
       })),
       purposes: publicPurposes,
+      /*
+       * 対応サービスは来店目的とは別軸。公開時に文言として保存されたものだけを出し、
+       * 未設定なら空にする（来店目的で代用すると、予約できる枠の名前が説明文に化ける）。
+       */
+      services: publicServices,
     }),
   )
 }
@@ -556,7 +789,7 @@ async function readPublicAvailability(
       startsAt: store.startsAt,
       endsAt: store.endsAt,
     },
-    systemClock().now(),
+    requestClock(c).now(),
   )
   if (reason)
     return c.json(
@@ -654,7 +887,7 @@ async function createPublicReservation(
       startsAt: store.startsAt,
       endsAt: store.endsAt,
     },
-    systemClock().now(),
+    requestClock(c).now(),
   )
   if (reason)
     return c.json(
@@ -693,14 +926,14 @@ async function createPublicReservation(
         operation: `public_reservation_create:${store.storeId}`,
         key: confirmationKeyHash,
         requestHash: await requestHash(input),
-        clock: systemClock(),
+        clock: requestClock(c),
       },
       async (completeInBatch) =>
         retryableBeforeCommit(async () => {
           const { selected, allocation, claimSlots, equipmentResourceIds, purposeResourceIds } =
             await prepareReservationAllocation(db, store.organizationId, store.storeId, input)
           const id = crypto.randomUUID()
-          const createdAt = nowIso(systemClock())
+          const createdAt = nowIso(requestClock(c))
           const managementCode = issueManagementCode()
           const managementCodeHash = await hashManagementCode(managementCode)
           const issued = PublicBookingResult.parse({
@@ -711,7 +944,7 @@ async function createPublicReservation(
           const persisted = PublicBookingResult.parse({ ...issued, managementCode: null })
           try {
             await writeAuditBatch(db, {
-              clock: systemClock(),
+              clock: requestClock(c),
               operations: [
                 db
                   .insert(customers)
@@ -2201,7 +2434,7 @@ async function persistOrganization(c: AppContext, organization: OrganizationSync
   return c.json(applied, 200)
 }
 
-async function persistStore(c: AppContext, store: StoreSync) {
+async function persistStore(c: AppContext, store: Store) {
   const db = drizzle(c.env.DB)
   await db
     .insert(stores)
@@ -2225,7 +2458,7 @@ async function persistStore(c: AppContext, store: StoreSync) {
   return c.json(store, 200)
 }
 
-async function persistMembership(c: AppContext, membership: StoreMembershipSync) {
+async function persistMembership(c: AppContext, membership: StoreMembership) {
   const db = drizzle(c.env.DB)
   await db
     .insert(storeMemberships)
@@ -2468,46 +2701,33 @@ function validateAvailabilityReferences(input: AvailabilitySettingsInput): void 
   }
 }
 
-async function saveAvailabilitySettings(
-  c: AppContext,
+/**
+ * Build the full replace-in-place statement list for one store's settings.
+ *
+ * Both the direct settings PUT and a settings publication write exactly the
+ * same rows, so the publication path can never drift from the interactive one.
+ */
+function availabilitySettingsWriteOperations(
+  db: ReturnType<typeof drizzle>,
+  organizationId: string,
   storeId: string,
-  input: AvailabilitySettingsInput,
-): Promise<Response> {
-  const denied = await requireStorePermission(c as StoreContext, storeId, 'settings.manage')
-  if (denied) return denied
-  validateAvailabilityReferences(input)
-
-  const organizationId = c.get('auth').org
-  const db = drizzle(c.env.DB)
-  const current = await readAvailabilitySettings(db, organizationId, storeId)
-  try {
-    await assertVersion(current.version, input.version)
-  } catch (error) {
-    if (error instanceof VersionConflictError) {
-      return c.json(
-        {
-          error: error.code,
-          currentVersion: error.currentVersion,
-          expectedVersion: error.expectedVersion,
-        },
-        409,
-      )
-    }
-    throw error
-  }
-
-  const version = nextVersion(current.version)
-  const updatedAt = nowIso(systemClock())
-  const persisted = AvailabilityStoreSettings.parse({ ...input, storeId, version })
+  persisted: AvailabilityStoreSettings,
+  actorId: string,
+  updatedAt: string,
+  currentVersion: number,
+  origin: SettingsOrigin,
+) {
+  const version = persisted.version
   const topLevel =
-    current.version === 0
+    currentVersion === 0
       ? db.insert(availabilitySettings).values({
           id: crypto.randomUUID(),
           organizationId,
           storeId,
           version,
           receptionStatus: persisted.receptionStatus,
-          updatedBy: c.get('auth').sub,
+          origin,
+          updatedBy: actorId,
           updatedAt,
         })
       : db
@@ -2515,18 +2735,19 @@ async function saveAvailabilitySettings(
           .set({
             version,
             receptionStatus: persisted.receptionStatus,
-            updatedBy: c.get('auth').sub,
+            origin,
+            updatedBy: actorId,
             updatedAt,
           })
           .where(
             and(
               eq(availabilitySettings.organizationId, organizationId),
               eq(availabilitySettings.storeId, storeId),
-              eq(availabilitySettings.version, current.version),
+              eq(availabilitySettings.version, currentVersion),
             ),
           )
 
-  const operations = [
+  return [
     topLevel,
     db
       .delete(availabilityBusinessHours)
@@ -2691,9 +2912,52 @@ async function saveAvailabilitySettings(
         ]
       : []),
   ]
+}
+
+async function saveAvailabilitySettings(
+  c: AppContext,
+  storeId: string,
+  input: AvailabilitySettingsInput,
+): Promise<Response> {
+  const denied = await requireStorePermission(c as StoreContext, storeId, 'settings.manage')
+  if (denied) return denied
+  validateAvailabilityReferences(input)
+
+  const organizationId = c.get('auth').org
+  const db = drizzle(c.env.DB)
+  const current = await readAvailabilitySettings(db, organizationId, storeId)
+  try {
+    await assertVersion(current.version, input.version)
+  } catch (error) {
+    if (error instanceof VersionConflictError) {
+      return c.json(
+        {
+          error: error.code,
+          currentVersion: error.currentVersion,
+          expectedVersion: error.expectedVersion,
+        },
+        409,
+      )
+    }
+    throw error
+  }
+
+  const version = nextVersion(current.version)
+  const updatedAt = nowIso(requestClock(c))
+  const persisted = AvailabilityStoreSettings.parse({ ...input, storeId, version })
+  const operations = availabilitySettingsWriteOperations(
+    db,
+    organizationId,
+    storeId,
+    persisted,
+    c.get('auth').sub,
+    updatedAt,
+    current.version,
+    'store_override',
+  )
 
   await writeAuditBatch(db, {
-    clock: systemClock(),
+    clock: requestClock(c),
     operations,
     events: [
       {
@@ -2924,14 +3188,14 @@ async function createStaffReservation(
         operation: `staff_reservation_create:${storeId}`,
         key: idempotencyKey,
         requestHash: await requestHash(input),
-        clock: systemClock(),
+        clock: requestClock(c),
       },
       async (completeInBatch) =>
         retryableBeforeCommit(async () => {
           const { selected, allocation, claimSlots, equipmentResourceIds, purposeResourceIds } =
             await prepareReservationAllocation(db, organizationId, storeId, input)
           const id = crypto.randomUUID()
-          const createdAt = nowIso(systemClock())
+          const createdAt = nowIso(requestClock(c))
           const record = Reservation.parse({
             id,
             organizationId,
@@ -2951,7 +3215,7 @@ async function createStaffReservation(
           })
           try {
             await writeAuditBatch(db, {
-              clock: systemClock(),
+              clock: requestClock(c),
               operations: [
                 db
                   .insert(customers)
@@ -3262,7 +3526,7 @@ async function cancelReservation(
     if (idempotencyKey.length > 256) return c.json({ error: 'invalid_idempotency_key' }, 400)
     const requestHashValue = await requestHash({ reservationId, input })
     const candidateId = crypto.randomUUID()
-    const createdAt = nowIso(systemClock())
+    const createdAt = nowIso(requestClock(c))
     await db
       .insert(idempotencyRecords)
       .values({
@@ -3350,7 +3614,7 @@ async function cancelReservation(
     await releaseIdempotency?.()
     return c.json({ error: 'invalid_cancellation_confirmation' }, 400)
   }
-  const updatedAt = nowIso(systemClock())
+  const updatedAt = nowIso(requestClock(c))
   const requestId = crypto.randomUUID()
   const next = { ...current, status: 'cancelled' as const, version: current.version + 1, updatedAt }
   const operationId = crypto.randomUUID()
@@ -3547,7 +3811,7 @@ async function markReservationNoShow(
     if (idempotencyKey.length > 256) return c.json({ error: 'invalid_idempotency_key' }, 400)
     const requestHashValue = await requestHash({ reservationId, input })
     const candidateId = crypto.randomUUID()
-    const createdAt = nowIso(systemClock())
+    const createdAt = nowIso(requestClock(c))
     await db
       .insert(idempotencyRecords)
       .values({
@@ -3635,7 +3899,7 @@ async function markReservationNoShow(
     )
   }
 
-  const updatedAt = nowIso(systemClock())
+  const updatedAt = nowIso(requestClock(c))
   const operationId = crypto.randomUUID()
   const requestId = crypto.randomUUID()
   const next = {
@@ -3845,7 +4109,7 @@ async function changeReservation(
     if (idempotencyKey.length > 256) return c.json({ error: 'invalid_idempotency_key' }, 400)
     const requestHashValue = await requestHash({ reservationId, input })
     const candidateId = crypto.randomUUID()
-    const createdAt = nowIso(systemClock())
+    const createdAt = nowIso(requestClock(c))
     await db
       .insert(idempotencyRecords)
       .values({
@@ -3991,7 +4255,7 @@ async function changeReservation(
         occupiedClaims,
       )
     })
-    const updatedAt = nowIso(systemClock())
+    const updatedAt = nowIso(requestClock(c))
     const requestId = crypto.randomUUID()
     const version = current.version + 1
     const operationId = crypto.randomUUID()
@@ -4235,7 +4499,268 @@ async function findCustomerCandidates(
   )
 }
 
-function ledgerEntryFromReservation(row: typeof reservations.$inferSelect, now: Date) {
+/*
+ * Dioptre and pupillary-distance values are formatted exactly once, here, so
+ * no client ever reimplements the sign and precision rules a prescription is
+ * read with.
+ */
+function formatDioptre(value: number): string {
+  return `${value < 0 ? '-' : '+'}${Math.abs(value).toFixed(2)}`
+}
+
+function formatMillimetres(value: number): string {
+  return value.toFixed(1)
+}
+
+/**
+ * Read one customer record (顧客台帳).
+ *
+ * Base access needs `customer.read` on the selected store. Cross-store rows
+ * are added only for `customer.history`, and 注意事項 only for
+ * `attention.read` — a caller without the latter receives an empty array and
+ * no count, flag or other trace that restricted rows exist (AC-EYEX-91).
+ * A customer in another organization, and one this store may not see, share
+ * the same opaque 403 so neither existence can be probed.
+ */
+async function readCustomerDetail(
+  c: AppContext,
+  storeId: string,
+  customerId: string,
+): Promise<Response> {
+  const access = await authorizedStore(c as StoreContext, storeId, 'customer.read')
+  if (!access) return c.json({ error: 'forbidden' }, 403)
+  const organizationId = c.get('auth').org
+  const permissions = access.actor.permissions
+  const crossStore = permissions.includes('customer.history')
+  const mayReadAttention = permissions.includes('attention.read')
+  const db = drizzle(c.env.DB)
+
+  const customer = (
+    await db
+      .select()
+      .from(customers)
+      .where(and(eq(customers.organizationId, organizationId), eq(customers.id, customerId)))
+  )[0]
+  if (!customer) return c.json({ error: 'forbidden' }, 403)
+
+  // A customer neither belonging to nor ever received by the selected store is
+  // visible only to staff trusted with the chain-wide customer record.
+  if (!crossStore && customer.primaryStoreId !== storeId) {
+    const [receivedReservations, receivedWalkins] = await Promise.all([
+      db
+        .select({ id: reservations.id })
+        .from(reservations)
+        .where(
+          and(
+            eq(reservations.organizationId, organizationId),
+            eq(reservations.storeId, storeId),
+            eq(reservations.customerId, customerId),
+          ),
+        )
+        .limit(1),
+      db
+        .select({ id: walkins.id })
+        .from(walkins)
+        .where(
+          and(
+            eq(walkins.organizationId, organizationId),
+            eq(walkins.storeId, storeId),
+            eq(walkins.customerId, customerId),
+          ),
+        )
+        .limit(1),
+    ])
+    if (receivedReservations.length === 0 && receivedWalkins.length === 0)
+      return c.json({ error: 'forbidden' }, 403)
+  }
+
+  const now = nowIso(requestClock(c))
+  // Every customer-record query is scoped by the JWT organization, and by the
+  // selected store unless the actor may read the chain-wide record.
+  const scoped = (
+    table:
+      | typeof customerPrescriptions
+      | typeof customerNotes
+      | typeof customerOwnedGlasses
+      | typeof customerAttentionNotes,
+  ) =>
+    crossStore
+      ? and(eq(table.organizationId, organizationId), eq(table.customerId, customerId))
+      : and(
+          eq(table.organizationId, organizationId),
+          eq(table.storeId, storeId),
+          eq(table.customerId, customerId),
+        )
+
+  const [storeRows, prescriptionRows, noteRows, glassesRows, attentionRows, visits, walkinVisits] =
+    await Promise.all([
+      db
+        .select({ id: stores.id, name: stores.name })
+        .from(stores)
+        .where(eq(stores.organizationId, organizationId)),
+      db
+        .select()
+        .from(customerPrescriptions)
+        .where(scoped(customerPrescriptions))
+        .orderBy(desc(customerPrescriptions.measuredOn), desc(customerPrescriptions.createdAt)),
+      db
+        .select()
+        .from(customerNotes)
+        .where(scoped(customerNotes))
+        .orderBy(desc(customerNotes.recordedOn), desc(customerNotes.createdAt))
+        .limit(1),
+      db
+        .select()
+        .from(customerOwnedGlasses)
+        .where(scoped(customerOwnedGlasses))
+        .orderBy(desc(customerOwnedGlasses.purchasedOn), desc(customerOwnedGlasses.createdAt)),
+      mayReadAttention
+        ? db
+            .select()
+            .from(customerAttentionNotes)
+            .where(
+              and(
+                scoped(customerAttentionNotes),
+                eq(customerAttentionNotes.status, 'published'),
+                isNull(customerAttentionNotes.hiddenAt),
+              ),
+            )
+            .orderBy(desc(customerAttentionNotes.recordedOn))
+        : Promise.resolve([]),
+      db
+        .select({ storeId: reservations.storeId, startAt: reservations.startAt })
+        .from(reservations)
+        .where(
+          and(
+            crossStore
+              ? eq(reservations.organizationId, organizationId)
+              : and(
+                  eq(reservations.organizationId, organizationId),
+                  eq(reservations.storeId, storeId),
+                ),
+            eq(reservations.customerId, customerId),
+            lte(reservations.startAt, now),
+            ne(reservations.status, 'cancelled'),
+            ne(reservations.status, 'no_show'),
+          ),
+        ),
+      db
+        .select({ storeId: walkins.storeId, arrivedAt: walkins.arrivedAt })
+        .from(walkins)
+        .where(
+          and(
+            crossStore
+              ? eq(walkins.organizationId, organizationId)
+              : and(eq(walkins.organizationId, organizationId), eq(walkins.storeId, storeId)),
+            eq(walkins.customerId, customerId),
+            lte(walkins.arrivedAt, now),
+          ),
+        ),
+    ])
+
+  const storeNames = new Map(storeRows.map((row) => [row.id, row.name]))
+  const storeName = (id: string) => storeNames.get(id) ?? ''
+
+  const prescriptions = prescriptionRows.map((row) => ({
+    measuredOn: row.measuredOn,
+    storeId: row.storeId,
+    storeName: storeName(row.storeId),
+    recordedBy: row.recordedBy,
+    rightSphere: formatDioptre(row.rightSphere),
+    leftSphere: formatDioptre(row.leftSphere),
+    pupillaryDistance: formatMillimetres(row.pupillaryDistance),
+    addPower: row.addPower === null ? null : formatDioptre(row.addPower),
+  }))
+
+  const visitHistory = [
+    ...visits.map((row) => ({ storeId: row.storeId, at: row.startAt, summary: '予約来店' })),
+    ...walkinVisits.map((row) => ({
+      storeId: row.storeId,
+      at: row.arrivedAt,
+      summary: 'ウォークイン来店',
+    })),
+  ]
+    .sort((left, right) => (left.at < right.at ? 1 : left.at > right.at ? -1 : 0))
+    .map((row) => ({
+      visitedOn: toJstDateString(row.at),
+      storeId: row.storeId,
+      storeName: storeName(row.storeId),
+      summary: row.summary,
+    }))
+
+  // Disclosing 注意事項 is itself an audited event (UC-EYEX-147); a read whose
+  // audit row cannot be appended discloses nothing.
+  if (mayReadAttention) {
+    const audited = await auditAttentionRead(c, storeId, customerId, attentionRows.length)
+    if (audited) return audited
+  }
+
+  const latestNoteRow = noteRows[0]
+  return c.json(
+    CustomerDetail.parse({
+      customerId: customer.id,
+      currentPrescription: prescriptions[0] ?? null,
+      pastPrescriptions: prescriptions.slice(1),
+      latestNote:
+        latestNoteRow === undefined
+          ? null
+          : {
+              recordedOn: latestNoteRow.recordedOn,
+              storeId: latestNoteRow.storeId,
+              storeName: storeName(latestNoteRow.storeId),
+              recordedBy: latestNoteRow.recordedBy,
+              body: latestNoteRow.body,
+            },
+      ownedGlasses: glassesRows.map((row) => ({
+        label: row.label,
+        purchasedOn: row.purchasedOn,
+        storeId: row.storeId,
+        storeName: storeName(row.storeId),
+        lensType: row.lensType,
+      })),
+      attentionNotes: attentionRows.map((row) => ({
+        body: row.body,
+        basis: row.basis,
+        recordedBy: row.recordedBy,
+        recordedOn: row.recordedOn,
+      })),
+      visitHistory,
+    }),
+  )
+}
+
+/**
+ * 来店目的の id → スタッフ向け名称。台帳のセルは名称しか出さないので、
+ * id を引ける表がないまま台帳を組み立てることはしない。
+ */
+async function purposeNameLookup(c: AppContext, storeId: string): Promise<Map<string, string>> {
+  const rows = await drizzle(c.env.DB)
+    .select({ id: visitPurposes.id, name: visitPurposes.staffName })
+    .from(visitPurposes)
+    .where(
+      and(
+        eq(visitPurposes.organizationId, c.get('auth').org),
+        eq(visitPurposes.storeId, storeId),
+      ),
+    )
+  return new Map(rows.map((row) => [row.id, row.name]))
+}
+
+function reservationPurposeNames(
+  row: typeof reservations.$inferSelect,
+  names: Map<string, string>,
+): string[] {
+  const ids: unknown = JSON.parse(row.purposeIdsJson)
+  if (!Array.isArray(ids)) return []
+  // 名称を引けない目的は落とす。台帳に生の uuid を出しても誰も読めない。
+  return ids.flatMap((id) => (typeof id === 'string' ? (names.get(id) ?? []) : []))
+}
+
+function ledgerEntryFromReservation(
+  row: typeof reservations.$inferSelect,
+  now: Date,
+  purposeNames: string[],
+) {
   return LedgerEntry.parse({
     id: row.id,
     entryType: 'reservation',
@@ -4251,6 +4776,7 @@ function ledgerEntryFromReservation(row: typeof reservations.$inferSelect, now: 
     assignedEquipmentIds:
       row.assignedEquipmentIdsJson === null ? [] : JSON.parse(row.assignedEquipmentIdsJson),
     nextGuidance: row.nextGuidance,
+    purposeNames,
     warnings: ledgerWarnings({
       progress: row.progress as import('@app/contracts').ReceptionProgress | null,
       waitStartedAt: row.waitStartedAt,
@@ -4342,11 +4868,14 @@ async function readLedger(c: AppContext, storeId: string, date: string): Promise
             ),
           )
   const walkinCustomerNames = new Map(walkinCustomerRows.map((row) => [row.id, row.name]))
-  const now = systemClock().now()
+  const purposeNames = await purposeNameLookup(c, storeId)
+  const now = requestClock(c).now()
   return c.json(
     LedgerEntry.array().parse(
       [
-        ...reservationRows.map((row) => ledgerEntryFromReservation(row, now)),
+        ...reservationRows.map((row) =>
+          ledgerEntryFromReservation(row, now, reservationPurposeNames(row, purposeNames)),
+        ),
         ...walkinRows.map((row) =>
           ledgerEntryFromWalkin(
             row,
@@ -4548,7 +5077,7 @@ async function updateReservationProgress(
         return c.json({ error: 'forbidden' }, 403)
     }
   }
-  const clock = systemClock()
+  const clock = requestClock(c)
   const updatedAt = nowIso(clock)
   const nextStatus = current.status === 'confirmed' ? 'checked_in' : current.status
   const updatedVersion = nextVersion(current.version)
@@ -4644,11 +5173,11 @@ async function updateReservationProgress(
     ),
   ])
   if (!batchStatementChanged(batchResults[0])) {
-    const terminalFailure = await sharedTerminalWriteFailure(c, storeId, systemClock())
+    const terminalFailure = await sharedTerminalWriteFailure(c, storeId, requestClock(c))
     if (terminalFailure) return terminalFailure
     const latest = (
       await db
-        .select({ version: reservations.version })
+        .select()
         .from(reservations)
         .where(
           and(
@@ -4659,10 +5188,169 @@ async function updateReservationProgress(
         )
     )[0]
     if (!latest) return c.json({ error: 'forbidden' }, 403)
-    return c.json({ error: 'version_conflict', currentVersion: latest.version }, 409)
+    return reservationConflict(c, storeId, latest)
   }
   const result = { ...current, ...values }
-  return c.json(ledgerEntryFromReservation(result, systemClock().now()))
+  return c.json(
+    ledgerEntryFromReservation(
+      result,
+      requestClock(c).now(),
+      reservationPurposeNames(result, await purposeNameLookup(c, storeId)),
+    ),
+  )
+}
+
+/**
+ * EX-CONFLICT のための 409 本文。
+ *
+ * 版番号だけでは操作者は何も判断できない。承認済みモックは「最新の内容」に
+ * 実際の値と更新者・時刻を出すので、監査イベントから最後に書いた主体を引いて
+ * 一緒に返す。監査行が引けないときは版番号だけに縮退させる（衝突自体は
+ * 事実なので、更新者が不明でも 409 を返さないという選択は取らない）。
+ */
+async function versionConflictBody(
+  c: AppContext,
+  input: {
+    storeId: string
+    entityType: 'reservation' | 'walkin'
+    entityId: string
+    currentVersion: number
+    latest: { label: string; value: string }[]
+  },
+): Promise<Record<string, unknown>> {
+  const db = drizzle(c.env.DB)
+  const event = (
+    await db
+      .select({
+        actorType: auditEvents.actorType,
+        actorId: auditEvents.actorId,
+        occurredAt: auditEvents.occurredAt,
+      })
+      .from(auditEvents)
+      .where(
+        and(
+          eq(auditEvents.organizationId, c.get('auth').org),
+          eq(auditEvents.entityType, input.entityType),
+          eq(auditEvents.entityId, input.entityId),
+        ),
+      )
+      .orderBy(desc(auditEvents.occurredAt))
+      .limit(1)
+  )[0]
+  const storeRow = (
+    await db
+      .select({ name: stores.name })
+      .from(stores)
+      .where(
+        and(eq(stores.organizationId, c.get('auth').org), eq(stores.id, input.storeId)),
+      )
+  )[0]
+  let actorName: string | undefined
+  if (event?.actorType === 'shared_terminal') {
+    actorName = (
+      await db
+        .select({ name: sharedTerminals.name })
+        .from(sharedTerminals)
+        .where(
+          and(
+            eq(sharedTerminals.organizationId, c.get('auth').org),
+            eq(sharedTerminals.id, event.actorId),
+          ),
+        )
+    )[0]?.name
+  } else if (event) {
+    actorName = event.actorId
+  }
+  const updatedBy =
+    actorName === undefined
+      ? null
+      : storeRow === undefined
+        ? actorName
+        : `${storeRow.name} ${actorName}`
+  return VersionConflict.parse({
+    error: 'version_conflict',
+    currentVersion: input.currentVersion,
+    latest: input.latest,
+    updatedBy,
+    updatedAt: event?.occurredAt ?? null,
+  })
+}
+
+/** 台帳セルと同じ語で状態を出す。操作者が画面で読む語と 409 の語を割らない。 */
+const CONFLICT_PROGRESS_LABELS: Record<string, string> = {
+  waiting: 'お待ち',
+  service_in_progress: '接客中',
+  service_completed: '接客完了',
+  departed: '退店',
+}
+
+/** ウォークインの 409。最新の工程と顧客の紐付きを、画面の語のまま並べる。 */
+async function walkinConflict(
+  c: AppContext,
+  storeId: string,
+  row: { id: string; version: number; progress: string; customerId: string | null },
+): Promise<Response> {
+  return c.json(
+    await versionConflictBody(c, {
+      storeId,
+      entityType: 'walkin',
+      entityId: row.id,
+      currentVersion: row.version,
+      latest: [
+        { label: '状態', value: CONFLICT_PROGRESS_LABELS[row.progress] ?? row.progress },
+        { label: 'お客様', value: row.customerId === null ? '顧客未登録' : '顧客と関連付け済み' },
+      ],
+    }),
+    409,
+  )
+}
+
+/** 予約の 409。工程・担当者・次のご案内という、この画面で書き換わる 3 つ。 */
+async function reservationConflict(
+  c: AppContext,
+  storeId: string,
+  row: {
+    id: string
+    version: number
+    progress: string | null
+    assignedStaffId: string | null
+    nextGuidance: string | null
+  },
+): Promise<Response> {
+  // 担当者は名前でしか意味を成さない。id しか引けないときは未定として扱う。
+  const staffName =
+    row.assignedStaffId === null
+      ? null
+      : ((
+          await drizzle(c.env.DB)
+            .select({ name: availabilityStaff.name })
+            .from(availabilityStaff)
+            .where(
+              and(
+                eq(availabilityStaff.organizationId, c.get('auth').org),
+                eq(availabilityStaff.storeId, storeId),
+                eq(availabilityStaff.id, row.assignedStaffId),
+              ),
+            )
+        )[0]?.name ?? null)
+  return c.json(
+    await versionConflictBody(c, {
+      storeId,
+      entityType: 'reservation',
+      entityId: row.id,
+      currentVersion: row.version,
+      latest: [
+        {
+          label: '店内工程',
+          value:
+            row.progress === null ? '未着手' : (CONFLICT_PROGRESS_LABELS[row.progress] ?? row.progress),
+        },
+        { label: '担当者', value: staffName ?? '担当者未定' },
+        { label: '次のご案内', value: row.nextGuidance ?? 'なし' },
+      ],
+    }),
+    409,
+  )
 }
 
 function jstDate(instant: Date): string {
@@ -4753,7 +5441,7 @@ async function createWalkin(c: AppContext, storeId: string): Promise<Response> {
   const denied = await requireStorePermission(c as StoreContext, storeId, 'reservation.write')
   if (denied) return denied
   const db = drizzle(c.env.DB)
-  const now = nowIso(systemClock())
+  const now = nowIso(requestClock(c))
   const serviceDate = jstDate(new Date(now))
   const recordId = crypto.randomUUID()
   const actor = auditActor(c)
@@ -4872,7 +5560,7 @@ async function createWalkin(c: AppContext, storeId: string): Promise<Response> {
   ])
   if (!batchStatementChanged(results[2])) {
     return (
-      (await sharedTerminalWriteFailure(c, storeId, systemClock())) ??
+      (await sharedTerminalWriteFailure(c, storeId, requestClock(c))) ??
       c.json({ error: 'version_conflict' }, 409)
     )
   }
@@ -4936,10 +5624,9 @@ async function linkWalkinCustomer(
       )
   )[0]
   if (!customer) return c.json({ error: 'forbidden' }, 403)
-  if (current.version !== input.version)
-    return c.json({ error: 'version_conflict', currentVersion: current.version }, 409)
+  if (current.version !== input.version) return walkinConflict(c, storeId, current)
   const operationId = crypto.randomUUID()
-  const updatedAt = nowIso(systemClock())
+  const updatedAt = nowIso(requestClock(c))
   const nextVersion = current.version + 1
   const actor = auditActor(c)
   const terminalGuard = activeSharedTerminalWriteGuard(c, storeId, updatedAt)
@@ -5018,11 +5705,11 @@ async function linkWalkinCustomer(
     ),
   ])
   if (!batchStatementChanged(results[0])) {
-    const terminalFailure = await sharedTerminalWriteFailure(c, storeId, systemClock())
+    const terminalFailure = await sharedTerminalWriteFailure(c, storeId, requestClock(c))
     if (terminalFailure) return terminalFailure
     const latest = (
       await db
-        .select({ version: walkins.version })
+        .select()
         .from(walkins)
         .where(
           and(
@@ -5032,10 +5719,7 @@ async function linkWalkinCustomer(
           ),
         )
     )[0]
-    return c.json(
-      { error: 'version_conflict', currentVersion: latest?.version ?? current.version },
-      409,
-    )
+    return walkinConflict(c, storeId, latest ?? current)
   }
   return c.json(
     walkinFromRow({
@@ -5088,11 +5772,10 @@ async function createAndLinkWalkinCustomer(
       )
   )[0]
   if (!current) return c.json({ error: 'forbidden' }, 403)
-  if (current.version !== input.version)
-    return c.json({ error: 'version_conflict', currentVersion: current.version }, 409)
+  if (current.version !== input.version) return walkinConflict(c, storeId, current)
   const operationId = crypto.randomUUID()
   const customerId = crypto.randomUUID()
-  const updatedAt = nowIso(systemClock())
+  const updatedAt = nowIso(requestClock(c))
   const nextVersion = current.version + 1
   const actor = auditActor(c)
   const terminalGuard = activeSharedTerminalWriteGuard(c, storeId, updatedAt)
@@ -5134,6 +5817,9 @@ async function createAndLinkWalkinCustomer(
             phoneNormalized: sql<string>`${normalizedPhone}`.as('phoneNormalized'),
             email: sql<string | null>`${input.customer.email ?? null}`.as('email'),
             visitCount: sql<number>`1`.as('visitCount'),
+            // A newly created customer is never the losing side of a merge;
+            // insert-select requires every column, in table order.
+            mergedIntoCustomerId: sql<string | null>`null`.as('mergedIntoCustomerId'),
             createdAt: sql<string>`${updatedAt}`.as('createdAt'),
             updatedAt: sql<string>`${updatedAt}`.as('updatedAt'),
           })
@@ -5200,11 +5886,11 @@ async function createAndLinkWalkinCustomer(
     })
   }
   if (!batchStatementChanged(results[0])) {
-    const terminalFailure = await sharedTerminalWriteFailure(c, storeId, systemClock())
+    const terminalFailure = await sharedTerminalWriteFailure(c, storeId, requestClock(c))
     if (terminalFailure) return terminalFailure
     const latest = (
       await db
-        .select({ version: walkins.version })
+        .select()
         .from(walkins)
         .where(
           and(
@@ -5214,10 +5900,7 @@ async function createAndLinkWalkinCustomer(
           ),
         )
     )[0]
-    return c.json(
-      { error: 'version_conflict', currentVersion: latest?.version ?? current.version },
-      409,
-    )
+    return walkinConflict(c, storeId, latest ?? current)
   }
   const updated = (
     await db
@@ -5257,13 +5940,12 @@ async function updateWalkinProgress(
       )
   )[0]
   if (!current) return c.json({ error: 'forbidden' }, 403)
-  if (current.version !== input.version)
-    return c.json({ error: 'version_conflict', currentVersion: current.version }, 409)
+  if (current.version !== input.version) return walkinConflict(c, storeId, current)
   if (current.status === 'departed' && input.progress !== 'departed') {
     return c.json({ error: 'invalid_progress_transition', currentVersion: current.version }, 409)
   }
   const operationId = crypto.randomUUID()
-  const updatedAt = nowIso(systemClock())
+  const updatedAt = nowIso(requestClock(c))
   const version = current.version + 1
   const status = input.progress === 'departed' ? 'departed' : 'active'
   const actor = auditActor(c)
@@ -5328,11 +6010,11 @@ async function updateWalkinProgress(
     ),
   ])
   if (!batchStatementChanged(results[0])) {
-    const terminalFailure = await sharedTerminalWriteFailure(c, storeId, systemClock())
+    const terminalFailure = await sharedTerminalWriteFailure(c, storeId, requestClock(c))
     if (terminalFailure) return terminalFailure
     const latest = (
       await db
-        .select({ version: walkins.version })
+        .select()
         .from(walkins)
         .where(
           and(
@@ -5342,10 +6024,7 @@ async function updateWalkinProgress(
           ),
         )
     )[0]
-    return c.json(
-      { error: 'version_conflict', currentVersion: latest?.version ?? current.version },
-      409,
-    )
+    return walkinConflict(c, storeId, latest ?? current)
   }
   return c.json(
     walkinFromRow({
@@ -5380,6 +6059,28 @@ async function listWalkins(
   return c.json(Walkin.array().parse(rows.map(walkinFromRow)))
 }
 
+/*
+ * The terminal surface authenticates with a device token, so a stored row that
+ * violates the SharedTerminal contract must fail closed and be indistinguishable
+ * from an unknown terminal. Returning `undefined` here lets the terminal-facing
+ * callers answer 401 instead of leaking a parse failure as a 500.
+ */
+function sharedTerminalFromRowOrUndefined(row: typeof sharedTerminals.$inferSelect) {
+  const parsed = SharedTerminal.safeParse({
+    id: row.id,
+    organizationId: row.organizationId,
+    storeId: row.storeId,
+    name: row.name,
+    status: row.status,
+    idleTimeoutSeconds: row.idleTimeoutSeconds,
+    expiresAt: row.expiresAt,
+    lastSeenAt: row.lastSeenAt,
+    createdAt: row.createdAt,
+    revokedAt: row.revokedAt,
+  })
+  return parsed.success ? parsed.data : undefined
+}
+
 function sharedTerminalFromRow(row: typeof sharedTerminals.$inferSelect) {
   return SharedTerminal.parse({
     id: row.id,
@@ -5402,7 +6103,7 @@ async function createSharedTerminal(
 ): Promise<Response> {
   const denied = await requireStorePermission(c as StoreContext, storeId, 'terminal.manage')
   if (denied) return denied
-  const now = nowIso(systemClock())
+  const now = nowIso(requestClock(c))
   const token = issueSharedTerminalToken()
   const terminal = {
     id: crypto.randomUUID(),
@@ -5420,7 +6121,7 @@ async function createSharedTerminal(
   } as const
   const db = drizzle(c.env.DB)
   await writeAuditBatch(db, {
-    clock: systemClock(),
+    clock: requestClock(c),
     operations: [db.insert(sharedTerminals).values(terminal)],
     events: [
       {
@@ -5474,7 +6175,7 @@ async function auditStoreSwitch(c: AppContext, input: StoreSwitchInput): Promise
     'store.read',
   )
   if (destinationDenied) return destinationDenied
-  const occurredAt = nowIso(systemClock())
+  const occurredAt = nowIso(requestClock(c))
   await drizzle(c.env.DB)
     .insert(auditEvents)
     .values({
@@ -5526,7 +6227,7 @@ async function revokeSharedTerminal(
   )[0]
   if (!current) return c.json({ error: 'forbidden' }, 403)
   if (current.status === 'revoked') return c.json(sharedTerminalFromRow(current))
-  const revokedAt = nowIso(systemClock())
+  const revokedAt = nowIso(requestClock(c))
   const operationId = crypto.randomUUID()
   const next = {
     ...current,
@@ -5693,7 +6394,9 @@ async function readSharedTerminalSession(
       return c.json({ error: 'terminal_store_inactive' }, 403)
     return c.json({ error: 'terminal_revoked' }, 401)
   }
-  return c.json(sharedTerminalFromRow({ ...row, lastSeenAt: now }))
+  const terminal = sharedTerminalFromRowOrUndefined({ ...row, lastSeenAt: now })
+  if (!terminal) return c.json({ error: 'terminal_unauthorized' }, 401)
+  return c.json(terminal)
 }
 
 const SHARED_TERMINAL_REAUTH_TTL_MS = 5 * 60 * 1000
@@ -5825,7 +6528,9 @@ async function requirePersonalReauth(
       .from(sharedTerminalReauthSessions)
       .where(and(eq(sharedTerminalReauthSessions.tokenHash, await hashSharedTerminalToken(token))))
   )[0]
-  if (!session) return c.json({ error: 'reauth_unauthorized' }, 401)
+  // A spent grant is indistinguishable from an unknown one: replaying it must
+  // not reveal that it was ever valid.
+  if (!session || session.consumedAt !== null) return c.json({ error: 'reauth_unauthorized' }, 401)
   const accessError = sharedTerminalReauthAccessError(
     session,
     {
@@ -5838,12 +6543,29 @@ async function requirePersonalReauth(
   )
   if (accessError === 'reauth_expired') return c.json({ error: accessError }, 401)
   if (accessError) return c.json({ error: accessError }, 403)
+  /*
+   * Spend the grant before the action runs. The claim is the UPDATE itself —
+   * `consumed_at IS NULL` in the WHERE — so two concurrent requests presenting
+   * the same token cannot both proceed, and a replay after the action finds
+   * nothing to claim.
+   */
+  const claimed = await db
+    .update(sharedTerminalReauthSessions)
+    .set({ consumedAt: nowIso(clock) })
+    .where(
+      and(
+        eq(sharedTerminalReauthSessions.id, session.id),
+        isNull(sharedTerminalReauthSessions.consumedAt),
+      ),
+    )
+    .run()
+  if (!batchStatementChanged(claimed)) return c.json({ error: 'reauth_unauthorized' }, 401)
   c.set('personalReauthUserId', session.userId)
   return null
 }
 
 async function revokeCurrentSharedTerminal(c: AppContext, terminalId: string): Promise<Response> {
-  const denied = await requirePersonalReauth(c, terminalId, 'management', systemClock())
+  const denied = await requirePersonalReauth(c, terminalId, 'management', requestClock(c))
   if (denied) return denied
   const reauthenticatedUserId = c.get('personalReauthUserId')
   if (!reauthenticatedUserId) return c.json({ error: 'reauth_unauthorized' }, 401)
@@ -5930,12 +6652,4496 @@ async function establishSharedTerminalDailyActor(
   return null
 }
 
+/* ------------------------------------------------------------------ *
+ * 設定の下書き → 影響確認 → 公開 (UC-EYEX-092〜098, 159〜166)
+ * ------------------------------------------------------------------ */
+
+type SettingsDraftRow = typeof settingsDrafts.$inferSelect
+type SettingsPublicationRow = typeof settingsPublications.$inferSelect
+
+/** Strip the store identity so a stored snapshot can be re-validated as input. */
+function toAvailabilitySettingsInput(
+  settings: AvailabilityStoreSettings,
+  version: number,
+): AvailabilitySettingsInput {
+  return AvailabilitySettingsInput.parse({
+    version,
+    receptionStatus: settings.receptionStatus,
+    businessHours: settings.businessHours,
+    exceptions: settings.exceptions,
+    purposes: settings.purposes,
+    staff: settings.staff,
+    shifts: settings.shifts,
+    equipment: settings.equipment,
+    maintenance: settings.maintenance,
+  })
+}
+
+function parseSettingsPayload(
+  payloadJson: string,
+  storeId: string,
+  version: number,
+): AvailabilityStoreSettings {
+  const payload = parseJson(payloadJson, 'settings payload')
+  if (typeof payload !== 'object' || payload === null) throw new Error('invalid settings payload')
+  return AvailabilityStoreSettings.parse({ ...payload, storeId, version })
+}
+
+function draftSettings(row: SettingsDraftRow): AvailabilityStoreSettings {
+  return parseSettingsPayload(row.payloadJson, row.storeId, row.baseVersion)
+}
+
+function toSettingsDraft(row: SettingsDraftRow): SettingsDraft {
+  return SettingsDraft.parse({
+    id: row.id,
+    storeId: row.storeId,
+    draftVersion: row.draftVersion,
+    baseVersion: row.baseVersion,
+    status: row.status,
+    origin: row.origin,
+    restoredFromVersionId: row.restoredFromVersionId,
+    savedAt: row.savedAt,
+    savedBy: row.savedBy,
+    settings: draftSettings(row),
+  })
+}
+
+async function readSettingsDraft(
+  db: ReturnType<typeof drizzle>,
+  organizationId: string,
+  storeId: string,
+): Promise<SettingsDraftRow | undefined> {
+  const rows = await db
+    .select()
+    .from(settingsDrafts)
+    .where(
+      and(eq(settingsDrafts.organizationId, organizationId), eq(settingsDrafts.storeId, storeId)),
+    )
+  return rows[0]
+}
+
+/** Public candidate slots for one JST day; a settings snapshot that cannot be evaluated yields none. */
+function countPublicSlots(
+  settings: AvailabilityStoreSettings,
+  bookings: readonly AvailabilityBooking[],
+  date: string,
+): number {
+  const purposeIds = settings.purposes.filter((purpose) => purpose.isPublic).map((p) => p.id)
+  if (purposeIds.length === 0) return 0
+  try {
+    return calculateAvailability(
+      {
+        date,
+        store: {
+          receptionStatus: settings.receptionStatus,
+          businessHours: settings.businessHours,
+          exceptions: settings.exceptions,
+        },
+        purposes: settings.purposes,
+        staff: settings.staff,
+        shifts: settings.shifts,
+        equipment: settings.equipment,
+        maintenance: settings.maintenance,
+        bookings,
+      },
+      purposeIds,
+    ).slots.length
+  } catch {
+    return 0
+  }
+}
+
+/**
+ * Re-run the whole impact evaluation from persisted state.
+ *
+ * The impact screen, the publication request and the moment a scheduled
+ * publication runs all call this, so a conflict cannot appear between the
+ * check and the write (UC-EYEX-093, 097, 115, 161).
+ */
+async function buildSettingsImpact(
+  c: AppContext,
+  db: ReturnType<typeof drizzle>,
+  organizationId: string,
+  row: SettingsDraftRow,
+): Promise<SettingsImpactReport> {
+  const storeId = row.storeId
+  const [published, bookings, resolutionRows] = await Promise.all([
+    readAvailabilitySettings(db, organizationId, storeId),
+    readAvailabilityBookings(db, organizationId, storeId),
+    db
+      .select()
+      .from(settingsDraftConflictResolutions)
+      .where(
+        and(
+          eq(settingsDraftConflictResolutions.organizationId, organizationId),
+          eq(settingsDraftConflictResolutions.draftId, row.id),
+        ),
+      ),
+  ])
+  const clock = requestClock(c)
+  const date = toJstDateString(clock.now())
+  const draft = draftSettings(row)
+  return evaluateSettingsImpact({
+    draftId: row.id,
+    storeId,
+    evaluatedAt: nowIso(clock),
+    published,
+    draft,
+    bookings: bookings.map((booking) => ({
+      id: booking.id,
+      startAt: booking.startAt,
+      endAt: booking.endAt,
+      purposeIds: booking.purposeIds,
+      staffId: booking.staffId ?? null,
+      status: booking.status,
+    })),
+    resolutions: resolutionRows.map((resolution) => ({
+      reservationId: resolution.reservationId,
+      resolution: SettingsConflictResolutionKind.parse(resolution.resolution),
+    })),
+    publicSlots: {
+      date,
+      publishedCount: countPublicSlots(published, bookings, date),
+      draftCount: countPublicSlots(draft, bookings, date),
+    },
+  })
+}
+
+function versionConflictResponse(c: AppContext, error: VersionConflictError): Response {
+  return c.json(
+    {
+      error: error.code,
+      currentVersion: error.currentVersion,
+      expectedVersion: error.expectedVersion,
+    },
+    409,
+  )
+}
+
+/** Persist a draft (new or replacing the store's open draft) together with its audit event. */
+async function persistSettingsDraft(
+  c: AppContext,
+  storeId: string,
+  input: {
+    settings: AvailabilitySettingsInput
+    status: 'draft' | 'review'
+    origin: SettingsOrigin
+    restoredFromVersionId?: string | null
+    action: string
+  },
+): Promise<SettingsDraft> {
+  const organizationId = c.get('auth').org
+  const db = drizzle(c.env.DB)
+  const actorId = c.get('auth').sub
+  const savedAt = nowIso(requestClock(c))
+  const existing = await readSettingsDraft(db, organizationId, storeId)
+  const current = await readAvailabilitySettings(db, organizationId, storeId)
+  const draftVersion = (existing?.draftVersion ?? 0) + 1
+  const id = existing?.id ?? crypto.randomUUID()
+  const payloadJson = JSON.stringify({ ...input.settings, version: 0 })
+  const values = {
+    id,
+    organizationId,
+    storeId,
+    draftVersion,
+    baseVersion: input.settings.version,
+    status: input.status,
+    origin: input.origin,
+    restoredFromVersionId: input.restoredFromVersionId ?? null,
+    payloadJson,
+    savedBy: actorId,
+    savedAt,
+  }
+  const write =
+    existing === undefined
+      ? db.insert(settingsDrafts).values(values)
+      : db
+          .update(settingsDrafts)
+          .set(values)
+          .where(
+            and(
+              eq(settingsDrafts.organizationId, organizationId),
+              eq(settingsDrafts.storeId, storeId),
+            ),
+          )
+  const stored = AvailabilityStoreSettings.parse({
+    ...input.settings,
+    storeId,
+    version: input.settings.version,
+  })
+  await writeAuditBatch(db, {
+    clock: requestClock(c),
+    operations: [write],
+    events: [
+      {
+        organizationId,
+        storeId,
+        actorType: 'user',
+        actorId,
+        action: input.action,
+        entityType: 'settings_draft',
+        entityId: id,
+        metadata: {
+          draftVersion,
+          baseVersion: input.settings.version,
+          status: input.status,
+          origin: input.origin,
+          changedFields: changedSettingsFields(current, stored),
+        },
+      },
+    ],
+  })
+  return SettingsDraft.parse({
+    id,
+    storeId,
+    draftVersion,
+    baseVersion: input.settings.version,
+    status: input.status,
+    origin: input.origin,
+    restoredFromVersionId: input.restoredFromVersionId ?? null,
+    savedAt,
+    savedBy: actorId,
+    settings: stored,
+  })
+}
+
+async function saveSettingsDraft(
+  c: AppContext,
+  storeId: string,
+  input: SettingsDraftInput,
+): Promise<Response> {
+  const denied = await requireStorePermission(c as StoreContext, storeId, 'settings.manage')
+  if (denied) return denied
+  validateAvailabilityReferences(input.settings)
+  const db = drizzle(c.env.DB)
+  const current = await readAvailabilitySettings(db, c.get('auth').org, storeId)
+  try {
+    await assertVersion(current.version, input.settings.version)
+  } catch (error) {
+    if (error instanceof VersionConflictError) return versionConflictResponse(c, error)
+    throw error
+  }
+  const draft = await persistSettingsDraft(c, storeId, {
+    settings: input.settings,
+    status: input.status,
+    origin: 'store_override',
+    action: 'settings.draft.saved',
+  })
+  return c.json(draft, 201)
+}
+
+async function requireSettingsDraft(
+  c: AppContext,
+  storeId: string,
+): Promise<{ error: Response } | { db: ReturnType<typeof drizzle>; row: SettingsDraftRow }> {
+  const db = drizzle(c.env.DB)
+  const row = await readSettingsDraft(db, c.get('auth').org, storeId)
+  if (row === undefined) return { error: c.json({ error: 'draft_not_found' }, 404) }
+  return { db, row }
+}
+
+async function recordSettingsConflictResolution(
+  c: AppContext,
+  storeId: string,
+  reservationId: string,
+  input: SettingsConflictResolutionInput,
+): Promise<Response> {
+  const denied = await requireStorePermission(c as StoreContext, storeId, 'settings.manage')
+  if (denied) return denied
+  const found = await requireSettingsDraft(c as AppContext, storeId)
+  if ('error' in found) return found.error
+  const organizationId = c.get('auth').org
+  const actorId = c.get('auth').sub
+  const resolvedAt = nowIso(requestClock(c))
+  const record = {
+    draftId: found.row.id,
+    reservationId,
+    resolution: input.resolution,
+    note: input.note,
+    resolvedBy: actorId,
+    resolvedAt,
+  }
+  await writeAuditBatch(found.db, {
+    clock: requestClock(c),
+    operations: [
+      found.db
+        .insert(settingsDraftConflictResolutions)
+        .values({ id: crypto.randomUUID(), organizationId, storeId, ...record })
+        .onConflictDoUpdate({
+          target: [
+            settingsDraftConflictResolutions.draftId,
+            settingsDraftConflictResolutions.reservationId,
+          ],
+          set: { resolution: input.resolution, note: input.note, resolvedBy: actorId, resolvedAt },
+        }),
+    ],
+    events: [
+      {
+        organizationId,
+        storeId,
+        actorType: 'user',
+        actorId,
+        action: 'settings.conflict.resolved',
+        entityType: 'reservation',
+        entityId: reservationId,
+        metadata: { draftId: found.row.id, resolution: input.resolution },
+      },
+    ],
+  })
+  return c.json(SettingsConflictResolution.parse(record), 201)
+}
+
+async function readPublicationTargets(
+  db: ReturnType<typeof drizzle>,
+  organizationId: string,
+  publicationId: string,
+) {
+  return db
+    .select()
+    .from(settingsPublicationTargets)
+    .where(
+      and(
+        eq(settingsPublicationTargets.organizationId, organizationId),
+        eq(settingsPublicationTargets.publicationId, publicationId),
+      ),
+    )
+}
+
+function toSettingsPublication(
+  row: SettingsPublicationRow,
+  targets: readonly (typeof settingsPublicationTargets.$inferSelect)[],
+): SettingsPublication {
+  return SettingsPublication.parse({
+    id: row.id,
+    versionId: row.versionId,
+    draftId: row.draftId,
+    status: row.status,
+    scheduledForJst: row.scheduledAt === null ? null : instantToJstDateTime(row.scheduledAt),
+    scheduledAt: row.scheduledAt,
+    executedAt: row.executedAt,
+    appliedCount: row.appliedCount,
+    failedCount: row.failedCount,
+    ledgerEntriesAffected: row.ledgerEntriesAffected,
+    webSlotEffect: {
+      date: row.slotDate,
+      previousSlotCount: row.previousSlotCount,
+      publishedSlotCount: row.publishedSlotCount,
+    },
+    targets: [...targets]
+      .sort((left, right) => left.storeId.localeCompare(right.storeId))
+      .map((target) => ({
+        storeId: target.storeId,
+        status: target.status,
+        appliedVersion: target.appliedVersion,
+        failureReason: target.failureReason,
+        appliedAt: target.appliedAt,
+      })),
+  })
+}
+
+/**
+ * Apply one draft to every target store that has not already succeeded.
+ *
+ * Each store is its own `db.batch()` — settings rows, the immutable version
+ * snapshot, the target outcome and the audit event commit or roll back
+ * together — so a partial failure leaves the successful stores applied and
+ * the failed ones retryable without ever applying a version twice
+ * (AC-EYEX-103, 107).
+ */
+async function applyPublicationTargets(
+  c: AppContext,
+  db: ReturnType<typeof drizzle>,
+  publication: SettingsPublicationRow,
+  row: SettingsDraftRow,
+): Promise<void> {
+  const organizationId = c.get('auth').org
+  const actorId = c.get('auth').sub
+  const clock = requestClock(c)
+  const settings = draftSettings(row)
+  const origin = SettingsOrigin.parse(row.origin)
+  const targets = await readPublicationTargets(db, organizationId, publication.id)
+
+  for (const target of targets) {
+    if (target.status === 'applied') continue
+    const appliedAt = nowIso(clock)
+    try {
+      const denied = await requireStorePermission(
+        c as StoreContext,
+        target.storeId,
+        'settings.manage',
+      )
+      if (denied) throw new Error('store is inactive or not permitted')
+      const current = await readAvailabilitySettings(db, organizationId, target.storeId)
+      const version = nextVersion(current.version)
+      const persisted = AvailabilityStoreSettings.parse({
+        // A store other than the draft's own store receives store-local
+        // resource ids; the ids are keyed globally and cannot be shared.
+        ...(target.storeId === row.storeId
+          ? settings
+          : await deriveStoreScopedSettings(settings, target.storeId)),
+        storeId: target.storeId,
+        version,
+      })
+      const changedFields = changedSettingsFields(current, persisted)
+      await writeAuditBatch(db, {
+        clock,
+        operations: [
+          ...availabilitySettingsWriteOperations(
+            db,
+            organizationId,
+            target.storeId,
+            persisted,
+            actorId,
+            appliedAt,
+            current.version,
+            origin,
+          ),
+          db.insert(settingsVersions).values({
+            id: crypto.randomUUID(),
+            organizationId,
+            storeId: target.storeId,
+            version,
+            origin,
+            payloadJson: JSON.stringify(toAvailabilitySettingsInput(persisted, 0)),
+            changedFieldsJson: JSON.stringify(changedFields),
+            sourceDraftId: row.id,
+            publicationId: publication.id,
+            publishedBy: actorId,
+            publishedAt: appliedAt,
+          }),
+          db
+            .update(settingsPublicationTargets)
+            .set({
+              status: 'applied',
+              appliedVersion: version,
+              failureReason: null,
+              appliedAt,
+            })
+            .where(
+              and(
+                eq(settingsPublicationTargets.id, target.id),
+                // A target that already succeeded can never be applied again.
+                ne(settingsPublicationTargets.status, 'applied'),
+              ),
+            ),
+        ],
+        events: [
+          {
+            organizationId,
+            storeId: target.storeId,
+            actorType: 'user',
+            actorId,
+            action: 'settings.published',
+            entityType: 'availability_settings',
+            entityId: target.storeId,
+            metadata: {
+              publicationId: publication.id,
+              versionId: publication.versionId,
+              draftId: row.id,
+              fromVersion: current.version,
+              toVersion: version,
+              changedFields,
+            },
+          },
+        ],
+      })
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : 'settings could not be applied'
+      await db
+        .update(settingsPublicationTargets)
+        .set({ status: 'failed', failureReason: reason.slice(0, 300) })
+        .where(
+          and(
+            eq(settingsPublicationTargets.id, target.id),
+            ne(settingsPublicationTargets.status, 'applied'),
+          ),
+        )
+        .run()
+    }
+  }
+}
+
+/** Settle the run: counts, status, executed instant and the draft's own state. */
+async function settlePublication(
+  c: AppContext,
+  db: ReturnType<typeof drizzle>,
+  publication: SettingsPublicationRow,
+  row: SettingsDraftRow,
+): Promise<SettingsPublication> {
+  const organizationId = c.get('auth').org
+  const actorId = c.get('auth').sub
+  const executedAt = nowIso(requestClock(c))
+  const targets = await readPublicationTargets(db, organizationId, publication.id)
+  const appliedCount = targets.filter((target) => target.status === 'applied').length
+  const failedCount = targets.filter((target) => target.status === 'failed').length
+  const status = failedCount === 0 ? 'completed' : 'partially_failed'
+  await writeAuditBatch(db, {
+    clock: requestClock(c),
+    operations: [
+      db
+        .update(settingsPublications)
+        .set({ status, appliedCount, failedCount, executedAt, updatedAt: executedAt })
+        .where(
+          and(
+            eq(settingsPublications.organizationId, organizationId),
+            eq(settingsPublications.id, publication.id),
+          ),
+        ),
+      db
+        .update(settingsDrafts)
+        .set({ status: status === 'completed' ? 'published' : 'draft' })
+        .where(
+          and(eq(settingsDrafts.organizationId, organizationId), eq(settingsDrafts.id, row.id)),
+        ),
+    ],
+    events: [
+      {
+        organizationId,
+        storeId: publication.storeId,
+        actorType: 'user',
+        actorId,
+        action: 'settings.publication.executed',
+        entityType: 'settings_publication',
+        entityId: publication.id,
+        metadata: { status, appliedCount, failedCount, versionId: publication.versionId },
+      },
+    ],
+  })
+  return toSettingsPublication(
+    { ...publication, status, appliedCount, failedCount, executedAt, updatedAt: executedAt },
+    await readPublicationTargets(db, organizationId, publication.id),
+  )
+}
+
+async function createSettingsPublication(
+  c: AppContext,
+  storeId: string,
+  input: SettingsPublicationRequest,
+): Promise<Response> {
+  const denied = await requireStorePermission(c as StoreContext, storeId, 'settings.manage')
+  if (denied) return denied
+  const organizationId = c.get('auth').org
+  const db = drizzle(c.env.DB)
+  const row = await readSettingsDraft(db, organizationId, storeId)
+  if (row === undefined || row.id !== input.draftId) {
+    return c.json({ error: 'draft_not_found' }, 404)
+  }
+  const impact = await buildSettingsImpact(c, db, organizationId, row)
+  if (!impact.canPublish) {
+    return c.json(
+      {
+        error: 'publication_blocked',
+        blockingCount: impact.blockingCount,
+        items: impact.items.filter((item) => item.severity === 'blocking'),
+      },
+      409,
+    )
+  }
+  const clock = requestClock(c)
+  const createdAt = nowIso(clock)
+  const scheduledAt =
+    input.scheduledForJst === undefined ? null : jstDateTimeToInstant(input.scheduledForJst)
+  // A scheduled publication always waits for its own run step, even when the
+  // instant has already passed: the JST boundary is decided in exactly one
+  // place (UC-EYEX-166), never split between creation and execution.
+  const runNow = scheduledAt === null
+  const publicationId = crypto.randomUUID()
+  const publication = {
+    id: publicationId,
+    organizationId,
+    storeId,
+    draftId: row.id,
+    versionId: crypto.randomUUID(),
+    status: runNow ? ('completed' as const) : ('scheduled' as const),
+    scheduledAt,
+    executedAt: null,
+    appliedCount: 0,
+    failedCount: 0,
+    ledgerEntriesAffected: impact.ledgerEntriesAffected,
+    slotDate: impact.publicSlots.date,
+    previousSlotCount: impact.publicSlots.publishedCount,
+    publishedSlotCount: impact.publicSlots.draftCount,
+    createdBy: c.get('auth').sub,
+    createdAt,
+    updatedAt: createdAt,
+  }
+  const result = await withIdempotency<SettingsPublication, Record<string, never>>(
+    {
+      db,
+      organizationId,
+      operation: 'settings.publication',
+      key: input.idempotencyKey,
+      requestHash: await requestHash({ storeId, ...input }),
+      clock,
+    },
+    async () => {
+      await writeAuditBatch(db, {
+        clock,
+        operations: [
+          db.insert(settingsPublications).values({ ...publication, status: 'scheduled' }),
+          db.insert(settingsPublicationTargets).values(
+            input.targetStoreIds.map((targetStoreId) => ({
+              id: crypto.randomUUID(),
+              organizationId,
+              publicationId,
+              storeId: targetStoreId,
+              status: 'pending',
+              appliedVersion: null,
+              failureReason: null,
+              appliedAt: null,
+            })),
+          ),
+          db
+            .update(settingsDrafts)
+            .set({ status: runNow ? 'draft' : 'scheduled' })
+            .where(
+              and(eq(settingsDrafts.organizationId, organizationId), eq(settingsDrafts.id, row.id)),
+            ),
+        ],
+        events: [
+          {
+            organizationId,
+            storeId,
+            actorType: 'user',
+            actorId: c.get('auth').sub,
+            action: runNow ? 'settings.publication.started' : 'settings.publication.scheduled',
+            entityType: 'settings_publication',
+            entityId: publicationId,
+            metadata: {
+              draftId: row.id,
+              versionId: publication.versionId,
+              scheduledAt,
+              targetStoreIds: [...input.targetStoreIds],
+            },
+          },
+        ],
+      })
+      const stored = { ...publication, status: 'scheduled' as const }
+      if (!runNow) {
+        return toSettingsPublication(
+          stored,
+          await readPublicationTargets(db, organizationId, publicationId),
+        )
+      }
+      await applyPublicationTargets(c, db, stored, row)
+      return settlePublication(c, db, stored, row)
+    },
+  )
+  return c.json(result, 201)
+}
+
+async function requirePublication(
+  c: AppContext,
+  storeId: string,
+  publicationId: string,
+): Promise<
+  { error: Response } | { db: ReturnType<typeof drizzle>; publication: SettingsPublicationRow }
+> {
+  const db = drizzle(c.env.DB)
+  const rows = await db
+    .select()
+    .from(settingsPublications)
+    .where(
+      and(
+        eq(settingsPublications.organizationId, c.get('auth').org),
+        eq(settingsPublications.storeId, storeId),
+        eq(settingsPublications.id, publicationId),
+      ),
+    )
+  const publication = rows[0]
+  if (publication === undefined) return { error: c.json({ error: 'publication_not_found' }, 404) }
+  return { db, publication }
+}
+
+async function readSettingsPublication(
+  c: AppContext,
+  storeId: string,
+  publicationId: string,
+): Promise<Response> {
+  const denied = await requireStorePermission(c as StoreContext, storeId, 'settings.read')
+  if (denied) return denied
+  const found = await requirePublication(c, storeId, publicationId)
+  if ('error' in found) return found.error
+  return c.json(
+    toSettingsPublication(
+      found.publication,
+      await readPublicationTargets(found.db, c.get('auth').org, publicationId),
+    ),
+  )
+}
+
+async function patchSettingsPublication(
+  c: AppContext,
+  storeId: string,
+  publicationId: string,
+  input: SettingsPublicationPatch,
+): Promise<Response> {
+  const denied = await requireStorePermission(c as StoreContext, storeId, 'settings.manage')
+  if (denied) return denied
+  const found = await requirePublication(c, storeId, publicationId)
+  if ('error' in found) return found.error
+  if (found.publication.status !== 'scheduled') {
+    return c.json({ error: 'publication_not_scheduled' }, 409)
+  }
+  const organizationId = c.get('auth').org
+  const updatedAt = nowIso(requestClock(c))
+  const scheduledAt =
+    input.scheduledForJst === undefined
+      ? found.publication.scheduledAt
+      : jstDateTimeToInstant(input.scheduledForJst)
+  const status = input.status === 'cancelled' ? 'cancelled' : 'scheduled'
+  await writeAuditBatch(found.db, {
+    clock: requestClock(c),
+    operations: [
+      found.db
+        .update(settingsPublications)
+        .set({ scheduledAt, status, updatedAt })
+        .where(
+          and(
+            eq(settingsPublications.organizationId, organizationId),
+            eq(settingsPublications.id, publicationId),
+          ),
+        ),
+      ...(status === 'cancelled'
+        ? [
+            found.db
+              .update(settingsDrafts)
+              .set({ status: 'draft' })
+              .where(
+                and(
+                  eq(settingsDrafts.organizationId, organizationId),
+                  eq(settingsDrafts.id, found.publication.draftId),
+                ),
+              ),
+          ]
+        : []),
+    ],
+    events: [
+      {
+        organizationId,
+        storeId,
+        actorType: 'user',
+        actorId: c.get('auth').sub,
+        action:
+          status === 'cancelled'
+            ? 'settings.publication.cancelled'
+            : 'settings.publication.rescheduled',
+        entityType: 'settings_publication',
+        entityId: publicationId,
+        metadata: { fromScheduledAt: found.publication.scheduledAt, toScheduledAt: scheduledAt },
+      },
+    ],
+  })
+  return c.json(
+    toSettingsPublication(
+      { ...found.publication, scheduledAt, status, updatedAt },
+      await readPublicationTargets(found.db, organizationId, publicationId),
+    ),
+  )
+}
+
+/** Execute a scheduled publication once its JST instant has arrived (UC-EYEX-161, 166). */
+async function runSettingsPublication(
+  c: AppContext,
+  storeId: string,
+  publicationId: string,
+): Promise<Response> {
+  const denied = await requireStorePermission(c as StoreContext, storeId, 'settings.manage')
+  if (denied) return denied
+  const found = await requirePublication(c, storeId, publicationId)
+  if ('error' in found) return found.error
+  if (found.publication.status !== 'scheduled') {
+    return c.json({ error: 'publication_not_scheduled' }, 409)
+  }
+  if (
+    found.publication.scheduledAt !== null &&
+    !isPublicationDue(found.publication.scheduledAt, requestClock(c).now())
+  ) {
+    return c.json({ error: 'publication_not_due' }, 409)
+  }
+  const organizationId = c.get('auth').org
+  const row = await readSettingsDraft(found.db, organizationId, storeId)
+  if (row === undefined || row.id !== found.publication.draftId) {
+    return c.json({ error: 'draft_not_found' }, 404)
+  }
+  // Re-validate immediately before applying; the world may have moved.
+  const impact = await buildSettingsImpact(c, found.db, organizationId, row)
+  if (!impact.canPublish) {
+    return c.json({ error: 'publication_blocked', blockingCount: impact.blockingCount }, 409)
+  }
+  await applyPublicationTargets(c, found.db, found.publication, row)
+  return c.json(await settlePublication(c, found.db, found.publication, row))
+}
+
+/** Retry only the stores that failed; successful stores are skipped (AC-EYEX-107). */
+async function retrySettingsPublication(
+  c: AppContext,
+  storeId: string,
+  publicationId: string,
+): Promise<Response> {
+  const denied = await requireStorePermission(c as StoreContext, storeId, 'settings.manage')
+  if (denied) return denied
+  const found = await requirePublication(c, storeId, publicationId)
+  if ('error' in found) return found.error
+  if (found.publication.status !== 'partially_failed') {
+    return c.json({ error: 'publication_not_retryable' }, 409)
+  }
+  const organizationId = c.get('auth').org
+  const rows = await found.db
+    .select()
+    .from(settingsDrafts)
+    .where(
+      and(
+        eq(settingsDrafts.organizationId, organizationId),
+        eq(settingsDrafts.id, found.publication.draftId),
+      ),
+    )
+  const row = rows[0]
+  if (row === undefined) return c.json({ error: 'draft_not_found' }, 404)
+  await applyPublicationTargets(c, found.db, found.publication, row)
+  return c.json(await settlePublication(c, found.db, found.publication, row))
+}
+
+async function listSettingsVersions(c: AppContext, storeId: string): Promise<Response> {
+  const denied = await requireStorePermission(c as StoreContext, storeId, 'settings.read')
+  if (denied) return denied
+  const db = drizzle(c.env.DB)
+  const rows = await db
+    .select()
+    .from(settingsVersions)
+    .where(
+      and(
+        eq(settingsVersions.organizationId, c.get('auth').org),
+        eq(settingsVersions.storeId, storeId),
+      ),
+    )
+    .orderBy(desc(settingsVersions.version))
+  return c.json(
+    rows.map((row) =>
+      SettingsVersionSummary.parse({
+        versionId: row.id,
+        storeId: row.storeId,
+        version: row.version,
+        origin: row.origin,
+        publishedAt: row.publishedAt,
+        publishedBy: row.publishedBy,
+        changedFields: parseJson(row.changedFieldsJson, 'changed fields'),
+      }),
+    ),
+  )
+}
+
+async function requireSettingsVersion(
+  c: AppContext,
+  storeId: string,
+  versionId: string,
+): Promise<
+  | { error: Response }
+  | { db: ReturnType<typeof drizzle>; row: typeof settingsVersions.$inferSelect }
+> {
+  const db = drizzle(c.env.DB)
+  const rows = await db
+    .select()
+    .from(settingsVersions)
+    .where(
+      and(
+        eq(settingsVersions.organizationId, c.get('auth').org),
+        eq(settingsVersions.storeId, storeId),
+        eq(settingsVersions.id, versionId),
+      ),
+    )
+  const row = rows[0]
+  if (row === undefined) return { error: c.json({ error: 'version_not_found' }, 404) }
+  return { db, row }
+}
+
+async function readSettingsVersion(
+  c: AppContext,
+  storeId: string,
+  versionId: string,
+): Promise<Response> {
+  const denied = await requireStorePermission(c as StoreContext, storeId, 'settings.read')
+  if (denied) return denied
+  const found = await requireSettingsVersion(c, storeId, versionId)
+  if ('error' in found) return found.error
+  const settings = parseSettingsPayload(found.row.payloadJson, storeId, found.row.version)
+  const previous = await found.db
+    .select()
+    .from(settingsVersions)
+    .where(
+      and(
+        eq(settingsVersions.organizationId, c.get('auth').org),
+        eq(settingsVersions.storeId, storeId),
+        lt(settingsVersions.version, found.row.version),
+      ),
+    )
+    .orderBy(desc(settingsVersions.version))
+    .limit(1)
+  const before =
+    previous[0] === undefined
+      ? emptyAvailabilitySettings(storeId)
+      : parseSettingsPayload(previous[0].payloadJson, storeId, previous[0].version)
+  return c.json(
+    SettingsVersionDetail.parse({
+      versionId: found.row.id,
+      storeId,
+      version: found.row.version,
+      origin: found.row.origin,
+      publishedAt: found.row.publishedAt,
+      publishedBy: found.row.publishedBy,
+      changedFields: parseJson(found.row.changedFieldsJson, 'changed fields'),
+      settings,
+      diff: settingsDiff(before, settings),
+    }),
+  )
+}
+
+/** A past version is never republished directly; it becomes a new draft (AC-EYEX-108). */
+async function restoreSettingsVersion(
+  c: AppContext,
+  storeId: string,
+  versionId: string,
+): Promise<Response> {
+  const denied = await requireStorePermission(c as StoreContext, storeId, 'settings.manage')
+  if (denied) return denied
+  const found = await requireSettingsVersion(c, storeId, versionId)
+  if ('error' in found) return found.error
+  const current = await readAvailabilitySettings(found.db, c.get('auth').org, storeId)
+  const settings = parseSettingsPayload(found.row.payloadJson, storeId, current.version)
+  const draft = await persistSettingsDraft(c, storeId, {
+    settings: toAvailabilitySettingsInput(settings, current.version),
+    status: 'draft',
+    origin: SettingsOrigin.parse(found.row.origin),
+    restoredFromVersionId: versionId,
+    action: 'settings.draft.restored',
+  })
+  return c.json(draft, 201)
+}
+
+async function readChainDefaultRow(
+  db: ReturnType<typeof drizzle>,
+  organizationId: string,
+): Promise<typeof settingsChainDefaults.$inferSelect | undefined> {
+  const rows = await db
+    .select()
+    .from(settingsChainDefaults)
+    .where(eq(settingsChainDefaults.organizationId, organizationId))
+  return rows[0]
+}
+
+async function saveChainDefault(
+  c: AppContext,
+  storeId: string,
+  input: SettingsDraftInput,
+): Promise<Response> {
+  const denied = await requireStorePermission(c as StoreContext, storeId, 'settings.manage')
+  if (denied) return denied
+  validateAvailabilityReferences(input.settings)
+  const organizationId = c.get('auth').org
+  const db = drizzle(c.env.DB)
+  const actorId = c.get('auth').sub
+  const updatedAt = nowIso(requestClock(c))
+  const existing = await readChainDefaultRow(db, organizationId)
+  const version = (existing?.version ?? 0) + 1
+  const settings = AvailabilitySettingsInput.parse({ ...input.settings, version })
+  const payloadJson = JSON.stringify({ ...settings, version: 0 })
+  const values = {
+    id: existing?.id ?? crypto.randomUUID(),
+    organizationId,
+    version,
+    payloadJson,
+    updatedBy: actorId,
+    updatedAt,
+  }
+  await writeAuditBatch(db, {
+    clock: requestClock(c),
+    operations: [
+      existing === undefined
+        ? db.insert(settingsChainDefaults).values(values)
+        : db
+            .update(settingsChainDefaults)
+            .set(values)
+            .where(eq(settingsChainDefaults.organizationId, organizationId)),
+    ],
+    events: [
+      {
+        organizationId,
+        storeId,
+        actorType: 'user',
+        actorId,
+        action: 'settings.chain_default.updated',
+        entityType: 'settings_chain_default',
+        entityId: values.id,
+        metadata: { fromVersion: existing?.version ?? 0, toVersion: version },
+      },
+    ],
+  })
+  return c.json(
+    SettingsChainDefault.parse({ version, updatedAt, updatedBy: actorId, settings }),
+    201,
+  )
+}
+
+async function readChainDefault(c: AppContext, storeId: string): Promise<Response> {
+  const denied = await requireStorePermission(c as StoreContext, storeId, 'settings.read')
+  if (denied) return denied
+  const db = drizzle(c.env.DB)
+  const row = await readChainDefaultRow(db, c.get('auth').org)
+  if (row === undefined) return c.json({ error: 'chain_default_not_found' }, 404)
+  return c.json(
+    SettingsChainDefault.parse({
+      version: row.version,
+      updatedAt: row.updatedAt,
+      updatedBy: row.updatedBy,
+      settings: AvailabilitySettingsInput.parse({
+        ...(parseJson(row.payloadJson, 'chain default payload') as Record<string, unknown>),
+        version: row.version,
+      }),
+    }),
+  )
+}
+
+async function readSettingsOverride(c: AppContext, storeId: string): Promise<Response> {
+  const denied = await requireStorePermission(c as StoreContext, storeId, 'settings.read')
+  if (denied) return denied
+  const organizationId = c.get('auth').org
+  const db = drizzle(c.env.DB)
+  const [rows, chain, current] = await Promise.all([
+    db
+      .select({ origin: availabilitySettings.origin })
+      .from(availabilitySettings)
+      .where(
+        and(
+          eq(availabilitySettings.organizationId, organizationId),
+          eq(availabilitySettings.storeId, storeId),
+        ),
+      ),
+    readChainDefaultRow(db, organizationId),
+    readAvailabilitySettings(db, organizationId, storeId),
+  ])
+  // Rows written before this loop existed carry no origin and are, by
+  // definition, a store-local value rather than a distributed chain value.
+  const origin = SettingsOrigin.parse(rows[0]?.origin ?? 'store_override')
+  const chainSettings =
+    chain === undefined
+      ? emptyAvailabilitySettings(storeId)
+      : parseSettingsPayload(chain.payloadJson, storeId, current.version)
+  return c.json(
+    SettingsOverrideView.parse({
+      storeId,
+      origin,
+      chainVersion: chain?.version ?? 0,
+      overriddenFields: chain === undefined ? [] : changedSettingsFields(chainSettings, current),
+    }),
+  )
+}
+
+/** Show the new common value and its impact before the store returns to it (AC-EYEX-104). */
+async function releaseSettingsOverride(c: AppContext, storeId: string): Promise<Response> {
+  const denied = await requireStorePermission(c as StoreContext, storeId, 'settings.manage')
+  if (denied) return denied
+  const organizationId = c.get('auth').org
+  const db = drizzle(c.env.DB)
+  const chain = await readChainDefaultRow(db, organizationId)
+  if (chain === undefined) return c.json({ error: 'chain_default_not_found' }, 404)
+  const current = await readAvailabilitySettings(db, organizationId, storeId)
+  const settings = AvailabilitySettingsInput.parse({
+    ...(parseJson(chain.payloadJson, 'chain default payload') as Record<string, unknown>),
+    version: current.version,
+  })
+  const draft = await persistSettingsDraft(c, storeId, {
+    settings,
+    status: 'draft',
+    origin: 'chain',
+    action: 'settings.override.released',
+  })
+  const row = await readSettingsDraft(db, organizationId, storeId)
+  if (row === undefined) return c.json({ error: 'draft_not_found' }, 404)
+  return c.json(
+    SettingsOverrideRelease.parse({
+      chainVersion: chain.version,
+      draft,
+      impact: await buildSettingsImpact(c, db, organizationId, row),
+    }),
+    201,
+  )
+}
+
+/* ------------------------------------------------------------------ *
+ * Recording storage, playback, retention, legal hold and deletion.
+ * The audio body lives only in the private R2 bucket; D1 keeps the
+ * metadata that makes a deletion provable. There is no download API.
+ * ------------------------------------------------------------------ */
+
+type RecordingRow = typeof recordings.$inferSelect
+
+/** Who performed a recording management action, for the audit trail. */
+type RecordingActor = {
+  actorType: 'user' | 'shared_terminal'
+  actorId: string
+  /** The person behind a shared terminal, proven by personal reauthentication. */
+  reauthenticatedUserId?: string
+}
+
+function staffRecordingActor(c: AppContext): RecordingActor {
+  return { actorType: 'user', actorId: c.get('auth').sub }
+}
+
+function recordingPersonId(actor: RecordingActor): string {
+  return actor.reauthenticatedUserId ?? actor.actorId
+}
+
+function toRecording(row: RecordingRow) {
+  return Recording.parse({
+    id: row.id,
+    organizationId: row.organizationId,
+    storeId: row.storeId,
+    receptionSessionId: row.receptionSessionId,
+    reservationId: row.reservationId,
+    recorderType: row.recorderType,
+    recorderId: row.recorderId,
+    startedAt: row.startedAt,
+    endedAt: row.endedAt,
+    durationSeconds: row.durationSeconds,
+    endReason: row.endReason,
+    state: row.state,
+    retentionUntil: row.retentionUntil,
+    holdReason: row.holdReason,
+    heldBy: row.heldBy,
+    heldAt: row.heldAt,
+    deletedAt: row.deletedAt,
+    failureReason: row.failureReason,
+    version: row.version,
+  })
+}
+
+/** Always scoped by the JWT organization and the authorized store. */
+async function findRecordingRow(
+  db: ReturnType<typeof drizzle>,
+  organizationId: string,
+  storeId: string,
+  recordingId: string,
+): Promise<RecordingRow | undefined> {
+  const rows = await db
+    .select()
+    .from(recordings)
+    .where(
+      and(
+        eq(recordings.id, recordingId),
+        eq(recordings.organizationId, organizationId),
+        eq(recordings.storeId, storeId),
+      ),
+    )
+  return rows[0]
+}
+
+type RecordingAccess =
+  | { error: Response }
+  | { db: ReturnType<typeof drizzle>; organizationId: string; row: RecordingRow }
+
+async function accessRecording(
+  c: AppContext,
+  storeId: string,
+  recordingId: string,
+  permission: 'recording.read' | 'recording.manage',
+): Promise<RecordingAccess> {
+  const denied = await requireStorePermission(c as StoreContext, storeId, permission)
+  if (denied) return { error: denied }
+  const organizationId = c.get('auth').org
+  const db = drizzle(c.env.DB)
+  const row = await findRecordingRow(db, organizationId, storeId, recordingId)
+  // A recording from another store or tenant is indistinguishable from one
+  // that never existed.
+  if (!row) return { error: c.json({ error: 'not_found' }, 404) }
+  return { db, organizationId, row }
+}
+
+function recordingStateError(c: AppContext, error: unknown): Response | null {
+  if (error instanceof RecordingTransitionError) {
+    return c.json({ error: error.code, from: error.from, to: error.to }, error.status)
+  }
+  if (error instanceof VersionConflictError) {
+    return c.json({ error: error.code, currentVersion: error.currentVersion }, error.status)
+  }
+  if (error instanceof AuditAppendError) return c.json({ error: error.code }, error.status)
+  return null
+}
+
+async function readRecordingRetentionSettings(
+  db: ReturnType<typeof drizzle>,
+  organizationId: string,
+  storeId: string,
+) {
+  const rows = await db
+    .select()
+    .from(recordingRetentionSettings)
+    .where(
+      and(
+        eq(recordingRetentionSettings.organizationId, organizationId),
+        eq(recordingRetentionSettings.storeId, storeId),
+      ),
+    )
+  const row = rows[0]
+  return {
+    confirmedRetentionDays: row?.confirmedRetentionDays ?? MINIMUM_CONFIRMED_RETENTION_DAYS,
+    discardedRetentionHours: row?.discardedRetentionHours ?? MINIMUM_DISCARDED_RETENTION_HOURS,
+    updatedAt: row?.updatedAt ?? null,
+  }
+}
+
+async function recordingRetentionUntil(
+  db: ReturnType<typeof drizzle>,
+  organizationId: string,
+  storeId: string,
+  row: Pick<RecordingRow, 'endedAt' | 'reservationId'>,
+): Promise<string> {
+  const settings = await readRecordingRetentionSettings(db, organizationId, storeId)
+  return retentionDeadline({
+    endedAt: row.endedAt,
+    hasReservation: row.reservationId !== null,
+    confirmedRetentionDays: settings.confirmedRetentionDays,
+    discardedRetentionHours: settings.discardedRetentionHours,
+  })
+}
+
+async function createRecordingMetadata(
+  c: AppContext,
+  storeId: string,
+  input: RecordingMetadataCreate,
+): Promise<Response> {
+  const denied = await requireStorePermission(c as StoreContext, storeId, 'recording.manage')
+  if (denied) return denied
+  const organizationId = c.get('auth').org
+  /*
+   * 録音主体はセッションが決める。本文の申告を採ると、誰でも他人の名前で録音を
+   * 残せてしまい、監査に残る操作主体(AC-EYEX-80)と食い違う。共有端末の録音は
+   * 端末認証の経路だけが名乗れる。
+   */
+  const terminal = c.get('sharedTerminal')
+  const expectedRecorderType = terminal === undefined ? 'personal' : 'shared_terminal'
+  if (input.recorderType !== expectedRecorderType) return c.json({ error: 'invalid_recorder' }, 400)
+  const recorder =
+    terminal === undefined
+      ? { type: 'personal' as const, id: c.get('auth').sub }
+      : { type: 'shared_terminal' as const, id: terminal.id }
+  const db = drizzle(c.env.DB)
+  const clock = requestClock(c)
+  try {
+    const recording = await withIdempotency<Recording, Record<string, never>>(
+      {
+        db,
+        organizationId,
+        operation: `recording_metadata_create:${storeId}`,
+        key: input.idempotencyKey,
+        requestHash: await requestHash({ storeId, ...input }),
+        clock,
+      },
+      async (completeInBatch) => {
+        const id = crypto.randomUUID()
+        const createdAt = nowIso(clock)
+        const storageKey = recordingStorageKey({
+          organizationId,
+          storeId,
+          recordingId: id,
+          secret: recordingKeySecret(),
+        })
+        const row = {
+          id,
+          organizationId,
+          storeId,
+          receptionSessionId: input.receptionSessionId,
+          reservationId: input.reservationId,
+          recorderType: recorder.type,
+          recorderId: recorder.id,
+          startedAt: input.startedAt,
+          endedAt: input.endedAt,
+          durationSeconds: input.durationSeconds,
+          endReason: input.endReason,
+          // The body has not arrived yet; retention starts once it is stored.
+          state: 'uploading' as const,
+          contentType: input.contentType,
+          storageKey,
+          retentionUntil: null,
+          holdReason: null,
+          heldBy: null,
+          heldAt: null,
+          failureReason: null,
+          deletedAt: null,
+          createdAt,
+          updatedAt: createdAt,
+          version: 1,
+        }
+        const view = toRecording(row)
+        await writeAuditBatch(db, {
+          clock,
+          operations: [db.insert(recordings).values(row), completeInBatch(view)],
+          events: [
+            {
+              organizationId,
+              storeId,
+              actorType: 'user',
+              actorId: c.get('auth').sub,
+              action: 'recording.metadata_created',
+              entityType: 'recording',
+              entityId: id,
+              metadata: {
+                receptionSessionId: input.receptionSessionId,
+                reservationId: input.reservationId,
+                endReason: input.endReason,
+                durationSeconds: input.durationSeconds,
+              },
+            },
+          ],
+        })
+        return view
+      },
+    )
+    return c.json(recording, 201)
+  } catch (error) {
+    if (error instanceof IdempotencyConflictError || error instanceof IdempotencyInProgressError) {
+      return c.json({ error: error.code }, error.status)
+    }
+    const mapped = recordingStateError(c, error)
+    if (mapped) {
+      // A second recording for the same reception session collides with the
+      // unique index and reaches this boundary as a rolled-back batch.
+      return c.json({ error: 'recording_session_exists' }, 409)
+    }
+    throw error
+  }
+}
+
+async function uploadRecordingAudio(
+  c: AppContext,
+  storeId: string,
+  recordingId: string,
+): Promise<Response> {
+  const access = await accessRecording(c, storeId, recordingId, 'recording.manage')
+  if ('error' in access) return access.error
+  const { db, organizationId, row } = access
+  // A resent body must not create a second object or a second audit event.
+  if (row.state === 'stored') return c.json(toRecording(row))
+  const clock = requestClock(c)
+  const audio = await c.req.arrayBuffer()
+  if (audio.byteLength === 0) {
+    try {
+      await writeAuditBatch(db, {
+        clock,
+        operations: [
+          db
+            .update(recordings)
+            .set({
+              state: 'failed',
+              failureReason: 'empty_audio_body',
+              updatedAt: nowIso(clock),
+              version: nextVersion(row.version),
+            })
+            .where(and(eq(recordings.id, row.id), eq(recordings.version, row.version))),
+        ],
+        events: [
+          {
+            organizationId,
+            storeId,
+            actorType: 'user',
+            actorId: c.get('auth').sub,
+            action: 'recording.upload_failed',
+            entityType: 'recording',
+            entityId: row.id,
+            metadata: { reason: 'empty_audio_body' },
+          },
+        ],
+      })
+    } catch (error) {
+      const mapped = recordingStateError(c, error)
+      if (mapped) return mapped
+      throw error
+    }
+    return c.json({ error: 'empty_audio_body' }, 400)
+  }
+  try {
+    assertRecordingTransition(row.state as RecordingState, 'stored')
+  } catch (error) {
+    const mapped = recordingStateError(c, error)
+    if (mapped) return mapped
+    throw error
+  }
+  await c.env.RECORDINGS.put(row.storageKey, audio, {
+    httpMetadata: { contentType: row.contentType },
+  })
+  const retentionUntil = await recordingRetentionUntil(db, organizationId, storeId, row)
+  try {
+    await writeAuditBatch(db, {
+      clock,
+      operations: [
+        db
+          .update(recordings)
+          .set({
+            state: 'stored',
+            retentionUntil,
+            failureReason: null,
+            updatedAt: nowIso(clock),
+            version: nextVersion(row.version),
+          })
+          .where(and(eq(recordings.id, row.id), eq(recordings.version, row.version))),
+      ],
+      events: [
+        {
+          organizationId,
+          storeId,
+          actorType: 'user',
+          actorId: c.get('auth').sub,
+          action: 'recording.stored',
+          entityType: 'recording',
+          entityId: row.id,
+          metadata: { retentionUntil, byteLength: audio.byteLength },
+        },
+      ],
+    })
+  } catch (error) {
+    // The metadata write is the source of truth. An object without it would be
+    // invisible to reconciliation, so remove it again.
+    await c.env.RECORDINGS.delete(row.storageKey)
+    const mapped = recordingStateError(c, error)
+    if (mapped) return mapped
+    throw error
+  }
+  return c.json(
+    toRecording({
+      ...row,
+      state: 'stored',
+      retentionUntil,
+      failureReason: null,
+      version: nextVersion(row.version),
+    }),
+  )
+}
+
+async function playRecording(
+  c: AppContext,
+  storeId: string,
+  recordingId: string,
+): Promise<Response> {
+  const access = await accessRecording(c, storeId, recordingId, 'recording.read')
+  if ('error' in access) return access.error
+  const { db, organizationId, row } = access
+  if (row.state === 'deleted') return c.json({ error: 'recording_deleted' }, 410)
+  if (row.state !== 'stored' && row.state !== 'held' && row.state !== 'pending_deletion') {
+    return c.json({ error: 'invalid_recording_state', state: row.state }, 409)
+  }
+  const rangeHeader = c.req.header('range')
+  const object = await c.env.RECORDINGS.get(row.storageKey, {
+    range: rangeHeader === undefined ? undefined : c.req.raw.headers,
+  })
+  if (!object || !('body' in object) || object.body === null) {
+    return c.json({ error: 'recording_object_missing' }, 404)
+  }
+  const clock = requestClock(c)
+  try {
+    await writeAuditBatch(db, {
+      clock,
+      events: [
+        {
+          organizationId,
+          storeId,
+          actorType: 'user',
+          actorId: c.get('auth').sub,
+          action: 'recording.played',
+          entityType: 'recording',
+          entityId: row.id,
+          metadata: {
+            reservationId: row.reservationId,
+            receptionSessionId: row.receptionSessionId,
+            playedAt: nowIso(clock),
+            ranged: rangeHeader !== undefined,
+          },
+        },
+      ],
+    })
+  } catch (error) {
+    const mapped = recordingStateError(c, error)
+    if (mapped) return mapped
+    throw error
+  }
+  const headers = new Headers({
+    'content-type': row.contentType,
+    // Streaming playback only. Never an attachment, never a signed URL.
+    'content-disposition': 'inline',
+    'accept-ranges': 'bytes',
+    'cache-control': 'no-store, private',
+    'x-content-type-options': 'nosniff',
+  })
+  const range = object.range
+  if (rangeHeader !== undefined && range && 'offset' in range && 'length' in range) {
+    const offset = range.offset ?? 0
+    const length = range.length ?? object.size - offset
+    headers.set('content-range', `bytes ${offset}-${offset + length - 1}/${object.size}`)
+    headers.set('content-length', String(length))
+    return new Response(object.body as unknown as BodyInit, { status: 206, headers })
+  }
+  headers.set('content-length', String(object.size))
+  return new Response(object.body as unknown as BodyInit, { status: 200, headers })
+}
+
+async function listRecordings(
+  c: AppContext,
+  storeId: string,
+  query: RecordingListQuery,
+): Promise<Response> {
+  const denied = await requireStorePermission(c as StoreContext, storeId, 'recording.read')
+  if (denied) return denied
+  const db = drizzle(c.env.DB)
+  const conditions = [
+    eq(recordings.organizationId, c.get('auth').org),
+    eq(recordings.storeId, storeId),
+  ]
+  if (query.state) conditions.push(eq(recordings.state, query.state))
+  const rows = await db
+    .select()
+    .from(recordings)
+    .where(and(...conditions))
+    .orderBy(desc(recordings.createdAt))
+  return c.json(Recording.array().parse(rows.map(toRecording)))
+}
+
+async function readRecording(
+  c: AppContext,
+  storeId: string,
+  recordingId: string,
+): Promise<Response> {
+  const access = await accessRecording(c, storeId, recordingId, 'recording.read')
+  if ('error' in access) return access.error
+  return c.json(toRecording(access.row))
+}
+
+async function retryRecordingUpload(
+  c: AppContext,
+  storeId: string,
+  recordingId: string,
+): Promise<Response> {
+  const access = await accessRecording(c, storeId, recordingId, 'recording.manage')
+  if ('error' in access) return access.error
+  const { db, organizationId, row } = access
+  const clock = requestClock(c)
+  try {
+    assertRecordingTransition(row.state as RecordingState, 'uploading')
+    await writeAuditBatch(db, {
+      clock,
+      operations: [
+        db
+          .update(recordings)
+          .set({
+            state: 'uploading',
+            failureReason: null,
+            updatedAt: nowIso(clock),
+            version: nextVersion(row.version),
+          })
+          .where(and(eq(recordings.id, row.id), eq(recordings.version, row.version))),
+      ],
+      events: [
+        {
+          organizationId,
+          storeId,
+          actorType: 'user',
+          actorId: c.get('auth').sub,
+          action: 'recording.retry_requested',
+          entityType: 'recording',
+          entityId: row.id,
+          metadata: { previousFailureReason: row.failureReason },
+        },
+      ],
+    })
+  } catch (error) {
+    const mapped = recordingStateError(c, error)
+    if (mapped) return mapped
+    throw error
+  }
+  return c.json(
+    toRecording({
+      ...row,
+      state: 'uploading',
+      failureReason: null,
+      version: nextVersion(row.version),
+    }),
+  )
+}
+
+async function linkRecordingReservation(
+  c: AppContext,
+  storeId: string,
+  recordingId: string,
+  input: RecordingReservationLink,
+): Promise<Response> {
+  const access = await accessRecording(c, storeId, recordingId, 'recording.manage')
+  if ('error' in access) return access.error
+  const { db, organizationId, row } = access
+  if (row.state === 'deleted') return c.json({ error: 'recording_deleted' }, 410)
+  const clock = requestClock(c)
+  const linked = { ...row, reservationId: input.reservationId }
+  const retentionUntil = await recordingRetentionUntil(db, organizationId, storeId, linked)
+  try {
+    await assertVersion(row.version, input.version)
+    await writeAuditBatch(db, {
+      clock,
+      operations: [
+        db
+          .update(recordings)
+          .set({
+            reservationId: input.reservationId,
+            retentionUntil,
+            updatedAt: nowIso(clock),
+            version: nextVersion(row.version),
+          })
+          .where(and(eq(recordings.id, row.id), eq(recordings.version, row.version))),
+      ],
+      events: [
+        {
+          organizationId,
+          storeId,
+          actorType: 'user',
+          actorId: c.get('auth').sub,
+          action: 'recording.reservation_linked',
+          entityType: 'recording',
+          entityId: row.id,
+          metadata: { reservationId: input.reservationId, retentionUntil },
+        },
+      ],
+    })
+  } catch (error) {
+    const mapped = recordingStateError(c, error)
+    if (mapped) return mapped
+    throw error
+  }
+  return c.json(toRecording({ ...linked, retentionUntil, version: nextVersion(row.version) }))
+}
+
+async function holdRecording(
+  c: AppContext,
+  storeId: string,
+  recordingId: string,
+  input: RecordingHoldInput,
+  actor: RecordingActor,
+): Promise<Response> {
+  const organizationId = c.get('auth').org
+  const db = drizzle(c.env.DB)
+  const row = await findRecordingRow(db, organizationId, storeId, recordingId)
+  if (!row) return c.json({ error: 'not_found' }, 404)
+  const clock = requestClock(c)
+  const heldAt = nowIso(clock)
+  const heldBy = recordingPersonId(actor)
+  try {
+    await assertVersion(row.version, input.version)
+    assertRecordingTransition(row.state as RecordingState, 'held')
+    await writeAuditBatch(db, {
+      clock,
+      operations: [
+        db
+          .update(recordings)
+          .set({
+            state: 'held',
+            holdReason: input.reason,
+            heldBy,
+            heldAt,
+            updatedAt: heldAt,
+            version: nextVersion(row.version),
+          })
+          .where(and(eq(recordings.id, row.id), eq(recordings.version, row.version))),
+      ],
+      events: [
+        {
+          organizationId,
+          storeId,
+          actorType: actor.actorType,
+          actorId: actor.actorId,
+          action: 'recording.held',
+          entityType: 'recording',
+          entityId: row.id,
+          metadata: {
+            reason: input.reason,
+            heldBy,
+            reauthenticatedUserId: actor.reauthenticatedUserId ?? null,
+          },
+        },
+      ],
+    })
+  } catch (error) {
+    const mapped = recordingStateError(c, error)
+    if (mapped) return mapped
+    throw error
+  }
+  return c.json(
+    toRecording({
+      ...row,
+      state: 'held',
+      holdReason: input.reason,
+      heldBy,
+      heldAt,
+      version: nextVersion(row.version),
+    }),
+  )
+}
+
+async function releaseRecordingHold(
+  c: AppContext,
+  storeId: string,
+  recordingId: string,
+  input: RecordingHoldRelease,
+  actor: RecordingActor,
+): Promise<Response> {
+  const organizationId = c.get('auth').org
+  const db = drizzle(c.env.DB)
+  const row = await findRecordingRow(db, organizationId, storeId, recordingId)
+  if (!row) return c.json({ error: 'not_found' }, 404)
+  const clock = requestClock(c)
+  const releasedAt = nowIso(clock)
+  try {
+    await assertVersion(row.version, input.version)
+    assertRecordingTransition(row.state as RecordingState, 'stored')
+    await writeAuditBatch(db, {
+      clock,
+      operations: [
+        db
+          .update(recordings)
+          .set({
+            state: 'stored',
+            holdReason: null,
+            heldBy: null,
+            heldAt: null,
+            updatedAt: releasedAt,
+            version: nextVersion(row.version),
+          })
+          .where(and(eq(recordings.id, row.id), eq(recordings.version, row.version))),
+      ],
+      events: [
+        {
+          organizationId,
+          storeId,
+          actorType: actor.actorType,
+          actorId: actor.actorId,
+          action: 'recording.hold_released',
+          entityType: 'recording',
+          entityId: row.id,
+          metadata: {
+            reason: input.reason,
+            previousHoldReason: row.holdReason,
+            releasedBy: recordingPersonId(actor),
+            reauthenticatedUserId: actor.reauthenticatedUserId ?? null,
+          },
+        },
+      ],
+    })
+  } catch (error) {
+    const mapped = recordingStateError(c, error)
+    if (mapped) return mapped
+    throw error
+  }
+  return c.json(
+    toRecording({
+      ...row,
+      state: 'stored',
+      holdReason: null,
+      heldBy: null,
+      heldAt: null,
+      version: nextVersion(row.version),
+    }),
+  )
+}
+
+async function deleteRecording(
+  c: AppContext,
+  storeId: string,
+  recordingId: string,
+): Promise<Response> {
+  const access = await accessRecording(c, storeId, recordingId, 'recording.manage')
+  if ('error' in access) return access.error
+  const { db, organizationId, row } = access
+  if (row.state === 'deleted') return c.json(toRecording(row))
+  // A legal hold survives both routine and manual deletion.
+  if (row.state === 'held') {
+    return c.json({ error: 'recording_held', holdReason: row.holdReason }, 409)
+  }
+  if (row.retentionUntil !== null && retentionIsActive(row.retentionUntil, requestClock(c).now())) {
+    return c.json(
+      {
+        error: 'retention_active',
+        retentionUntil: row.retentionUntil,
+        minimumRetentionUntil: minimumRetentionDeadline(row.endedAt, row.reservationId !== null),
+      },
+      409,
+    )
+  }
+  const clock = requestClock(c)
+  try {
+    assertRecordingTransition(row.state as RecordingState, 'deleted')
+  } catch (error) {
+    const mapped = recordingStateError(c, error)
+    if (mapped) return mapped
+    throw error
+  }
+  const deletedAt = nowIso(clock)
+  await c.env.RECORDINGS.delete(row.storageKey)
+  try {
+    await writeAuditBatch(db, {
+      clock,
+      operations: [
+        db
+          .update(recordings)
+          .set({
+            state: 'deleted',
+            deletedAt,
+            updatedAt: deletedAt,
+            version: nextVersion(row.version),
+          })
+          .where(and(eq(recordings.id, row.id), eq(recordings.version, row.version))),
+      ],
+      events: [
+        {
+          organizationId,
+          storeId,
+          actorType: 'user',
+          actorId: c.get('auth').sub,
+          action: 'recording.deleted',
+          entityType: 'recording',
+          entityId: row.id,
+          metadata: { trigger: 'manual', retentionUntil: row.retentionUntil },
+        },
+      ],
+    })
+  } catch (error) {
+    const mapped = recordingStateError(c, error)
+    if (mapped) return mapped
+    throw error
+  }
+  return c.json(
+    toRecording({ ...row, state: 'deleted', deletedAt, version: nextVersion(row.version) }),
+  )
+}
+
+async function readRecordingRetention(c: AppContext, storeId: string): Promise<Response> {
+  const denied = await requireStorePermission(c as StoreContext, storeId, 'recording.manage')
+  if (denied) return denied
+  const settings = await readRecordingRetentionSettings(
+    drizzle(c.env.DB),
+    c.get('auth').org,
+    storeId,
+  )
+  return c.json(
+    RecordingRetentionSettings.parse({
+      confirmedRetentionDays: settings.confirmedRetentionDays,
+      discardedRetentionHours: settings.discardedRetentionHours,
+      updatedAt: settings.updatedAt ?? nowIso(requestClock(c)),
+    }),
+  )
+}
+
+async function saveRecordingRetention(
+  c: AppContext,
+  storeId: string,
+  input: RecordingRetentionSettingsInput,
+): Promise<Response> {
+  const denied = await requireStorePermission(c as StoreContext, storeId, 'recording.manage')
+  if (denied) return denied
+  const organizationId = c.get('auth').org
+  const db = drizzle(c.env.DB)
+  const clock = requestClock(c)
+  const updatedAt = nowIso(clock)
+  const existing = await readRecordingRetentionSettings(db, organizationId, storeId)
+  try {
+    await writeAuditBatch(db, {
+      clock,
+      operations: [
+        db
+          .insert(recordingRetentionSettings)
+          .values({
+            id: crypto.randomUUID(),
+            organizationId,
+            storeId,
+            confirmedRetentionDays: input.confirmedRetentionDays,
+            discardedRetentionHours: input.discardedRetentionHours,
+            createdAt: updatedAt,
+            updatedAt,
+          })
+          .onConflictDoUpdate({
+            target: [recordingRetentionSettings.organizationId, recordingRetentionSettings.storeId],
+            set: {
+              confirmedRetentionDays: input.confirmedRetentionDays,
+              discardedRetentionHours: input.discardedRetentionHours,
+              updatedAt,
+            },
+          }),
+      ],
+      events: [
+        {
+          organizationId,
+          storeId,
+          actorType: 'user',
+          actorId: c.get('auth').sub,
+          action: 'recording.retention_configured',
+          entityType: 'recording_retention_settings',
+          entityId: storeId,
+          metadata: {
+            from: {
+              confirmedRetentionDays: existing.confirmedRetentionDays,
+              discardedRetentionHours: existing.discardedRetentionHours,
+            },
+            to: {
+              confirmedRetentionDays: input.confirmedRetentionDays,
+              discardedRetentionHours: input.discardedRetentionHours,
+            },
+          },
+        },
+      ],
+    })
+  } catch (error) {
+    const mapped = recordingStateError(c, error)
+    if (mapped) return mapped
+    throw error
+  }
+  return c.json(
+    RecordingRetentionSettings.parse({
+      confirmedRetentionDays: input.confirmedRetentionDays,
+      discardedRetentionHours: input.discardedRetentionHours,
+      updatedAt,
+    }),
+  )
+}
+
+/**
+ * Compare R2 against D1 for one organization.
+ *
+ * R2 lifecycle rules alone cannot prove a body is gone, so this pass deletes
+ * what is due, verifies what should exist, and records every divergence as an
+ * audit event. It is deliberately an internal endpoint: no cron trigger is
+ * registered, because adding one is an architecture decision.
+ */
+async function reconcileRecordings(
+  c: AppContext,
+  input: RecordingReconciliationRequest,
+): Promise<Response> {
+  const db = drizzle(c.env.DB)
+  const organization = (
+    await db.select().from(organizations).where(eq(organizations.id, input.organizationId))
+  )[0]
+  if (!organization) return c.json({ error: 'organization_not_found' }, 404)
+  const clock = requestClock(c)
+  const now = clock.now()
+  const rows = await db
+    .select()
+    .from(recordings)
+    .where(
+      and(
+        eq(recordings.organizationId, input.organizationId),
+        inArray(recordings.state, ['stored', 'pending_deletion', 'held', 'deleted']),
+      ),
+    )
+    .orderBy(asc(recordings.createdAt))
+    .limit(input.limit)
+
+  let deleted = 0
+  let retained = 0
+  let held = 0
+  const mismatches: RecordingReconciliationMismatch[] = []
+  const mismatchEvents: Parameters<typeof writeAuditBatch>[1]['events'][number][] = []
+
+  const recordMismatch = (row: RecordingRow, kind: RecordingReconciliationMismatch['kind']) => {
+    mismatches.push(RecordingReconciliationMismatch.parse({ recordingId: row.id, kind }))
+    mismatchEvents.push({
+      organizationId: row.organizationId,
+      storeId: row.storeId,
+      actorType: 'system',
+      actorId: 'recording-reconciliation',
+      action: 'recording.reconciliation_mismatch',
+      entityType: 'recording',
+      entityId: row.id,
+      metadata: { kind, state: row.state, retentionUntil: row.retentionUntil },
+    })
+  }
+
+  for (const row of rows) {
+    if (row.state === 'deleted') {
+      // A body that survived a recorded deletion must never look like success.
+      if ((await c.env.RECORDINGS.head(row.storageKey)) !== null) {
+        recordMismatch(row, 'object_present_after_deletion')
+      }
+      continue
+    }
+    if (row.state === 'held') {
+      held += 1
+      continue
+    }
+    if (row.retentionUntil === null || retentionIsActive(row.retentionUntil, now)) {
+      retained += 1
+      if ((await c.env.RECORDINGS.head(row.storageKey)) === null) {
+        recordMismatch(row, 'object_missing')
+      }
+      continue
+    }
+    try {
+      await c.env.RECORDINGS.delete(row.storageKey)
+    } catch {
+      recordMismatch(row, 'delete_failed')
+      continue
+    }
+    const deletedAt = nowIso(clock)
+    try {
+      await writeAuditBatch(db, {
+        clock,
+        operations: [
+          db
+            .update(recordings)
+            .set({
+              state: 'deleted',
+              deletedAt,
+              updatedAt: deletedAt,
+              version: nextVersion(row.version),
+            })
+            .where(and(eq(recordings.id, row.id), eq(recordings.version, row.version))),
+        ],
+        events: [
+          {
+            organizationId: row.organizationId,
+            storeId: row.storeId,
+            actorType: 'system',
+            actorId: 'recording-reconciliation',
+            action: 'recording.deleted',
+            entityType: 'recording',
+            entityId: row.id,
+            metadata: { trigger: 'retention_expired', retentionUntil: row.retentionUntil },
+          },
+        ],
+      })
+      deleted += 1
+    } catch (error) {
+      if (!(error instanceof AuditAppendError)) throw error
+      recordMismatch(row, 'delete_failed')
+    }
+  }
+
+  if (mismatchEvents.length > 0) {
+    await writeAuditBatch(db, { clock, events: mismatchEvents })
+  }
+  return c.json(
+    RecordingReconciliationReport.parse({
+      scanned: rows.length,
+      deleted,
+      retained,
+      held,
+      mismatches,
+    }),
+  )
+}
+
+/**
+ * A shared iPad may never manage a recording on the strength of the device
+ * alone: the acting person must reauthenticate personally and must themselves
+ * hold `recording.manage` in the terminal's store.
+ */
+async function sharedTerminalRecordingManager(
+  c: AppContext,
+  terminalId: string,
+  storeId: string,
+): Promise<Response | RecordingActor> {
+  const denied = await requirePersonalReauth(c, terminalId, 'management', requestClock(c))
+  if (denied) return denied
+  const reauthenticatedUserId = c.get('personalReauthUserId')
+  if (!reauthenticatedUserId) return c.json({ error: 'reauth_unauthorized' }, 401)
+  const db = drizzle(c.env.DB)
+  const terminal = (
+    await db
+      .select()
+      .from(sharedTerminals)
+      .where(and(eq(sharedTerminals.id, terminalId), eq(sharedTerminals.storeId, storeId)))
+  )[0]
+  if (!terminal) return c.json({ error: 'forbidden' }, 403)
+  const memberships = await db
+    .select({ permissions: storeMemberships.permissions })
+    .from(storeMemberships)
+    .where(
+      and(
+        eq(storeMemberships.organizationId, terminal.organizationId),
+        eq(storeMemberships.storeId, terminal.storeId),
+        eq(storeMemberships.userId, reauthenticatedUserId),
+      ),
+    )
+  const mayManage = memberships.some((membership) => {
+    try {
+      return StorePermission.array()
+        .parse(JSON.parse(membership.permissions))
+        .includes('recording.manage')
+    } catch {
+      return false
+    }
+  })
+  if (!mayManage) return c.json({ error: 'forbidden' }, 403)
+  c.set(
+    'auth' as never,
+    {
+      sub: terminal.id,
+      org: terminal.organizationId,
+      email: 'shared-terminal@internal.invalid',
+      role: 'staff',
+    } as never,
+  )
+  return {
+    actorType: 'shared_terminal',
+    actorId: terminal.id,
+    reauthenticatedUserId,
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * 注意事項 (UC-EYEX-139〜148), 監査検索 (UC-EYEX-155), 顧客統合 (UC-EYEX-181)
+ * ------------------------------------------------------------------ */
+
+const ATTENTION_PERMISSION: Record<AttentionCapability, StorePermissionValue> = {
+  read: 'attention.read',
+  write: 'attention.write',
+  publish: 'attention.publish',
+  revise: 'attention.revise',
+  hide: 'attention.hide',
+}
+
+/**
+ * The person and device behind one 注意事項 operation. A shared iPad is always
+ * the actor of record; `personId` is the individual credited with the change,
+ * proven by personal reauthentication on that device (AC-EYEX-87).
+ */
+type AttentionActor = {
+  actorType: 'user' | 'shared_terminal'
+  actorId: string
+  personId: string
+  reauthenticatedUserId?: string
+}
+
+/** A request-scoped correlation id, carried into every audit row it writes. */
+function correlationId(c: AppContext): string {
+  return c.req.header('x-request-id')?.trim() || crypto.randomUUID()
+}
+
+async function readAttentionSettings(c: AppContext, storeId: string): Promise<AttentionSettings> {
+  const organizationId = c.get('auth').org
+  const rows = await drizzle(c.env.DB)
+    .select()
+    .from(attentionSettings)
+    .where(
+      and(
+        eq(attentionSettings.organizationId, organizationId),
+        inArray(attentionSettings.storeId, [ATTENTION_ORGANIZATION_SCOPE, storeId]),
+      ),
+    )
+  return resolveAttentionSettings({
+    storeId,
+    organization: rows.find((row) => row.storeId === ATTENTION_ORGANIZATION_SCOPE) ?? null,
+    store: rows.find((row) => row.storeId === storeId) ?? null,
+  })
+}
+
+/**
+ * Authorize one 注意事項 capability. The store permission and the configured
+ * minimum role must *both* hold: configuration can only narrow what a
+ * membership already grants, never widen it.
+ */
+async function attentionAccess(
+  c: AppContext,
+  storeId: string,
+  capability: AttentionCapability,
+): Promise<Response | { settings: AttentionSettings; actor: AttentionActor }> {
+  const access = await authorizedStore(c as StoreContext, storeId, ATTENTION_PERMISSION[capability])
+  if (!access) return c.json({ error: 'forbidden' }, 403)
+  const settings = await readAttentionSettings(c, storeId)
+  const role = attentionRoleFor(access.actor.role, access.actor.permissions)
+  if (!mayUseAttentionCapability(settings, capability, role))
+    return c.json({ error: 'forbidden' }, 403)
+  const auditedActor = auditActor(c)
+  return {
+    settings,
+    actor: { ...auditedActor, personId: c.get('auth').sub },
+  }
+}
+
+type AttentionRow = typeof customerAttentionNotes.$inferSelect
+
+function attentionRecordFrom(row: AttentionRow): AttentionNoteRecord {
+  return AttentionNoteRecord.parse({
+    id: row.id,
+    // Rows written before the versioned workflow are their own single version.
+    noteId: row.noteId ?? row.id,
+    customerId: row.customerId,
+    storeId: row.storeId,
+    status: row.status === 'draft' ? 'pending_review' : row.status,
+    version: row.version,
+    body: row.body,
+    occurredAt: row.occurredAt ?? `${row.recordedOn}T00:00:00.000Z`,
+    basis: row.basis,
+    recommendedAction: row.recommendedAction ?? '（未記録）',
+    sharingScope: row.sharingScope ?? 'permitted_stores',
+    recordedBy: row.recordedBy,
+    recordedOn: row.recordedOn,
+    publishedAt: row.publishedAt,
+    hiddenAt: row.hiddenAt,
+    reviewedBy: row.reviewedBy,
+    reviewedAt: row.reviewedAt,
+    reviewReason: row.reviewReason,
+  })
+}
+
+function attentionNoteFields(row: AttentionRow): AttentionNoteInput {
+  const record = attentionRecordFrom(row)
+  return {
+    body: record.body,
+    occurredAt: record.occurredAt,
+    basis: record.basis,
+    recommendedAction: record.recommendedAction,
+  }
+}
+
+/** A note is visible from its own store, or from anywhere when shared chain-wide. */
+function attentionVisibleFrom(storeId: string) {
+  return or(
+    eq(customerAttentionNotes.storeId, storeId),
+    eq(customerAttentionNotes.sharingScope, 'chain'),
+  )
+}
+
+async function currentAttentionVersion(
+  db: ReturnType<typeof drizzle>,
+  organizationId: string,
+  storeId: string,
+  noteId: string,
+): Promise<AttentionRow[]> {
+  return db
+    .select()
+    .from(customerAttentionNotes)
+    .where(
+      and(
+        eq(customerAttentionNotes.organizationId, organizationId),
+        eq(customerAttentionNotes.noteId, noteId),
+        attentionVisibleFrom(storeId),
+      ),
+    )
+    .orderBy(desc(customerAttentionNotes.version))
+}
+
+function attentionConflict(
+  c: AppContext,
+  versions: readonly AttentionRow[],
+  expectedVersion: number,
+): Response {
+  const current = versions[0]
+  if (current === undefined) return c.json({ error: 'not_found' }, 404)
+  const expected = versions.find((row) => row.version === expectedVersion)
+  return c.json(
+    AttentionVersionConflict.parse({
+      error: 'attention_version_conflict',
+      currentVersion: current.version,
+      expectedVersion,
+      differences:
+        expected === undefined
+          ? []
+          : noteDifferences(attentionNoteFields(expected), attentionNoteFields(current)),
+    }),
+    409,
+  )
+}
+
+async function readAttentionSettingsRoute(c: AppContext, storeId: string): Promise<Response> {
+  const access = await attentionAccess(c, storeId, 'read')
+  if (access instanceof Response) return access
+  return c.json(access.settings)
+}
+
+/**
+ * Count the notes an organization-wide sharing-scope change would move, and
+ * how many customers and stores they belong to (AC-EYEX-118).
+ */
+async function attentionSharingScopeImpact(
+  c: AppContext,
+  storeId: string,
+  requestedScope: AttentionSharingScope,
+): Promise<AttentionSharingScopeImpact> {
+  const settings = await readAttentionSettings(c, storeId)
+  const rows = await drizzle(c.env.DB)
+    .select({
+      customerId: customerAttentionNotes.customerId,
+      storeId: customerAttentionNotes.storeId,
+      sharingScope: customerAttentionNotes.sharingScope,
+      status: customerAttentionNotes.status,
+    })
+    .from(customerAttentionNotes)
+    .where(eq(customerAttentionNotes.organizationId, c.get('auth').org))
+  const affected = rows.filter(
+    (row) => row.status !== 'hidden' && (row.sharingScope ?? 'permitted_stores') !== requestedScope,
+  )
+  return AttentionSharingScopeImpact.parse({
+    currentScope: settings.sharingScope,
+    requestedScope,
+    affectedNoteCount: affected.length,
+    affectedCustomerCount: new Set(affected.map((row) => row.customerId)).size,
+    affectedStoreCount: new Set(affected.map((row) => row.storeId)).size,
+  })
+}
+
+async function readAttentionSharingScopeImpact(
+  c: AppContext,
+  storeId: string,
+  input: AttentionSharingScopeImpactRequest,
+): Promise<Response> {
+  return c.json(await attentionSharingScopeImpact(c, storeId, input.requestedScope))
+}
+
+/**
+ * Write the organization default or the store override (UC-EYEX-139〜142).
+ * A sharing-scope change is refused until the actor acknowledges exactly the
+ * impact they were shown, and is then applied to the existing notes too.
+ */
+async function saveAttentionSettings(
+  c: AppContext,
+  storeId: string,
+  input: AttentionSettingsInput,
+): Promise<Response> {
+  const access = await authorizedStore(c as StoreContext, storeId, 'settings.manage')
+  if (!access) return c.json({ error: 'forbidden' }, 403)
+  const role = attentionRoleFor(access.actor.role, access.actor.permissions)
+  const requiredRole = input.scope === 'organization' ? 'organization_admin' : 'store_manager'
+  if (requiredRole === 'organization_admin' ? role !== 'organization_admin' : role === 'staff')
+    return c.json({ error: 'forbidden' }, 403)
+
+  const organizationId = c.get('auth').org
+  const current = await readAttentionSettings(c, storeId)
+  const clock = requestClock(c)
+  const now = nowIso(clock)
+  const db = drizzle(c.env.DB)
+
+  const scopeChanged = input.sharingScope !== current.sharingScope
+  let impact: AttentionSharingScopeImpact | null = null
+  if (scopeChanged) {
+    impact = await attentionSharingScopeImpact(c, storeId, input.sharingScope)
+    if (input.acknowledgedAffectedNoteCount !== impact.affectedNoteCount)
+      return c.json({ error: 'sharing_scope_impact_unacknowledged', impact }, 409)
+  }
+
+  const scopeStoreId = input.scope === 'organization' ? ATTENTION_ORGANIZATION_SCOPE : storeId
+  const existing = (
+    await db
+      .select({ id: attentionSettings.id })
+      .from(attentionSettings)
+      .where(
+        and(
+          eq(attentionSettings.organizationId, organizationId),
+          eq(attentionSettings.storeId, scopeStoreId),
+        ),
+      )
+  )[0]
+  const values = {
+    reviewMode: input.reviewMode,
+    sharingScope: input.sharingScope,
+    storeOverrideAllowed: input.storeOverrideAllowed ? '1' : '0',
+    capabilitiesJson: serializeAttentionCapabilities(input.capabilities),
+    updatedBy: c.get('auth').sub,
+    updatedAt: now,
+  }
+  const operations: Parameters<typeof writeAuditBatch>[1]['operations'] = [
+    existing === undefined
+      ? db.insert(attentionSettings).values({
+          id: crypto.randomUUID(),
+          organizationId,
+          storeId: scopeStoreId,
+          ...values,
+        })
+      : db
+          .update(attentionSettings)
+          .set(values)
+          .where(
+            and(
+              eq(attentionSettings.id, existing.id),
+              eq(attentionSettings.organizationId, organizationId),
+            ),
+          ),
+    ...(impact === null || impact.affectedNoteCount === 0
+      ? []
+      : [
+          db
+            .update(customerAttentionNotes)
+            .set({ sharingScope: input.sharingScope, updatedAt: now })
+            .where(
+              and(
+                eq(customerAttentionNotes.organizationId, organizationId),
+                ne(customerAttentionNotes.status, 'hidden'),
+              ),
+            ),
+        ]),
+  ]
+
+  try {
+    await writeAuditBatch(db, {
+      clock,
+      operations,
+      events: [
+        {
+          organizationId,
+          storeId,
+          ...auditActor(c),
+          action: 'attention_settings.updated',
+          entityType: 'attention_settings',
+          entityId: scopeStoreId,
+          requestId: correlationId(c),
+          metadata: {
+            before: {
+              reviewMode: current.reviewMode,
+              sharingScope: current.sharingScope,
+              storeOverrideAllowed: current.storeOverrideAllowed,
+            },
+            after: {
+              reviewMode: input.reviewMode,
+              sharingScope: input.sharingScope,
+              storeOverrideAllowed: input.storeOverrideAllowed,
+            },
+            scope: input.scope,
+            affectedNoteCount: impact?.affectedNoteCount ?? 0,
+          },
+        },
+      ],
+    })
+  } catch (error) {
+    if (error instanceof AuditAppendError) return c.json({ error: error.code }, error.status)
+    throw error
+  }
+  return c.json(await readAttentionSettings(c, storeId))
+}
+
+/**
+ * List the 注意事項 of one customer. A note awaiting review is stored apart
+ * from published information and is returned only to an actor who may review
+ * it (AC-EYEX-85); every disclosure is audited (UC-EYEX-147).
+ */
+async function listAttentionNotes(
+  c: AppContext,
+  storeId: string,
+  customerId: string,
+): Promise<Response> {
+  const access = await attentionAccess(c, storeId, 'read')
+  if (access instanceof Response) return access
+  const organizationId = c.get('auth').org
+  const db = drizzle(c.env.DB)
+
+  const reviewer = await authorizedStore(c as StoreContext, storeId, 'attention.publish')
+  const visibleStatuses = reviewer ? ['pending_review', 'published', 'returned'] : ['published']
+  const rows = await db
+    .select()
+    .from(customerAttentionNotes)
+    .where(
+      and(
+        eq(customerAttentionNotes.organizationId, organizationId),
+        eq(customerAttentionNotes.customerId, customerId),
+        attentionVisibleFrom(storeId),
+        inArray(customerAttentionNotes.status, visibleStatuses),
+      ),
+    )
+    .orderBy(desc(customerAttentionNotes.recordedOn), desc(customerAttentionNotes.version))
+
+  // Every permitted 閲覧 is audited, disclosed rows or not (UC-EYEX-147).
+  const audited = await auditAttentionRead(c, storeId, customerId, rows.length)
+  if (audited) return audited
+  return c.json(rows.map(attentionRecordFrom))
+}
+
+/** The 閲覧 audit that UC-EYEX-147 does not allow any read path to skip. */
+async function auditAttentionRead(
+  c: AppContext,
+  storeId: string,
+  customerId: string,
+  disclosed: number,
+): Promise<Response | null> {
+  try {
+    await writeAuditBatch(drizzle(c.env.DB), {
+      clock: requestClock(c),
+      events: [
+        {
+          organizationId: c.get('auth').org,
+          storeId,
+          ...auditActor(c),
+          action: 'attention_note.read',
+          entityType: 'customer',
+          entityId: customerId,
+          requestId: correlationId(c),
+          metadata: { disclosed },
+        },
+      ],
+    })
+    return null
+  } catch (error) {
+    if (error instanceof AuditAppendError) return c.json({ error: error.code }, error.status)
+    throw error
+  }
+}
+
+async function readAttentionVersions(
+  c: AppContext,
+  storeId: string,
+  noteId: string,
+): Promise<Response> {
+  const access = await attentionAccess(c, storeId, 'read')
+  if (access instanceof Response) return access
+  const versions = await currentAttentionVersion(
+    drizzle(c.env.DB),
+    c.get('auth').org,
+    storeId,
+    noteId,
+  )
+  if (versions.length === 0) return c.json({ error: 'not_found' }, 404)
+  const reviewer = await authorizedStore(c as StoreContext, storeId, 'attention.publish')
+  // Without review rights a never-published note must not even be countable.
+  if (!reviewer && !versions.some((row) => row.publishedAt !== null))
+    return c.json({ error: 'not_found' }, 404)
+  const audited = await auditAttentionRead(
+    c,
+    storeId,
+    versions[0]?.customerId ?? noteId,
+    versions.length,
+  )
+  if (audited) return audited
+  return c.json(versions.map(attentionRecordFrom))
+}
+
+/**
+ * Register one 注意事項. Under 確認待ち方式 — and always from a fully shared
+ * terminal — the note is stored as pending and stays invisible to ordinary
+ * staff until a reviewer publishes it (AC-EYEX-85, AC-EYEX-87).
+ */
+async function registerAttentionNote(
+  c: AppContext,
+  storeId: string,
+  customerId: string,
+  input: AttentionNoteInput,
+  sharedTerminalActor?: AttentionActor,
+): Promise<Response> {
+  let settings: AttentionSettings
+  let actor: AttentionActor
+  if (sharedTerminalActor === undefined) {
+    const access = await attentionAccess(c, storeId, 'write')
+    if (access instanceof Response) return access
+    settings = access.settings
+    actor = access.actor
+  } else {
+    settings = await readAttentionSettings(c, storeId)
+    actor = sharedTerminalActor
+  }
+
+  const organizationId = c.get('auth').org
+  const db = drizzle(c.env.DB)
+  const customer = (
+    await db
+      .select({ id: customers.id })
+      .from(customers)
+      .where(and(eq(customers.organizationId, organizationId), eq(customers.id, customerId)))
+  )[0]
+  if (!customer) return c.json({ error: 'not_found' }, 404)
+
+  const clock = requestClock(c)
+  const now = nowIso(clock)
+  const immediate = sharedTerminalActor === undefined && settings.reviewMode === 'immediate'
+  const row = {
+    id: crypto.randomUUID(),
+    organizationId,
+    storeId,
+    customerId,
+    noteId: crypto.randomUUID(),
+    body: input.body,
+    occurredAt: input.occurredAt,
+    basis: input.basis,
+    recommendedAction: input.recommendedAction,
+    sharingScope: settings.sharingScope,
+    status: immediate ? 'published' : 'pending_review',
+    version: 1,
+    recordedBy: actor.personId,
+    recordedOn: toJstDateString(clock.now()),
+    publishedAt: immediate ? now : null,
+    hiddenAt: null,
+    reviewedBy: null,
+    reviewedAt: null,
+    reviewReason: null,
+    previousVersionId: null,
+    createdAt: now,
+    updatedAt: now,
+  }
+
+  try {
+    await writeAuditBatch(db, {
+      clock,
+      operations: [db.insert(customerAttentionNotes).values(row)],
+      events: [
+        {
+          organizationId,
+          storeId,
+          actorType: actor.actorType,
+          actorId: actor.actorId,
+          action: 'attention_note.registered',
+          entityType: 'attention_note',
+          entityId: row.noteId,
+          requestId: correlationId(c),
+          metadata: {
+            before: null,
+            after: { status: row.status, version: 1, customerId },
+            ...(actor.reauthenticatedUserId === undefined
+              ? {}
+              : { reauthenticatedUserId: actor.reauthenticatedUserId }),
+          },
+        },
+      ],
+    })
+  } catch (error) {
+    if (error instanceof AuditAppendError) return c.json({ error: error.code }, error.status)
+    throw error
+  }
+  return c.json(attentionRecordFrom(row as AttentionRow), 201)
+}
+
+const REVIEW_STATUS = {
+  publish: 'published',
+  return: 'returned',
+  reject: 'rejected',
+} as const
+
+/** 公開 / 差戻し / 却下 を理由付きで記録する (AC-EYEX-116). */
+async function reviewAttentionNote(
+  c: AppContext,
+  storeId: string,
+  noteId: string,
+  input: AttentionReviewInput,
+  sharedTerminalActor?: AttentionActor,
+): Promise<Response> {
+  let actor: AttentionActor
+  if (sharedTerminalActor === undefined) {
+    const access = await attentionAccess(c, storeId, 'publish')
+    if (access instanceof Response) return access
+    actor = access.actor
+  } else {
+    actor = sharedTerminalActor
+  }
+
+  const organizationId = c.get('auth').org
+  const db = drizzle(c.env.DB)
+  const versions = await currentAttentionVersion(db, organizationId, storeId, noteId)
+  const current = versions[0]
+  if (current === undefined) return c.json({ error: 'not_found' }, 404)
+  if (current.version !== input.expectedVersion)
+    return attentionConflict(c, versions, input.expectedVersion)
+  if (current.status !== 'pending_review') return c.json({ error: 'attention_not_pending' }, 409)
+
+  const clock = requestClock(c)
+  const now = nowIso(clock)
+  const status = REVIEW_STATUS[input.decision]
+  const patch = {
+    status,
+    reviewedBy: actor.personId,
+    reviewedAt: now,
+    reviewReason: input.reason,
+    publishedAt: input.decision === 'publish' ? now : null,
+    updatedAt: now,
+  }
+
+  try {
+    await writeAuditBatch(db, {
+      clock,
+      operations: [
+        db
+          .update(customerAttentionNotes)
+          .set(patch)
+          .where(
+            and(
+              eq(customerAttentionNotes.id, current.id),
+              eq(customerAttentionNotes.organizationId, organizationId),
+            ),
+          ),
+      ],
+      events: [
+        {
+          organizationId,
+          storeId,
+          actorType: actor.actorType,
+          actorId: actor.actorId,
+          action: `attention_note.${status}`,
+          entityType: 'attention_note',
+          entityId: noteId,
+          requestId: correlationId(c),
+          metadata: {
+            before: { status: current.status, version: current.version },
+            after: { status, version: current.version },
+            reason: input.reason,
+            registeredBy: current.recordedBy,
+            reviewedBy: actor.personId,
+            ...(actor.reauthenticatedUserId === undefined
+              ? {}
+              : { reauthenticatedUserId: actor.reauthenticatedUserId }),
+          },
+        },
+      ],
+    })
+  } catch (error) {
+    if (error instanceof AuditAppendError) return c.json({ error: error.code }, error.status)
+    throw error
+  }
+  return c.json(attentionRecordFrom({ ...current, ...patch }))
+}
+
+/** 公開済みは上書きせず、新しい版を公開して旧版を残す (UC-EYEX-145, AC-EYEX-86). */
+async function reviseAttentionNote(
+  c: AppContext,
+  storeId: string,
+  noteId: string,
+  input: AttentionNoteRevisionInput,
+  sharedTerminalActor?: AttentionActor,
+): Promise<Response> {
+  let actor: AttentionActor
+  if (sharedTerminalActor === undefined) {
+    const access = await attentionAccess(c, storeId, 'revise')
+    if (access instanceof Response) return access
+    actor = access.actor
+  } else {
+    actor = sharedTerminalActor
+  }
+
+  const organizationId = c.get('auth').org
+  const db = drizzle(c.env.DB)
+  const versions = await currentAttentionVersion(db, organizationId, storeId, noteId)
+  const current = versions[0]
+  if (current === undefined) return c.json({ error: 'not_found' }, 404)
+  if (current.status !== 'published') return c.json({ error: 'attention_not_published' }, 409)
+  if (current.version !== input.expectedVersion)
+    return attentionConflict(c, versions, input.expectedVersion)
+
+  const clock = requestClock(c)
+  const now = nowIso(clock)
+  const revision = {
+    id: crypto.randomUUID(),
+    organizationId,
+    storeId: current.storeId,
+    customerId: current.customerId,
+    noteId,
+    body: input.body,
+    occurredAt: input.occurredAt,
+    basis: input.basis,
+    recommendedAction: input.recommendedAction,
+    sharingScope: current.sharingScope,
+    status: 'published',
+    version: nextVersion(current.version),
+    recordedBy: actor.personId,
+    recordedOn: toJstDateString(clock.now()),
+    publishedAt: now,
+    hiddenAt: null,
+    reviewedBy: actor.personId,
+    reviewedAt: now,
+    reviewReason: null,
+    previousVersionId: current.id,
+    createdAt: now,
+    updatedAt: now,
+  }
+
+  try {
+    await writeAuditBatch(db, {
+      clock,
+      operations: [
+        db
+          .update(customerAttentionNotes)
+          .set({ status: 'superseded', updatedAt: now })
+          .where(
+            and(
+              eq(customerAttentionNotes.id, current.id),
+              eq(customerAttentionNotes.organizationId, organizationId),
+            ),
+          ),
+        db.insert(customerAttentionNotes).values(revision),
+      ],
+      events: [
+        {
+          organizationId,
+          storeId,
+          actorType: actor.actorType,
+          actorId: actor.actorId,
+          action: 'attention_note.revised',
+          entityType: 'attention_note',
+          entityId: noteId,
+          requestId: correlationId(c),
+          metadata: {
+            // Field names only, never their values: `audit.read` is a separate
+            // capability from `attention.read`, so the audit trail must not
+            // become a second way to read 注意事項 (AC-EYEX-91).
+            changedFields: noteDifferences(attentionNoteFields(current), input).map(
+              (difference) => difference.field,
+            ),
+            before: { version: current.version, status: current.status },
+            after: { version: revision.version, status: 'published' },
+            ...(actor.reauthenticatedUserId === undefined
+              ? {}
+              : { reauthenticatedUserId: actor.reauthenticatedUserId }),
+          },
+        },
+      ],
+    })
+  } catch (error) {
+    if (error instanceof AuditAppendError) return c.json({ error: error.code }, error.status)
+    throw error
+  }
+  return c.json(attentionRecordFrom(revision as AttentionRow))
+}
+
+/** 削除ではなく非表示化 (UC-EYEX-146): the row itself is never removed. */
+async function hideAttentionNote(
+  c: AppContext,
+  storeId: string,
+  noteId: string,
+  input: AttentionHideInput,
+  sharedTerminalActor?: AttentionActor,
+): Promise<Response> {
+  let actor: AttentionActor
+  if (sharedTerminalActor === undefined) {
+    const access = await attentionAccess(c, storeId, 'hide')
+    if (access instanceof Response) return access
+    actor = access.actor
+  } else {
+    actor = sharedTerminalActor
+  }
+
+  const organizationId = c.get('auth').org
+  const db = drizzle(c.env.DB)
+  const versions = await currentAttentionVersion(db, organizationId, storeId, noteId)
+  const current = versions[0]
+  if (current === undefined) return c.json({ error: 'not_found' }, 404)
+  if (current.status === 'hidden') return c.json({ error: 'attention_already_hidden' }, 409)
+  if (current.version !== input.expectedVersion)
+    return attentionConflict(c, versions, input.expectedVersion)
+
+  const clock = requestClock(c)
+  const now = nowIso(clock)
+  const patch = { status: 'hidden', hiddenAt: now, updatedAt: now }
+
+  try {
+    await writeAuditBatch(db, {
+      clock,
+      operations: [
+        db
+          .update(customerAttentionNotes)
+          .set(patch)
+          .where(
+            and(
+              eq(customerAttentionNotes.id, current.id),
+              eq(customerAttentionNotes.organizationId, organizationId),
+            ),
+          ),
+      ],
+      events: [
+        {
+          organizationId,
+          storeId,
+          actorType: actor.actorType,
+          actorId: actor.actorId,
+          action: 'attention_note.hidden',
+          entityType: 'attention_note',
+          entityId: noteId,
+          requestId: correlationId(c),
+          metadata: {
+            before: { status: current.status, version: current.version },
+            after: { status: 'hidden', version: current.version },
+            reason: input.reason,
+            ...(actor.reauthenticatedUserId === undefined
+              ? {}
+              : { reauthenticatedUserId: actor.reauthenticatedUserId }),
+          },
+        },
+      ],
+    })
+  } catch (error) {
+    if (error instanceof AuditAppendError) return c.json({ error: error.code }, error.status)
+    throw error
+  }
+  return c.json(attentionRecordFrom({ ...current, ...patch }))
+}
+
+/**
+ * A shared iPad may register for review on the device alone, but publishing,
+ * revising and hiding require the individual to reauthenticate personally and
+ * to hold the capability themselves (UC-EYEX-137, 138, AC-EYEX-87).
+ */
+async function sharedTerminalAttentionManager(
+  c: AppContext,
+  terminalId: string,
+  storeId: string,
+  capability: AttentionCapability,
+): Promise<Response | AttentionActor> {
+  const denied = await requirePersonalReauth(c, terminalId, 'management', requestClock(c))
+  if (denied) return denied
+  const reauthenticatedUserId = c.get('personalReauthUserId')
+  if (!reauthenticatedUserId) return c.json({ error: 'reauth_unauthorized' }, 401)
+  const db = drizzle(c.env.DB)
+  const terminal = (
+    await db
+      .select()
+      .from(sharedTerminals)
+      .where(and(eq(sharedTerminals.id, terminalId), eq(sharedTerminals.storeId, storeId)))
+  )[0]
+  if (!terminal) return c.json({ error: 'forbidden' }, 403)
+
+  const memberships = await db
+    .select({ permissions: storeMemberships.permissions })
+    .from(storeMemberships)
+    .where(
+      and(
+        eq(storeMemberships.organizationId, terminal.organizationId),
+        eq(storeMemberships.storeId, terminal.storeId),
+        eq(storeMemberships.userId, reauthenticatedUserId),
+      ),
+    )
+  const permissions = memberships.flatMap((membership) => {
+    try {
+      return StorePermission.array().parse(JSON.parse(membership.permissions))
+    } catch {
+      return []
+    }
+  })
+  c.set(
+    'auth' as never,
+    {
+      sub: terminal.id,
+      org: terminal.organizationId,
+      email: 'shared-terminal@internal.invalid',
+      role: 'staff',
+    } as never,
+  )
+  const settings = await readAttentionSettings(c, terminal.storeId)
+  if (
+    !permissions.includes(ATTENTION_PERMISSION[capability]) ||
+    !mayUseAttentionCapability(settings, capability, attentionRoleFor('staff', permissions))
+  )
+    return c.json({ error: 'forbidden' }, 403)
+
+  return {
+    actorType: 'shared_terminal',
+    actorId: terminal.id,
+    personId: reauthenticatedUserId,
+    reauthenticatedUserId,
+  }
+}
+
+/** Establish the shared terminal as a non-person 注意事項 registrant. */
+async function sharedTerminalAttentionRegistrant(
+  c: AppContext,
+  terminalId: string,
+  storeId: string,
+): Promise<Response | AttentionActor> {
+  const denied = await establishSharedTerminalDailyActor(
+    c as AppContext,
+    terminalId,
+    storeId,
+    requestClock(c),
+  )
+  if (denied) return denied
+  const identity = c.get('sharedTerminal')
+  if (!identity) return c.json({ error: 'terminal_unauthorized' }, 401)
+  return { actorType: 'shared_terminal', actorId: identity.id, personId: identity.id }
+}
+
+/** 権限内の監査イベントを検索する (UC-EYEX-155, AC-EYEX-102). */
+async function searchAuditEvents(
+  c: AppContext,
+  storeId: string,
+  query: AuditSearchQuery,
+): Promise<Response> {
+  const organizationId = c.get('auth').org
+  const rows = await drizzle(c.env.DB)
+    .select()
+    .from(auditEvents)
+    .where(
+      and(
+        eq(auditEvents.organizationId, organizationId),
+        // The selected store is the authorization boundary; a store id from the
+        // query never widens it.
+        eq(auditEvents.storeId, storeId),
+        ...(query.from === undefined ? [] : [gte(auditEvents.occurredAt, query.from)]),
+        ...(query.to === undefined ? [] : [lte(auditEvents.occurredAt, query.to)]),
+        ...(query.action === undefined ? [] : [eq(auditEvents.action, query.action)]),
+        ...(query.actorType === undefined ? [] : [eq(auditEvents.actorType, query.actorType)]),
+        ...(query.entityType === undefined ? [] : [eq(auditEvents.entityType, query.entityType)]),
+        ...(query.entityId === undefined ? [] : [eq(auditEvents.entityId, query.entityId)]),
+      ),
+    )
+    .orderBy(desc(auditEvents.occurredAt), desc(auditEvents.id))
+    .limit(query.limit)
+
+  return c.json(
+    rows.map((row) => {
+      const metadata: unknown = JSON.parse(row.metadata)
+      const document =
+        typeof metadata === 'object' && metadata !== null
+          ? (metadata as Record<string, unknown>)
+          : {}
+      const section = (key: 'before' | 'after') => {
+        const value = document[key]
+        return typeof value === 'object' && value !== null && !Array.isArray(value)
+          ? (value as Record<string, unknown>)
+          : null
+      }
+      return AuditEventView.parse({
+        id: row.id,
+        occurredAt: row.occurredAt,
+        storeId: row.storeId,
+        actorType: row.actorType,
+        actorId: row.actorId,
+        action: row.action,
+        entityType: row.entityType,
+        entityId: row.entityId,
+        correlationId: row.requestId,
+        before: section('before'),
+        after: section('after'),
+      })
+    }),
+  )
+}
+
+/* 顧客の重複統合・誤関連解除 (UC-EYEX-181, AC-EYEX-121) */
+
+/**
+ * Correcting a customer identity touches the chain-wide record, so it needs
+ * the read, the write and the cross-store history permission together.
+ */
+async function requireCustomerCorrectionPermissions(
+  c: AppContext,
+  storeId: string,
+): Promise<Response | null> {
+  for (const permission of ['customer.read', 'customer.write', 'customer.history'] as const) {
+    const denied = await requireStorePermission(c as StoreContext, storeId, permission)
+    if (denied) return denied
+  }
+  return null
+}
+
+type CustomerRow = typeof customers.$inferSelect
+
+function customerSummary(row: CustomerRow) {
+  return {
+    customerId: row.id,
+    name: row.name,
+    kana: row.kana,
+    phone: row.phoneNormalized,
+    primaryStoreId: row.primaryStoreId,
+    visitCount: row.visitCount,
+  }
+}
+
+async function customerMergeImpact(
+  db: ReturnType<typeof drizzle>,
+  organizationId: string,
+  customerId: string,
+): Promise<CustomerMergeImpact> {
+  const count = async (
+    table:
+      | typeof reservations
+      | typeof walkins
+      | typeof customerPrescriptions
+      | typeof customerNotes
+      | typeof customerAttentionNotes
+      | typeof customerOwnedGlasses,
+  ) =>
+    (
+      await db
+        .select({ id: table.id })
+        .from(table)
+        .where(and(eq(table.organizationId, organizationId), eq(table.customerId, customerId)))
+    ).length
+
+  const [reservationCount, walkinCount, prescriptions, notes, attention, glasses] =
+    await Promise.all([
+      count(reservations),
+      count(walkins),
+      count(customerPrescriptions),
+      count(customerNotes),
+      count(customerAttentionNotes),
+      count(customerOwnedGlasses),
+    ])
+  return {
+    reservations: reservationCount,
+    walkins: walkinCount,
+    prescriptions,
+    notes,
+    attentionNotes: attention,
+    ownedGlasses: glasses,
+  }
+}
+
+async function loadMergeCandidates(
+  c: AppContext,
+  primaryCustomerId: string,
+  duplicateCustomerId: string,
+): Promise<Response | { primary: CustomerRow; duplicate: CustomerRow }> {
+  const organizationId = c.get('auth').org
+  const rows = await drizzle(c.env.DB)
+    .select()
+    .from(customers)
+    .where(
+      and(
+        eq(customers.organizationId, organizationId),
+        inArray(customers.id, [primaryCustomerId, duplicateCustomerId]),
+      ),
+    )
+  const primary = rows.find((row) => row.id === primaryCustomerId)
+  const duplicate = rows.find((row) => row.id === duplicateCustomerId)
+  if (primary === undefined || duplicate === undefined) return c.json({ error: 'not_found' }, 404)
+  return { primary, duplicate }
+}
+
+async function previewCustomerMerge(
+  c: AppContext,
+  input: CustomerMergePreviewRequest,
+): Promise<Response> {
+  const candidates = await loadMergeCandidates(
+    c,
+    input.primaryCustomerId,
+    input.duplicateCustomerId,
+  )
+  if (candidates instanceof Response) return candidates
+  const impact = await customerMergeImpact(
+    drizzle(c.env.DB),
+    c.get('auth').org,
+    input.duplicateCustomerId,
+  )
+  return c.json(
+    CustomerMergePreview.parse({
+      primary: customerSummary(candidates.primary),
+      duplicate: customerSummary(candidates.duplicate),
+      impact,
+      alreadyMerged: candidates.duplicate.mergedIntoCustomerId !== null,
+    }),
+  )
+}
+
+/** Never automatic: the acknowledged impact must match what was previewed. */
+async function mergeCustomers(c: AppContext, input: CustomerMergeInput): Promise<Response> {
+  const candidates = await loadMergeCandidates(
+    c,
+    input.primaryCustomerId,
+    input.duplicateCustomerId,
+  )
+  if (candidates instanceof Response) return candidates
+  if (candidates.duplicate.mergedIntoCustomerId !== null)
+    return c.json({ error: 'customer_already_merged' }, 409)
+
+  const organizationId = c.get('auth').org
+  const db = drizzle(c.env.DB)
+  const impact = await customerMergeImpact(db, organizationId, input.duplicateCustomerId)
+  const total = Object.values(impact).reduce((sum, value) => sum + value, 0)
+  if (input.acknowledgedImpactTotal !== total)
+    return c.json({ error: 'merge_impact_unacknowledged', impact }, 409)
+
+  const clock = requestClock(c)
+  const now = nowIso(clock)
+  const scoped = (
+    table:
+      | typeof reservations
+      | typeof walkins
+      | typeof customerPrescriptions
+      | typeof customerNotes
+      | typeof customerAttentionNotes
+      | typeof customerOwnedGlasses,
+  ) =>
+    db
+      .update(table)
+      .set({ customerId: input.primaryCustomerId })
+      .where(
+        and(
+          eq(table.organizationId, organizationId),
+          eq(table.customerId, input.duplicateCustomerId),
+        ),
+      )
+
+  try {
+    await writeAuditBatch(db, {
+      clock,
+      operations: [
+        scoped(reservations),
+        scoped(walkins),
+        scoped(customerPrescriptions),
+        scoped(customerNotes),
+        scoped(customerAttentionNotes),
+        scoped(customerOwnedGlasses),
+        db
+          .update(customers)
+          .set({ mergedIntoCustomerId: input.primaryCustomerId, updatedAt: now })
+          .where(
+            and(
+              eq(customers.organizationId, organizationId),
+              eq(customers.id, input.duplicateCustomerId),
+            ),
+          ),
+        db
+          .update(customers)
+          .set({
+            visitCount: candidates.primary.visitCount + candidates.duplicate.visitCount,
+            updatedAt: now,
+          })
+          .where(
+            and(
+              eq(customers.organizationId, organizationId),
+              eq(customers.id, input.primaryCustomerId),
+            ),
+          ),
+      ],
+      events: [
+        {
+          organizationId,
+          storeId: candidates.primary.primaryStoreId,
+          ...auditActor(c),
+          action: 'customer.merged',
+          entityType: 'customer',
+          entityId: input.primaryCustomerId,
+          requestId: correlationId(c),
+          metadata: {
+            before: {
+              duplicateCustomerId: input.duplicateCustomerId,
+              mergedIntoCustomerId: null,
+              visitCount: candidates.primary.visitCount,
+            },
+            after: {
+              mergedIntoCustomerId: input.primaryCustomerId,
+              visitCount: candidates.primary.visitCount + candidates.duplicate.visitCount,
+            },
+            reason: input.reason,
+            impact,
+          },
+        },
+      ],
+    })
+  } catch (error) {
+    if (error instanceof AuditAppendError) return c.json({ error: error.code }, error.status)
+    throw error
+  }
+
+  return c.json(
+    CustomerMergeResult.parse({
+      primaryCustomerId: input.primaryCustomerId,
+      mergedCustomerId: input.duplicateCustomerId,
+      impact,
+      mergedAt: now,
+    }),
+  )
+}
+
+/** 誤関連解除: the reception entry survives, only the association is removed. */
+async function releaseCustomerLink(
+  c: AppContext,
+  storeId: string,
+  input: CustomerLinkReleaseInput,
+): Promise<Response> {
+  const organizationId = c.get('auth').org
+  const db = drizzle(c.env.DB)
+  const table = input.entryType === 'reservation' ? reservations : walkins
+  const entry = (
+    await db
+      .select({ id: table.id, customerId: table.customerId })
+      .from(table)
+      .where(
+        and(
+          eq(table.organizationId, organizationId),
+          eq(table.storeId, storeId),
+          eq(table.id, input.entryId),
+        ),
+      )
+  )[0]
+  if (entry === undefined) return c.json({ error: 'not_found' }, 404)
+  if (entry.customerId === null) return c.json({ error: 'link_already_released' }, 409)
+
+  const clock = requestClock(c)
+  const now = nowIso(clock)
+  try {
+    await writeAuditBatch(db, {
+      clock,
+      operations: [
+        db
+          .update(table)
+          .set({ customerId: null, updatedAt: now })
+          .where(
+            and(
+              eq(table.organizationId, organizationId),
+              eq(table.storeId, storeId),
+              eq(table.id, input.entryId),
+            ),
+          ),
+      ],
+      events: [
+        {
+          organizationId,
+          storeId,
+          ...auditActor(c),
+          action: 'customer.link_released',
+          entityType: input.entryType,
+          entityId: input.entryId,
+          requestId: correlationId(c),
+          metadata: {
+            before: { customerId: entry.customerId },
+            after: { customerId: null },
+            reason: input.reason,
+          },
+        },
+      ],
+    })
+  } catch (error) {
+    if (error instanceof AuditAppendError) return c.json({ error: error.code }, error.status)
+    throw error
+  }
+
+  return c.json(
+    CustomerLinkReleaseResult.parse({
+      entryType: input.entryType,
+      entryId: input.entryId,
+      previousCustomerId: entry.customerId,
+      releasedAt: now,
+    }),
+  )
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * Analytics (UC-EYEX-099..108, 180) and the alert inbox (UC-EYEX-178, 179)
+ * ---------------------------------------------------------------------------
+ */
+
+/** Used until an organization configures its own privacy threshold. */
+const DEFAULT_SMALL_SAMPLE_THRESHOLD = 5
+
+const FUNNEL_STAGES = [
+  { stage: 'started' as const, label: '開始' },
+  { stage: 'slot_selected' as const, label: '枠選択' },
+  { stage: 'confirmed' as const, label: '確認' },
+  { stage: 'completed' as const, label: '完了' },
+]
+
+const METRIC_DEFINITIONS: Record<AnalyticsMetricName, { label: string; definition: string }> = {
+  reservations: {
+    label: '予約件数',
+    definition: '対象期間内にJSTの開始時刻を持つ予約の件数（状態を問わない）。',
+  },
+  visits: {
+    label: '来店件数',
+    definition: '対象期間内に受付された来店の件数（受付済み予約 + ウォークイン）。',
+  },
+  cancellations: {
+    label: '取消件数',
+    definition: '対象期間内に開始予定だった予約のうち、取消された件数。',
+  },
+  no_shows: {
+    label: '無断キャンセル件数',
+    definition: '対象期間内に開始予定だった予約のうち、無断キャンセルとして記録された件数。',
+  },
+}
+
+const EXCLUSION_TEXT: Record<AnalyticsExclusionReason, { description: string; caveat: string }> = {
+  invalid_timestamp: {
+    description: '時刻が解釈できない記録',
+    caveat: '該当件数だけ実際より少なく集計されています。記録の修正後に再表示してください。',
+  },
+  missing_stage_timestamp: {
+    description: '工程の開始時刻または完了時刻が欠けている記録',
+    caveat: '待ち時間・所要時間の分布は、計測できた記録だけを対象にしています。',
+  },
+  unknown_purpose: {
+    description: '現在の設定に存在しない来店目的を参照している記録',
+    caveat: '来店目的別の内訳は、現在の設定に存在する目的だけを対象にしています。',
+  },
+  unassigned_staff: {
+    description: '担当者が割り当てられていない記録',
+    caveat: '担当者別の内訳は、担当者が記録されているものだけを対象にしています。',
+  },
+}
+
+type AnalyticsExclusionReason = AnalyticsExclusion['reason']
+type AnalyticsMetricName = AnalyticsMetricValue['metric']
+
+type AnalyticsSettingsResolved = {
+  organizationId: string
+  smallSampleThreshold: number
+  targets: AnalyticsTarget[]
+  updatedAt: string
+}
+
+/**
+ * Read the organization's analytics configuration. A stored row that cannot be
+ * parsed is an error rather than a silent fallback: guessing a suppression
+ * threshold would be guessing how much privacy to give away.
+ */
+async function loadAnalyticsSettings(
+  db: ReturnType<typeof drizzle>,
+  organizationId: string,
+  now: string,
+): Promise<AnalyticsSettingsResolved> {
+  const rows = await db
+    .select()
+    .from(analyticsSettings)
+    .where(eq(analyticsSettings.organizationId, organizationId))
+  const row = rows[0]
+  if (row === undefined)
+    return {
+      organizationId,
+      smallSampleThreshold: DEFAULT_SMALL_SAMPLE_THRESHOLD,
+      targets: [],
+      updatedAt: now,
+    }
+  const targets = AnalyticsTarget.array().parse(JSON.parse(row.targetsJson))
+  return {
+    organizationId,
+    smallSampleThreshold: row.smallSampleThreshold,
+    targets,
+    updatedAt: row.updatedAt,
+  }
+}
+
+/** JST hour of an instant. Japan has no daylight saving, so this is exact. */
+function jstHour(instant: string): number | null {
+  const parsed = new Date(instant)
+  if (Number.isNaN(parsed.getTime())) return null
+  return (parsed.getUTCHours() + 9) % 24
+}
+
+function minutesBetween(from: string, to: string): number | null {
+  const start = new Date(from).getTime()
+  const end = new Date(to).getTime()
+  if (Number.isNaN(start) || Number.isNaN(end) || end < start) return null
+  return Math.round((end - start) / 60000)
+}
+
+type PeriodRows = {
+  reservationRows: (typeof reservations.$inferSelect)[]
+  walkinRows: (typeof walkins.$inferSelect)[]
+}
+
+async function readPeriodRows(
+  db: ReturnType<typeof drizzle>,
+  organizationId: string,
+  storeId: string,
+  period: AnalyticsPeriod,
+): Promise<PeriodRows> {
+  const reservationRows = await db
+    .select()
+    .from(reservations)
+    .where(
+      and(
+        eq(reservations.organizationId, organizationId),
+        eq(reservations.storeId, storeId),
+        gte(reservations.startAt, period.startAt),
+        lt(reservations.startAt, period.endAt),
+      ),
+    )
+  const walkinRows = await db
+    .select()
+    .from(walkins)
+    .where(
+      and(
+        eq(walkins.organizationId, organizationId),
+        eq(walkins.storeId, storeId),
+        gte(walkins.arrivedAt, period.startAt),
+        lt(walkins.arrivedAt, period.endAt),
+      ),
+    )
+  return { reservationRows, walkinRows }
+}
+
+function countsFor(rows: PeriodRows): Record<AnalyticsMetricName, number> {
+  return {
+    reservations: rows.reservationRows.length,
+    visits:
+      rows.reservationRows.filter((row) => row.status === 'checked_in').length +
+      rows.walkinRows.length,
+    cancellations: rows.reservationRows.filter((row) => row.status === 'cancelled').length,
+    no_shows: rows.reservationRows.filter((row) => row.status === 'no_show').length,
+  }
+}
+
+function tallied(entries: readonly string[]): Map<string, number> {
+  const counts = new Map<string, number>()
+  for (const entry of entries) counts.set(entry, (counts.get(entry) ?? 0) + 1)
+  return counts
+}
+
+function breakdownFrom(
+  dimension: AnalyticsBreakdown['dimension'],
+  metricName: AnalyticsMetricName,
+  counts: Map<string, number>,
+  labelFor: (key: string) => string,
+): AnalyticsBreakdown {
+  return {
+    dimension,
+    metric: metricName,
+    suppressed: false,
+    suppressionReason: null,
+    items: [...counts.entries()]
+      .sort((left, right) => left[0].localeCompare(right[0]))
+      .map(([key, value]) => ({ key, label: labelFor(key), value, suppressed: false })),
+  }
+}
+
+type StageTimestamps = {
+  receptionAt: string | null
+  serviceStartedAt: string | null
+  serviceCompletedAt: string | null
+  departedAt: string | null
+}
+
+/** Collapse a progress history into the four instants the stages need. */
+function stageTimestampsFrom(
+  receptionAt: string | null,
+  events: readonly { toProgress: string; occurredAt: string }[],
+): StageTimestamps {
+  const earliest = (progress: string) =>
+    events
+      .filter((event) => event.toProgress === progress)
+      .map((event) => event.occurredAt)
+      .sort()[0] ?? null
+  return {
+    receptionAt,
+    serviceStartedAt: earliest('service_in_progress'),
+    serviceCompletedAt: earliest('service_completed'),
+    departedAt: earliest('departed'),
+  }
+}
+
+function stageSamples(timestamps: readonly StageTimestamps[]): {
+  samples: Record<AnalyticsStage, number[]>
+  missing: number
+} {
+  const samples: Record<AnalyticsStage, number[]> = {
+    reception_to_service_start: [],
+    service_duration: [],
+    service_end_to_departure: [],
+  }
+  let missing = 0
+  for (const entry of timestamps) {
+    const pairs: [AnalyticsStage, string | null, string | null][] = [
+      ['reception_to_service_start', entry.receptionAt, entry.serviceStartedAt],
+      ['service_duration', entry.serviceStartedAt, entry.serviceCompletedAt],
+      ['service_end_to_departure', entry.serviceCompletedAt, entry.departedAt],
+    ]
+    let incomplete = false
+    for (const [stage, from, to] of pairs) {
+      if (to === null) continue
+      if (from === null) {
+        // The stage ended but nothing says when it began — measuring it would
+        // invent a wait, so the row is excluded and reported instead.
+        incomplete = true
+        continue
+      }
+      const minutes = minutesBetween(from, to)
+      if (minutes === null) incomplete = true
+      else samples[stage].push(minutes)
+    }
+    if (incomplete) missing += 1
+  }
+  return { samples, missing }
+}
+
+function funnelFrom(
+  sessionsByStage: Map<string, Set<string>>,
+  sessionCount: number,
+): AnalyticsFunnel {
+  let previous: number | null = null
+  let largestDrop = 0
+  let largestDropStage: AnalyticsFunnel['largestDropStage'] = null
+  const steps = FUNNEL_STAGES.map(({ stage, label }) => {
+    const count = sessionsByStage.get(stage)?.size ?? 0
+    const dropped = previous === null ? null : Math.max(0, previous - count)
+    if (dropped !== null && dropped > largestDrop) {
+      largestDrop = dropped
+      largestDropStage = stage
+    }
+    previous = count
+    return { stage, label, count, droppedFromPrevious: dropped, suppressed: false }
+  })
+  return {
+    sessionCount,
+    suppressed: false,
+    suppressionReason: null,
+    steps,
+    largestDropStage,
+  }
+}
+
+const CAUSE_TEXT: Record<
+  AnalyticsCauseCandidate['code'],
+  { hypothesis: string; inspectionTarget: string }
+> = {
+  web_source_concentration: {
+    hypothesis: 'Web予約に偏っている可能性があります。断定はできません。',
+    inspectionTarget: 'Web予約の確認メール到達状況と、予約完了画面の案内文',
+  },
+  peak_hour_concentration: {
+    hypothesis: '特定の時間帯に集中している可能性があります。断定はできません。',
+    inspectionTarget: '該当時間帯の受付枠数と担当者シフト',
+  },
+  staff_unassigned: {
+    hypothesis: '担当者が割り当てられないまま進行した可能性があります。断定はできません。',
+    inspectionTarget: '受付台帳の担当者割り当て運用',
+  },
+  purpose_concentration: {
+    hypothesis: '特定の来店目的に偏っている可能性があります。断定はできません。',
+    inspectionTarget: '該当する来店目的の所要時間設定と案内文',
+  },
+}
+
+function causeCandidatesFor(
+  metricName: AnalyticsMetricName,
+  reservationRows: readonly (typeof reservations.$inferSelect)[],
+  walkinRows: readonly (typeof walkins.$inferSelect)[],
+): AnalyticsCauseCandidate[] {
+  const relevant =
+    metricName === 'reservations'
+      ? reservationRows
+      : metricName === 'visits'
+        ? reservationRows.filter((row) => row.status === 'checked_in')
+        : reservationRows.filter(
+            (row) => row.status === (metricName === 'cancellations' ? 'cancelled' : 'no_show'),
+          )
+  const includedWalkins = metricName === 'visits' ? walkinRows : []
+  const hours = [
+    ...relevant.map((row) => jstHour(row.startAt)),
+    ...includedWalkins.map((row) => jstHour(row.arrivedAt)),
+  ].flatMap((hour) => (hour === null ? [] : [String(hour)]))
+  const purposeKeys = relevant.flatMap((row) => parsePurposeIds(row.purposeIdsJson))
+  const evidence: Record<AnalyticsCauseCandidate['code'], number> = {
+    web_source_concentration: relevant.filter((row) => row.source === 'web').length,
+    peak_hour_concentration: Math.max(0, ...tallied(hours).values()),
+    staff_unassigned:
+      relevant.filter((row) => row.assignedStaffId === null).length + includedWalkins.length,
+    purpose_concentration: Math.max(0, ...tallied(purposeKeys).values()),
+  }
+  return (Object.keys(evidence) as AnalyticsCauseCandidate['code'][]).flatMap((code) => {
+    const evidenceCount = evidence[code]
+    if (evidenceCount <= 0) return []
+    return [{ metric: metricName, code, evidenceCount, ...CAUSE_TEXT[code] }]
+  })
+}
+
+function parsePurposeIds(serialized: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(serialized)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((value): value is string => typeof value === 'string')
+  } catch {
+    return []
+  }
+}
+
+function emptyAnalyticsFunnel(): AnalyticsFunnel {
+  return funnelFrom(new Map(), 0)
+}
+
+async function readAnalyticsReport(
+  c: AppContext,
+  storeId: string,
+  query: AnalyticsQuery,
+): Promise<Response> {
+  const denied = await requireStorePermission(c as StoreContext, storeId, 'analytics.read')
+  if (denied) return denied
+  const access = await authorizedStore(c as StoreContext, storeId, 'analytics.read')
+  if (!access) return c.json({ error: 'forbidden' }, 403)
+  const organizationId = c.get('auth').org
+  const lastUpdatedAt = nowIso(requestClock(c))
+  const period = jstPeriod(query.granularity, query.date)
+  const previousPeriod = previousJstPeriod(period)
+  const base = {
+    storeId,
+    storeName: access.store.name,
+    timezone: 'Asia/Tokyo' as const,
+    period,
+    previousPeriod,
+    lastUpdatedAt,
+  }
+
+  try {
+    const db = drizzle(c.env.DB)
+    const settings = await loadAnalyticsSettings(db, organizationId, lastUpdatedAt)
+    const rows = await readPeriodRows(db, organizationId, storeId, period)
+    const previousRows = await readPeriodRows(db, organizationId, storeId, previousPeriod)
+    const purposeRows = await db
+      .select()
+      .from(visitPurposes)
+      .where(
+        and(eq(visitPurposes.organizationId, organizationId), eq(visitPurposes.storeId, storeId)),
+      )
+    const purposeNames = new Map(purposeRows.map((row) => [row.id, row.staffName]))
+
+    const invalidTimestamps =
+      rows.reservationRows.filter((row) => jstHour(row.startAt) === null).length +
+      rows.walkinRows.filter((row) => jstHour(row.arrivedAt) === null).length
+    const valid = {
+      reservationRows: rows.reservationRows.filter((row) => jstHour(row.startAt) !== null),
+      walkinRows: rows.walkinRows.filter((row) => jstHour(row.arrivedAt) !== null),
+    }
+    const counts = countsFor(valid)
+    const previousCounts = countsFor(previousRows)
+    const totalCount = valid.reservationRows.length + valid.walkinRows.length
+    const targets = new Map(settings.targets.map((target) => [target.metric, target.target]))
+
+    const metrics: AnalyticsMetricValue[] = (
+      Object.keys(METRIC_DEFINITIONS) as AnalyticsMetricName[]
+    ).map((metricName) => {
+      const value = counts[metricName]
+      const target = targets.get(metricName) ?? null
+      return {
+        metric: metricName,
+        label: METRIC_DEFINITIONS[metricName].label,
+        definition: METRIC_DEFINITIONS[metricName].definition,
+        unit: 'count' as const,
+        value,
+        previousValue: previousCounts[metricName],
+        difference: value - previousCounts[metricName],
+        target,
+        targetDifference: target === null ? null : value - target,
+        exceedsTarget: target !== null && value > target,
+        suppressed: false,
+        suppressionReason: null,
+      }
+    })
+
+    // --- breakdowns (UC-EYEX-100) -----------------------------------------
+    const purposeReferences = valid.reservationRows.flatMap((row) =>
+      parsePurposeIds(row.purposeIdsJson),
+    )
+    const knownPurposeReferences = purposeReferences.filter((id) => purposeNames.has(id))
+    const sourceKeys = [
+      ...valid.reservationRows.map((row) => row.source),
+      ...valid.walkinRows.map(() => 'walkin'),
+    ]
+    const visitRows = valid.reservationRows.filter((row) => row.status === 'checked_in')
+    const hourKeys = [
+      ...visitRows.map((row) => String(jstHour(row.startAt))),
+      ...valid.walkinRows.map((row) => String(jstHour(row.arrivedAt))),
+    ]
+    const staffKeys = visitRows.flatMap((row) =>
+      row.assignedStaffId === null ? [] : [row.assignedStaffId],
+    )
+    const unassignedStaff =
+      visitRows.filter((row) => row.assignedStaffId === null).length + valid.walkinRows.length
+    const breakdowns: AnalyticsBreakdown[] = [
+      breakdownFrom(
+        'purpose',
+        'reservations',
+        tallied(knownPurposeReferences),
+        (key) => purposeNames.get(key) ?? key,
+      ),
+      breakdownFrom('source', 'reservations', tallied(sourceKeys), (key) => key),
+      breakdownFrom('hour', 'visits', tallied(hourKeys), (key) => `${key}時台`),
+      breakdownFrom('staff', 'visits', tallied(staffKeys), (key) => key),
+    ]
+
+    // --- wait time and stage durations (UC-EYEX-101) ----------------------
+    const reservationIds = valid.reservationRows.map((row) => row.id)
+    const walkinIds = valid.walkinRows.map((row) => row.id)
+    const progressRows =
+      reservationIds.length === 0
+        ? []
+        : await db
+            .select()
+            .from(reservationProgressEvents)
+            .where(
+              and(
+                eq(reservationProgressEvents.organizationId, organizationId),
+                eq(reservationProgressEvents.storeId, storeId),
+                inArray(reservationProgressEvents.reservationId, reservationIds),
+              ),
+            )
+    const walkinEventRows =
+      walkinIds.length === 0
+        ? []
+        : await db
+            .select()
+            .from(walkinEvents)
+            .where(
+              and(
+                eq(walkinEvents.organizationId, organizationId),
+                eq(walkinEvents.storeId, storeId),
+                inArray(walkinEvents.walkinId, walkinIds),
+              ),
+            )
+    const timestamps: StageTimestamps[] = [
+      ...valid.reservationRows.map((row) =>
+        stageTimestampsFrom(
+          row.waitStartedAt,
+          progressRows
+            .filter((event) => event.reservationId === row.id)
+            .map((event) => ({ toProgress: event.toProgress, occurredAt: event.createdAt })),
+        ),
+      ),
+      ...valid.walkinRows.map((row) =>
+        stageTimestampsFrom(
+          row.arrivedAt,
+          walkinEventRows
+            .filter((event) => event.walkinId === row.id && event.toProgress !== null)
+            .map((event) => ({
+              toProgress: event.toProgress ?? '',
+              occurredAt: event.occurredAt,
+            })),
+        ),
+      ),
+    ]
+    const stages = stageSamples(timestamps)
+    const stageDistributions = (Object.keys(stages.samples) as AnalyticsStage[]).map((stage) =>
+      stageDistribution(stage, stages.samples[stage]),
+    )
+
+    // --- web booking funnel (UC-EYEX-103) ---------------------------------
+    const funnelRows = await db
+      .select()
+      .from(webBookingFunnelEvents)
+      .where(
+        and(
+          eq(webBookingFunnelEvents.organizationId, organizationId),
+          eq(webBookingFunnelEvents.storeId, storeId),
+          gte(webBookingFunnelEvents.occurredAt, period.startAt),
+          lt(webBookingFunnelEvents.occurredAt, period.endAt),
+        ),
+      )
+    const sessionsByStage = new Map<string, Set<string>>()
+    for (const row of funnelRows) {
+      const bucket = sessionsByStage.get(row.stage) ?? new Set<string>()
+      bucket.add(row.sessionId)
+      sessionsByStage.set(row.stage, bucket)
+    }
+    const funnel = funnelFrom(sessionsByStage, new Set(funnelRows.map((row) => row.sessionId)).size)
+
+    // --- operational quality (UC-EYEX-104) --------------------------------
+    const failedRecordingRows = await db
+      .select()
+      .from(recordings)
+      .where(
+        and(
+          eq(recordings.organizationId, organizationId),
+          eq(recordings.storeId, storeId),
+          eq(recordings.state, 'failed'),
+          gte(recordings.updatedAt, period.startAt),
+          lt(recordings.updatedAt, period.endAt),
+        ),
+      )
+    const contradictions = settingsContradictionAlerts(purposeRows, new Date(lastUpdatedAt))
+    const qualityWarnings: AnalyticsQualityWarning[] = [
+      ...(failedRecordingRows.length === 0
+        ? []
+        : [
+            {
+              code: 'recording_save_failure' as const,
+              count: failedRecordingRows.length,
+              message: '対象期間に録音の保存失敗が記録されています。',
+              nextAction: '録音一覧で該当セッションを開き、再取得の可否を確認してください。',
+            },
+          ]),
+      ...(contradictions.length === 0
+        ? []
+        : [
+            {
+              code: 'settings_contradiction' as const,
+              count: contradictions.length,
+              message: '来店目的の設定に矛盾があり、集計対象の枠が作られていない可能性があります。',
+              nextAction: '設定画面で所要時間・枠間隔・同時受入数を見直してください。',
+            },
+          ]),
+    ]
+
+    // --- exclusions (AC-EYEX-54) ------------------------------------------
+    const exclusionCounts: [AnalyticsExclusionReason, number][] = [
+      ['invalid_timestamp', invalidTimestamps],
+      ['missing_stage_timestamp', stages.missing],
+      ['unknown_purpose', purposeReferences.length - knownPurposeReferences.length],
+      ['unassigned_staff', unassignedStaff],
+    ]
+    const exclusions: AnalyticsExclusion[] = exclusionCounts.flatMap(([reason, count]) =>
+      count <= 0 ? [] : [{ reason, count, ...EXCLUSION_TEXT[reason] }],
+    )
+
+    // --- cause candidates (AC-EYEX-51) ------------------------------------
+    const causeCandidates = metrics
+      .filter((entry) => entry.exceedsTarget)
+      .flatMap((entry) => causeCandidatesFor(entry.metric, valid.reservationRows, valid.walkinRows))
+
+    const suppressed = applySmallSampleSuppression({
+      threshold: settings.smallSampleThreshold,
+      totalCount,
+      metrics,
+      breakdowns,
+      stageDistributions,
+      funnel,
+      causeCandidates,
+    })
+
+    const status: AnalyticsReport['status'] =
+      totalCount === 0 ? 'empty' : suppressed.suppressedEverything ? 'suppressed' : 'ok'
+    const reason =
+      status === 'empty'
+        ? '対象期間に集計できる予約・来店の記録がありません。'
+        : status === 'suppressed'
+          ? `対象件数が組織の抑制閾値（${settings.smallSampleThreshold}件）未満のため、個人が特定されないよう値と内訳を非表示にしています。`
+          : null
+    const nextAction =
+      status === 'empty'
+        ? '対象期間または店舗を変えて再表示するか、受付記録が登録されているか確認してください。'
+        : status === 'suppressed'
+          ? '期間を広げるか、より粗い集計粒度（週・月）で再表示してください。'
+          : null
+
+    return c.json(
+      AnalyticsReport.parse({
+        ...base,
+        totalCount,
+        smallSampleThreshold: settings.smallSampleThreshold,
+        status,
+        reason,
+        nextAction,
+        metrics: suppressed.metrics,
+        breakdowns: suppressed.breakdowns,
+        stageDistributions: suppressed.stageDistributions,
+        funnel: suppressed.funnel,
+        exclusions,
+        qualityWarnings,
+        causeCandidates: suppressed.causeCandidates,
+      }),
+    )
+  } catch (error) {
+    // UC-EYEX-108: a failed aggregation states its reason and the next step;
+    // it never degrades into a zero that reads like a real result.
+    console.error('analytics_aggregation_failed', error)
+    return c.json(
+      AnalyticsReport.parse({
+        ...base,
+        totalCount: 0,
+        smallSampleThreshold: DEFAULT_SMALL_SAMPLE_THRESHOLD,
+        status: 'failed',
+        reason: '集計に必要な設定または記録を読み取れませんでした。',
+        nextAction: '分析設定（抑制閾値・目標値）を保存し直してから再表示してください。',
+        metrics: [],
+        breakdowns: [],
+        stageDistributions: [],
+        funnel: emptyAnalyticsFunnel(),
+        exclusions: [],
+        qualityWarnings: [],
+        causeCandidates: [],
+      }),
+    )
+  }
+}
+
+async function readAnalyticsSettings(c: AppContext, storeId: string): Promise<Response> {
+  const denied = await requireStorePermission(c as StoreContext, storeId, 'settings.read')
+  if (denied) return denied
+  const db = drizzle(c.env.DB)
+  const now = nowIso(requestClock(c))
+  const settings = await loadAnalyticsSettings(db, c.get('auth').org, now)
+  return c.json(AnalyticsSettings.parse(settings))
+}
+
+async function updateAnalyticsSettings(
+  c: AppContext,
+  storeId: string,
+  input: AnalyticsSettingsInput,
+): Promise<Response> {
+  const denied = await requireStorePermission(c as StoreContext, storeId, 'settings.manage')
+  if (denied) return denied
+  const db = drizzle(c.env.DB)
+  const organizationId = c.get('auth').org
+  const clock = requestClock(c)
+  const updatedAt = nowIso(clock)
+  const targetsJson = JSON.stringify(input.targets)
+  try {
+    await writeAuditBatch(db, {
+      clock,
+      operations: [
+        db
+          .insert(analyticsSettings)
+          .values({
+            id: crypto.randomUUID(),
+            organizationId,
+            smallSampleThreshold: input.smallSampleThreshold,
+            targetsJson,
+            createdAt: updatedAt,
+            updatedAt,
+          })
+          .onConflictDoUpdate({
+            target: analyticsSettings.organizationId,
+            set: {
+              smallSampleThreshold: input.smallSampleThreshold,
+              targetsJson,
+              updatedAt,
+            },
+          }),
+      ],
+      events: [
+        {
+          organizationId,
+          storeId,
+          actorType: 'user',
+          actorId: c.get('auth').sub,
+          action: 'analytics.settings_updated',
+          entityType: 'analytics_settings',
+          entityId: organizationId,
+          metadata: {
+            smallSampleThreshold: input.smallSampleThreshold,
+            targetMetrics: input.targets.map((target) => target.metric),
+          },
+        },
+      ],
+    })
+  } catch (error) {
+    if (error instanceof AuditAppendError) return c.json({ error: error.code }, error.status)
+    throw error
+  }
+  return c.json(
+    AnalyticsSettings.parse({
+      organizationId,
+      smallSampleThreshold: input.smallSampleThreshold,
+      targets: input.targets,
+      updatedAt,
+    }),
+  )
+}
+
+async function recordFunnelEvent(
+  c: AppContext,
+  slug: string,
+  input: AnalyticsFunnelEventInput,
+): Promise<Response> {
+  const db = drizzle(c.env.DB)
+  const now = nowIso(requestClock(c))
+  const rows = await db
+    .select({ organizationId: stores.organizationId, storeId: stores.id })
+    .from(stores)
+    .innerJoin(organizations, eq(organizations.id, stores.organizationId))
+    .innerJoin(
+      webBookingPublications,
+      and(
+        eq(webBookingPublications.organizationId, stores.organizationId),
+        eq(webBookingPublications.storeId, stores.id),
+      ),
+    )
+    .where(
+      and(
+        eq(webBookingPublications.publicSlug, slug),
+        eq(stores.isActive, '1'),
+        eq(organizations.isDisabled, '0'),
+        ...publicPublicationWindow(now),
+      ),
+    )
+  const row = rows[0]
+  if (row === undefined) return c.json({ error: 'store_not_found' }, 404)
+  // The unique (organization, session, stage) index makes a replayed step a
+  // no-op, so a client retry can never inflate a funnel count.
+  await db
+    .insert(webBookingFunnelEvents)
+    .values({
+      id: crypto.randomUUID(),
+      organizationId: row.organizationId,
+      storeId: row.storeId,
+      sessionId: input.sessionId,
+      stage: input.stage,
+      occurredAt: now,
+    })
+    .onConflictDoNothing()
+  return c.json(AnalyticsFunnelEventResult.parse({ recorded: true }))
+}
+
+/* --- alerts --------------------------------------------------------------- */
+
+async function loadAlertSettings(
+  db: ReturnType<typeof drizzle>,
+  organizationId: string,
+  storeId: string,
+  now: string,
+): Promise<AlertSettings> {
+  const rows = await db
+    .select()
+    .from(alertSettings)
+    .where(
+      and(eq(alertSettings.organizationId, organizationId), eq(alertSettings.storeId, storeId)),
+    )
+  const row = rows[0]
+  if (row === undefined)
+    return AlertSettings.parse({
+      storeId,
+      conditions: DEFAULT_ALERT_CONDITIONS,
+      notificationTargets: [],
+      updatedAt: now,
+    })
+  return AlertSettings.parse({
+    storeId,
+    conditions: AlertCondition.array().parse(JSON.parse(row.conditionsJson)),
+    notificationTargets: JSON.parse(row.notificationTargetsJson),
+    updatedAt: row.updatedAt,
+  })
+}
+
+async function readAlertSettings(c: AppContext, storeId: string): Promise<Response> {
+  const denied = await requireStorePermission(c as StoreContext, storeId, 'settings.read')
+  if (denied) return denied
+  const db = drizzle(c.env.DB)
+  return c.json(await loadAlertSettings(db, c.get('auth').org, storeId, nowIso(requestClock(c))))
+}
+
+async function updateAlertSettings(
+  c: AppContext,
+  storeId: string,
+  input: AlertSettingsInput,
+): Promise<Response> {
+  const denied = await requireStorePermission(c as StoreContext, storeId, 'settings.manage')
+  if (denied) return denied
+  const db = drizzle(c.env.DB)
+  const organizationId = c.get('auth').org
+  const clock = requestClock(c)
+  const updatedAt = nowIso(clock)
+  const conditionsJson = JSON.stringify(input.conditions)
+  const notificationTargetsJson = JSON.stringify(input.notificationTargets)
+  try {
+    await writeAuditBatch(db, {
+      clock,
+      operations: [
+        db
+          .insert(alertSettings)
+          .values({
+            id: crypto.randomUUID(),
+            organizationId,
+            storeId,
+            conditionsJson,
+            notificationTargetsJson,
+            createdAt: updatedAt,
+            updatedAt,
+          })
+          .onConflictDoUpdate({
+            target: [alertSettings.organizationId, alertSettings.storeId],
+            set: { conditionsJson, notificationTargetsJson, updatedAt },
+          }),
+      ],
+      events: [
+        {
+          organizationId,
+          storeId,
+          actorType: 'user',
+          actorId: c.get('auth').sub,
+          action: 'alert.settings_updated',
+          entityType: 'alert_settings',
+          entityId: storeId,
+          metadata: {
+            enabledCodes: input.conditions
+              .filter((condition) => condition.enabled)
+              .map((condition) => condition.code),
+            // Addresses stay out of the audit metadata; only the count is a fact
+            // an auditor needs.
+            notificationTargetCount: input.notificationTargets.length,
+          },
+        },
+      ],
+    })
+  } catch (error) {
+    if (error instanceof AuditAppendError) return c.json({ error: error.code }, error.status)
+    throw error
+  }
+  return c.json(
+    AlertSettings.parse({
+      storeId,
+      conditions: input.conditions,
+      notificationTargets: input.notificationTargets,
+      updatedAt,
+    }),
+  )
+}
+
+function alertRecordFrom(row: typeof operationalAlerts.$inferSelect): AlertRecord {
+  return AlertRecord.parse({
+    id: row.id,
+    storeId: row.storeId,
+    kind: row.kind,
+    code: row.code,
+    title: row.title,
+    reason: row.reason,
+    subject: row.subject,
+    subjectType: row.subjectType,
+    subjectId: row.subjectId,
+    occurredAt: row.occurredAt,
+    nextAction: row.nextAction,
+    readAt: row.readAt,
+    readBy: row.readBy,
+    resolvedAt: row.resolvedAt,
+    resolvedBy: row.resolvedBy,
+    resolutionNote: row.resolutionNote,
+  })
+}
+
+/**
+ * Evaluate every enabled warning condition for one store and persist what is
+ * newly true. Dedupe keys make this safe to call as often as an operator
+ * likes; a scheduled trigger would call exactly this handler.
+ */
+async function evaluateStoreAlerts(c: AppContext, storeId: string): Promise<Response> {
+  const denied = await requireStorePermission(c as StoreContext, storeId, 'reservation.write')
+  if (denied) return denied
+  const db = drizzle(c.env.DB)
+  const organizationId = c.get('auth').org
+  const clock = requestClock(c)
+  const now = clock.now()
+  const evaluatedAt = nowIso(clock)
+  const settings = await loadAlertSettings(db, organizationId, storeId, evaluatedAt)
+  const enabled = new Map(settings.conditions.map((condition) => [condition.code, condition]))
+  const isEnabled = (code: AlertCode) => enabled.get(code)?.enabled === true
+
+  const descriptors: AlertDescriptor[] = []
+  if (isEnabled('long_wait')) {
+    const waitingReservations = await db
+      .select()
+      .from(reservations)
+      .where(
+        and(
+          eq(reservations.organizationId, organizationId),
+          eq(reservations.storeId, storeId),
+          eq(reservations.progress, 'waiting'),
+        ),
+      )
+    const waitingWalkins = await db
+      .select()
+      .from(walkins)
+      .where(
+        and(
+          eq(walkins.organizationId, organizationId),
+          eq(walkins.storeId, storeId),
+          eq(walkins.progress, 'waiting'),
+        ),
+      )
+    descriptors.push(
+      ...longWaitAlerts({
+        entries: [
+          ...waitingReservations.map((row) => ({
+            subjectType: 'reservation' as const,
+            subjectId: row.id,
+            subject: `予約番号 ${row.reservationNumber}`,
+            waitStartedAt: row.waitStartedAt,
+            isWaiting: true,
+          })),
+          ...waitingWalkins.map((row) => ({
+            subjectType: 'walkin' as const,
+            subjectId: row.id,
+            subject: `来店番号 ${row.sequence}`,
+            waitStartedAt: row.arrivedAt,
+            isWaiting: true,
+          })),
+        ],
+        thresholdMinutes: enabled.get('long_wait')?.thresholdMinutes ?? 15,
+        now,
+      }),
+    )
+  }
+  if (isEnabled('recording_save_failure')) {
+    const failed = await db
+      .select()
+      .from(recordings)
+      .where(
+        and(
+          eq(recordings.organizationId, organizationId),
+          eq(recordings.storeId, storeId),
+          eq(recordings.state, 'failed'),
+        ),
+      )
+    descriptors.push(...recordingFailureAlerts(failed))
+  }
+  if (isEnabled('settings_contradiction')) {
+    const purposeRows = await db
+      .select()
+      .from(visitPurposes)
+      .where(
+        and(eq(visitPurposes.organizationId, organizationId), eq(visitPurposes.storeId, storeId)),
+      )
+    descriptors.push(...settingsContradictionAlerts(purposeRows, now))
+  }
+
+  const existing =
+    descriptors.length === 0
+      ? []
+      : await db
+          .select({ dedupeKey: operationalAlerts.dedupeKey })
+          .from(operationalAlerts)
+          .where(
+            and(
+              eq(operationalAlerts.organizationId, organizationId),
+              inArray(
+                operationalAlerts.dedupeKey,
+                descriptors.map((descriptor) => descriptor.dedupeKey),
+              ),
+            ),
+          )
+  const known = new Set(existing.map((row) => row.dedupeKey))
+  const fresh = descriptors.filter((descriptor) => !known.has(descriptor.dedupeKey))
+  const inserted = fresh.map((descriptor) => ({
+    id: crypto.randomUUID(),
+    organizationId,
+    storeId,
+    kind: descriptor.kind,
+    code: descriptor.code,
+    title: descriptor.title,
+    reason: descriptor.reason,
+    subject: descriptor.subject,
+    subjectType: descriptor.subjectType,
+    subjectId: descriptor.subjectId,
+    occurredAt: descriptor.occurredAt,
+    nextAction: descriptor.nextAction,
+    dedupeKey: descriptor.dedupeKey,
+    readAt: null,
+    readBy: null,
+    resolvedAt: null,
+    resolvedBy: null,
+    resolutionNote: null,
+    createdAt: evaluatedAt,
+    updatedAt: evaluatedAt,
+  }))
+  if (inserted.length > 0) {
+    try {
+      await writeAuditBatch(db, {
+        clock,
+        operations: inserted.map((values) =>
+          db.insert(operationalAlerts).values(values).onConflictDoNothing(),
+        ),
+        events: inserted.map((values) => ({
+          organizationId,
+          storeId,
+          actorType: 'user',
+          actorId: c.get('auth').sub,
+          action: 'alert.raised',
+          entityType: 'operational_alert',
+          entityId: values.id,
+          metadata: { code: values.code, subjectType: values.subjectType },
+        })),
+      })
+    } catch (error) {
+      if (error instanceof AuditAppendError) return c.json({ error: error.code }, error.status)
+      throw error
+    }
+  }
+  return c.json(
+    AlertEvaluationResult.parse({
+      evaluatedAt,
+      raised: inserted.length,
+      disabledCodes: settings.conditions
+        .filter((condition) => !condition.enabled)
+        .map((condition) => condition.code),
+      alerts: inserted.map(alertRecordFrom),
+    }),
+  )
+}
+
+async function listStoreAlerts(
+  c: AppContext,
+  storeId: string,
+  query: AlertListQuery,
+): Promise<Response> {
+  const denied = await requireStorePermission(c as StoreContext, storeId, 'reservation.read')
+  if (denied) return denied
+  const db = drizzle(c.env.DB)
+  const rows = await db
+    .select()
+    .from(operationalAlerts)
+    .where(
+      and(
+        eq(operationalAlerts.organizationId, c.get('auth').org),
+        eq(operationalAlerts.storeId, storeId),
+        ...(query.kind === undefined ? [] : [eq(operationalAlerts.kind, query.kind)]),
+        ...(query.status === 'unread' ? [isNull(operationalAlerts.readAt)] : []),
+        ...(query.status === 'unresolved' ? [isNull(operationalAlerts.resolvedAt)] : []),
+      ),
+    )
+    .orderBy(desc(operationalAlerts.occurredAt))
+  return c.json(AlertRecord.array().parse(rows.map(alertRecordFrom)))
+}
+
+async function findStoreAlert(
+  c: AppContext,
+  storeId: string,
+  alertId: string,
+): Promise<typeof operationalAlerts.$inferSelect | undefined> {
+  const db = drizzle(c.env.DB)
+  const rows = await db
+    .select()
+    .from(operationalAlerts)
+    .where(
+      and(
+        eq(operationalAlerts.organizationId, c.get('auth').org),
+        eq(operationalAlerts.storeId, storeId),
+        eq(operationalAlerts.id, alertId),
+      ),
+    )
+  return rows[0]
+}
+
+async function readStoreAlert(c: AppContext, storeId: string, alertId: string): Promise<Response> {
+  const denied = await requireStorePermission(c as StoreContext, storeId, 'reservation.read')
+  if (denied) return denied
+  const row = await findStoreAlert(c, storeId, alertId)
+  if (row === undefined) return c.json({ error: 'alert_not_found' }, 404)
+  return c.json(alertRecordFrom(row))
+}
+
+/**
+ * 既読 and 対応済み are two independent transitions (AC-EYEX-120). Marking an
+ * alert read never marks it handled, and the first reader is kept rather than
+ * overwritten by whoever opened it last.
+ */
+async function acknowledgeStoreAlert(
+  c: AppContext,
+  storeId: string,
+  alertId: string,
+  transition: { kind: 'read' } | { kind: 'resolve'; note: string },
+): Promise<Response> {
+  const denied = await requireStorePermission(c as StoreContext, storeId, 'reservation.write')
+  if (denied) return denied
+  const row = await findStoreAlert(c, storeId, alertId)
+  if (row === undefined) return c.json({ error: 'alert_not_found' }, 404)
+  const db = drizzle(c.env.DB)
+  const clock = requestClock(c)
+  const at = nowIso(clock)
+  const actorId = c.get('auth').sub
+  const alreadyDone = transition.kind === 'read' ? row.readAt !== null : row.resolvedAt !== null
+  if (alreadyDone) return c.json(alertRecordFrom(row))
+  const patch =
+    transition.kind === 'read'
+      ? { readAt: at, readBy: actorId, updatedAt: at }
+      : { resolvedAt: at, resolvedBy: actorId, resolutionNote: transition.note, updatedAt: at }
+  try {
+    await writeAuditBatch(db, {
+      clock,
+      operations: [
+        db
+          .update(operationalAlerts)
+          .set(patch)
+          .where(
+            and(
+              eq(operationalAlerts.organizationId, row.organizationId),
+              eq(operationalAlerts.id, row.id),
+            ),
+          ),
+      ],
+      events: [
+        {
+          organizationId: row.organizationId,
+          storeId,
+          actorType: 'user',
+          actorId,
+          action: transition.kind === 'read' ? 'alert.read' : 'alert.resolved',
+          entityType: 'operational_alert',
+          entityId: row.id,
+          metadata: { code: row.code },
+        },
+      ],
+    })
+  } catch (error) {
+    if (error instanceof AuditAppendError) return c.json({ error: error.code }, error.status)
+    throw error
+  }
+  return c.json(alertRecordFrom({ ...row, ...patch }))
+}
+
 const routes = app
   .get('/api/health', (c) => c.json({ status: 'ok' as const }))
   .get('/api/public/stores', zValidator('query', PublicStoreSearchQuery), async (c) =>
     c.json(await listPublicStores(c as AppContext, c.req.valid('query'))),
   )
-  .get('/api/public/stores/:slug/slots', zValidator('query', PublicAvailabilityQuery), async (c) =>
+  // Public slots are scoped by the resolved public store slug, never by an
+  // organization or store id taken from the query.
+  .get('/api/public/stores/:slug/slots', zValidator('query', AvailabilitySlotsQuery), async (c) =>
     readPublicAvailability(c as AppContext, c.req.param('slug'), c.req.valid('query')),
   )
   .post(
@@ -5973,7 +11179,7 @@ const routes = app
   )
   .post('/api/auth/refresh', async (c) => domainRefresh(c as AppContext))
   .get('/api/shared-terminals/:terminalId/session', async (c) =>
-    readSharedTerminalSession(c, c.req.param('terminalId'), systemClock()),
+    readSharedTerminalSession(c, c.req.param('terminalId'), requestClock(c)),
   )
   .post(
     '/api/shared-terminals/:terminalId/reauthenticate',
@@ -5983,7 +11189,7 @@ const routes = app
         c as AppContext,
         c.req.param('terminalId'),
         c.req.valid('json'),
-        systemClock(),
+        requestClock(c),
       ),
   )
   .get('/api/shared-terminals/:terminalId/reauthentication', async (c) => {
@@ -5991,7 +11197,7 @@ const routes = app
       c as AppContext,
       c.req.param('terminalId'),
       'management',
-      systemClock(),
+      requestClock(c),
     )
     if (denied) return denied
     return c.json({ authorized: true })
@@ -6007,7 +11213,7 @@ const routes = app
         c as AppContext,
         c.req.param('terminalId'),
         c.req.param('storeId'),
-        systemClock(),
+        requestClock(c),
       )
       if (denied) return denied
       return readLedger(c as AppContext, c.req.param('storeId'), c.req.valid('query').date)
@@ -6021,7 +11227,7 @@ const routes = app
         c as AppContext,
         c.req.param('terminalId'),
         c.req.param('storeId'),
-        systemClock(),
+        requestClock(c),
       )
       if (denied) return denied
       return createWalkin(c as AppContext, c.req.param('storeId'))
@@ -6035,7 +11241,7 @@ const routes = app
         c as AppContext,
         c.req.param('terminalId'),
         c.req.param('storeId'),
-        systemClock(),
+        requestClock(c),
       )
       if (denied) return denied
       return updateWalkinProgress(
@@ -6054,7 +11260,7 @@ const routes = app
         c as AppContext,
         c.req.param('terminalId'),
         c.req.param('storeId'),
-        systemClock(),
+        requestClock(c),
       )
       if (denied) return denied
       return updateReservationProgress(
@@ -6073,7 +11279,7 @@ const routes = app
         c as AppContext,
         c.req.param('terminalId'),
         c.req.param('storeId'),
-        systemClock(),
+        requestClock(c),
       )
       if (denied) return denied
       return linkWalkinCustomer(
@@ -6095,16 +11301,14 @@ const routes = app
   .post('/api/internal/organizations', zValidator('json', OrganizationSync), async (c) =>
     persistOrganization(c, c.req.valid('json')),
   )
-  .post('/api/internal/stores/sync', zValidator('json', StoreSync), async (c) =>
+  .post('/api/internal/stores/sync', zValidator('json', Store), async (c) =>
     persistStore(c, c.req.valid('json')),
   )
-  .post('/api/internal/stores', zValidator('json', StoreSync), async (c) =>
+  .post('/api/internal/stores', zValidator('json', Store), async (c) =>
     persistStore(c, c.req.valid('json')),
   )
-  .post(
-    '/api/internal/store-memberships/sync',
-    zValidator('json', StoreMembershipSync),
-    async (c) => persistMembership(c, c.req.valid('json')),
+  .post('/api/internal/store-memberships/sync', zValidator('json', StoreMembership), async (c) =>
+    persistMembership(c, c.req.valid('json')),
   )
   .get('/api/staff/stores', async (c) => {
     const storesForActor = await listAccessibleStores(c as StoreContext)
@@ -6118,6 +11322,17 @@ const routes = app
     const access = await authorizedStore(c as StoreContext, storeId)
     if (!access) return c.json({ error: 'forbidden' }, 403)
     return c.json(access.store)
+  })
+  /*
+   * What the caller may do in this store, from the server's own evaluation.
+   * The UI needs this to decide whether restricted information is shown at
+   * all; letting the client infer it from a role would either over-expose
+   * customer data or hide it from staff entitled to see it.
+   */
+  .get('/api/staff/stores/:storeId/permissions', async (c) => {
+    const access = await authorizedStore(c as StoreContext, c.req.param('storeId'))
+    if (!access) return c.json({ error: 'forbidden' }, 403)
+    return c.json(StorePermission.array().parse(access.actor.permissions))
   })
   .patch('/api/staff/stores/:storeId', zValidator('json', StorePatch), async (c) => {
     const storeId = c.req.param('storeId')
@@ -6179,6 +11394,89 @@ const routes = app
       const storeId = c.req.param('storeId')
       return saveAvailabilitySettings(c as AppContext, storeId, c.req.valid('json'))
     },
+  )
+  .get('/api/staff/stores/:storeId/availability/draft', async (c) => {
+    const storeId = c.req.param('storeId')
+    const denied = await requireStorePermission(c as StoreContext, storeId, 'settings.read')
+    if (denied) return denied
+    const found = await requireSettingsDraft(c as AppContext, storeId)
+    if ('error' in found) return found.error
+    return c.json(toSettingsDraft(found.row))
+  })
+  .put(
+    '/api/staff/stores/:storeId/availability/draft',
+    zValidator('json', SettingsDraftInput),
+    async (c) => saveSettingsDraft(c as AppContext, c.req.param('storeId'), c.req.valid('json')),
+  )
+  .get('/api/staff/stores/:storeId/availability/draft/impact', async (c) => {
+    const storeId = c.req.param('storeId')
+    const denied = await requireStorePermission(c as StoreContext, storeId, 'settings.read')
+    if (denied) return denied
+    const found = await requireSettingsDraft(c as AppContext, storeId)
+    if ('error' in found) return found.error
+    return c.json(
+      await buildSettingsImpact(c as AppContext, found.db, c.get('auth').org, found.row),
+    )
+  })
+  .post(
+    '/api/staff/stores/:storeId/availability/draft/conflicts/:reservationId',
+    zValidator('json', SettingsConflictResolutionInput),
+    async (c) =>
+      recordSettingsConflictResolution(
+        c as AppContext,
+        c.req.param('storeId'),
+        c.req.param('reservationId'),
+        c.req.valid('json'),
+      ),
+  )
+  .post(
+    '/api/staff/stores/:storeId/availability/publications',
+    zValidator('json', SettingsPublicationRequest),
+    async (c) =>
+      createSettingsPublication(c as AppContext, c.req.param('storeId'), c.req.valid('json')),
+  )
+  .get('/api/staff/stores/:storeId/availability/publications/:publicationId', async (c) =>
+    readSettingsPublication(c as AppContext, c.req.param('storeId'), c.req.param('publicationId')),
+  )
+  .patch(
+    '/api/staff/stores/:storeId/availability/publications/:publicationId',
+    zValidator('json', SettingsPublicationPatch),
+    async (c) =>
+      patchSettingsPublication(
+        c as AppContext,
+        c.req.param('storeId'),
+        c.req.param('publicationId'),
+        c.req.valid('json'),
+      ),
+  )
+  .post('/api/staff/stores/:storeId/availability/publications/:publicationId/run', async (c) =>
+    runSettingsPublication(c as AppContext, c.req.param('storeId'), c.req.param('publicationId')),
+  )
+  .post('/api/staff/stores/:storeId/availability/publications/:publicationId/retry', async (c) =>
+    retrySettingsPublication(c as AppContext, c.req.param('storeId'), c.req.param('publicationId')),
+  )
+  .get('/api/staff/stores/:storeId/availability/versions', async (c) =>
+    listSettingsVersions(c as AppContext, c.req.param('storeId')),
+  )
+  .get('/api/staff/stores/:storeId/availability/versions/:versionId', async (c) =>
+    readSettingsVersion(c as AppContext, c.req.param('storeId'), c.req.param('versionId')),
+  )
+  .post('/api/staff/stores/:storeId/availability/versions/:versionId/restore', async (c) =>
+    restoreSettingsVersion(c as AppContext, c.req.param('storeId'), c.req.param('versionId')),
+  )
+  .get('/api/staff/stores/:storeId/availability/chain-default', async (c) =>
+    readChainDefault(c as AppContext, c.req.param('storeId')),
+  )
+  .put(
+    '/api/staff/stores/:storeId/availability/chain-default',
+    zValidator('json', SettingsDraftInput),
+    async (c) => saveChainDefault(c as AppContext, c.req.param('storeId'), c.req.valid('json')),
+  )
+  .get('/api/staff/stores/:storeId/availability/override', async (c) =>
+    readSettingsOverride(c as AppContext, c.req.param('storeId')),
+  )
+  .post('/api/staff/stores/:storeId/availability/override/release', async (c) =>
+    releaseSettingsOverride(c as AppContext, c.req.param('storeId')),
   )
   .get(
     '/api/staff/stores/:storeId/ledger',
@@ -6407,6 +11705,436 @@ const routes = app
     zValidator('query', CustomerSearchQuery),
     async (c) =>
       findCustomerCandidates(c as AppContext, c.req.param('storeId'), c.req.valid('query')),
+  )
+
+  .get('/api/staff/stores/:storeId/customers/:customerId', async (c) =>
+    readCustomerDetail(c as AppContext, c.req.param('storeId'), c.req.param('customerId')),
+  )
+  .get(
+    '/api/staff/stores/:storeId/recordings',
+    zValidator('query', RecordingListQuery),
+    async (c) => listRecordings(c as AppContext, c.req.param('storeId'), c.req.valid('query')),
+  )
+  .post(
+    '/api/staff/stores/:storeId/recordings',
+    zValidator('json', RecordingMetadataCreate),
+    async (c) =>
+      createRecordingMetadata(c as AppContext, c.req.param('storeId'), c.req.valid('json')),
+  )
+  .get('/api/staff/stores/:storeId/recordings/:recordingId', async (c) =>
+    readRecording(c as AppContext, c.req.param('storeId'), c.req.param('recordingId')),
+  )
+  .put('/api/staff/stores/:storeId/recordings/:recordingId/audio', async (c) =>
+    uploadRecordingAudio(c as AppContext, c.req.param('storeId'), c.req.param('recordingId')),
+  )
+  // Streaming playback only — no download route exists anywhere in this API.
+  .get('/api/staff/stores/:storeId/recordings/:recordingId/audio', async (c) =>
+    playRecording(c as AppContext, c.req.param('storeId'), c.req.param('recordingId')),
+  )
+  .post('/api/staff/stores/:storeId/recordings/:recordingId/retry', async (c) =>
+    retryRecordingUpload(c as AppContext, c.req.param('storeId'), c.req.param('recordingId')),
+  )
+  .post(
+    '/api/staff/stores/:storeId/recordings/:recordingId/reservation',
+    zValidator('json', RecordingReservationLink),
+    async (c) =>
+      linkRecordingReservation(
+        c as AppContext,
+        c.req.param('storeId'),
+        c.req.param('recordingId'),
+        c.req.valid('json'),
+      ),
+  )
+  .post(
+    '/api/staff/stores/:storeId/recordings/:recordingId/hold',
+    async (c, next) => {
+      const denied = await requireStorePermission(
+        c as StoreContext,
+        c.req.param('storeId'),
+        'recording.manage',
+      )
+      if (denied) return denied
+      await next()
+    },
+    zValidator('json', RecordingHoldInput),
+    async (c) =>
+      holdRecording(
+        c as AppContext,
+        c.req.param('storeId'),
+        c.req.param('recordingId'),
+        c.req.valid('json'),
+        staffRecordingActor(c as AppContext),
+      ),
+  )
+  .post(
+    '/api/staff/stores/:storeId/recordings/:recordingId/hold/release',
+    async (c, next) => {
+      const denied = await requireStorePermission(
+        c as StoreContext,
+        c.req.param('storeId'),
+        'recording.manage',
+      )
+      if (denied) return denied
+      await next()
+    },
+    zValidator('json', RecordingHoldRelease),
+    async (c) =>
+      releaseRecordingHold(
+        c as AppContext,
+        c.req.param('storeId'),
+        c.req.param('recordingId'),
+        c.req.valid('json'),
+        staffRecordingActor(c as AppContext),
+      ),
+  )
+  .delete('/api/staff/stores/:storeId/recordings/:recordingId', async (c) =>
+    deleteRecording(c as AppContext, c.req.param('storeId'), c.req.param('recordingId')),
+  )
+  .get('/api/staff/stores/:storeId/recording-retention', async (c) =>
+    readRecordingRetention(c as AppContext, c.req.param('storeId')),
+  )
+  .put(
+    '/api/staff/stores/:storeId/recording-retention',
+    async (c, next) => {
+      const denied = await requireStorePermission(
+        c as StoreContext,
+        c.req.param('storeId'),
+        'recording.manage',
+      )
+      if (denied) return denied
+      await next()
+    },
+    zValidator('json', RecordingRetentionSettingsInput),
+    async (c) =>
+      saveRecordingRetention(c as AppContext, c.req.param('storeId'), c.req.valid('json')),
+  )
+  .post(
+    '/api/shared-terminals/:terminalId/stores/:storeId/recordings/:recordingId/hold',
+    zValidator('json', RecordingHoldInput),
+    async (c) => {
+      const actor = await sharedTerminalRecordingManager(
+        c as AppContext,
+        c.req.param('terminalId'),
+        c.req.param('storeId'),
+      )
+      if (actor instanceof Response) return actor
+      return holdRecording(
+        c as AppContext,
+        c.req.param('storeId'),
+        c.req.param('recordingId'),
+        c.req.valid('json'),
+        actor,
+      )
+    },
+  )
+  .post(
+    '/api/shared-terminals/:terminalId/stores/:storeId/recordings/:recordingId/hold/release',
+    zValidator('json', RecordingHoldRelease),
+    async (c) => {
+      const actor = await sharedTerminalRecordingManager(
+        c as AppContext,
+        c.req.param('terminalId'),
+        c.req.param('storeId'),
+      )
+      if (actor instanceof Response) return actor
+      return releaseRecordingHold(
+        c as AppContext,
+        c.req.param('storeId'),
+        c.req.param('recordingId'),
+        c.req.valid('json'),
+        actor,
+      )
+    },
+  )
+  .post(
+    '/api/internal/recordings/reconcile',
+    zValidator('json', RecordingReconciliationRequest),
+    async (c) => reconcileRecordings(c as AppContext, c.req.valid('json')),
+  )
+
+  .get('/api/staff/stores/:storeId/attention-settings', async (c) =>
+    readAttentionSettingsRoute(c as AppContext, c.req.param('storeId')),
+  )
+  .put(
+    '/api/staff/stores/:storeId/attention-settings',
+    async (c, next) => {
+      const denied = await requireStorePermission(
+        c as StoreContext,
+        c.req.param('storeId'),
+        'settings.manage',
+      )
+      if (denied) return denied
+      await next()
+    },
+    zValidator('json', AttentionSettingsInput),
+    async (c) =>
+      saveAttentionSettings(c as AppContext, c.req.param('storeId'), c.req.valid('json')),
+  )
+  .post(
+    '/api/staff/stores/:storeId/attention-settings/sharing-scope-impact',
+    async (c, next) => {
+      const denied = await requireStorePermission(
+        c as StoreContext,
+        c.req.param('storeId'),
+        'settings.manage',
+      )
+      if (denied) return denied
+      await next()
+    },
+    zValidator('json', AttentionSharingScopeImpactRequest),
+    async (c) =>
+      readAttentionSharingScopeImpact(c as AppContext, c.req.param('storeId'), c.req.valid('json')),
+  )
+  .get(
+    '/api/staff/stores/:storeId/customers/:customerId/attention-notes',
+    async (c, next) => {
+      const denied = await requireStorePermission(
+        c as StoreContext,
+        c.req.param('storeId'),
+        'customer.read',
+      )
+      if (denied) return denied
+      await next()
+    },
+    async (c) =>
+      listAttentionNotes(c as AppContext, c.req.param('storeId'), c.req.param('customerId')),
+  )
+  .post(
+    '/api/staff/stores/:storeId/customers/:customerId/attention-notes',
+    async (c, next) => {
+      const denied = await requireStorePermission(
+        c as StoreContext,
+        c.req.param('storeId'),
+        'customer.read',
+      )
+      if (denied) return denied
+      await next()
+    },
+    zValidator('json', AttentionNoteInput),
+    async (c) =>
+      registerAttentionNote(
+        c as AppContext,
+        c.req.param('storeId'),
+        c.req.param('customerId'),
+        c.req.valid('json'),
+      ),
+  )
+  .get('/api/staff/stores/:storeId/attention-notes/:noteId/versions', async (c) =>
+    readAttentionVersions(c as AppContext, c.req.param('storeId'), c.req.param('noteId')),
+  )
+  .post(
+    '/api/staff/stores/:storeId/attention-notes/:noteId/review',
+    zValidator('json', AttentionReviewInput),
+    async (c) =>
+      reviewAttentionNote(
+        c as AppContext,
+        c.req.param('storeId'),
+        c.req.param('noteId'),
+        c.req.valid('json'),
+      ),
+  )
+  .post(
+    '/api/staff/stores/:storeId/attention-notes/:noteId/revisions',
+    zValidator('json', AttentionNoteRevisionInput),
+    async (c) =>
+      reviseAttentionNote(
+        c as AppContext,
+        c.req.param('storeId'),
+        c.req.param('noteId'),
+        c.req.valid('json'),
+      ),
+  )
+  .post(
+    '/api/staff/stores/:storeId/attention-notes/:noteId/hide',
+    zValidator('json', AttentionHideInput),
+    async (c) =>
+      hideAttentionNote(
+        c as AppContext,
+        c.req.param('storeId'),
+        c.req.param('noteId'),
+        c.req.valid('json'),
+      ),
+  )
+  .get(
+    '/api/staff/stores/:storeId/audit-events',
+    async (c, next) => {
+      const denied = await requireStorePermission(
+        c as StoreContext,
+        c.req.param('storeId'),
+        'audit.read',
+      )
+      if (denied) return denied
+      await next()
+    },
+    zValidator('query', AuditSearchQuery),
+    async (c) => searchAuditEvents(c as AppContext, c.req.param('storeId'), c.req.valid('query')),
+  )
+  .post(
+    '/api/staff/stores/:storeId/customer-merges/preview',
+    async (c, next) => {
+      const denied = await requireCustomerCorrectionPermissions(
+        c as AppContext,
+        c.req.param('storeId'),
+      )
+      if (denied) return denied
+      await next()
+    },
+    zValidator('json', CustomerMergePreviewRequest),
+    async (c) => previewCustomerMerge(c as AppContext, c.req.valid('json')),
+  )
+  .post(
+    '/api/staff/stores/:storeId/customer-merges',
+    async (c, next) => {
+      const denied = await requireCustomerCorrectionPermissions(
+        c as AppContext,
+        c.req.param('storeId'),
+      )
+      if (denied) return denied
+      await next()
+    },
+    zValidator('json', CustomerMergeInput),
+    async (c) => mergeCustomers(c as AppContext, c.req.valid('json')),
+  )
+  .post(
+    '/api/staff/stores/:storeId/customer-links/release',
+    async (c, next) => {
+      const denied = await requireCustomerCorrectionPermissions(
+        c as AppContext,
+        c.req.param('storeId'),
+      )
+      if (denied) return denied
+      await next()
+    },
+    zValidator('json', CustomerLinkReleaseInput),
+    async (c) => releaseCustomerLink(c as AppContext, c.req.param('storeId'), c.req.valid('json')),
+  )
+  .post(
+    '/api/shared-terminals/:terminalId/stores/:storeId/customers/:customerId/attention-notes',
+    zValidator('json', AttentionNoteInput),
+    async (c) => {
+      const actor = await sharedTerminalAttentionRegistrant(
+        c as AppContext,
+        c.req.param('terminalId'),
+        c.req.param('storeId'),
+      )
+      if (actor instanceof Response) return actor
+      return registerAttentionNote(
+        c as AppContext,
+        c.req.param('storeId'),
+        c.req.param('customerId'),
+        c.req.valid('json'),
+        actor,
+      )
+    },
+  )
+  .post(
+    '/api/shared-terminals/:terminalId/stores/:storeId/attention-notes/:noteId/review',
+    zValidator('json', AttentionReviewInput),
+    async (c) => {
+      const actor = await sharedTerminalAttentionManager(
+        c as AppContext,
+        c.req.param('terminalId'),
+        c.req.param('storeId'),
+        'publish',
+      )
+      if (actor instanceof Response) return actor
+      return reviewAttentionNote(
+        c as AppContext,
+        c.req.param('storeId'),
+        c.req.param('noteId'),
+        c.req.valid('json'),
+        actor,
+      )
+    },
+  )
+  .post(
+    '/api/shared-terminals/:terminalId/stores/:storeId/attention-notes/:noteId/revisions',
+    zValidator('json', AttentionNoteRevisionInput),
+    async (c) => {
+      const actor = await sharedTerminalAttentionManager(
+        c as AppContext,
+        c.req.param('terminalId'),
+        c.req.param('storeId'),
+        'revise',
+      )
+      if (actor instanceof Response) return actor
+      return reviseAttentionNote(
+        c as AppContext,
+        c.req.param('storeId'),
+        c.req.param('noteId'),
+        c.req.valid('json'),
+        actor,
+      )
+    },
+  )
+  .post(
+    '/api/shared-terminals/:terminalId/stores/:storeId/attention-notes/:noteId/hide',
+    zValidator('json', AttentionHideInput),
+    async (c) => {
+      const actor = await sharedTerminalAttentionManager(
+        c as AppContext,
+        c.req.param('terminalId'),
+        c.req.param('storeId'),
+        'hide',
+      )
+      if (actor instanceof Response) return actor
+      return hideAttentionNote(
+        c as AppContext,
+        c.req.param('storeId'),
+        c.req.param('noteId'),
+        c.req.valid('json'),
+        actor,
+      )
+    },
+  )
+
+  .get('/api/staff/stores/:storeId/analytics', zValidator('query', AnalyticsQuery), async (c) =>
+    readAnalyticsReport(c as AppContext, c.req.param('storeId'), c.req.valid('query')),
+  )
+  .get('/api/staff/stores/:storeId/analytics/settings', async (c) =>
+    readAnalyticsSettings(c as AppContext, c.req.param('storeId')),
+  )
+  .put(
+    '/api/staff/stores/:storeId/analytics/settings',
+    zValidator('json', AnalyticsSettingsInput),
+    async (c) =>
+      updateAnalyticsSettings(c as AppContext, c.req.param('storeId'), c.req.valid('json')),
+  )
+  .get('/api/staff/stores/:storeId/alert-settings', async (c) =>
+    readAlertSettings(c as AppContext, c.req.param('storeId')),
+  )
+  .put(
+    '/api/staff/stores/:storeId/alert-settings',
+    zValidator('json', AlertSettingsInput),
+    async (c) => updateAlertSettings(c as AppContext, c.req.param('storeId'), c.req.valid('json')),
+  )
+  .post('/api/staff/stores/:storeId/alerts/evaluate', async (c) =>
+    evaluateStoreAlerts(c as AppContext, c.req.param('storeId')),
+  )
+  .get('/api/staff/stores/:storeId/alerts', zValidator('query', AlertListQuery), async (c) =>
+    listStoreAlerts(c as AppContext, c.req.param('storeId'), c.req.valid('query')),
+  )
+  .get('/api/staff/stores/:storeId/alerts/:alertId', async (c) =>
+    readStoreAlert(c as AppContext, c.req.param('storeId'), c.req.param('alertId')),
+  )
+  .post('/api/staff/stores/:storeId/alerts/:alertId/read', async (c) =>
+    acknowledgeStoreAlert(c as AppContext, c.req.param('storeId'), c.req.param('alertId'), {
+      kind: 'read',
+    }),
+  )
+  .post(
+    '/api/staff/stores/:storeId/alerts/:alertId/resolve',
+    zValidator('json', AlertResolveInput),
+    async (c) =>
+      acknowledgeStoreAlert(c as AppContext, c.req.param('storeId'), c.req.param('alertId'), {
+        kind: 'resolve',
+        note: c.req.valid('json').note,
+      }),
+  )
+  .post(
+    '/api/public/stores/:slug/funnel-events',
+    zValidator('json', AnalyticsFunnelEventInput),
+    async (c) => recordFunnelEvent(c as AppContext, c.req.param('slug'), c.req.valid('json')),
   )
 
 export type AppType = typeof routes

@@ -1,6 +1,6 @@
 import type { PublicBookingCreate, PublicStoreSummary } from '@app/contracts'
 
-export type PublicBookingStep =
+type PublicBookingStep =
   | 'store'
   | 'store_detail'
   | 'purpose'
@@ -9,7 +9,7 @@ export type PublicBookingStep =
   | 'confirm'
   | 'complete'
   | 'unknown'
-export type PublicBookingStore = PublicStoreSummary
+type PublicBookingStore = PublicStoreSummary
 type PublicBookingCustomer = PublicBookingCreate['customer']
 
 export type PublicBookingDraft = {

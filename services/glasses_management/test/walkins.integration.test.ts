@@ -570,12 +570,8 @@ describe('walk-in reception', () => {
 
   it('continues a legacy daily sequence when no allocator row exists yet', async () => {
     const scope = await setupScope()
-    const serviceDate = new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'Asia/Tokyo',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    }).format(new Date())
+    // The JST service date comes from the injected clock, not the machine's.
+    const serviceDate = '2026-08-31'
     await env.DB.prepare(
       `INSERT INTO walkins (
         id, organization_id, store_id, service_date, sequence, customer_id, status, progress,

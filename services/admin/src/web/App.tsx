@@ -8,6 +8,8 @@ import { Spinner } from './components/ui'
 import { Invite } from './routes/Invite'
 import { Login } from './routes/Login'
 import { Orgs } from './routes/Orgs'
+import { Pin } from './routes/Pin'
+import { Users } from './routes/Users'
 
 /**
  * admin SPA のルート。起動時に cookie でセッション復帰(refresh)を試み、
@@ -25,6 +27,8 @@ export function App() {
         <Route element={<RequireAuth />}>
           <Route element={<AppShell />}>
             <Route index element={<Orgs />} />
+            <Route path="users" element={<Users />} />
+            <Route path="me/pin" element={<Pin />} />
           </Route>
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />

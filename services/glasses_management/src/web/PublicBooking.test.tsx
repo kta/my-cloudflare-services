@@ -84,11 +84,13 @@ test('starts the approved public flow by selecting a published store and its pur
     await screen.findByRole('heading', { name: '今回はどのようなご相談ですか？' }),
   ).toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: /メガネを新しく作りたい.*約60分/ }))
+  fireEvent.click(screen.getByRole('button', { name: '日時へ進む' }))
   expect(
     await screen.findByRole('heading', { name: 'ご希望の日時を選んでください' }),
   ).toBeInTheDocument()
   fireEvent.change(screen.getByLabelText('ご希望の日'), { target: { value: '2026-09-01' } })
-  fireEvent.click(await screen.findByRole('button', { name: '9月1日 10:00' }))
+  fireEvent.click(await screen.findByRole('button', { name: '9月1日（火） 10:00' }))
+  fireEvent.click(screen.getByRole('button', { name: 'お客様情報へ進む' }))
   expect(
     await screen.findByRole('heading', { name: 'ご連絡先を入力してください' }),
   ).toBeInTheDocument()
@@ -115,7 +117,7 @@ test('starts the approved public flow by selecting a published store and its pur
   fireEvent.click(screen.getByRole('button', { name: '予約日時を変更する' }))
   expect(await screen.findByRole('heading', { name: '変更後の日時を選ぶ' })).toBeInTheDocument()
   fireEvent.change(screen.getByLabelText('変更後の日'), { target: { value: '2026-09-01' } })
-  fireEvent.click(await screen.findByRole('button', { name: '9月1日 10:00' }))
+  fireEvent.click(await screen.findByRole('button', { name: '9月1日（火） 10:00' }))
   expect(changeReservation).toHaveBeenCalledWith(
     '00000000-0000-4000-8000-000000000001',
     expect.objectContaining({ version: 1, date: '2026-09-01', startTime: '10:00' }),
@@ -181,8 +183,10 @@ test('checks the coarse result with the same confirmation key after the booking 
   fireEvent.click(await screen.findByRole('button', { name: /銀座店.*店舗情報を見る/ }))
   fireEvent.click(await screen.findByRole('button', { name: '銀座店で予約を始める' }))
   fireEvent.click(await screen.findByRole('button', { name: /メガネを新しく作りたい.*約60分/ }))
+  fireEvent.click(screen.getByRole('button', { name: '日時へ進む' }))
   fireEvent.change(await screen.findByLabelText('ご希望の日'), { target: { value: '2026-09-01' } })
-  fireEvent.click(await screen.findByRole('button', { name: '9月1日 10:00' }))
+  fireEvent.click(await screen.findByRole('button', { name: '9月1日（火） 10:00' }))
+  fireEvent.click(screen.getByRole('button', { name: 'お客様情報へ進む' }))
   fireEvent.change(screen.getByLabelText('お名前'), { target: { value: '田中花子' } })
   fireEvent.change(screen.getByLabelText('お名前（かな）'), { target: { value: 'タナカハナコ' } })
   fireEvent.change(screen.getByLabelText('電話番号'), { target: { value: '09012345678' } })
@@ -250,8 +254,10 @@ test('keeps customer input and returns to same-store alternatives when confirmat
   fireEvent.click(await screen.findByRole('button', { name: /銀座店.*店舗情報を見る/ }))
   fireEvent.click(await screen.findByRole('button', { name: '銀座店で予約を始める' }))
   fireEvent.click(await screen.findByRole('button', { name: /メガネを新しく作りたい.*約60分/ }))
+  fireEvent.click(screen.getByRole('button', { name: '日時へ進む' }))
   fireEvent.change(await screen.findByLabelText('ご希望の日'), { target: { value: '2026-09-01' } })
-  fireEvent.click(await screen.findByRole('button', { name: '9月1日 11:00' }))
+  fireEvent.click(await screen.findByRole('button', { name: '9月1日（火） 11:00' }))
+  fireEvent.click(screen.getByRole('button', { name: 'お客様情報へ進む' }))
   fireEvent.change(screen.getByLabelText('お名前'), { target: { value: '田中花子' } })
   fireEvent.change(screen.getByLabelText('お名前（かな）'), { target: { value: 'タナカハナコ' } })
   fireEvent.change(screen.getByLabelText('電話番号'), { target: { value: '09012345678' } })
@@ -267,7 +273,97 @@ test('keeps customer input and returns to same-store alternatives when confirmat
   expect(screen.getByRole('alert')).toHaveTextContent(
     '選択した時間は他のお客様の予約で埋まりました',
   )
-  fireEvent.click(screen.getByRole('button', { name: '9月1日 11:00' }))
+  fireEvent.click(screen.getByRole('button', { name: '9月1日（火） 11:00' }))
+  fireEvent.click(screen.getByRole('button', { name: 'お客様情報へ進む' }))
   expect(await screen.findByLabelText('お名前')).toHaveValue('田中花子')
   expect(readSlots).toHaveBeenCalledTimes(2)
+})
+
+test('顧客フローの各画面は承認済みモックの文言と工程表示を出す (web-booking-complete-approved.html)', async () => {
+  const api: PublicBookingApi = {
+    listStores: async () => [store],
+    readStore: async () => detail,
+    readSlots: async () => ({
+      date: '2026-09-01',
+      timezone: 'Asia/Tokyo',
+      durationMinutes: 60,
+      intervalMinutes: 30,
+      slots: [
+        {
+          date: '2026-09-01',
+          startTime: '10:00',
+          endTime: '11:00',
+          startAt: '2026-09-01T01:00:00.000Z',
+          endAt: '2026-09-01T02:00:00.000Z',
+        },
+      ],
+    }),
+    createReservation: async () => {
+      throw new Error('network disconnected')
+    },
+    readReservationStatus: async () => ({ status: 'pending' as const }),
+    verifyReservation: async () => {
+      throw new Error('unused')
+    },
+    cancelReservation: async () => ({ status: 'cancelled', version: 2 }),
+    changeReservation: async () => ({
+      status: 'confirmed',
+      version: 2,
+      startAt: '2026-09-01T02:00:00.000Z',
+      endAt: '2026-09-01T03:00:00.000Z',
+      purposeIds: ['00000000-0000-4000-8000-000000000001'],
+    }),
+  }
+  render(<PublicBooking api={api} createConfirmationKey={() => 'CHECK-6F82'} />)
+
+  // 店舗検索: モックの検索プレースホルダとカードの操作語。
+  expect(await screen.findByLabelText('店舗を検索')).toHaveAttribute(
+    'placeholder',
+    '現在地・駅名・店舗名・地域',
+  )
+  fireEvent.click(screen.getByRole('button', { name: /銀座店.*店舗情報を見る/ }))
+
+  // 店舗詳細: 営業時間と対応サービスがモックどおり並ぶ。
+  expect(await screen.findByText(/営業時間 10:00–19:00/)).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: '対応サービス' })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: '銀座店で予約を始める' }))
+
+  // 来店目的: 選ぶことと進むことが分かれている。
+  const purpose = await screen.findByRole('button', { name: /メガネを新しく作りたい/ })
+  expect(purpose).toHaveAttribute('aria-pressed', 'false')
+  expect(screen.getByRole('button', { name: '日時へ進む' })).toBeDisabled()
+  fireEvent.click(purpose)
+  expect(screen.getByRole('button', { name: /メガネを新しく作りたい/ })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  )
+  fireEvent.click(screen.getByRole('button', { name: '日時へ進む' }))
+
+  // 日時: 工程 2 / 5、選択中の来店目的、曜日つきの枠。
+  expect(screen.getByRole('progressbar', { name: '予約工程 2 / 5' })).toBeInTheDocument()
+  expect(screen.getByText('メガネを新しく作りたい · 約60分')).toBeInTheDocument()
+  fireEvent.change(await screen.findByLabelText('ご希望の日'), { target: { value: '2026-09-01' } })
+  fireEvent.click(await screen.findByRole('button', { name: '9月1日（火） 10:00' }))
+  fireEvent.click(screen.getByRole('button', { name: 'お客様情報へ進む' }))
+
+  expect(screen.getByRole('progressbar', { name: '予約工程 3 / 5' })).toBeInTheDocument()
+  fireEvent.change(screen.getByLabelText('お名前'), { target: { value: '田中 花子' } })
+  fireEvent.change(screen.getByLabelText('お名前（かな）'), { target: { value: 'タナカハナコ' } })
+  fireEvent.change(screen.getByLabelText('電話番号'), { target: { value: '090-1234-5678' } })
+  fireEvent.click(screen.getByRole('button', { name: '確認へ進む' }))
+
+  // 確認: 工程 4 / 5 と、期限の同意文。
+  expect(screen.getByRole('progressbar', { name: '予約工程 4 / 5' })).toBeInTheDocument()
+  expect(screen.getByText('変更・取消期限と店舗からのご案内を確認しました。')).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'この内容で予約する' }))
+
+  // 応答が失われた画面: 見出しと本文を分け、照会番号を出す。
+  expect(
+    await screen.findByRole('heading', { name: '予約結果を確認しています' }),
+  ).toBeInTheDocument()
+  expect(screen.getByText('通信が途中で切れました')).toBeInTheDocument()
+  expect(
+    screen.getByText('もう一度予約ボタンを押さず、この画面で成立状況を確認してください。'),
+  ).toBeInTheDocument()
+  expect(screen.getByText('照会番号 CHECK-6F82')).toBeInTheDocument()
 })

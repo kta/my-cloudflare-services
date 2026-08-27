@@ -4,7 +4,7 @@ import { auditEvents } from '../db/schema'
 import type { Clock } from './clock'
 
 type JsonPrimitive = string | number | boolean | null
-export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue }
+type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue }
 
 export type AuditEventInput = {
   id?: string
@@ -19,7 +19,7 @@ export type AuditEventInput = {
   metadata?: JsonValue
 }
 
-export type AuditBatchOperation = BatchItem<'sqlite'>
+type AuditBatchOperation = BatchItem<'sqlite'>
 // Keep the boundary compatible with the repository convention of creating
 // `drizzle(c.env.DB)` inside each handler. The table arguments still provide
 // full column inference without forcing every caller to register a global

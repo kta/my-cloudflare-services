@@ -90,7 +90,7 @@ describe('status primitives', () => {
 
     expect(screen.getByText('Project summary')).toBeVisible()
     expect(screen.getByText('Saved')).toHaveClass('text-pine')
-    expect(screen.getByText('Review needed')).toHaveClass('text-amber-deep')
+    expect(screen.getByText('Review needed')).toHaveClass('text-amber')
     expect(screen.getByText('Failed')).toHaveClass('text-danger')
     expect(screen.getByText('Waiting')).toHaveClass('text-ink-muted')
   })

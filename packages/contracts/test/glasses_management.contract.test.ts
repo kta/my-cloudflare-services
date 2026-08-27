@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   Actor,
   AvailabilityException,
+  AvailabilitySlotsQuery,
   OrganizationSync,
-  PublicAvailabilityQuery,
   PublicBookingCreate,
   Store,
   StoreMembership,
@@ -181,7 +181,7 @@ describe('glasses_management contracts', () => {
 
   it('keeps public booking input separate from staff-only memos and requires consent', () => {
     expect(
-      PublicAvailabilityQuery.parse({
+      AvailabilitySlotsQuery.parse({
         date: '2026-08-31',
         purposeIds: 'af1d3c4c-913c-43e9-a2f6-78a111d2d947',
       }).purposeIds,

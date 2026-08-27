@@ -1,73 +1,230 @@
 /*
- * Design tokens — the single place a project's visual identity lives.
+ * デザイントークン — この製品の見た目が住む唯一の場所。
  *
- * This default theme is a PLACEHOLDER identity ("paper & pine"): warm paper
- * surfaces, near-black green-cast ink, one pine accent, amber reserved for
- * focus. When you copy this template for a real product, REPLACE these values
- * following docs/frontend/DESIGN_RULE.md (pick a subject-grounded palette and
- * type pairing first, then encode it here). Components and app code must only
- * ever reference these semantic tokens — never raw hex, never Tailwind's
- * default palette (bg-blue-500 etc.), never arbitrary values (p-[13px]).
+ * 値はすべて `docs/frontend/mockups/eyex-reservation/` の承認済みモックの
+ * `:root` と各クラスの実測から採った。アプリのコードはこのセマンティック
+ * トークンだけを参照する。生の hex、Tailwind 既定パレット（bg-blue-500 等）、
+ * 任意値（p-[13px]）は使わない。
  *
- * Tailwind v4 turns each token into utilities automatically:
+ * Tailwind v4 が各トークンをユーティリティへ自動展開する:
  *   --color-ink → text-ink / bg-ink / border-ink …
- *   --font-display → font-display
+ *   --font-sans → font-sans
  *   --radius-ctl → rounded-ctl
+ *
+ * モック間で同じ役割に僅かに違う hex が使われている箇所（注意事項の罫線が
+ * #d6a99f と #d4a299 など）は、役割ごとに 1 つへ寄せた。寄せた事実は該当
+ * トークンのコメントに残す。
  */
 @theme {
-  /* --- Type. Two roles on purpose: a characterful display face used with
-     restraint (wordmark, page titles) and a quiet body face for everything
-     else. Data (timestamps, ids) uses the mono stack. --- */
-  --font-display: "Fraunces Variable", Georgia, "Times New Roman", serif;
-  --font-sans: "Public Sans Variable", system-ui, -apple-system, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+  /* --- 書体。モックは全画面 IBM Plex Sans JP。IBM Plex Mono は時刻・ID・
+     グリッドの数値だけに使う（和文グリフを持たないので日本語には使わない）。
+     ワードマークも本文と同じ書体の 700 で、別の見出し書体は無い。 --- */
+  /* 予備は総称の sans-serif だけにする。モックが `font:16px/1.5
+     "IBM Plex Sans JP",sans-serif` で、間に system-ui を挟むと ✓ のような
+     Plex JP に無い記号だけ別の書体（幅も別）で描かれ、その行の字送りが
+     丸ごとずれる。 */
+  --font-display: "IBM Plex Sans JP", sans-serif;
+  --font-sans: "IBM Plex Sans JP", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  /* 記号（完了の ✓ など）。IBM Plex Sans JP はこの手の記号グリフを持たないので
+     必ず代替に落ちる。モックの `font:16px/1.5 "IBM Plex Sans JP",sans-serif` と
+     同じ落ち先にするため、間に system-ui を挟まない。 */
+  --font-glyph: "IBM Plex Sans JP", sans-serif;
+  /* 監査イベントの生記録だけは、モックが書いたとおりの `ui-monospace,
+     monospace` で描く。記録は出したままの姿で読ませる面で、IBM Plex Mono に
+     寄せると和文と欧文の桁がモックとずれる。 */
+  --font-record: ui-monospace, monospace;
+  /* 分析の数字とステータスバーは、モックが書いたとおり代替を持たない
+     `'IBM Plex Mono'` 単独で描く。代替を足すと和文（「中央値」「Wi‑Fi」）の
+     落ち先が変わり、行の高さが 3px 縮んでグラフから下が丸ごとずれる。 */
+  --font-figure: "IBM Plex Mono";
+  /* 予約フローの録音経過（approved.html `.record{font:700 16px ui-monospace}`）。
+     `--font-record` と違って予備を 1 つも並べないのは、等幅書体が持たない `●` が
+     予備へ落ちた瞬間に字面の幅が 3px 変わり、右端揃えの経過時間がずれるため。 */
+  --font-timer: ui-monospace;
 
-  /* --- Surfaces & ink --- */
-  --color-paper: #f4f3ee; /* app background */
-  --color-surface: #fdfdfb; /* cards, inputs */
-  --color-ink: #22271f; /* primary text — near-black with a green cast */
-  --color-ink-muted: #68705f; /* secondary text; AA on paper */
-  --color-line: #d9d7cc; /* hairline borders */
+  /* --- 文字寸法。モックが実際に使っている段だけを持つ。ここに無い大きさは
+     モックに存在しないということなので、任意値で足さずにまずモックを見る。
+     行間もモックの `font:16px/1.5` と各見出しの実測に合わせる。 --- */
+  --text-glyph: 3.375rem; /* 54px 全画面状態の記号 */
+  --text-figure: 1.75rem; /* 28px 公開結果の件数 */
+  --text-script: 1.8125rem; /* 29px 予約フローの読み上げ見出し */
+  --text-readout: 1.5625rem; /* 25px 復唱文 */
+  /* 復唱文だけ行間が広い（`.readout{line-height:1.8}`）。読み上げる人が行を
+     見失わないための段で、本文の 1.5 とは役割が違うので寸法に結び付けて持つ。 */
+  --text-readout--line-height: 1.8;
+  --text-title: 1.5rem; /* 24px h2 と主操作タイル */
+  --text-search: 1.25rem; /* 20px 電話番号の検索欄 */
+  --text-brand: 1.25rem; /* 20px 予約フローのワードマーク（approved.html） */
+  --text-bar: 1.1875rem; /* 19px 業務・運用のワードマーク */
+  --text-lead: 1.125rem; /* 18px 副導線 */
+  /* 18.72px。モックのレール見出しは `<h3>` を素のまま使っていて、ブラウザ既定の
+     1.17em がそのまま設計になっている。18px に丸めるとレール全体が 1px ずつ
+     上へずれるので、既定値をそのまま段として持つ。 */
+  --text-h3: 1.17rem;
+  --text-body: 1rem; /* 16px 本文 */
+  --text-body--line-height: 1.5;
+  --text-grid: 0.875rem; /* 14px 台帳・監査ブロック */
+  --text-note: 0.8125rem; /* 13px 副題・工程ラベル */
 
-  /* --- Accent. One dominant accent (pine) spent on primary actions and the
-     wordmark; amber appears ONLY as the focus ring — a deliberate, scarce
-     signal. Resist adding more colors; add neutrals instead. --- */
-  --color-pine: #2f5743;
-  --color-pine-deep: #21402f;
-  --color-amber: #c2921e;
-  --color-amber-deep: #8a6712; /* amber legible at small sizes (warning text on soft fills) */
-  --color-danger: #a2372c;
+  /* --- 面と文字。モック `--bg` / `--w` / `--i` / `--m` / `--l`。 --- */
+  --color-paper: #eef2ef; /* アプリのキャンバス */
+  --color-surface: #ffffff; /* カード・入力・セル */
+  --color-ink: #17251f; /* 本文 */
+  --color-ink-muted: #52655c; /* 補足 */
+  --color-line: #cbd6d0; /* 罫線 */
 
-  /* Glasses reservation source-parity roles: translated from the static
-     reception mock so service CSS never needs raw palette values. */
-  --color-glass-canvas: #f6f8f4;
-  --color-glass-home-canvas: #176b5b;
-  --color-glass-paper: #fffefd;
-  --color-glass-green-050: #f4f9f1;
-  --color-glass-green-100: #e9f3e5;
-  --color-glass-green-600: #59a648;
-  --color-glass-green-500: #82ae6f;
-  --color-glass-green-700: #3f8a36;
-  --color-glass-green-800: #2f702e;
-  --color-glass-green-900: #235626;
-  --color-glass-green-source-mid: #347b2c;
-  --color-glass-green-source-end: #448b35;
-  --color-glass-line-strong: #d6ded3;
-  --color-glass-warm: #fff8eb;
-  --color-glass-warning: #c9822a;
-  --color-glass-blue: #4c88bd;
-  --color-glass-blue-light: #93b9d9;
-  --color-glass-green-150: #d9e7cd;
-  --color-glass-recording-bg: #235626;
-  --color-glass-recording-dot: #ed6a60;
-  --color-glass-recording-wave: #9ed582;
-  --color-glass-recording-muted: #b8d0b3;
+  /* --- ブランド。緑ひとつがヘッダー・主操作・選択状態を担う。 --- */
+  --color-pine: #1f604b; /* モック --g */
+  --color-on-pine: #ffffff;
+  /*
+   * 緑バーの上の細枠。モックは `#ffffff70`（43.92%）で、Tailwind の不透明度は
+   * 1% 刻みなので 44% では 1 つずれる。緑に重ねた結果の色をそのまま持つ。
+   */
+  --color-pine-hairline: #81a69a;
+  /*
+   * Web 予約の進捗の目盛り。モックは `#ffffff55`（33.33%）で、こちらも
+   * Tailwind の 1% 刻みでは表せない。緑に重ねた結果の色を持つ。
+   */
+  --color-pine-tick: #699587;
+  --color-pine-deep: #184b3a; /* SP のしおり帯 */
+  --color-pine-soft: #e1efe8; /* 選択・予約セルの地 — モック --gs */
 
-  /* --- Shape. Controls share one radius; anything larger must be earned. --- */
-  --radius-ctl: 0.3125rem;
+  /* --- 状態。地色と、その上で読める文字色を対で持つ。 --- */
+  --color-danger: #8b3b2c; /* 失敗・現在時刻線・破壊的操作 — モック --warn */
+  --color-on-danger: #ffffff;
+  --color-danger-soft: #fff0ed; /* 運用面の失敗行・顧客の注意事項の地 */
+  --color-danger-line: #d4a299; /* 同上の罫線 */
+  /*
+   * 同じ「失敗」でも面ごとに hex が違う。役割で寄せると、並べたときに
+   * 面の塗りだけが少し違うという最も気づきにくい形の食い違いになるので、
+   * 出どころごとに持つ。
+   */
+  --color-danger-panel: #fff1ed; /* 例外画面と予約フローの注意事項の地 */
+  --color-danger-panel-line: #d2a099; /* 例外画面の罫線 */
+  --color-attention-line: #d6a99f; /* 予約フローの注意事項の罫線 */
+  --color-record: #9b3425; /* 録音の経過時間（approved.html の --danger） */
+  --color-walkin-soft: #fff0e8; /* 台帳のウォークイン行 */
+  --color-amber: #7a5415; /* 失敗ではない注意 */
+  --color-amber-ink: #4b3713; /* 琥珀の面の上に置く文字 */
+  --color-amber-soft: #fff6e5; /* 琥珀の面 */
+  --color-amber-line: #d4ad66; /* 琥珀の罫線 */
+  --color-notice-soft: #fff7e9; /* 予約フローの案内 `.notice` */
+  --color-notice-line: #c58d36;
+  /* 顧客向け Web 予約の注意カード `.error`。琥珀より赤寄りで、業務画面の
+     `--color-amber-*` とは別の hex なので統合せずに持つ。 */
+  --color-alert-soft: #fff3e8;
+  --color-alert-line: #c49550;
+  --color-focus: #005fcc; /* フォーカスリング専用 */
+  --color-accent: #075f78; /* モックが使う唯一の非緑アクセント（進行中の工程） */
+
+  /* --- 作業領域の中の構造的な地色。役割が違うので統合しない。 --- */
+  --color-panel: #e7ede9; /* 詳細に並ぶ一覧の列 — staff `.list` */
+  --color-side: #e5ece8; /* 管理画面の節ナビ — operations `.side` */
+  --color-steps: #e4ebe7; /* 設定ガイドの工程レール — settings `.steps` */
+  --color-rail: #f6f8f6; /* 予約フローの右レール — approved `.aside` */
+  --color-summary: #f0f5f2; /* Web 予約の要約帯 */
+  --color-grid-head: #dce5e0; /* 台帳の見出し行 */
+  --color-app-frame: #dce3df; /* 端末外枠の外側 */
+
+  /* --- 端末モック（reception-history-approved / store-switch-approved）の方言。
+     この 2 面は他より後に描かれていて、寸法体系ごと違う。上に 25px の iOS
+     ステータスバーが乗り、緑のバーは 67px（他は 76px）、本文は 10〜11px、緑は
+     #286b55 と僅かに明るい。役割は同じでも値が違うので既存トークンへ寄せず、
+     `terminal-` の名前で並べて持つ（寄せると 2 面だけが 1px ずつ狂う）。 --- */
+  --text-terminal-h2: 1.3125rem; /* 21px 受付履歴の見出し */
+  --text-terminal-h3: 1.17rem; /* 18.72px ブラウザ既定の h3（切替シートの見出し） */
+  --text-terminal-body: 0.6875rem; /* 11px 検索欄・日付見出し・時刻 */
+  --text-terminal-note: 0.625rem; /* 10px 本文 */
+  --text-terminal-micro: 0.5625rem; /* 9px 台帳の見出し行 */
+
+  --color-terminal-pine: #286b55;
+  --color-terminal-pine-soft: #dfeee7;
+  --color-terminal-nav: #d9ebe3; /* バーの非選択タブの文字 */
+  --color-terminal-chip: #ffffff16; /* バーの中の店舗ボタンの地 */
+  --color-terminal-chip-line: #ffffff5c;
+  --color-terminal-paper: #f7f8f6;
+  --color-terminal-ink: #1a2923;
+  --color-terminal-ink-muted: #68776f;
+  --color-terminal-line: #d7ded9;
+  --color-terminal-panel: #edf1ee; /* 受付履歴の一覧列 */
+  --color-terminal-status: #fbfcfb; /* iOS ステータスバー */
+  --color-terminal-danger: #b74834; /* 受付停止の店舗 */
+  --color-terminal-selected: #f2f8f4; /* 選択中の記録 */
+  --color-terminal-highlight: #f0f7f3; /* 選択中の店舗行 */
+  --color-terminal-hairline: #e8ece9; /* カードの中の行罫 */
+  --color-terminal-store-line: #e7ebe8; /* 切替シートの行罫 */
+  --color-terminal-filter-line: #c8d4cd; /* 絞り込みボタンの罫 */
+  --color-terminal-grid-head: #e9eeeb;
+  --color-terminal-grid-line: #e5eae7;
+  --color-terminal-boundary: #f4f6f4; /* 切替シートの末尾の但し書き */
+  --color-terminal-boundary-ink: #5f7168;
+  --color-terminal-wave: #89b4a2; /* 録音の波形 */
+  --color-terminal-veil: #17382b66; /* シートの背後を伏せる幕 */
+  --color-terminal-shadow: #10271e66;
+
+  /* --- 形。モックは 8px（操作）と 9px（カード）が基本で、
+     全画面のパネルだけ 12px、シート状のものが 14px。 --- */
+  --radius-ctl: 0.5rem; /* 8px */
+  --radius-card: 0.5625rem; /* 9px */
+  --radius-panel: 0.75rem; /* 12px */
+  --radius-sheet: 0.875rem; /* 14px */
   --radius-none: 0;
   --radius-full: 9999px;
   --radius-circle: 50%;
   --radius-pill: 9999px;
-  --radius-brand: 0.7rem 0.7rem 0.55rem 0.55rem;
+
+  /* --- 分析「運用診断」だけが持つ寸法体系。承認済みモック
+     `analytics-approved.html` は他の面より一段小さく組まれており（バー 67px、
+     本文 10〜11px）、緑も罫線も僅かに違う hex を使う。役割が同じでも値が違う
+     ので、上の段へ混ぜずに `viz` として分けて持つ。混ぜると分析を直すたびに
+     全画面が動く。 --- */
+  --color-viz-pine: #286b55; /* モック --g */
+  --color-viz-pine-soft: #dfeee7; /* モック --gs */
+  --color-viz-on-pine-muted: #d9ebe3; /* バーの中の非選択タブ */
+  --color-viz-paper: #f7f8f6; /* モック --p */
+  --color-viz-ink: #1a2923; /* モック --i */
+  --color-viz-ink-muted: #68776f; /* モック --m */
+  --color-viz-line: #d7ded9; /* モック --l */
+  --color-viz-hairline: #e5eae7; /* 定義書きの区切り */
+  --color-viz-critical: #ee654f; /* 目標を大きく超えた時間帯 — モック --co */
+  --color-viz-warn: #f3a450; /* 目標に迫る時間帯 — モック --amber */
+  --color-viz-bar: #82bda5; /* 通常の時間帯 */
+  --color-viz-axis: #aebcb4; /* グラフの基線 */
+  --color-viz-panel: #e9eeeb; /* 指標の一覧 */
+  --color-viz-rail: #f0f2ef; /* 右の点検欄 */
+  --color-viz-status: #fbfcfb; /* 端末のステータスバー */
+
+  --text-viz-figure: 2rem; /* 32px 中央値 */
+  --text-viz-body: 0.6875rem; /* 11px 指標名・所見 */
+  --text-viz-note: 0.625rem; /* 10px 補足・カード本文 */
+  --text-viz-fine: 0.5625rem; /* 9px 目盛と定義書き */
+
+  /* --- 設定ガイドのスマートフォン版だけが持つ体系。承認済みモック
+     `settings-responsive-approved.html` は iPad 版（1194px）とは別に組まれて
+     いて、緑も罫線も文字寸法も違う。役割が同じでも値が違うので分けて持つ。
+     先頭 5 つは `viz` と同じ hex だが、出どころが別のモックで今後も別々に
+     動くため、片方へ寄せない（寄せると分析を直すたびに SP が動く）。 --- */
+  /* 設定ガイド SP の等幅（`font:600 9px 'IBM Plex Mono'`）。モックは予備を
+     1 つも並べていないので、Plex Mono が持たない全角スペースと ✓ はブラウザ
+     既定の書体に落ちる。`--font-mono` のように ui-monospace を挟むと、その
+     2 文字だけ幅が変わって行が丸ごとずれる。 */
+  --font-sp-mono: "IBM Plex Mono";
+
+  --color-sp-pine: #286b55; /* モック --g */
+  --color-sp-pine-soft: #dfeee7; /* 済んだ工程の丸 — モック --gs */
+  --color-sp-line: #d7ded9; /* モック --l */
+  --color-sp-ink: #1a2923; /* 本文 */
+  --color-sp-ink-muted: #68776f; /* 工程名 — モック --m */
+  --color-sp-rail: #f4f6f4; /* 工程帯の地と、丸の内側 */
+  --color-sp-rail-line: #c7d1cc; /* 工程どうしをつなぐ線 */
+  --color-sp-circle-line: #aab9b1; /* これからの工程の丸 */
+  --color-sp-changed: #f2f8f4; /* この工程で変えた欄の地 */
+  --color-sp-ring: #cfe4da; /* 現在の工程の丸を囲む輪 */
+
+  --text-sp-title: 1.25rem; /* 20px 本文の見出し */
+  --text-sp-head: 1.0625rem; /* 17px ワードマーク */
+  --text-sp-body: 0.625rem; /* 10px 欄の中身 */
+  --text-sp-fine: 0.5625rem; /* 9px 進捗の見出し・丸の数字・ステータスバー */
+  --text-sp-step: 0.4375rem; /* 7px 工程名 */
 }

@@ -4,8 +4,9 @@
 scenario に**ちょうど 1 回**対応付ける。これは E2E の line coverage ではなく、仕様の
 網羅性を検証する 100% gate である。
 
-feature spec は先頭で `- ステータス: Draft` または `- ステータス: Approved` を必ず宣言する。
-`Approved` の定義だけが mapping の分母になる。UC/AC は `- AC-<TAG>-01: ...` または
+feature spec は先頭で `- ステータス: Draft` / `- ステータス: Approved` / `- ステータス: Superseded`
+のいずれかを必ず宣言する。`Approved` の定義だけが mapping の分母になる。`Superseded` は
+後継 spec に置換された履歴であり、分母にも `@e2e-covers` の対応先にもならない。UC/AC は `- AC-<TAG>-01: ...` または
 `- UC-<TAG>-01: ...` という definition bullet でのみ宣言し、同じ ID を複数 spec で定義しない。
 本文中の ID 参照は validator の分母に含めない。
 

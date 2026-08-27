@@ -185,7 +185,7 @@ export function Chip({
       className={cn(
         'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 font-sans text-xs font-medium',
         tone === 'success' && 'bg-pine/10 text-pine',
-        tone === 'warning' && 'bg-amber/15 text-amber-deep',
+        tone === 'warning' && 'bg-amber/15 text-amber',
         tone === 'danger' && 'bg-danger/10 text-danger',
         tone === 'neutral' && 'bg-line/60 text-ink-muted',
         className,
@@ -196,7 +196,7 @@ export function Chip({
         className={cn(
           'size-1.5 rounded-full',
           tone === 'success' && 'bg-pine',
-          tone === 'warning' && 'bg-amber-deep',
+          tone === 'warning' && 'bg-amber',
           tone === 'danger' && 'bg-danger',
           tone === 'neutral' && 'bg-ink-muted',
         )}

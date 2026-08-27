@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, test, vi } from 'vitest'
 import { createStoreSwitchController } from './store-switch'
 
 describe('selected-store state', () => {
@@ -41,4 +41,24 @@ describe('selected-store state', () => {
     expect(controller).not.toHaveProperty('confirmDiscard')
     expect(controller).not.toHaveProperty('commitSwitch')
   })
+})
+
+test('forgets the unsaved input once the operator no longer has any', () => {
+  // Draft state is a claim about right now. Without a way to withdraw it, a
+  // finished or discarded booking would keep interrupting every later switch
+  // with a discard prompt that has nothing to discard (UC-EYEX-065).
+  const controller = createStoreSwitchController(
+    { id: 'store-a', name: '銀座店', isActive: true },
+    async () => true,
+  )
+  controller.setDraftState({ form: { date: '2026-09-01' } })
+  expect(controller.prepareSwitch({ id: 'store-b', name: '丸の内店', isActive: true }).kind).toBe(
+    'confirm_discard',
+  )
+
+  controller.clearDraftState()
+
+  expect(controller.prepareSwitch({ id: 'store-b', name: '丸の内店', isActive: true }).kind).toBe(
+    'ready',
+  )
 })

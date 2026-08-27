@@ -70,7 +70,12 @@ export async function authFetch(
 ): Promise<Response> {
   const send = () => {
     const headers = new Headers(init.headers)
-    if (accessToken) headers.set('authorization', `Bearer ${accessToken}`)
+    // The staff session token is a default, not an override. A caller that set
+    // `authorization` itself is presenting a different, narrower proof — a
+    // personal re-authentication grant — and replacing it would let a
+    // management action run as ordinary staff work (AC-EYEX-82, 87, 101).
+    if (accessToken && !headers.has('authorization'))
+      headers.set('authorization', `Bearer ${accessToken}`)
     return fetch(input, { ...init, headers })
   }
   const response = await send()

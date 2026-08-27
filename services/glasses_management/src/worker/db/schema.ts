@@ -1,4 +1,4 @@
-import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
+import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
 
 /** Admin is the source of truth; this is the tenant-authenticated local copy.
  * Organization ids retain the canonical admin format and may be non-UUID. */
@@ -90,6 +90,10 @@ export const sharedTerminalReauthSessions = sqliteTable(
     tokenHash: text('token_hash').notNull(),
     actionClass: text('action_class').notNull(),
     expiresAt: text('expires_at').notNull(),
+    // A grant proves one manager stood at the iPad for one action. Once spent it
+    // must never authorise another: otherwise a single PIN entry becomes a
+    // bearer capability over every management action until it expires.
+    consumedAt: text('consumed_at'),
     createdAt: text('created_at').notNull(),
   },
   (table) => [
@@ -170,6 +174,10 @@ export const availabilitySettings = sqliteTable(
     storeId: text('store_id').notNull(),
     version: integer('version').notNull(),
     receptionStatus: text('reception_status').notNull(),
+    // Whether this store runs the chain-wide value or an explicit override
+    // (AC-EYEX-48). Rows written before the settings-publication loop are null
+    // and read as a store override.
+    origin: text('origin'),
     updatedBy: text('updated_by').notNull(),
     // Existing reservations predate operational progress. New writes set this
     // field, while migration-era rows use `createdAt` as their read fallback.
@@ -200,6 +208,8 @@ export const webBookingPublications = sqliteTable(
     longitude: text('longitude'),
     publicPurposeIdsJson: text('public_purpose_ids_json').notNull(),
     publicPurposesJson: text('public_purposes_json'),
+    /* 店舗ページの「対応サービス」。来店目的とは別軸なので別列で持つ。既存行は null。 */
+    publicServicesJson: text('public_services_json'),
     version: integer('version').notNull(),
     publishedAt: text('published_at').notNull(),
     updatedAt: text('updated_at').notNull(),
@@ -706,6 +716,12 @@ export const customers = sqliteTable(
     phoneNormalized: text('phone_normalized').notNull(),
     email: text('email'),
     visitCount: integer('visit_count').notNull(),
+    /**
+     * Set only by an explicit, acknowledged merge (UC-EYEX-181). The losing
+     * record is kept — never deleted — so the merge stays auditable and
+     * reversible by inspection.
+     */
+    mergedIntoCustomerId: text('merged_into_customer_id'),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
   },
@@ -713,5 +729,498 @@ export const customers = sqliteTable(
     uniqueIndex('customers_org_phone_unique_idx').on(table.organizationId, table.phoneNormalized),
     index('customers_org_phone_idx').on(table.organizationId, table.phoneNormalized),
     index('customers_org_primary_store_idx').on(table.organizationId, table.primaryStoreId),
+  ],
+)
+
+/**
+ * One prescription measurement. The latest row is the current prescription and
+ * every older row stays readable as history, so the two are never confused.
+ * Powers are stored as numbers and formatted once, server-side, on read.
+ */
+export const customerPrescriptions = sqliteTable(
+  'customer_prescriptions',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    storeId: text('store_id').notNull(),
+    customerId: text('customer_id').notNull(),
+    measuredOn: text('measured_on').notNull(),
+    recordedBy: text('recorded_by').notNull(),
+    rightSphere: real('right_sphere').notNull(),
+    leftSphere: real('left_sphere').notNull(),
+    pupillaryDistance: real('pupillary_distance').notNull(),
+    addPower: real('add_power'),
+    createdAt: text('created_at').notNull(),
+  },
+  (table) => [
+    index('customer_prescriptions_org_customer_idx').on(
+      table.organizationId,
+      table.customerId,
+      table.measuredOn,
+    ),
+    index('customer_prescriptions_org_store_customer_idx').on(
+      table.organizationId,
+      table.storeId,
+      table.customerId,
+    ),
+  ],
+)
+
+/** A staff service note, attributed to the store and person who wrote it. */
+export const customerNotes = sqliteTable(
+  'customer_notes',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    storeId: text('store_id').notNull(),
+    customerId: text('customer_id').notNull(),
+    recordedOn: text('recorded_on').notNull(),
+    recordedBy: text('recorded_by').notNull(),
+    body: text('body').notNull(),
+    createdAt: text('created_at').notNull(),
+  },
+  (table) => [
+    index('customer_notes_org_customer_idx').on(
+      table.organizationId,
+      table.customerId,
+      table.recordedOn,
+    ),
+    index('customer_notes_org_store_customer_idx').on(
+      table.organizationId,
+      table.storeId,
+      table.customerId,
+    ),
+  ],
+)
+
+/** Glasses the customer already owns, kept per selling store. */
+export const customerOwnedGlasses = sqliteTable(
+  'customer_owned_glasses',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    storeId: text('store_id').notNull(),
+    customerId: text('customer_id').notNull(),
+    label: text('label').notNull(),
+    purchasedOn: text('purchased_on').notNull(),
+    lensType: text('lens_type').notNull(),
+    createdAt: text('created_at').notNull(),
+  },
+  (table) => [
+    index('customer_owned_glasses_org_customer_idx').on(
+      table.organizationId,
+      table.customerId,
+      table.purchasedOn,
+    ),
+    index('customer_owned_glasses_org_store_customer_idx').on(
+      table.organizationId,
+      table.storeId,
+      table.customerId,
+    ),
+  ],
+)
+
+/**
+ * Restricted 注意事項. Only a published, never-hidden row is readable, and only
+ * by an actor holding `attention.read`. `status` / `version` / `published_at` /
+ * `hidden_at` carry the versioned publish, revise and hide workflow that the
+ * permission split (UC-EYEX-140) will drive; reads already honour them.
+ */
+export const customerAttentionNotes = sqliteTable(
+  'customer_attention_notes',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    storeId: text('store_id').notNull(),
+    customerId: text('customer_id').notNull(),
+    /**
+     * The logical note every version of it shares. Rows written before the
+     * versioned workflow existed carry no value and are read as their own id.
+     */
+    noteId: text('note_id'),
+    body: text('body').notNull(),
+    /** 発生日時 (UC-EYEX-143); an ISO instant, distinct from `recorded_on`. */
+    occurredAt: text('occurred_at'),
+    // An attention note without a basis is a rumour, so this is not nullable.
+    basis: text('basis').notNull(),
+    /** 推奨対応 (UC-EYEX-143). */
+    recommendedAction: text('recommended_action'),
+    /** 権限店舗のみ / チェーン全体 (UC-EYEX-142), frozen per version. */
+    sharingScope: text('sharing_scope'),
+    status: text('status').notNull(),
+    version: integer('version').notNull(),
+    /** The review outcome (公開 / 差戻し / 却下) and its mandatory reason. */
+    reviewedBy: text('reviewed_by'),
+    reviewedAt: text('reviewed_at'),
+    reviewReason: text('review_reason'),
+    /** The version this one revised; the previous row is never overwritten. */
+    previousVersionId: text('previous_version_id'),
+    recordedBy: text('recorded_by').notNull(),
+    recordedOn: text('recorded_on').notNull(),
+    publishedAt: text('published_at'),
+    hiddenAt: text('hidden_at'),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [
+    index('customer_attention_notes_org_customer_idx').on(
+      table.organizationId,
+      table.customerId,
+      table.recordedOn,
+    ),
+    index('customer_attention_notes_org_store_customer_idx').on(
+      table.organizationId,
+      table.storeId,
+      table.customerId,
+    ),
+    index('customer_attention_notes_org_note_idx').on(
+      table.organizationId,
+      table.noteId,
+      table.version,
+    ),
+  ],
+)
+
+/**
+ * 注意事項の権限・公開方式・共有範囲の設定 (UC-EYEX-139〜142).
+ *
+ * One row per organization default and one per store override. The default row
+ * uses the `'*'` store sentinel rather than NULL, because SQLite treats NULLs
+ * as distinct in a unique index and would silently allow two defaults.
+ */
+export const attentionSettings = sqliteTable(
+  'attention_settings',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    storeId: text('store_id').notNull(),
+    reviewMode: text('review_mode').notNull(),
+    sharingScope: text('sharing_scope').notNull(),
+    /** '0' / '1'; whether a store override may exist at all (UC-EYEX-139). */
+    storeOverrideAllowed: text('store_override_allowed').notNull(),
+    /** `[{ capability, minimumRole }]`, validated by Zod on every read. */
+    capabilitiesJson: text('capabilities_json').notNull(),
+    updatedBy: text('updated_by').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('attention_settings_org_store_idx').on(table.organizationId, table.storeId),
+  ],
+)
+
+/**
+ * A parked settings change. Distinct from `availability_settings`: the draft
+ * carries its own monotonic version and never affects reception until a
+ * publication applies it (UC-EYEX-095).
+ */
+export const settingsDrafts = sqliteTable(
+  'settings_drafts',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    storeId: text('store_id').notNull(),
+    draftVersion: integer('draft_version').notNull(),
+    /** The published settings version this draft was derived from. */
+    baseVersion: integer('base_version').notNull(),
+    status: text('status').notNull(),
+    origin: text('origin').notNull(),
+    restoredFromVersionId: text('restored_from_version_id'),
+    payloadJson: text('payload_json').notNull(),
+    savedBy: text('saved_by').notNull(),
+    savedAt: text('saved_at').notNull(),
+  },
+  (table) => [
+    // One open draft per store keeps "the draft" an unambiguous object for the
+    // impact step and for publication.
+    uniqueIndex('settings_drafts_org_store_idx').on(table.organizationId, table.storeId),
+  ],
+)
+
+/** How a conflicting future reservation was handled before publication (UC-EYEX-165). */
+export const settingsDraftConflictResolutions = sqliteTable(
+  'settings_draft_conflict_resolutions',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    storeId: text('store_id').notNull(),
+    draftId: text('draft_id').notNull(),
+    reservationId: text('reservation_id').notNull(),
+    resolution: text('resolution').notNull(),
+    note: text('note').notNull(),
+    resolvedBy: text('resolved_by').notNull(),
+    resolvedAt: text('resolved_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('settings_conflict_resolution_draft_reservation_idx').on(
+      table.draftId,
+      table.reservationId,
+    ),
+  ],
+)
+
+/** An immutable published settings snapshot; restoring one only creates a draft. */
+export const settingsVersions = sqliteTable(
+  'settings_versions',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    storeId: text('store_id').notNull(),
+    version: integer('version').notNull(),
+    origin: text('origin').notNull(),
+    payloadJson: text('payload_json').notNull(),
+    changedFieldsJson: text('changed_fields_json').notNull(),
+    sourceDraftId: text('source_draft_id'),
+    publicationId: text('publication_id'),
+    publishedBy: text('published_by').notNull(),
+    publishedAt: text('published_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('settings_versions_org_store_version_idx').on(
+      table.organizationId,
+      table.storeId,
+      table.version,
+    ),
+  ],
+)
+
+/** One publication run: immediate or scheduled for a JST instant (UC-EYEX-094). */
+export const settingsPublications = sqliteTable(
+  'settings_publications',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    storeId: text('store_id').notNull(),
+    draftId: text('draft_id').notNull(),
+    versionId: text('version_id').notNull(),
+    status: text('status').notNull(),
+    /** Null for an immediate publication. */
+    scheduledAt: text('scheduled_at'),
+    executedAt: text('executed_at'),
+    appliedCount: integer('applied_count').notNull(),
+    failedCount: integer('failed_count').notNull(),
+    ledgerEntriesAffected: integer('ledger_entries_affected').notNull(),
+    slotDate: text('slot_date').notNull(),
+    previousSlotCount: integer('previous_slot_count').notNull(),
+    publishedSlotCount: integer('published_slot_count').notNull(),
+    createdBy: text('created_by').notNull(),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [
+    index('settings_publications_org_scheduled_idx').on(
+      table.organizationId,
+      table.status,
+      table.scheduledAt,
+    ),
+  ],
+)
+
+/** Per-store outcome; the unique index is what makes a retry non-duplicating. */
+export const settingsPublicationTargets = sqliteTable(
+  'settings_publication_targets',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    publicationId: text('publication_id').notNull(),
+    storeId: text('store_id').notNull(),
+    status: text('status').notNull(),
+    appliedVersion: integer('applied_version'),
+    failureReason: text('failure_reason'),
+    appliedAt: text('applied_at'),
+  },
+  (table) => [
+    uniqueIndex('settings_publication_targets_publication_store_idx').on(
+      table.publicationId,
+      table.storeId,
+    ),
+  ],
+)
+
+/** The chain-wide common value a store override can be released back to (UC-EYEX-092, 160). */
+export const settingsChainDefaults = sqliteTable(
+  'settings_chain_defaults',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    version: integer('version').notNull(),
+    payloadJson: text('payload_json').notNull(),
+    updatedBy: text('updated_by').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [uniqueIndex('settings_chain_defaults_org_idx').on(table.organizationId)],
+)
+
+/**
+ * Recording metadata. The audio body itself lives only in the private R2
+ * bucket; D1 keeps the reception session, the lifecycle state, the retention
+ * deadline, the hold and the object key so a deletion can be reconciled.
+ */
+export const recordings = sqliteTable(
+  'recordings',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    storeId: text('store_id').notNull(),
+    // A recording belongs to a reception session; the reservation is optional
+    // and only linked once the reception actually produced one.
+    receptionSessionId: text('reception_session_id').notNull(),
+    reservationId: text('reservation_id'),
+    recorderType: text('recorder_type').notNull(),
+    recorderId: text('recorder_id').notNull(),
+    startedAt: text('started_at').notNull(),
+    endedAt: text('ended_at').notNull(),
+    durationSeconds: integer('duration_seconds').notNull(),
+    endReason: text('end_reason').notNull(),
+    state: text('state').notNull(),
+    contentType: text('content_type').notNull(),
+    // Unguessable, tenant-scoped R2 key. Never returned to a client.
+    storageKey: text('storage_key').notNull(),
+    retentionUntil: text('retention_until'),
+    holdReason: text('hold_reason'),
+    heldBy: text('held_by'),
+    heldAt: text('held_at'),
+    failureReason: text('failure_reason'),
+    deletedAt: text('deleted_at'),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+    version: integer('version').notNull(),
+  },
+  (table) => [
+    index('recordings_org_store_state_idx').on(table.organizationId, table.storeId, table.state),
+    index('recordings_org_retention_idx').on(table.organizationId, table.retentionUntil),
+    index('recordings_org_reservation_idx').on(table.organizationId, table.reservationId),
+    uniqueIndex('recordings_org_session_unique_idx').on(
+      table.organizationId,
+      table.receptionSessionId,
+    ),
+    uniqueIndex('recordings_storage_key_unique_idx').on(table.storageKey),
+  ],
+)
+
+/** Operational retention per store; it may only lengthen the legal minimum. */
+export const recordingRetentionSettings = sqliteTable(
+  'recording_retention_settings',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    storeId: text('store_id').notNull(),
+    confirmedRetentionDays: integer('confirmed_retention_days').notNull(),
+    discardedRetentionHours: integer('discarded_retention_hours').notNull(),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('recording_retention_org_store_unique_idx').on(table.organizationId, table.storeId),
+  ],
+)
+
+/**
+ * Organization-wide analytics configuration (UC-EYEX-180). The suppression
+ * threshold is a privacy control, so it belongs to the organization rather
+ * than to a store that could quietly lower it for itself.
+ */
+export const analyticsSettings = sqliteTable(
+  'analytics_settings',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    smallSampleThreshold: integer('small_sample_threshold').notNull(),
+    /** `AnalyticsTarget[]`; absent metrics simply have no target. */
+    targetsJson: text('targets_json').notNull(),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [uniqueIndex('analytics_settings_org_unique_idx').on(table.organizationId)],
+)
+
+/** Per-store warning conditions and their notification targets (UC-EYEX-179). */
+export const alertSettings = sqliteTable(
+  'alert_settings',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    storeId: text('store_id').notNull(),
+    /** `AlertCondition[]`. */
+    conditionsJson: text('conditions_json').notNull(),
+    /** Email addresses a dispatcher would notify. */
+    notificationTargetsJson: text('notification_targets_json').notNull(),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('alert_settings_org_store_unique_idx').on(table.organizationId, table.storeId),
+  ],
+)
+
+/**
+ * One inbox for お知らせ and アラート (UC-EYEX-178). 既読 and 対応済み are
+ * separate columns on purpose: reading an alert is not handling it, and the
+ * two are frequently done by different people.
+ */
+export const operationalAlerts = sqliteTable(
+  'operational_alerts',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    storeId: text('store_id').notNull(),
+    kind: text('kind').notNull(),
+    code: text('code').notNull(),
+    title: text('title').notNull(),
+    reason: text('reason').notNull(),
+    subject: text('subject').notNull(),
+    subjectType: text('subject_type').notNull(),
+    subjectId: text('subject_id').notNull(),
+    occurredAt: text('occurred_at').notNull(),
+    nextAction: text('next_action').notNull(),
+    /** Condition + subject + occurrence; makes re-evaluation idempotent. */
+    dedupeKey: text('dedupe_key').notNull(),
+    readAt: text('read_at'),
+    readBy: text('read_by'),
+    resolvedAt: text('resolved_at'),
+    resolvedBy: text('resolved_by'),
+    resolutionNote: text('resolution_note'),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('operational_alerts_org_dedupe_unique_idx').on(
+      table.organizationId,
+      table.dedupeKey,
+    ),
+    index('operational_alerts_org_store_occurred_idx').on(
+      table.organizationId,
+      table.storeId,
+      table.occurredAt,
+    ),
+  ],
+)
+
+/**
+ * Anonymous web booking funnel steps (UC-EYEX-103). The session id is a
+ * client-generated opaque uuid and is never linked to a customer, so a funnel
+ * count can never be walked back to a person.
+ */
+export const webBookingFunnelEvents = sqliteTable(
+  'web_booking_funnel_events',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    storeId: text('store_id').notNull(),
+    sessionId: text('session_id').notNull(),
+    stage: text('stage').notNull(),
+    occurredAt: text('occurred_at').notNull(),
+  },
+  (table) => [
+    // At most four rows per session: a replayed step cannot inflate a funnel.
+    uniqueIndex('web_booking_funnel_org_session_stage_unique_idx').on(
+      table.organizationId,
+      table.sessionId,
+      table.stage,
+    ),
+    index('web_booking_funnel_org_store_occurred_idx').on(
+      table.organizationId,
+      table.storeId,
+      table.occurredAt,
+    ),
   ],
 )

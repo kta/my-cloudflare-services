@@ -1,0 +1,11 @@
+{
+  // Playwright specs run in Node, but `page.evaluate` callbacks are compiled
+  // into the browser. Keeping them in the Worker project would either fail to
+  // typecheck or force DOM types onto the Worker, where they do not exist.
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "types": []
+  },
+  "include": ["."]
+}

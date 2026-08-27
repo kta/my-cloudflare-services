@@ -1,6 +1,6 @@
 import type { LedgerWarning, ReceptionProgress } from '@app/contracts'
 
-export const DEFAULT_LONG_WAIT_THRESHOLD_MS = 12 * 60 * 1000
+const DEFAULT_LONG_WAIT_THRESHOLD_MS = 12 * 60 * 1000
 
 type LedgerWarningInput = {
   progress: ReceptionProgress | null

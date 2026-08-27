@@ -104,7 +104,11 @@ export function createSharedTerminalController(clock: SharedTerminalClock) {
       if (state.status === 'active') lock('page_exit')
     },
     handleApiError(status: number, body: { error?: string }) {
-      if (state.status !== 'active' || status !== 401 || body.error === undefined) return
+      // Also applies before a session exists: a revoked iPad presents its token
+      // first, and it must reach the re-registration screen rather than fall
+      // through to the ordinary staff sign-in (UC-EYEX-158, AC-EYEX-98).
+      if (state.status === 'locked' || state.status === 'revoked') return
+      if (status !== 401 || body.error === undefined) return
       if (terminalErrors.has(body.error as SharedTerminalReason))
         lock(body.error as SharedTerminalReason)
     },

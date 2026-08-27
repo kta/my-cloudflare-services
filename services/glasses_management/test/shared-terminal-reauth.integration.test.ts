@@ -263,3 +263,49 @@ describe('shared-terminal personal reauthentication', () => {
     await expect(mismatched.json()).resolves.toEqual({ error: 'reauth_scope_mismatch' })
   })
 })
+
+describe('a personal reauthentication grant is spent by the action it authorises', () => {
+  it('refuses a second management action on the same grant', async () => {
+    // The grant proves that a manager stood at the iPad and typed their PIN for
+    // one action. Leaving it valid for the rest of its five minutes turns it
+    // into a bearer capability over every management action on that terminal —
+    // one PIN entry, unbounded authority (UC-EYEX-138, AC-EYEX-82).
+    const terminal = await setupTerminal()
+    const issued = await SELF.fetch(
+      `${BASE}/api/shared-terminals/${terminal.terminal.id}/reauthenticate`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-shared-terminal-token': terminal.token },
+        body: JSON.stringify({
+          userId: terminal.managerId,
+          stretchedPin: 'pin-proof-from-browser',
+        }),
+      },
+    )
+    expect(issued.status).toBe(201)
+    const grant = ((await issued.json()) as { token: string }).token
+
+    // 端末の失効そのものを二度は使えないので、同じグラントで別の管理操作を試す。
+    const reauthentication = () =>
+      SELF.fetch(`${BASE}/api/shared-terminals/${terminal.terminal.id}/reauthentication`, {
+        headers: {
+          'x-shared-terminal-token': terminal.token,
+          'x-shared-terminal-reauth-token': grant,
+        },
+      })
+
+    const first = await reauthentication()
+    expect(first.status).toBe(200)
+
+    const second = await reauthentication()
+    expect(second.status).toBe(401)
+    await expect(second.json()).resolves.toEqual({ error: 'reauth_unauthorized' })
+
+    const rows = await env.DB.prepare(
+      'SELECT consumed_at FROM shared_terminal_reauth_sessions WHERE terminal_id = ?',
+    )
+      .bind(terminal.terminal.id)
+      .all<{ consumed_at: string | null }>()
+    for (const row of rows.results) expect(row.consumed_at).not.toBeNull()
+  })
+})

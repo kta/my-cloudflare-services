@@ -1,13 +1,17 @@
 import {
   AcceptInviteRequest,
+  AdminUserQuery,
   CreateOrganization,
   InviteRequest,
   IssueTokenRequest,
   LoginRequest,
   Organization,
+  PinResetStartRequest,
   PinVerificationRequest,
   Plan,
   RefreshRequest,
+  SetOwnPinRequest,
+  UserAssignmentUpdate,
 } from '@app/contracts'
 import {
   type AuthVariables,
@@ -32,7 +36,18 @@ import { z } from 'zod'
 import { type AuthDeps, acceptInvite, login, refresh, revokeOne } from './auth/service'
 import { invitations, organizations, users } from './db/schema'
 import { proxyLogin, proxyRefresh, proxyVerifyPin } from './domain-auth'
-import { syncOrganization } from './sync'
+import { syncOrganization, syncStoreMemberships } from './sync'
+import {
+  getUser,
+  hasPin,
+  listAudits,
+  listUsers,
+  membershipsFor,
+  setOwnPin,
+  startPinReset,
+  type UserAdminDeps,
+  updateAssignment,
+} from './users/service'
 
 // The admin SPA is served by this same Worker (same origin) — no CORS.
 export type Bindings = {
@@ -72,6 +87,18 @@ function authDeps(c: { env: Bindings }): AuthDeps {
     pepper: c.env.AUTH_PEPPER,
     jwtSecret: c.env.JWT_SECRET,
   }
+}
+/**
+ * 利用者管理・PIN の依存。時刻はここで 1 度だけ注入し、ハンドラやサービス層で
+ * `new Date()` を呼ばない。組織 ID は必ず JWT 由来(引数で受け取る)。
+ */
+function userAdminDeps(c: AdminContext): UserAdminDeps {
+  return { db: drizzle(c.env.DB), pepper: c.env.AUTH_PEPPER, now: new Date() }
+}
+/** 操作主体(JWT の sub)。監査の actor はリクエスト入力から取らない。 */
+function actor(c: AdminContext): { organizationId: string; userId: string } {
+  const auth = c.get('auth')
+  return { organizationId: auth.org, userId: auth.sub }
 }
 function clientIp(c: { req: { header: (k: string) => string | undefined } }): string {
   return c.req.header('cf-connecting-ip') ?? c.req.header('x-forwarded-for') ?? 'unknown'
@@ -175,12 +202,43 @@ app.use(
 app.use(
   '/api/*',
   except(
-    ['/api/health', '/api/auth/*', '/api/internal/*'],
+    [
+      '/api/health',
+      '/api/auth/*',
+      '/api/internal/*',
+      // テナントの本部管理者が使う利用者管理と、本人の PIN。運営限定ゲートの
+      // 対象外だが、下の専用ミドルウェアで認証・ロールを必ず要求する。
+      '/api/users',
+      '/api/users/*',
+      '/api/me/*',
+    ],
     tenantAuth(),
     requireRole('admin'),
     requireOperator(),
   ),
 )
+
+/*
+ * 利用者管理(UC-EYEX-149) は本部管理者だけの操作である。
+ *
+ * JWT の `role` では判定できない: `STANDARD_ROLE_BASE_ROLE` は店舗管理者にも
+ * `admin` を与えるので、ロールだけを門にすると店舗管理者がここを通過し、
+ * 自分の標準ロールを本部管理者へ書き換えられてしまう。標準ロールはサーバが
+ * D1 から引き直して判定する。
+ */
+function requireHeadOfficeAdmin(): MiddlewareHandler<{ Bindings: Bindings; Variables: Variables }> {
+  return async (c, next) => {
+    const { organizationId, userId } = actor(c as AdminContext)
+    const self = await getUser(userAdminDeps(c as AdminContext), organizationId, userId)
+    if (self?.standardRole !== 'head_office_admin') return c.json({ error: 'forbidden' }, 403)
+    await next()
+  }
+}
+
+app.use('/api/users', tenantAuth(), requireRole('admin'), requireHeadOfficeAdmin())
+app.use('/api/users/*', tenantAuth(), requireRole('admin'), requireHeadOfficeAdmin())
+// 個人 PIN(UC-EYEX-151): 本人であればロールを問わない。対象は常に JWT の sub。
+app.use('/api/me/*', tenantAuth())
 
 const routes = app
   .get('/api/health', (c) => c.json({ status: 'ok' as const }))
@@ -410,6 +468,101 @@ const routes = app
       return c.json({ emailed: false as const, acceptUrl }, 201)
     },
   )
+
+  // ---- User / role / store assignment administration (UC-EYEX-149) ----
+  .get('/api/users', zValidator('query', AdminUserQuery), async (c) => {
+    const { organizationId } = actor(c)
+    return c.json(await listUsers(userAdminDeps(c), organizationId, c.req.valid('query')))
+  })
+  .get('/api/users/:id', async (c) => {
+    const { organizationId } = actor(c)
+    const view = await getUser(userAdminDeps(c), organizationId, c.req.param('id'))
+    return view ? c.json(view) : c.json({ error: 'not_found' as const }, 404)
+  })
+  .patch('/api/users/:id', zValidator('json', UserAssignmentUpdate), async (c) => {
+    const { organizationId, userId } = actor(c)
+    const deps = userAdminDeps(c)
+    const changed = await updateAssignment(deps, {
+      organizationId,
+      actorUserId: userId,
+      userId: c.req.param('id'),
+      update: c.req.valid('json'),
+    })
+    if (!changed) return c.json({ error: 'not_found' as const }, 404)
+    const outcome = await syncStoreMemberships(
+      c.env.GLASSES_MANAGEMENT,
+      c.env.INTERNAL_KEY,
+      changed.memberships,
+    )
+    if (!outcome.ok) {
+      return c.json(
+        {
+          error: 'store_membership_sync_failed' as const,
+          userId: changed.view.id,
+          retryable: outcome.retryable,
+        },
+        502,
+      )
+    }
+    return c.json(changed.view)
+  })
+  // 同期障害からの明示的な回復。正本を読み直して同じ snapshot を再送するだけで、
+  // 新しい変更も他組織の payload も作らない。
+  .post('/api/users/:id/sync', async (c) => {
+    const { organizationId } = actor(c)
+    const memberships = await membershipsFor(userAdminDeps(c), organizationId, c.req.param('id'))
+    if (!memberships) return c.json({ error: 'not_found' as const }, 404)
+    const outcome = await syncStoreMemberships(
+      c.env.GLASSES_MANAGEMENT,
+      c.env.INTERNAL_KEY,
+      memberships,
+    )
+    if (!outcome.ok) {
+      return c.json(
+        {
+          error: 'store_membership_sync_failed' as const,
+          userId: c.req.param('id'),
+          retryable: outcome.retryable,
+        },
+        502,
+      )
+    }
+    return c.json({ userId: c.req.param('id'), synced: memberships.length })
+  })
+  .get('/api/users/:id/audits', async (c) => {
+    const { organizationId } = actor(c)
+    const audits = await listAudits(userAdminDeps(c), organizationId, c.req.param('id'))
+    return audits ? c.json(audits) : c.json({ error: 'not_found' as const }, 404)
+  })
+  // ---- Personal PIN (UC-EYEX-151) ----
+  // 管理者は本人確認の記録つきで再設定を開始できるだけで、PIN は読めず設定もできない。
+  .post('/api/users/:id/pin-reset', zValidator('json', PinResetStartRequest), async (c) => {
+    const { organizationId, userId } = actor(c)
+    const outcome = await startPinReset(userAdminDeps(c), {
+      organizationId,
+      actorUserId: userId,
+      userId: c.req.param('id'),
+      input: c.req.valid('json'),
+    })
+    if (!outcome.ok) return c.json({ error: 'not_found' as const }, 404)
+    return c.json(outcome.ticket, 201)
+  })
+  .get('/api/me/pin', async (c) => {
+    const { organizationId, userId } = actor(c)
+    const present = await hasPin(userAdminDeps(c), organizationId, userId)
+    if (present === null) return c.json({ error: 'not_found' as const }, 404)
+    return c.json({ hasPin: present })
+  })
+  .post('/api/me/pin', zValidator('json', SetOwnPinRequest), async (c) => {
+    const { organizationId, userId } = actor(c)
+    const outcome = await setOwnPin(userAdminDeps(c), {
+      organizationId,
+      userId,
+      input: c.req.valid('json'),
+    })
+    if (!outcome.ok) return c.json({ error: outcome.error }, outcome.status)
+    return c.json({ ok: true as const, hasPin: true as const })
+  })
 
 export type AppType = typeof routes
 
