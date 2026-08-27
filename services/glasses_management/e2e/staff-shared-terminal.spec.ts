@@ -176,6 +176,8 @@ function ledgerFor(date: string) {
       assignedStaffId: null,
       assignedEquipmentIds: [],
       nextGuidance: null,
+      // 予約行は purposeNames 必須（台帳セルの「目的 · 予約元」表示のため）。
+      purposeNames: ['視力測定'],
       warnings: [],
       version: 1,
     },
@@ -529,13 +531,6 @@ async function stubMicrophone(page: Page) {
 /**
  * 端末のタイマーを Playwright の時計へ差し替える。無操作期限を確定的に
  * 進めるためであり、共有端末はどのシナリオでも同じ時計の上で動かす。
- *
- * NOTE: 2026-08 時点の `StaffWorkspace` は `createSharedTerminalController`
- * へ素の `setTimeout` / `clearTimeout` を渡しており、ブラウザではレシーバが
- * 外れて `Illegal invocation` になる（セッション開始が catch され、端末が
- * 「利用は停止されています」になる）。`page.clock.install()` は関数を素の
- * JS 実装へ置き換えるため、この不具合を迂回する。実機の共有 iPad を直す
- * には `StaffWorkspace` 側で `window` に束縛して渡す必要がある。
  */
 async function installTerminalClock(page: Page) {
   await page.clock.install()
@@ -545,14 +540,17 @@ async function installTerminalClock(page: Page) {
 async function openSharedTerminal(page: Page) {
   await page.setViewportSize(VIEWPORT)
   await page.goto(ENTRY)
-  await expect(page.getByRole('heading', { name: '銀座店のホーム' })).toBeVisible()
+  // ホームには見出しが無い。主操作の群が出たことをもって到達とみなす。
+  await expect(page.getByRole('navigation', { name: '主操作' })).toBeVisible()
 }
 
-/** ヘッダー管理メニュー「録音運用」まで進める。 */
+/** ホームの緑帯「設定」→ 共通サイドバーの「録音運用」まで進める。 */
 async function openRecordingOps(page: Page) {
+  // サイドバーはホームでは出ないので、まず設定の面へ移ってから柱を使う。
+  await page.getByRole('banner').getByRole('button', { name: '設定' }).click()
   await page
-    .getByRole('navigation', { name: '管理メニュー' })
-    .getByRole('button', { name: '録音運用' })
+    .getByRole('navigation', { name: '画面の一覧' })
+    .getByRole('button', { name: '録音運用', exact: true })
     .click()
   const screen = page.getByRole('region', { name: '録音運用' })
   await expect(screen).toBeVisible()
@@ -586,14 +584,16 @@ test('共有iPadは店舗と端末として名乗り、個人を推測しない�
 
   // 受付を 1 件通す。録音の主体は端末であり、担当者名を当て推量しない。
   await page.getByRole('button', { name: '新しい予約を取る' }).click()
-  const indicator = page.getByRole('region', { name: 'iPad録音' })
-  await indicator.getByRole('button', { name: '録音を開始する' }).click()
-  await expect(indicator.getByTestId('recording-state')).toHaveText('録音中')
+  // 録音は工程に入った時点で自動的に始まる（開始ボタンは無い）。下部バーの
+  // 状態表示だけが「今 iPad が録っている」ことを名乗る。
+  await expect(page.getByTestId('recording-state')).toContainText('録音中')
   await page.getByRole('button', { name: dayLabel(jstToday()) }).click()
-  await page.getByRole('button', { name: '11:00', exact: true }).click()
+  await page.getByRole('button', { name: '11:30', exact: true }).click()
   await page.getByRole('button', { name: /メガネを新しく作りたい/ }).click()
   await page.getByRole('button', { name: 'お客様情報へ進む' }).click()
+  // お客様情報は 2 段。まず番号を伺って特定し、新規として詳細入力へ進む。
   await page.getByLabel('お電話番号').fill('09012345678')
+  await page.getByRole('button', { name: '新しいお客様として登録する' }).click()
   await page.getByLabel('お名前', { exact: true }).fill('田中花子')
   await page.getByLabel('フリガナ').fill('タナカハナコ')
   await page.getByRole('button', { name: '復唱へ進む' }).click()
@@ -633,7 +633,7 @@ test('共有iPadは画面非表示・バックグラウンド・無操作期限�
     const locked = page.getByRole('heading', { name: '顧客情報を隠しました' })
     await expect(locked).toBeVisible()
     await expect(
-      page.getByText('画面非表示または無操作のため、端末をロックしました。'),
+      page.getByText('画面が非表示になったか、1分間操作がなかったためロックしました。'),
     ).toBeVisible()
     // 氏名・電話番号は画面のどこにも残らない（AC-EYEX-97）。
     await expect(page.locator('body')).not.toContainText(LEDGER_CUSTOMER)
@@ -692,7 +692,7 @@ test('共有iPadの管理操作は個人PINで本人を確かめてから走り�
   const prompt = page.getByRole('dialog', { name: '管理者として確認してください' })
   await expect(prompt).toBeVisible()
   await expect(prompt).toContainText(
-    '録音の保全には個人認証が必要です。共有端末と認証した個人の両方を監査記録に残します。',
+    '録音の保全は個人認証が必要です。共有端末と認証した個人の両方を監査記録に残します。',
   )
   await expect(page.getByRole('dialog', { name: '録音を保全する' })).toHaveCount(0)
   expect(holdRequests(mocks)).toEqual([])
@@ -781,7 +781,7 @@ test('共有モードでは録音の保全・解除を端末の権限だけで�
   // 保全解除も同じ扱いで、共有端末のままでは実行できない。
   await screen.getByRole('button', { name: '保全を解除する' }).click()
   await expect(page.getByRole('dialog', { name: '管理者として確認してください' })).toContainText(
-    '録音の保全解除には個人認証が必要です。',
+    '録音の保全解除は個人認証が必要です。',
   )
   await expect(page.getByRole('dialog', { name: '録音の保全を解除する' })).toHaveCount(0)
   expect(holdRequests(mocks)).toEqual([])
@@ -793,14 +793,16 @@ async function openAttentionReview(page: Page) {
     .getByRole('navigation', { name: '副操作' })
     .getByRole('button', { name: '顧客台帳' })
     .click()
-  await expect(page.getByRole('heading', { name: 'お客様を探す' })).toBeVisible()
-  await page.getByLabel('電話番号', { exact: true }).fill('09012345678')
-  await page.getByRole('button', { name: '候補を探す' }).click()
-  const option = page.getByRole('listbox', { name: '顧客候補' }).getByRole('option')
-  await expect(option).toHaveCount(1)
-  await option.click()
+  // 探す列は見出しではなく列そのものが名乗る。検索は欄 1 本で Enter で走る。
+  const list = page.getByRole('complementary', { name: 'お客様を探す' })
+  await expect(list).toBeVisible()
+  await list.getByLabel('顧客を検索').fill('09012345678')
+  await list.getByLabel('顧客を検索').press('Enter')
+  const candidate = list.getByRole('article')
+  await expect(candidate).toHaveCount(1)
+  await candidate.getByRole('button').click()
   await page.getByRole('button', { name: '注意事項を確認・登録する' }).click()
-  await expect(page.getByRole('heading', { name: '注意事項', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '注意事項を確認' })).toBeVisible()
 }
 
 /**
@@ -836,10 +838,11 @@ test('共有iPadは注意事項を確認待ちで登録できるが、公開・�
   await openAttentionReview(page)
 
   // 1. 確認待ちの登録は日常業務。PIN も本人確認も挟まない。
-  await page.getByLabel('発生した事実').fill('受付時に強い頭痛の訴えあり。')
-  await page.getByLabel('発生日時').fill('2026-08-27T10:30')
-  await page.getByLabel('根拠').fill('ご本人の申告')
-  await page.getByLabel('推奨対応').fill('休憩を挟んで測定する')
+  // 公開済みの版も同じ語を `region` の名に持つので、入力欄は textbox で指す。
+  await page.getByRole('textbox', { name: '発生した事実' }).fill('受付時に強い頭痛の訴えあり。')
+  await page.getByRole('textbox', { name: '発生日時' }).fill('2026-08-27T10:30')
+  await page.getByRole('textbox', { name: '根拠' }).fill('ご本人の申告')
+  await page.getByRole('textbox', { name: '推奨対応' }).fill('休憩を挟んで測定する')
   await page.getByRole('button', { name: '注意事項を登録する' }).click()
   await expect(
     page.getByText(
@@ -869,7 +872,7 @@ test('共有iPadは注意事項を確認待ちで登録できるが、公開・�
   await pending.getByRole('button', { name: '公開する' }).click()
   const prompt = page.getByRole('dialog', { name: '管理者として確認してください' })
   await expect(prompt).toBeVisible()
-  await expect(prompt).toContainText('注意事項の公開には個人認証が必要です。')
+  await expect(prompt).toContainText('注意事項の公開は個人認証が必要です。')
   expect(managementRequests(mocks)).toEqual([])
 
   await prompt.getByLabel('個人ログインID').fill('manager@eyex.example')
@@ -889,11 +892,13 @@ test('共有iPadは注意事項を確認待ちで登録できるが、公開・�
   const publishedNote = page.getByRole('article', { name: '注意事項 公開済み 版1' })
   await publishedNote.getByRole('button', { name: '改訂する' }).click()
   const revision = page.getByRole('dialog', { name: '注意事項を改訂' })
-  await revision.getByLabel('発生した事実').fill('強い遠近両用は合わないと申告あり（再確認）。')
+  await revision
+    .getByRole('textbox', { name: '発生した事実' })
+    .fill('強い遠近両用は合わないと申告あり（再確認）。')
   await revision.getByRole('button', { name: '改訂版を公開する' }).click()
   const revisePrompt = page.getByRole('dialog', { name: '管理者として確認してください' })
   await expect(revisePrompt).toBeVisible()
-  await expect(revisePrompt).toContainText('注意事項の改訂には個人認証が必要です。')
+  await expect(revisePrompt).toContainText('注意事項の改訂は個人認証が必要です。')
   expect(managementRequests(mocks)).toHaveLength(1)
 
   await revisePrompt.getByLabel('個人ログインID').fill('manager@eyex.example')

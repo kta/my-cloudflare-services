@@ -2,6 +2,7 @@ import { ATTENTION_INPUT_GUIDANCE } from '@app/contracts'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import { AttentionSettingsScreen } from './AttentionSettingsScreen'
+import { screenSections } from './app-chrome'
 
 const STORE_ID = '00000000-0000-4000-8000-000000000010'
 const TODAY = '2026-08-27'
@@ -106,12 +107,15 @@ test('注意事項の節と3枚のカードを出す', async () => {
   const { api } = createApi(() => jsonResponse(settings))
   renderScreen(api)
 
-  const sections = await screen.findByRole('navigation', { name: '注意事項の節' })
-  // 管理タブは 76px の緑バーが持つ。面が 2 本目の緑帯を持つのはモックに無い。
-  expect(screen.queryByRole('navigation', { name: '設定タブ' })).toBeNull()
-
-  for (const label of ['権限', '確認待ち', '共有範囲', '入力ルール'])
-    expect(within(sections).getByRole('button', { name: new RegExp(label) })).toBeInTheDocument()
+  /* 節は面が描かず、全画面共通の柱へ渡す。面の側では渡した中身で確かめる。 */
+  await screen.findByRole('region', { name: '登録方式' })
+  expect(screenSections.snapshot().map((section) => section.label)).toEqual([
+    '権限',
+    '確認待ち',
+    '共有範囲',
+    '入力ルール',
+  ])
+  expect(screen.queryByRole('navigation')).toBeNull()
 
   expect(screen.getByRole('region', { name: '登録方式' })).toHaveTextContent('管理者確認後に公開')
   expect(screen.getByRole('region', { name: '共有範囲の設定' })).toHaveTextContent('権限のある店舗')

@@ -17,6 +17,7 @@ import {
   PhoneBody,
   PhoneButton,
   PhoneCard,
+  PhoneDateField,
   PhoneField,
   PhoneHead,
   PhoneInput,
@@ -439,9 +440,8 @@ export function PublicBooking({
         <PhoneHead store="予約日時の変更" />
         <PhoneBody>
           <h1>変更後の日時を選ぶ</h1>
-          <PhoneField
+          <PhoneDateField
             label="変更後の日"
-            type="date"
             value={changeDate}
             onChange={(next) => void loadChangeSlots(next)}
           />
@@ -670,9 +670,8 @@ export function PublicBooking({
               {selectedPurpose.label} · 約{selectedPurpose.durationMinutes}分
             </PhoneSummary>
           )}
-          <PhoneField
+          <PhoneDateField
             label="ご希望の日"
-            type="date"
             value={slotDate}
             onChange={(next) => void loadSlots(next)}
           />

@@ -25,7 +25,11 @@ import { type Browser, chromium, type Locator, type Page, type Route } from '@pl
  * 使えず、`node:path` を引き込めない）。
  */
 const OUT_DIR = '../../docs/frontend/screens'
-const BASE_URL = 'http://localhost:4175'
+/*
+ * 既定は 4175 だが、他の作業と preview を共有するときのために環境変数で
+ * 差し替えられるようにしておく（`e2e/gallery.diff.ts` の `GALLERY_BASE` と同じ流儀）。
+ */
+const BASE_URL = process.env.SCREENS_BASE ?? 'http://localhost:4175'
 
 const IPAD = { width: 1180, height: 820 }
 const SP = { width: 375, height: 812 }
@@ -40,6 +44,17 @@ async function shot(page: Page, id: string, state: string, viewport: 'ipad-lands
   const name = `impl--${id}--${state}--${viewport}.png`
   // レイアウトと非同期描画が落ち着いてから撮る。
   await page.waitForLoadState('networkidle').catch(() => undefined)
+  /*
+   * 焦点を外してから撮る。`fill()` は欄に焦点を残すので、そのまま撮ると
+   * `:focus-visible` の 3px の輪（`--color-focus` = #005fcc）が画に写る。
+   * 基準の承認済みモックは焦点の当たっていない静止画なので、輪が写ると
+   * 「実装に青が混ざっている」ように読めてしまう。輪そのものはモックの
+   * `outline:3px solid var(--focus)` どおりで、直すべきは撮り方の側である。
+   */
+  await page.evaluate(() => {
+    const active = document.activeElement
+    if (active instanceof HTMLElement) active.blur()
+  })
   await page.waitForTimeout(250)
   await page.screenshot({ path: `${OUT_DIR}/${name}`, fullPage: true })
   captured.push(name)
@@ -108,17 +123,35 @@ function secondary(page: Page) {
 }
 
 /**
- * 運用系の入口は 設定 の中の副タブになった（operations-approved.html）。
- * 業務画面のヘッダーには 設定 がないので、いったんホームへ戻ってから開く。
+ * 設定と運用の面は、緑帯 1 本のバーのタブと、各面の左サイドを辿って開く
+ * （operations-approved.html は 2 本目の帯を持たない）。業務画面のバーには
+ * 設定 が無いので、いったんホームへ戻ってから辿る。
  */
+/*
+ * 設定・運用の面の行き先。緑帯のタブは廃止され、全画面共通の左サイドバー
+ * （`navigation[name="画面の一覧"]`）1 本に集約された。ここは「呼び出し側が使う
+ * 名前」→「サイドバーの行き先の名前」の対応表だけを持つ。
+ */
+const ADMIN_ROUTES: Record<string, string> = {
+  店舗設定: '設定ガイド',
+  共有端末: '共有端末',
+  録音運用: '録音運用',
+  注意事項権限: '注意事項',
+  '顧客の統合・訂正': '顧客の統合・訂正',
+  監査ログ: '監査ログ',
+  分析: '分析',
+  お知らせ: 'お知らせ',
+}
+
 async function openAdmin(page: Page, label: string) {
+  const destination = ADMIN_ROUTES[label]
+  if (destination === undefined) throw new Error(`${label} への経路が未定義`)
   await page.goto(`${BASE_URL}/`)
   await visible(page.getByRole('navigation', { name: '副操作' }))
+  // ホームには柱が無い。緑帯の「設定」で設定ガイドへ入ると柱が現れる。
   await page.getByRole('button', { name: '設定', exact: true }).click()
-  await page
-    .getByRole('navigation', { name: '管理メニュー' })
-    .getByRole('button', { name: label, exact: true })
-    .click()
+  const sidebar = page.getByRole('navigation', { name: '画面の一覧' })
+  await sidebar.getByRole('button', { name: destination, exact: true }).click()
 }
 
 /* ------------------------------------------------------------------ *
@@ -308,14 +341,15 @@ async function captureBookingScreens(browser: Browser) {
     await visible(page.getByRole('heading', { name: 'ご来店予定の日を伺えますか？' }))
     await page.getByRole('button', { name: dayLabel(jstToday()) }).click()
     await visible(page.getByRole('heading', { name: 'ご来店予定の時刻を伺えますか？' }))
-    await page.getByRole('button', { name: '11:00', exact: true }).click()
+    /* 希望時刻は `desiredTimes` が営業時間から間引いた候補だけ。11:00 は出ない。 */
+    await page.getByRole('button', { name: '11:30', exact: true }).click()
     await visible(page.getByRole('heading', { name: '今回のご来店目的を伺えますか？' }))
     // 「時間」工程は選択済みの状態を残したいので、目的工程へ移る前に戻って撮る。
     await page.getByRole('button', { name: '戻る' }).click()
     await visible(page.getByRole('heading', { name: 'ご来店予定の時刻を伺えますか？' }))
     await shot(page, 'BOOK-TIME', 'selected', 'ipad-landscape')
 
-    await page.getByRole('button', { name: '11:00', exact: true }).click()
+    await page.getByRole('button', { name: '11:30', exact: true }).click()
     await page.getByRole('button', { name: /メガネを新しく作りたい/ }).click()
     await page.getByRole('button', { name: /かけ具合を調整したい/ }).click()
     await page.getByRole('button', { name: 'お客様情報へ進む' }).click()
@@ -333,18 +367,18 @@ async function captureBookingScreens(browser: Browser) {
     await page.context().close()
   }
 
-  // BOOK-PURPOSE-CONFLICT: 希望した 11:00 が所要時間つき再検証で落ちる。
+  // BOOK-PURPOSE-CONFLICT: 希望した 13:30 が所要時間つき再検証で落ちる。
   {
     const page = await newPage(browser, IPAD)
     await mockBookingApi(page, { offered: ['10:00', '10:30', '11:30', '12:00'] })
     await openHome(page)
     await page.getByRole('button', { name: /新しい予約を取る/ }).click()
     await page.getByRole('button', { name: dayLabel(jstToday()) }).click()
-    await page.getByRole('button', { name: '11:00', exact: true }).click()
+    await page.getByRole('button', { name: '13:30', exact: true }).click()
     await page.getByRole('button', { name: /メガネを新しく作りたい/ }).click()
     await page.getByRole('button', { name: /かけ具合を調整したい/ }).click()
     await page.getByRole('button', { name: 'お客様情報へ進む' }).click()
-    await page.getByText('11:00は90分の受付ができません').waitFor({ state: 'visible' })
+    await page.getByText('13:30は90分の受付ができません').waitFor({ state: 'visible' })
     await shot(page, 'BOOK-PURPOSE-CONFLICT', 'resource-conflict', 'ipad-landscape')
     await page.context().close()
   }
@@ -356,7 +390,7 @@ async function captureBookingScreens(browser: Browser) {
     await openHome(page)
     await page.getByRole('button', { name: /新しい予約を取る/ }).click()
     await page.getByRole('button', { name: dayLabel(jstToday()) }).click()
-    await page.getByRole('button', { name: '11:00', exact: true }).click()
+    await page.getByRole('button', { name: '11:30', exact: true }).click()
     await page.getByRole('button', { name: /メガネを新しく作りたい/ }).click()
     await page.getByRole('button', { name: /かけ具合を調整したい/ }).click()
     await page.getByRole('button', { name: 'お客様情報へ進む' }).click()
@@ -625,7 +659,8 @@ async function openBooking(page: Page) {
 
 async function reachRecital(page: Page) {
   await page.getByRole('button', { name: dayLabel(jstToday()) }).click()
-  await page.getByRole('button', { name: '11:00', exact: true }).click()
+  /* 希望時刻は `desiredTimes` が間引いた候補だけ。11:00 は出ない。 */
+  await page.getByRole('button', { name: '11:30', exact: true }).click()
   await page.getByRole('button', { name: /メガネを新しく作りたい/ }).click()
   await page.getByRole('button', { name: 'お客様情報へ進む' }).click()
   // 顧客の工程は「電話で見つける」→「氏名を確かめる」の 2 面に分かれる。
@@ -710,6 +745,8 @@ function ledgerBase(overrides: Partial<LedgerRow> = {}): LedgerRow {
     assignedStaffId: null,
     assignedEquipmentIds: [],
     nextGuidance: null,
+    // 予約行は purposeNames 必須（台帳セルの「目的 · 予約元」表示のため）。
+    purposeNames: ['視力測定'],
     warnings: [],
     version: 1,
     ...overrides,
@@ -731,7 +768,8 @@ function phoneRow(): LedgerRow {
 }
 
 function walkinRow(overrides: Partial<LedgerRow> = {}): LedgerRow {
-  return ledgerBase({
+  // ウォークイン行の契約には purposeNames が無い（strictObject なので余計なキーは弾かれる）。
+  const { purposeNames: _reservationOnly, ...row } = ledgerBase({
     id: walkinId,
     entryType: 'walkin',
     source: 'walkin',
@@ -744,6 +782,7 @@ function walkinRow(overrides: Partial<LedgerRow> = {}): LedgerRow {
     waitStartedAt: '2026-09-01T05:00:00.000Z',
     ...overrides,
   })
+  return row as LedgerRow
 }
 
 type LedgerState = {
@@ -828,7 +867,11 @@ async function captureLedgerScreens(browser: Browser) {
     await openLedger(page)
     await shot(page, 'LEDGER-DAY', 'walkin-now', 'ipad-landscape')
 
-    await page.getByRole('button', { name: '来店受付へ' }).click()
+    /* 面の行き来は緑帯のタブではなく、全画面共通の左サイドバー 1 本に集約された。 */
+    await page
+      .getByRole('navigation', { name: '画面の一覧' })
+      .getByRole('button', { name: '来店受付', exact: true })
+      .click()
     await visible(page.getByRole('heading', { name: '銀座店の来店受付' }))
     await shot(page, 'JOURNEY-DEFAULT', 'default', 'ipad-landscape')
     await page.context().close()
@@ -950,7 +993,8 @@ async function captureSearchScreens(browser: Browser) {
     await page.getByRole('button', { name: '予約を検索', exact: true }).click()
     await visible(page.getByRole('heading', { name: '予約を検索する' }))
     await page.getByLabel('氏名・電話番号・予約番号').fill('田中 花子')
-    await page.getByRole('button', { name: '検索する' }).click()
+    /* 検索ボタンは廃止され、Enter で走るようになった。 */
+    await page.getByLabel('氏名・電話番号・予約番号').press('Enter')
     await page.getByRole('button', { name: /田中 花子 様/ }).click()
     await visible(page.getByRole('region', { name: '予約詳細' }))
     await shot(page, 'RES-SEARCH', 'store-fixed', 'ipad-landscape')
@@ -981,7 +1025,7 @@ async function captureSearchScreens(browser: Browser) {
     await page.getByRole('button', { name: '予約を検索', exact: true }).click()
     await visible(page.getByRole('heading', { name: '予約を検索する' }))
     await page.getByLabel('氏名・電話番号・予約番号').fill('該当なし')
-    await page.getByRole('button', { name: '検索する' }).click()
+    await page.getByLabel('氏名・電話番号・予約番号').press('Enter')
     await page.waitForTimeout(500)
     await shot(page, 'EX-EMPTY', 'default', 'ipad-landscape')
     await page.context().close()
@@ -1090,10 +1134,13 @@ async function captureCustomerScreen(browser: Browser) {
   )
   await openHome(page)
   await secondary(page).getByRole('button', { name: '顧客台帳' }).click()
-  await visible(page.getByRole('heading', { name: 'お客様を探す' }))
-  await page.getByLabel('電話番号', { exact: true }).fill('09012345678')
-  await page.getByRole('button', { name: '候補を探す' }).click()
-  await page.getByRole('listbox', { name: '顧客候補' }).getByRole('option').first().click()
+  /* 探す欄は左の脇柱（complementary）に移り、入力そのものが候補を出す。 */
+  const list = page.getByRole('complementary', { name: 'お客様を探す' })
+  await visible(list)
+  await list.getByLabel('顧客を検索').fill('09012345678')
+  // 候補 1 件は article のまとまりで、押せるのはその内側の button。
+  const candidate = list.getByRole('article', { name: '田中花子' })
+  await candidate.getByRole('button').click()
   await visible(page.getByRole('region', { name: '現在の度数' }))
   await shot(page, 'CUSTOMER-CURRENT', 'default', 'ipad-landscape')
   await page.context().close()
@@ -1166,7 +1213,7 @@ async function captureStoreSwitchScreens(browser: Browser) {
     await mockStoreSwitchApi(page)
     await openHome(page)
     await page.locator('header button').first().click()
-    await visible(page.getByRole('region', { name: '作業する店舗を切り替える' }))
+    await visible(page.getByRole('dialog', { name: '作業する店舗を切り替える' }))
     await shot(page, 'STORE-SWITCH', 'default', 'ipad-landscape')
     await page.context().close()
   }
@@ -1299,33 +1346,44 @@ async function openSettings(page: Page) {
 
 async function goToStep(page: Page, pattern: RegExp) {
   await page
-    .getByRole('navigation', { name: '設定工程' })
+    .getByRole('navigation', { name: '設定の工程' })
     .getByRole('button', { name: pattern })
     .click()
   await page.waitForTimeout(200)
+}
+
+/* 入力欄は「編集」を押した先にある。読み取りカードが既定の面になった。 */
+async function startEditing(screen: Locator) {
+  await screen.getByRole('button', { name: '編集', exact: true }).click()
 }
 
 async function captureSettingsScreens(browser: Browser) {
   {
     const page = await newPage(browser, IPAD)
     await mockSettingsApi(page)
-    await openSettings(page)
-    await visible(page.getByRole('region', { name: '営業時間' }))
+    const screen = await openSettings(page)
+    // 各工程の画は「編集」を開いた下書きの姿。読み取りカードのままでは撮らない。
+    await startEditing(screen)
+    await visible(page.getByRole('region', { name: '営業時間の編集' }))
     await shot(page, 'SETTINGS-STORE-HOURS', 'draft', 'ipad-landscape')
 
     await goToStep(page, /^工程2 来店目的/)
+    await startEditing(screen)
     await visible(page.getByRole('region', { name: 'Web予約プレビュー' }))
     await shot(page, 'SETTINGS-PURPOSES', 'draft', 'ipad-landscape')
 
     await goToStep(page, /^工程3 スタッフと技能/)
-    await visible(page.getByRole('region', { name: 'スタッフ' }))
+    await startEditing(screen)
+    await visible(page.getByRole('region', { name: 'スタッフと技能の編集' }))
     await shot(page, 'SETTINGS-STAFF-SKILLS', 'impact', 'ipad-landscape')
 
     await goToStep(page, /^工程4 設備と点検/)
-    await visible(page.getByRole('region', { name: '点検停止' }))
+    await startEditing(screen)
+    await visible(page.getByRole('region', { name: '設備の編集' }))
     await shot(page, 'SETTINGS-EQUIPMENT', 'maintenance', 'ipad-landscape')
 
     await goToStep(page, /^工程5 Web予約/)
+    await startEditing(screen)
     await visible(page.getByRole('region', { name: 'Web予約設定' }))
     await shot(page, 'SETTINGS-WEB', 'scheduled', 'ipad-landscape')
     await page.context().close()
@@ -1336,7 +1394,7 @@ async function captureSettingsScreens(browser: Browser) {
     const page = await newPage(browser, SP)
     await mockSettingsApi(page)
     await openSettings(page)
-    await visible(page.getByRole('navigation', { name: '設定工程' }))
+    await visible(page.getByRole('navigation', { name: '設定の工程' }))
     await shot(page, 'SETTINGS-SP', 'default', 'sp')
     await page.context().close()
   }
@@ -1368,7 +1426,7 @@ async function captureSettingsScreens(browser: Browser) {
     )
     await openHome(page)
     await openAdmin(page, '共有端末')
-    await visible(page.getByRole('heading', { name: '共有iPad', level: 2 }))
+    await visible(page.getByRole('heading', { name: '共有iPad', level: 1 }))
     await shot(page, 'DEVICE-LIST', 'default', 'ipad-landscape')
     await page.context().close()
   }
@@ -1557,7 +1615,8 @@ async function openImpactStep(page: Page) {
   await openAdmin(page, '店舗設定')
   await visible(page.getByRole('region', { name: '店舗設定' }))
   await goToStep(page, /^工程6 影響確認と公開/)
-  const region = page.getByRole('region', { name: '影響確認と公開' })
+  /* 第6工程は自分の見出しを持つだけで、区画名はガイド全体の「店舗設定」のまま。 */
+  const region = page.getByRole('region', { name: '店舗設定' })
   await region.getByRole('heading', { name: '影響を確認して公開' }).waitFor({ state: 'visible' })
   return region
 }
@@ -1568,7 +1627,7 @@ async function capturePublicationScreens(browser: Browser) {
     const page = await newPage(browser, IPAD)
     await mockPublicationApi(page, true)
     const region = await openImpactStep(page)
-    await region.getByRole('group', { name: '影響確認' }).waitFor({ state: 'visible' })
+    await region.getByRole('region', { name: '影響確認' }).waitFor({ state: 'visible' })
     await shot(page, 'SETTINGS-IMPACT', 'blocked', 'ipad-landscape')
     await page.context().close()
   }
@@ -1578,11 +1637,8 @@ async function capturePublicationScreens(browser: Browser) {
     const page = await newPage(browser, IPAD)
     await mockPublicationApi(page, false, true)
     const region = await openImpactStep(page)
-    await region
-      .getByRole('group', { name: '公開' })
-      .getByRole('button', { name: '今すぐ公開する' })
-      .click()
-    await region.getByRole('group', { name: '公開結果' }).waitFor({ state: 'visible' })
+    await region.getByRole('button', { name: '公開する', exact: true }).click()
+    await region.getByRole('region', { name: '公開結果' }).waitFor({ state: 'visible' })
     await shot(page, 'SETTINGS-RESULT', 'partial-failure', 'ipad-landscape')
     await page.context().close()
   }
@@ -1699,12 +1755,15 @@ async function captureAttentionScreens(browser: Browser) {
 
     await openHome(page)
     await openAdmin(page, '注意事項権限')
-    await visible(page.getByRole('heading', { name: '注意事項の権限', level: 2 }))
+    await visible(page.getByRole('heading', { name: '注意事項の権限', level: 1 }))
     await shot(page, 'ATTENTION-PERMISSIONS', 'default', 'ipad-landscape')
 
     await openHome(page)
     await openAdmin(page, '監査ログ')
-    await visible(page.getByRole('heading', { name: '監査イベント' }))
+    /* 監査は「直近 1 件の詳細」が既定の姿。一覧はそこから開く同じ面の別の姿。 */
+    await visible(page.getByRole('heading', { name: '監査イベント詳細' }))
+    await page.getByRole('button', { name: '監査を検索', exact: true }).click()
+    await page.getByRole('button', { name: '監査を検索する' }).click()
     await page
       .getByRole('table', { name: '監査イベント' })
       .getByRole('button', { name: '詳細' })
@@ -1788,10 +1847,12 @@ async function captureAttentionScreens(browser: Browser) {
 
     await openHome(page)
     await secondary(page).getByRole('button', { name: '顧客台帳' }).click()
-    await visible(page.getByRole('heading', { name: 'お客様を探す' }))
-    await page.getByLabel('電話番号', { exact: true }).fill('09012345678')
-    await page.getByRole('button', { name: '候補を探す' }).click()
-    await page.getByRole('listbox', { name: '顧客候補' }).getByRole('option').first().click()
+    /* 探す列は見出しではなく列自身が名乗る。検索欄は 1 本で、Enter で候補を出す。 */
+    const search = page.getByRole('complementary', { name: 'お客様を探す' })
+    await visible(search)
+    await search.getByLabel('顧客を検索').fill('09012345678')
+    await search.getByLabel('顧客を検索').press('Enter')
+    await search.getByRole('article', { name: '田中花子' }).getByRole('button').click()
     await page.getByRole('button', { name: '注意事項を確認・登録する' }).click()
     await visible(page.getByRole('heading', { name: '注意事項を確認', exact: true }))
     await shot(page, 'ATTENTION-REVIEW', 'pending', 'ipad-landscape')
@@ -1932,7 +1993,7 @@ async function captureSharedTerminalScreens(browser: Browser) {
     // ここでは使わない（goto するとこの端末の共有セッションが切れてしまう）。
     await page.getByRole('button', { name: '設定', exact: true }).click()
     await page
-      .getByRole('navigation', { name: '管理メニュー' })
+      .getByRole('navigation', { name: '画面の一覧' })
       .getByRole('button', { name: '録音運用', exact: true })
       .click()
     const screen = page.getByRole('region', { name: '録音運用' })
@@ -2286,11 +2347,14 @@ async function captureWebScreens(browser: Browser) {
     await page.getByRole('button', { name: /メガネを新しく作りたい.*約60分/ }).click()
     await shot(page, 'WEB-PURPOSE', 'selected', 'sp')
 
+    await page.getByRole('button', { name: '日時へ進む' }).click()
     await page.getByLabel('ご希望の日').fill('2026-09-01')
-    await page.getByRole('button', { name: '9月1日 10:00' }).waitFor({ state: 'visible' })
-    await page.getByRole('button', { name: '9月1日 10:00' }).click()
+    /* 枠の名前は曜日込み（`japaneseSlotLabel`）。 */
+    await page.getByRole('button', { name: '9月1日（火）10:00' }).waitFor({ state: 'visible' })
+    await page.getByRole('button', { name: '9月1日（火）10:00' }).click()
     await shot(page, 'WEB-DATETIME', 'selected', 'sp')
 
+    await page.getByRole('button', { name: 'お客様情報へ進む' }).click()
     await page.getByLabel('お名前', { exact: true }).fill('田中花子')
     await page.getByLabel('お名前（かな）').fill('タナカハナコ')
     await page.getByLabel('電話番号').fill('09012345678')
@@ -2321,8 +2385,10 @@ async function captureWebScreens(browser: Browser) {
     await page.getByRole('button', { name: /銀座店.*店舗情報を見る/ }).click()
     await page.getByRole('button', { name: '銀座店で予約を始める' }).click()
     await page.getByRole('button', { name: /メガネを新しく作りたい.*約60分/ }).click()
+    await page.getByRole('button', { name: '日時へ進む' }).click()
     await page.getByLabel('ご希望の日').fill('2026-09-01')
-    await page.getByRole('button', { name: '9月1日 10:00' }).click()
+    await page.getByRole('button', { name: '9月1日（火）10:00' }).click()
+    await page.getByRole('button', { name: 'お客様情報へ進む' }).click()
     await page.getByLabel('お名前', { exact: true }).fill('田中花子')
     await page.getByLabel('お名前（かな）').fill('タナカハナコ')
     await page.getByLabel('電話番号').fill('09012345678')

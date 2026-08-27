@@ -3,7 +3,7 @@ import { expect, type Page, test } from '@playwright/test'
 /*
  * EYEX スタッフ端末の「注意事項の権限設定」「監査イベント」「顧客の統合・誤関連解除」の E2E。
  *
- * どれもヘッダーの管理メニュー（注意事項権限 / 監査ログ / 顧客の統合・訂正）から開く。
+ * どれも全画面共通の左サイドバー（注意事項 / 監査ログ / 顧客の統合・訂正）から開く。
  * API はすべて `page.route` で差し替え、SPA だけを実行する。
  *
  * 共有 iPad（横向き 1180×820）が既定の前提なので viewport をそれに合わせる。
@@ -268,18 +268,26 @@ async function mockStaffApi(page: Page, mocks: Mocks) {
   })
 }
 
+/*
+ * 面の行き来は全画面共通の左サイドバー 1 本に集約された。ホームには柱が出ない
+ * ので、まず業務の面（予約台帳）へ入ってから柱で行き先を選ぶ。
+ */
 async function openAdmin(page: Page, label: string) {
   await page.setViewportSize(VIEWPORT)
   await page.goto('/')
-  await expect(page.getByRole('heading', { name: '銀座店のホーム' })).toBeVisible()
+  await expect(page.getByRole('navigation', { name: '主操作' })).toBeVisible()
   await page
-    .getByRole('navigation', { name: '管理メニュー' })
-    .getByRole('button', { name: label })
+    .getByRole('navigation', { name: '副操作' })
+    .getByRole('button', { name: '予約台帳' })
+    .click()
+  await page
+    .getByRole('navigation', { name: '画面の一覧' })
+    .getByRole('button', { name: label, exact: true })
     .click()
 }
 
 async function openAttentionSettings(page: Page) {
-  await openAdmin(page, '注意事項権限')
+  await openAdmin(page, '注意事項')
   await expect(page.getByRole('heading', { name: '注意事項の権限' })).toBeVisible()
 }
 
@@ -300,35 +308,38 @@ test('注意事項の権限は5操作それぞれのロールと適用元を出�
   await mockStaffApi(page, mocks)
   await openAttentionSettings(page)
 
-  // 閲覧・登録・公開・改訂・非表示化の各ロールと適用元が並ぶ (AC-EYEX-84)。
+  /*
+   * 表はロール×操作の許可表になった。5 操作それぞれのロールは操作ごとの
+   * 選択が持ち、適用元は表の最終行が操作ごとに持つ (AC-EYEX-84)。
+   */
   const table = page.getByRole('table', { name: '注意事項の権限' })
   const rows = table.getByRole('row')
-  await expect(rows).toHaveCount(6)
+  // 見出し + ロール 3 段 + 適用元。
+  await expect(rows).toHaveCount(5)
+  const originRow = rows.nth(4)
+  await expect(originRow.getByRole('rowheader')).toHaveText('適用元')
   const expected = [
-    ['閲覧', 'スタッフ以上', '組織共通'],
-    ['登録', 'スタッフ以上', '組織共通'],
-    ['公開', '店舗管理者以上', '組織共通'],
-    ['改訂', '店舗管理者以上', '店舗上書き'],
-    ['非表示化', '店舗管理者以上', '組織共通'],
+    ['閲覧', 'staff', '組織共通'],
+    ['登録', 'staff', '組織共通'],
+    ['公開', 'store_manager', '組織共通'],
+    ['改訂', 'store_manager', '店舗上書き'],
+    ['非表示化', 'store_manager', '組織共通'],
   ]
   for (const [index, row] of expected.entries()) {
     const [label = '', role = '', origin = ''] = row
-    const line = rows.nth(index + 1)
-    await expect(line).toContainText(label)
-    await expect(line.getByLabel(`${label}に必要なロール`)).toHaveValue(
-      role === 'スタッフ以上' ? 'staff' : 'store_manager',
-    )
-    await expect(line).toContainText(origin)
+    await expect(page.getByLabel(`${label}に必要なロール`)).toHaveValue(role)
+    // 適用元は行ごとに違う。列の並びは契約の順序（閲覧・登録・公開・改訂・非表示化）。
+    await expect(originRow.getByRole('cell').nth(index)).toHaveText(origin)
   }
   // 新規組織の初期値はこの並びそのもの (UC-EYEX-148)。
-  await expect(page.getByText('いま効いている値の適用元: 組織共通')).toBeVisible()
+  await expect(page.getByLabel('設定範囲')).toHaveValue('organization')
 
   // 入力時の案内は契約データとして届き、記録する/記録しないの両方が出る (UC-EYEX-144)。
-  await expect(page.getByText('記録する: 発生した事実・発生日時・根拠・推奨対応')).toBeVisible()
-  await expect(page.getByText('記録しない: 人格評価・憶測・差別につながる属性')).toBeVisible()
+  const guidance = page.getByRole('region', { name: '入力時の案内' })
+  await expect(guidance).toContainText('記録する: 発生した事実・発生日時・根拠・推奨対応')
+  await expect(guidance).toContainText('記録しない: 人格評価・憶測・差別につながる属性')
 
   // 組織共通と店舗上書きのどちらを書くかを選べる (UC-EYEX-139)。
-  await expect(page.getByLabel('設定範囲')).toHaveValue('organization')
   await page.getByLabel('設定範囲').selectOption('store')
   await expect(page.getByLabel('店舗ごとの上書きを許可する')).toBeChecked()
 
@@ -359,8 +370,9 @@ test('注意事項の権限は5操作それぞれのロールと適用元を出�
     { capability: 'revise', minimumRole: 'store_manager' },
     { capability: 'hide', minimumRole: 'store_manager' },
   ])
-  // 保存後は適用元が店舗上書きへ移ったことがそのまま読める (UC-EYEX-139)。
-  await expect(page.getByText('いま効いている値の適用元: 店舗上書き')).toBeVisible()
+  // 保存後は適用元が店舗上書きへ移ったことが、操作ごとにそのまま読める (UC-EYEX-139)。
+  for (const index of [0, 1, 2, 3, 4])
+    await expect(originRow.getByRole('cell').nth(index)).toHaveText('店舗上書き')
 })
 
 // @e2e-covers UC-EYEX-142 AC-EYEX-118
@@ -369,8 +381,8 @@ test('共有範囲の変更は影響件数を見せ、承認するまで適用�
   await mockStaffApi(page, mocks)
   await openAttentionSettings(page)
 
-  await expect(page.getByLabel('共有範囲')).toHaveValue('permitted_stores')
-  await page.getByLabel('共有範囲').selectOption('chain')
+  await expect(page.getByLabel('共有範囲', { exact: true })).toHaveValue('permitted_stores')
+  await page.getByLabel('共有範囲', { exact: true }).selectOption('chain')
   await page.getByRole('button', { name: '設定を保存する' }).click()
 
   // 既存情報がどこからどこへ何件動くかを、変更の前に言い切る (AC-EYEX-118)。
@@ -392,7 +404,7 @@ test('共有範囲の変更は影響件数を見せ、承認するまで適用�
   // キャンセルすると設定は元のまま（UC-EYEX-142）。
   await dialog.getByRole('button', { name: 'キャンセル' }).click()
   await expect(dialog).toHaveCount(0)
-  await expect(page.getByLabel('共有範囲')).toHaveValue('permitted_stores')
+  await expect(page.getByLabel('共有範囲', { exact: true })).toHaveValue('permitted_stores')
   expect(
     mocks.requests.some(
       (entry) => entry.method === 'PUT' && entry.url.endsWith('/attention-settings'),
@@ -400,7 +412,7 @@ test('共有範囲の変更は影響件数を見せ、承認するまで適用�
   ).toBe(false)
 
   // 承認して初めて、見た件数を添えて適用される。
-  await page.getByLabel('共有範囲').selectOption('chain')
+  await page.getByLabel('共有範囲', { exact: true }).selectOption('chain')
   await page.getByRole('button', { name: '設定を保存する' }).click()
   await page
     .getByRole('dialog', { name: '共有範囲の変更を確認' })
@@ -413,7 +425,7 @@ test('共有範囲の変更は影響件数を見せ、承認するまで適用�
   const sent = JSON.parse(put?.body ?? '{}') as Record<string, unknown>
   expect(sent.sharingScope).toBe('chain')
   expect(sent.acknowledgedAffectedNoteCount).toBe(12)
-  await expect(page.getByLabel('共有範囲')).toHaveValue('chain')
+  await expect(page.getByLabel('共有範囲', { exact: true })).toHaveValue('chain')
 })
 
 // @e2e-covers UC-EYEX-156 AC-EYEX-103
@@ -460,8 +472,12 @@ test('監査イベントは期間・操作・主体種別・対象で絞り込�
   const mocks = newMocks()
   await mockStaffApi(page, mocks)
   await openAdmin(page, '監査ログ')
-  await expect(page.getByRole('heading', { name: '監査イベント' })).toBeVisible()
-  await expect(page.getByText('表示中の店舗 銀座店 · 権限のある範囲のみ')).toBeVisible()
+  // 既定は直近 1 件の詳細ビュー。一覧と絞り込みはそこから開く同じ面の別の姿。
+  await expect(page.getByRole('heading', { name: '監査イベント詳細' })).toBeVisible()
+  await expect(page.getByRole('region', { name: '監査イベントの記録' })).toContainText(
+    'store: 銀座店',
+  )
+  await page.getByRole('button', { name: '監査を検索', exact: true }).click()
 
   // 閲覧・登録・公開・改訂・非表示化がいずれも監査に載っている (UC-EYEX-147)。
   const table = page.getByRole('table', { name: '監査イベント' })
@@ -484,7 +500,8 @@ test('監査イベントは期間・操作・主体種別・対象で絞り込�
   await page.getByLabel('開始日時').fill('2026-08-25T00:00')
   await page.getByLabel('終了日時').fill('2026-08-26T00:00')
   await page.getByLabel('操作').fill('attention.publish')
-  await page.getByLabel('主体種別').selectOption('user')
+  // 主体種別は 3 択の押しボタンになった（既定の `<select>` は使わない）。
+  await page.getByRole('group', { name: '主体種別' }).getByRole('button', { name: '個人' }).click()
   await page.getByLabel('対象種別').fill('attention_note')
   await page.getByLabel('対象ID').fill('note-1')
   await page.getByRole('button', { name: '監査を検索する' }).click()
@@ -499,16 +516,18 @@ test('監査イベントは期間・操作・主体種別・対象で絞り込�
 
   // 変更前後と相関IDは詳細で突き合わせて読む (AC-EYEX-102)。
   await table.getByRole('button', { name: '詳細' }).first().click()
-  const detail = page.getByRole('dialog', { name: '監査イベント詳細' })
-  await expect(detail).toContainText('相関ID corr-abc-123')
-  await expect(detail).toContainText('個人 · user-yamada')
-  const diff = detail.getByRole('table', { name: '変更前後' })
-  await expect(diff.getByRole('row')).toHaveCount(3)
-  await expect(diff.getByRole('row').nth(1)).toContainText('pending_review')
-  await expect(diff.getByRole('row').nth(1)).toContainText('published')
-  await detail.getByRole('button', { name: '閉じる' }).click()
+  const detail = page.getByRole('region', { name: '監査イベント詳細' })
+  await expect(detail).toContainText('correlation_id: corr-abc-123')
+  await expect(detail).toContainText('actor_type: user')
+  await expect(detail).toContainText('actor: user-yamada')
+  // 変更前後は同じ鍵で並べて突き合わせる。
+  await expect(detail.getByRole('region', { name: '変更前' })).toContainText(
+    'status pending_review',
+  )
+  await expect(detail.getByRole('region', { name: '変更後' })).toContainText('status published')
 
   // 権限の外は検索できず、その旨だけが返る。
+  await page.getByRole('button', { name: '監査を検索', exact: true }).click()
   mocks.onAudit = () => ({ status: 403, json: { error: 'forbidden' } })
   await page.getByRole('button', { name: '監査を検索する' }).click()
   await expect(page.getByText('権限のある範囲の監査イベントだけを表示できます。')).toBeVisible()
@@ -543,7 +562,7 @@ test('顧客の統合と誤関連解除は比較だけでは何も動かさず�
 
   // 理由が無ければ統合は始まらない。
   await impact.getByRole('button', { name: '統合する' }).click()
-  const mergeDialog = page.getByRole('dialog', { name: '顧客の統合を確認' })
+  const mergeDialog = page.getByRole('alertdialog', { name: '顧客の統合を確認' })
   await expect(mergeDialog).toContainText('13件の履歴が残す顧客へ移ります。')
   await mergeDialog.getByRole('button', { name: '統合を実行する' }).click()
   await expect(mergeDialog.getByText('理由を入力してください。')).toBeVisible()
@@ -566,7 +585,7 @@ test('顧客の統合と誤関連解除は比較だけでは何も動かさず�
   // 誤関連解除も同じ形。理由なしでは受付から顧客を外さない。
   await page.getByLabel('受付ID').fill(reservationId)
   await page.getByRole('button', { name: '誤関連を解除する' }).click()
-  const releaseDialog = page.getByRole('dialog', { name: '誤った顧客関連の解除を確認' })
+  const releaseDialog = page.getByRole('alertdialog', { name: '誤った顧客関連の解除を確認' })
   await releaseDialog.getByRole('button', { name: '解除を実行する' }).click()
   await expect(releaseDialog.getByText('理由を入力してください。')).toBeVisible()
   expect(
@@ -818,17 +837,19 @@ function newNoteMocks(overrides: Partial<NoteMocks> = {}): NoteMocks {
 async function openAttentionReview(page: Page) {
   await page.setViewportSize(VIEWPORT)
   await page.goto('/')
-  await expect(page.getByRole('heading', { name: '銀座店のホーム' })).toBeVisible()
+  await expect(page.getByRole('navigation', { name: '主操作' })).toBeVisible()
   await page
     .getByRole('navigation', { name: '副操作' })
     .getByRole('button', { name: '顧客台帳' })
     .click()
-  await expect(page.getByRole('heading', { name: 'お客様を探す' })).toBeVisible()
-  await page.getByLabel('電話番号', { exact: true }).fill('09012345678')
-  await page.getByRole('button', { name: '候補を探す' }).click()
-  await page.getByRole('listbox', { name: '顧客候補' }).getByRole('option').click()
+  // 探す列は見出しではなく列自身が名乗る。検索欄は 1 本で、Enter で候補を出す。
+  const search = page.getByRole('complementary', { name: 'お客様を探す' })
+  await expect(search).toBeVisible()
+  await search.getByLabel('顧客を検索').fill('09012345678')
+  await search.getByLabel('顧客を検索').press('Enter')
+  await search.getByRole('article', { name: '田中花子' }).getByRole('button').click()
   await page.getByRole('button', { name: '注意事項を確認・登録する' }).click()
-  await expect(page.getByRole('heading', { name: '注意事項' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '注意事項を確認' })).toBeVisible()
 }
 
 // @e2e-covers UC-EYEX-143 AC-EYEX-85
@@ -845,7 +866,9 @@ test('確認待ちで登録された注意事項は公開権限の無いスタ�
   await expect(page.getByText('確認待ち')).toHaveCount(0)
 
   // 4 項目が揃って初めて注意事項になる (UC-EYEX-143)。欠けたままでは送らない。
-  await page.getByLabel('発生した事実').fill('レンズ交換の際に強い薬品臭で咳き込まれた。')
+  await page
+    .getByLabel('発生した事実', { exact: true })
+    .fill('レンズ交換の際に強い薬品臭で咳き込まれた。')
   await page.getByRole('button', { name: '注意事項を登録する' }).click()
   await expect(
     page.getByText('発生した事実・発生日時・根拠・推奨対応をすべて入力してください。'),
@@ -856,9 +879,9 @@ test('確認待ちで登録された注意事項は公開権限の無いスタ�
     ),
   ).toHaveLength(0)
 
-  await page.getByLabel('発生日時').fill('2026-08-21T14:30')
-  await page.getByLabel('根拠').fill('2026-08-21の来店時のご申告')
-  await page.getByLabel('推奨対応').fill('作業前に換気し、待合でお待ちいただく')
+  await page.getByLabel('発生日時', { exact: true }).fill('2026-08-21T14:30')
+  await page.getByLabel('根拠', { exact: true }).fill('2026-08-21の来店時のご申告')
+  await page.getByLabel('推奨対応', { exact: true }).fill('作業前に換気し、待合でお待ちいただく')
   await page.getByRole('button', { name: '注意事項を登録する' }).click()
 
   // 登録した本人にも、公開されるまでは一覧へ出ない (AC-EYEX-85)。
@@ -905,7 +928,8 @@ test('公開・差戻し・却下はいずれも理由を求め、理由が無�
   const waiting = page.getByRole('article', { name: /注意事項 確認待ち 版1/ })
   const reviews = () => mocks.requests.filter((entry) => entry.url.endsWith('/review'))
 
-  for (const label of ['公開する', '差戻す', '却下する']) {
+  // 判断の 3 つはモックの文言（公開する / 差戻し / 却下）。
+  for (const label of ['公開する', '差戻し', '却下']) {
     await waiting.getByRole('button', { name: label }).click()
     await expect(page.getByText('理由を入力してください。')).toBeVisible()
     expect(reviews()).toHaveLength(0)
@@ -938,7 +962,7 @@ test('改訂は公開済みの版を上書きせず新しい版を公開し、�
   await expect(dialog).toContainText('公開済みの版は上書きされません。')
   await expect(dialog).toContainText('版1は過去版として残ります。')
   await dialog
-    .getByLabel('発生した事実')
+    .getByLabel('発生した事実', { exact: true })
     .fill('鼻あての金属で肌が荒れやすい。樹脂パッドへ交換済み。')
   await dialog.getByRole('button', { name: '改訂版を公開する' }).click()
 
@@ -993,22 +1017,23 @@ test('別の権限者が改訂した後に古い版から公開しようとす�
   await waiting.getByRole('button', { name: '公開する' }).click()
 
   // 公開は成立せず、どの版から見ているかを名指しして断る (AC-EYEX-117)。
-  const conflict = page.getByRole('dialog', { name: '別の権限者が改訂しています' })
+  const conflict = page.getByRole('dialog', { name: '別の端末で先に更新されています' })
   await expect(conflict).toContainText('この画面は版1です。現在の版は版3です。')
   await expect(conflict).toContainText('古い版からは公開できません。')
   await expect(page.getByText('公開しました。登録者と監査記録へ結果を残しました。')).toHaveCount(0)
 
-  // 何が変わったのかを、項目ごとに変更前後で突き合わせて見せる。
-  const diff = conflict.getByRole('table', { name: '新旧の差分' })
-  await expect(diff.getByRole('row')).toHaveCount(3)
-  await expect(diff.getByRole('row').nth(1)).toContainText('発生した事実')
-  await expect(diff.getByRole('row').nth(1)).toContainText(
-    '来店時に強い日差しで頭痛を訴えられた。調光レンズ試着済み。',
-  )
-  await expect(diff.getByRole('row').nth(2)).toContainText('推奨対応')
-  await expect(diff.getByRole('row').nth(2)).toContainText('（未記録）')
+  // 何が変わったのかを、最新と手元の 2 面に項目ごとで並べて突き合わせる。
+  const latest = conflict.getByRole('region', { name: '最新の内容' })
+  await expect(latest).toContainText('発生した事実')
+  await expect(latest).toContainText('来店時に強い日差しで頭痛を訴えられた。調光レンズ試着済み。')
+  await expect(latest).toContainText('推奨対応')
+  // 最新では推奨対応が消えている。空欄ではなく「未記録」と言い切る。
+  await expect(latest).toContainText('（未記録）')
+  const mine = conflict.getByRole('region', { name: 'この端末の入力' })
+  await expect(mine).toContainText('来店時に強い日差しで頭痛を訴えられた。')
+  await expect(mine).toContainText('調光レンズを案内する')
 
-  await conflict.getByRole('button', { name: '最新の版を読み直す' }).click()
+  await conflict.getByRole('button', { name: '最新内容へ再適用' }).click()
   await expect(conflict).toHaveCount(0)
 })
 
@@ -1119,15 +1144,17 @@ test('録音を再生した事実は、再生者・日時・対象予約とと�
   await expect.poll(() => played.length).toBeGreaterThan(0)
 
   await page
-    .getByRole('navigation', { name: '管理メニュー' })
-    .getByRole('button', { name: '監査ログ' })
+    .getByRole('navigation', { name: '画面の一覧' })
+    .getByRole('button', { name: '監査ログ', exact: true })
     .click()
-  await page.getByRole('button', { name: '検索する' }).click()
+  // 監査は詳細ビューが既定。一覧はそこから開く。
+  await page.getByRole('button', { name: '監査を検索', exact: true }).click()
+  await page.getByRole('button', { name: '監査を検索する' }).click()
 
   const row = page.getByRole('row', { name: /recording\.played/ }).first()
   await expect(row).toBeVisible()
   await row.getByRole('button', { name: '詳細' }).click()
-  const detail = page.getByRole('dialog')
+  const detail = page.getByRole('region', { name: '監査イベント詳細' })
   await expect(detail).toContainText('user-yamada')
   await expect(detail).toContainText('2026年8月25日')
   await expect(detail).toContainText(reservationId)

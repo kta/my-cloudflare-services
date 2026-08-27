@@ -7,7 +7,6 @@ import {
   type AlertSettingsInput,
   type StorePermission,
 } from '@app/contracts'
-import { Field, TextInput } from '@app/ui'
 import { useEffect, useState } from 'react'
 import {
   alertConditionLabel,
@@ -18,6 +17,7 @@ import {
 } from './analytics-view'
 import { Action, Actions, FilterLine, FilterSelect } from './design/controls'
 import { Modal } from './design/dialogs'
+import { CheckToggle, TextField } from './design/forms'
 import { FullScreenState } from './design/layouts'
 import { FailureNotice, StatusNotice } from './design/notices'
 import { Card, ListRow, StatePill } from './design/surfaces'
@@ -330,16 +330,15 @@ export function AlertsScreen({ storeId, api, permissions, navigate }: Props) {
 
           {mayWrite && (
             <>
-              <Field label="対応内容" htmlFor="alert-note" error={noteError}>
-                <TextInput
-                  id="alert-note"
-                  className="min-h-12"
-                  value={note}
-                  onChange={(event) => {
-                    setNote(event.target.value)
-                  }}
-                />
-              </Field>
+              <TextField
+                id="alert-note"
+                value={note}
+                onChange={(event) => {
+                  setNote(event.target.value)
+                }}
+                label="対応内容"
+                error={noteError}
+              />
               <Actions>
                 <Action
                   disabled={selected.readAt !== null}
@@ -382,48 +381,44 @@ export function AlertsScreen({ storeId, api, permissions, navigate }: Props) {
           <Card>
             {conditions.map((condition) => (
               <p key={condition.code} className="my-2.5 flex items-center gap-3">
-                <input
-                  id={`alert-condition-${condition.code}`}
-                  type="checkbox"
-                  className="size-6"
+                {/* 印の名前は隣の可視の文言そのもの。button には <label for> が
+                    効かないので `aria-labelledby` で結ぶ。 */}
+                <CheckToggle
+                  labelledBy={`alert-condition-${condition.code}`}
                   checked={condition.enabled}
-                  onChange={(event) => {
-                    updateCondition(condition.code, { enabled: event.target.checked })
+                  onChange={(enabled) => {
+                    updateCondition(condition.code, { enabled })
                   }}
                 />
-                <label htmlFor={`alert-condition-${condition.code}`}>
+                <span id={`alert-condition-${condition.code}`}>
                   {alertConditionLabel(condition.code)}
-                </label>
+                </span>
               </p>
             ))}
             {longWait && (
-              <Field label="待ち時間の閾値（分）" htmlFor="alert-threshold">
-                <TextInput
-                  id="alert-threshold"
-                  type="number"
-                  min={1}
-                  max={600}
-                  className="min-h-12"
-                  value={String(longWait.thresholdMinutes ?? '')}
-                  onChange={(event) => {
-                    const parsed = Number.parseInt(event.target.value, 10)
-                    updateCondition('long_wait', {
-                      thresholdMinutes: Number.isNaN(parsed) ? null : parsed,
-                    })
-                  }}
-                />
-              </Field>
-            )}
-            <Field label="通知先メールアドレス" htmlFor="alert-targets">
-              <TextInput
-                id="alert-targets"
-                className="min-h-12"
-                value={targets}
+              <TextField
+                id="alert-threshold"
+                type="number"
+                min={1}
+                max={600}
+                value={String(longWait.thresholdMinutes ?? '')}
                 onChange={(event) => {
-                  setTargets(event.target.value)
+                  const parsed = Number.parseInt(event.target.value, 10)
+                  updateCondition('long_wait', {
+                    thresholdMinutes: Number.isNaN(parsed) ? null : parsed,
+                  })
                 }}
+                label="待ち時間の閾値（分）"
               />
-            </Field>
+            )}
+            <TextField
+              id="alert-targets"
+              value={targets}
+              onChange={(event) => {
+                setTargets(event.target.value)
+              }}
+              label="通知先メールアドレス"
+            />
             <Actions>
               <Action
                 variant="primary"

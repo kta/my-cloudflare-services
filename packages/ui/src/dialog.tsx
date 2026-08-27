@@ -30,10 +30,13 @@ export function Dialog({
   const ref = useRef<HTMLDialogElement>(null)
 
   useEffect(() => {
+    // ref は直下の <dialog> に必ず付くので、null は型の上でしか起こらない。
+    // 到達しない early return を置くと届かない行が残るため、条件に畳む。
     const el = ref.current
-    if (!el) return
-    if (open && !el.open) el.showModal()
-    else if (!open && el.open) el.close()
+    if (el && el.open !== open) {
+      if (open) el.showModal()
+      else el.close()
+    }
   }, [open])
 
   return (

@@ -110,6 +110,28 @@ export function AdminRow({
   )
 }
 
+/**
+ * 録音の波形（承認済みモック受付履歴の `.wave`）。
+ *
+ * 再生位置も振幅も持たない装飾で、「録音が在る」ことだけを示す。中身を読み
+ * 取れるように描かないのは、波形から会話の内容を推し量らせないためである。
+ * 高さ 45px は 4 の倍数でない実測値なので、純粋な寸法としてインラインで持つ。
+ */
+export function Waveform() {
+  return (
+    <div
+      aria-hidden="true"
+      data-wave=""
+      className="mt-2 opacity-65"
+      style={{
+        height: '45px',
+        background:
+          'repeating-linear-gradient(90deg,var(--color-wave),var(--color-wave) 3px,transparent 3px,transparent 8px)',
+      }}
+    />
+  )
+}
+
 /** 状態ピル（`.state`）。緑の淡い地に緑の太字。 */
 export function StatePill({
   children,

@@ -118,9 +118,14 @@ function renderScreen(
   return { api, calls, navigate }
 }
 
+/*
+ * 承認済みモックの一覧上部は検索欄と 2 つのピルだけで、送信ボタンを持たない。
+ * 確定は欄そのものの submit（Enter）で起こるので、テストも同じ経路を通す。
+ */
 function searchFor(term: string) {
-  fireEvent.change(screen.getByLabelText('氏名・電話番号・予約番号'), { target: { value: term } })
-  fireEvent.click(screen.getByRole('button', { name: '検索する' }))
+  const field = screen.getByLabelText('氏名・電話番号・予約番号')
+  fireEvent.change(field, { target: { value: term } })
+  fireEvent.submit(field.closest('form') as HTMLFormElement)
 }
 
 function listResponse(reservations: unknown[]) {
@@ -402,14 +407,13 @@ test('cancels with a reason and shows the actor, time and previous content in th
     reason: 'お客様都合',
     confirmation: '取消',
   })
-  const history = await screen.findByRole('region', { name: '変更履歴' })
+  // 取り消した結果は詳細の `.card`「状態」に出る。承認済みモックの詳細ペインに
+  // 変更履歴の面は無いので、履歴は受付履歴の面が持つ。
+  const detail = await screen.findByRole('region', { name: '予約詳細' })
   await waitFor(() => {
-    const text = history.textContent ?? ''
-    expect(text).toContain('鈴木')
-    expect(text).toContain('2026年8月27日 10:30')
-    expect(text).toContain('変更前')
-    expect(text).toContain('2026年8月27日 11:00')
+    expect(within(detail).getByText('取消済み')).toBeInTheDocument()
   })
+  expect(screen.queryByRole('region', { name: '変更履歴' })).not.toBeInTheDocument()
 })
 
 // UC-EYEX-062: recording state is one of 録音なし / 処理中 / 保存失敗 / 削除済み.
@@ -496,20 +500,44 @@ test('hides the recording entirely from staff without playback permission', asyn
   expect(screen.queryByRole('button', { name: '再生' })).not.toBeInTheDocument()
 })
 
-// UC-EYEX-056: period, source and status narrow the fixed-store search.
-test('narrows the fixed-store search by period, source and status', async () => {
+/*
+ * UC-EYEX-056: 承認済みモックの絞り込みは `今後の予約` と
+ * `電話・店頭・Web予約` の 2 つのピルだけで、ネイティブの選択肢も日付欄も
+ * 持たない。押されているかどうかは `aria-pressed` が言う。
+ */
+test('narrows the fixed-store search with the two approved pills', async () => {
   const { calls } = renderScreen(listResponse([tanaka]))
-  fireEvent.change(screen.getByLabelText('開始日'), { target: { value: '2026-08-27' } })
-  fireEvent.change(screen.getByLabelText('終了日'), { target: { value: '2026-08-31' } })
-  fireEvent.change(screen.getByLabelText('予約元'), { target: { value: 'web' } })
-  fireEvent.change(screen.getByLabelText('状態'), { target: { value: 'confirmed' } })
+  const upcoming = screen.getByRole('button', { name: '今後の予約' })
+  expect(upcoming).toHaveAttribute('aria-pressed', 'false')
+  fireEvent.click(upcoming)
+  expect(upcoming).toHaveAttribute('aria-pressed', 'true')
+  await waitFor(() => {
+    // 今日以降だけに絞る。日付欄を出さないので、基準日は注入された today。
+    expect(calls.at(-1)?.url).toContain('dateFrom=2026-08-27')
+  })
+})
+
+// 予約元のピルはウォークインを外す。契約の `source` は単一値なので、この
+// 合成条件だけはサーバへ渡さず、取得した候補から落とす。
+test('drops walk-ins when the booked-source pill is pressed', async () => {
+  const walkin = { ...tanakaIchiro, source: 'walkin' as const }
+  renderScreen(listResponse([tanaka, walkin]))
   searchFor('田中')
-  await screen.findByRole('button', { name: /田中 花子/ })
-  const searchCall = calls.find((call) => call.url.includes('/reservations?'))
-  expect(searchCall?.url).toContain('dateFrom=2026-08-27')
-  expect(searchCall?.url).toContain('dateTo=2026-08-31')
-  expect(searchCall?.url).toContain('source=web')
-  expect(searchCall?.url).toContain('status=confirmed')
+  await screen.findByRole('button', { name: /田中 一郎/ })
+  const booked = screen.getByRole('button', { name: '電話・店頭・Web予約' })
+  expect(booked).toHaveAttribute('aria-pressed', 'false')
+  fireEvent.click(booked)
+  await waitFor(() => {
+    expect(screen.queryByRole('button', { name: /田中 一郎/ })).not.toBeInTheDocument()
+  })
+  expect(screen.getByRole('button', { name: /田中 花子/ })).toBeInTheDocument()
+})
+
+// ネイティブの選択肢と `type="date"` は米国式の `mm/dd/yy` を出すので使わない。
+test('offers no native select or date control', () => {
+  renderScreen(listResponse([tanaka]))
+  expect(screen.queryAllByRole('combobox')).toHaveLength(0)
+  expect(document.querySelectorAll('input[type="date"]')).toHaveLength(0)
 })
 
 // AC-EYEX-14: a failed search says so instead of silently showing nothing.
@@ -580,10 +608,7 @@ test('tells the workspace which reservation is open so its recording can be supp
   const onReservationOpened = vi.fn()
   renderScreen(listResponse([tanaka]), { onReservationOpened })
 
-  fireEvent.change(screen.getByLabelText('氏名・電話番号・予約番号'), {
-    target: { value: '田中' },
-  })
-  fireEvent.click(screen.getByRole('button', { name: '検索する' }))
+  searchFor('田中')
   const results = await screen.findByRole('region', { name: '検索結果' })
   fireEvent.click(within(results).getAllByRole('button')[0] as HTMLElement)
 
@@ -628,8 +653,8 @@ test('renders the search field as the approved 2px pine box', () => {
 // `.filter{min-height:44px;border:1px solid var(--l);background:#fff;border-radius:8px}`
 test('renders the filters as the approved chip line', () => {
   renderScreen(listResponse([tanaka]))
-  for (const label of ['予約元', '状態', '開始日', '終了日']) {
-    const control = screen.getByLabelText(label)
+  for (const label of ['今後の予約', '電話・店頭・Web予約']) {
+    const control = screen.getByRole('button', { name: label })
     expect(control.className).toContain('min-h-11')
     expect(control.className).toContain('border-line')
     expect(control.className).toContain('bg-surface')
@@ -684,19 +709,18 @@ test('renders the detail pane as the approved heading, card grid and danger acti
 
 // exception-states-approved.html `#empty`: 空表示は回復操作を必ず連れてくる。
 test('offers the approved recovery action when nothing matches', async () => {
-  // 空は面ごと EX-EMPTY の全画面状態になる。1 回目の検索は 0 件、解除したあとは
-  // 見つかる、という筋にして「解除で条件が本当に消えた」ことを両方から確かめる。
-  let searches = 0
+  /*
+   * 空は面ごと EX-EMPTY の全画面状態になる。絞り込みが効いているあいだは 0 件、
+   * 解除したあとは見つかる、という筋にして「解除で条件が本当に消えた」ことを
+   * 結果の側からも確かめる。
+   */
   const { calls } = renderScreen((route) => {
-    if (route.url.includes('/reservations?')) {
-      searches += 1
-      return jsonResponse(searches === 1 ? [] : [tanaka])
-    }
-    if (route.url.endsWith('/history')) return jsonResponse([])
+    if (route.url.includes('/reservations?'))
+      return jsonResponse(route.url.includes('dateFrom=') ? [] : [tanaka])
     return jsonResponse({ error: 'unexpected' }, 500)
   })
-  fireEvent.change(screen.getByLabelText('予約元'), { target: { value: 'web' } })
-  searchFor('田中')
+  fireEvent.change(screen.getByLabelText('氏名・電話番号・予約番号'), { target: { value: '田中' } })
+  fireEvent.click(screen.getByRole('button', { name: '今後の予約' }))
 
   expect(await screen.findByText('条件に一致する予約はありません')).toBeInTheDocument()
   expect(
@@ -707,10 +731,13 @@ test('offers the approved recovery action when nothing matches', async () => {
 
   fireEvent.click(screen.getByRole('button', { name: 'フィルターをすべて解除' }))
   await waitFor(() => {
-    expect(calls.at(-1)?.url).not.toContain('source=web')
+    expect(calls.at(-1)?.url).not.toContain('dateFrom=')
   })
   expect(await screen.findByLabelText('氏名・電話番号・予約番号')).toHaveValue('')
-  expect(screen.getByLabelText('予約元')).toHaveValue('')
+  expect(screen.getByRole('button', { name: '今後の予約' })).toHaveAttribute(
+    'aria-pressed',
+    'false',
+  )
 })
 
 // exception-states-approved.html `#permission-denied`: 403 も回復操作つき。

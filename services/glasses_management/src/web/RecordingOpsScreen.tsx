@@ -4,7 +4,7 @@ import { PermissionDenied } from './admin-chrome'
 import { Action, Actions } from './design/controls'
 import { Modal } from './design/dialogs'
 import { TextAreaField, TextField, ToggleFilter } from './design/forms'
-import { AdminLayout, AdminSurface, SideNavItem } from './design/layouts'
+import { AdminLayout, AdminSurface } from './design/layouts'
 import { FailureNotice } from './design/notices'
 import { AdminRow, Card, CardGrid, StatePill } from './design/surfaces'
 import { ReauthPrompt } from './ReauthPrompt'
@@ -28,8 +28,6 @@ const SECTIONS: { label: string; to?: StaffLocation }[] = [
   { label: '保存期間', to: { screen: 'recording-ops' } },
   { label: '保存・削除状態' },
   { label: '保全一覧' },
-  /* 同じタブの下の兄弟の面。ここからしか行けないので並びの末尾に置く。 */
-  { label: '共有端末', to: { screen: 'shared-terminals' } },
 ]
 
 export type RecordingOpsScreenProps = StaffScreenProps & {
@@ -237,18 +235,14 @@ export function RecordingOpsScreen({
        `RECORDING-OPS--failure-hold--ipad-landscape.png` の骨格と文言。 */
     <AdminSurface label="録音運用">
       <AdminLayout
-        navLabel="録音運用の節"
-        nav={SECTIONS.map((section) => (
-          <SideNavItem
-            key={section.label}
-            on={section.label === '保存期間'}
-            onClick={
-              section.to === undefined ? undefined : () => navigate(section.to as StaffLocation)
-            }
-          >
-            {section.label}
-          </SideNavItem>
-        ))}
+        /*
+         * 柱は全画面共通の 1 本しかないので、この面の節はそこへ渡す。
+         * 別の面への移動はサイドバーが持つので、ここでは並べない。
+         */
+        sections={SECTIONS.map((section) => ({
+          ...section,
+          current: section.label === '保存期間',
+        }))}
       >
         <h1>録音の保存期間</h1>
 

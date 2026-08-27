@@ -82,9 +82,12 @@ async function mockPublicApi(page: Page, booking: 'success' | 'conflict' | 'unkn
 async function reachConfirmation(page: Page) {
   await page.getByRole('button', { name: /銀座店.*店舗情報を見る/ }).click()
   await page.getByRole('button', { name: '銀座店で予約を始める' }).click()
+  // 来店目的と日時は「選ぶ」と「進む」が別操作（PublicBooking.tsx の 1/5・2/5 工程）。
   await page.getByRole('button', { name: /メガネを新しく作りたい.*約60分/ }).click()
+  await page.getByRole('button', { name: '日時へ進む' }).click()
   await page.getByLabel('ご希望の日').fill('2026-09-01')
-  await page.getByRole('button', { name: '9月1日 10:00' }).click()
+  await page.getByRole('button', { name: '9月1日（火）10:00' }).click()
+  await page.getByRole('button', { name: 'お客様情報へ進む' }).click()
   await page.getByLabel('お名前', { exact: true }).fill('田中花子')
   await page.getByLabel('お名前（かな）').fill('タナカハナコ')
   await page.getByLabel('電話番号').fill('09012345678')
@@ -111,7 +114,7 @@ test('allows a customer to book and manage only the verified reservation on a 37
   await page.getByRole('button', { name: '予約を表示する' }).click()
   await page.getByRole('button', { name: '予約日時を変更する' }).click()
   await page.getByLabel('変更後の日').fill('2026-09-01')
-  await page.getByRole('button', { name: '9月1日 10:00' }).click()
+  await page.getByRole('button', { name: '9月1日（火）10:00' }).click()
   await expect(page.getByText('予約を変更しました。')).toBeVisible()
   await page.getByRole('button', { name: '予約を取り消す' }).click()
   await expect(page.getByRole('heading', { name: '予約を取り消しました' })).toBeVisible()
@@ -123,9 +126,12 @@ test('retains the same-store booking input when the chosen slot conflicts', asyn
   await mockPublicApi(page, 'conflict')
   await page.goto('/book/ginza')
   await page.getByRole('button', { name: '銀座店で予約を始める' }).click()
+  // 来店目的と日時は「選ぶ」と「進む」が別操作（PublicBooking.tsx の 1/5・2/5 工程）。
   await page.getByRole('button', { name: /メガネを新しく作りたい.*約60分/ }).click()
+  await page.getByRole('button', { name: '日時へ進む' }).click()
   await page.getByLabel('ご希望の日').fill('2026-09-01')
-  await page.getByRole('button', { name: '9月1日 10:00' }).click()
+  await page.getByRole('button', { name: '9月1日（火）10:00' }).click()
+  await page.getByRole('button', { name: 'お客様情報へ進む' }).click()
   await page.getByLabel('お名前', { exact: true }).fill('田中花子')
   await page.getByLabel('お名前（かな）').fill('タナカハナコ')
   await page.getByLabel('電話番号').fill('09012345678')
@@ -135,7 +141,8 @@ test('retains the same-store booking input when the chosen slot conflicts', asyn
   await expect(page.getByRole('alert')).toContainText(
     '選択した時間は他のお客様の予約で埋まりました',
   )
-  await page.getByRole('button', { name: '9月1日 10:00' }).click()
+  await page.getByRole('button', { name: '9月1日（火）10:00' }).click()
+  await page.getByRole('button', { name: 'お客様情報へ進む' }).click()
   await expect(page.getByLabel('お名前', { exact: true })).toHaveValue('田中花子')
 })
 

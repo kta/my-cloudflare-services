@@ -9,7 +9,7 @@ import {
 } from '@app/contracts'
 import { Fragment, type ReactNode, useEffect, useState } from 'react'
 import { Action, Actions, FilterLine } from './design/controls'
-import { SelectField, TextField, ToggleFilter } from './design/forms'
+import { CheckToggle, SelectField, TextField, ToggleFilter } from './design/forms'
 import { FullScreenState, GuideLayout, GuideStep } from './design/layouts'
 import { FailureNotice, StatusNotice } from './design/notices'
 import { Card, CardGrid, FieldCard, Preview, TitleRow } from './design/surfaces'
@@ -468,20 +468,19 @@ export function SettingsScreen({
             return (
               <div key={name} className="flex flex-wrap items-end gap-3">
                 <span className="min-h-12 w-12 leading-12">{name}曜</span>
-                <label className="flex min-h-12 items-center gap-2">
-                  <input
-                    type="checkbox"
-                    aria-label={`${name}曜を営業日にする`}
+                <span className="flex min-h-12 items-center gap-2">
+                  <CheckToggle
+                    label={`${name}曜を営業日にする`}
                     checked={period !== undefined}
-                    onChange={(event) =>
+                    onChange={(on) =>
                       setDayPeriod(
                         dayOfWeek,
-                        event.target.checked ? { startTime: '10:00', endTime: '19:00' } : undefined,
+                        on ? { startTime: '10:00', endTime: '19:00' } : undefined,
                       )
                     }
                   />
                   営業
-                </label>
+                </span>
                 <TextField
                   id={`business-start-${dayOfWeek}`}
                   hideLabel
@@ -714,15 +713,14 @@ export function SettingsScreen({
                     updatePurpose({ requiredEquipment: splitList(event.target.value) })
                   }
                 />
-                <label className="flex min-h-12 items-center gap-2">
-                  <input
-                    type="checkbox"
-                    aria-label="Web予約に公開する"
+                <span className="flex min-h-12 items-center gap-2">
+                  <CheckToggle
+                    label="Web予約に公開する"
                     checked={selectedPurpose.isPublic}
-                    onChange={(event) => updatePurpose({ isPublic: event.target.checked })}
+                    onChange={(isPublic) => updatePurpose({ isPublic })}
                   />
                   Web予約に公開する
-                </label>
+                </span>
                 <p className="my-0">
                   非公開にすると新規の選択肢から外れます。既存予約と履歴は削除されません。
                 </p>
@@ -827,22 +825,21 @@ export function SettingsScreen({
                     })
                   }
                 />
-                <label className="flex min-h-12 items-center gap-2">
-                  <input
-                    type="checkbox"
-                    aria-label={`${member.name}は予約を受け付ける`}
+                <span className="flex min-h-12 items-center gap-2">
+                  <CheckToggle
+                    label={`${member.name}は予約を受け付ける`}
                     checked={member.canBook}
-                    onChange={(event) =>
+                    onChange={(canBook) =>
                       update((previous) => ({
                         ...previous,
                         staff: previous.staff.map((row) =>
-                          row.id === member.id ? { ...row, canBook: event.target.checked } : row,
+                          row.id === member.id ? { ...row, canBook } : row,
                         ),
                       }))
                     }
                   />
                   予約受付可
-                </label>
+                </span>
               </div>
             )
           })}
@@ -1022,22 +1019,21 @@ export function SettingsScreen({
               }
             />
             {draft.purposes.map((purpose) => (
-              <label key={purpose.id} className="flex min-h-12 items-center gap-2">
-                <input
-                  type="checkbox"
-                  aria-label={`${purpose.staffName}をWeb予約に公開する`}
+              <span key={purpose.id} className="flex min-h-12 items-center gap-2">
+                <CheckToggle
+                  label={`${purpose.staffName}をWeb予約に公開する`}
                   checked={webDraft.publicPurposeIds.includes(purpose.id)}
-                  onChange={(event) =>
+                  onChange={(on) =>
                     setWebDraft({
                       ...webDraft,
-                      publicPurposeIds: event.target.checked
+                      publicPurposeIds: on
                         ? [...webDraft.publicPurposeIds, purpose.id]
                         : webDraft.publicPurposeIds.filter((id) => id !== purpose.id),
                     })
                   }
                 />
                 {purpose.staffName}
-              </label>
+              </span>
             ))}
             {/* 保存先の API がまだ無いことを黙らない。 */}
             <p className="my-0">

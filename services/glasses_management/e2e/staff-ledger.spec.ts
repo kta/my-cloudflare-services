@@ -12,7 +12,9 @@ import { expect, type Page, test } from '@playwright/test'
  * suite happens to run on.
  */
 
-const NOW = '2026-09-01T05:30:00.000Z' // JST 2026-09-01 14:30
+// 台帳の時間軸は承認済みモックどおり 10:00–13:30 の 7 列なので、現在線が
+// 軸の上に載る時刻を選ぶ。11:45 は軸のちょうど中点にあたる。
+const NOW = '2026-09-01T02:45:00.000Z' // JST 2026-09-01 11:45
 const TODAY = '2026-09-01'
 const YESTERDAY = '2026-08-31'
 const IPAD_LANDSCAPE = { width: 1180, height: 820 }
@@ -49,6 +51,8 @@ function webReservation(overrides: Partial<LedgerEntry> = {}): LedgerEntry {
     assignedStaffId: null,
     assignedEquipmentIds: [],
     nextGuidance: null,
+    // 台帳のセルは「氏名 / 目的 · 予約元」を出すため、契約上 purposeNames は必須。
+    purposeNames: ['視力測定'],
     warnings: [],
     version: 1,
     ...overrides,
@@ -70,6 +74,7 @@ function phoneReservation(overrides: Partial<LedgerEntry> = {}): LedgerEntry {
     assignedStaffId: staffMemberId,
     assignedEquipmentIds: [equipmentId],
     nextGuidance: null,
+    purposeNames: ['レンズ相談'],
     warnings: [],
     version: 3,
     ...overrides,
@@ -82,12 +87,12 @@ function walkin(overrides: Partial<LedgerEntry> = {}): LedgerEntry {
     entryType: 'walkin',
     source: 'walkin',
     status: 'active',
-    startAt: '2026-09-01T05:00:00.000Z', // 14:00 JST
-    endAt: '2026-09-01T06:00:00.000Z',
-    customerName: 'ウォークイン 14:00',
+    startAt: '2026-09-01T02:00:00.000Z', // 11:00 JST
+    endAt: '2026-09-01T03:00:00.000Z',
+    customerName: 'ウォークイン 11:00',
     customerId: null,
     progress: 'waiting',
-    waitStartedAt: '2026-09-01T05:00:00.000Z',
+    waitStartedAt: '2026-09-01T02:00:00.000Z',
     assignedStaffId: null,
     assignedEquipmentIds: [],
     nextGuidance: null,
@@ -95,6 +100,27 @@ function walkin(overrides: Partial<LedgerEntry> = {}): LedgerEntry {
     version: 1,
     ...overrides,
   } as LedgerEntry
+}
+
+/** レーンの見出しになる店舗の名簿。台帳は id ではなく必ず名前で並べる。 */
+const availabilitySettings = {
+  storeId,
+  version: 3,
+  receptionStatus: 'open',
+  businessHours: [0, 1, 2, 3, 4, 5, 6].map((dayOfWeek) => ({
+    dayOfWeek,
+    periods: [{ startTime: '10:00', endTime: '19:00' }],
+  })),
+  exceptions: [],
+  purposes: [],
+  staff: [
+    { id: staffMemberId, name: '高橋 健', skills: ['refraction'], canBook: true, isActive: true },
+  ],
+  shifts: [],
+  equipment: [
+    { id: equipmentId, name: '測定機A', capacity: 1, isActive: true, availablePeriods: [] },
+  ],
+  maintenance: [],
 }
 
 const candidate = {
@@ -138,6 +164,10 @@ async function mockStaffApi(page: Page, state: ServerState) {
       return route.fulfill({ json: state.ledger[date] ?? [] })
     }
     if (path.endsWith('/customers')) return route.fulfill({ json: [candidate] })
+    // 台帳のレーンは担当者・設備の「名前」で組まれる。名簿を返さないと
+    // どちらの軸も名称未取得になり、軸の切り替えを確かめられない。
+    if (path.endsWith('/availability/settings'))
+      return route.fulfill({ json: availabilitySettings })
     if (path.endsWith('/reception-history')) return route.fulfill({ json: state.history })
 
     // Writes below are the compare-and-swap surface the screens drive.
@@ -212,7 +242,8 @@ async function openWorkspace(page: Page) {
   await page.setViewportSize(IPAD_LANDSCAPE)
   await page.clock.setFixedTime(new Date(NOW))
   await page.goto('/')
-  await expect(page.getByRole('heading', { name: '銀座店のホーム' })).toBeVisible()
+  // ホームは見出しを持たない面なので、主操作のナビゲーションで到達を待つ。
+  await expect(page.getByRole('navigation', { name: '主操作' })).toBeVisible()
 }
 
 async function openLedgerFor(page: Page, monthDay: string) {
@@ -233,34 +264,36 @@ test('shows every channel on one axis with the now line, both lane views and an 
   await openWorkspace(page)
   await openLedgerFor(page, '9月1日')
 
-  const grid = page.getByRole('region', { name: '予約台帳' })
+  const grid = page.getByRole('grid', { name: '予約台帳' })
   // UC-EYEX-043: web, phone/counter and walk-in share one time axis.
   await expect(grid.getByText('Web予約')).toBeVisible()
   await expect(grid.getByText('店頭・電話')).toBeVisible()
   await expect(grid.getByText('ウォークイン')).toBeVisible()
+  // 軸は承認済みモックの 7 列（10:00〜13:00）。両端が同じ軸の上にある。
   await expect(grid.getByText('10:00', { exact: true })).toBeVisible()
-  await expect(grid.getByText('18:30', { exact: true })).toBeVisible()
+  await expect(grid.getByText('13:00', { exact: true })).toBeVisible()
 
   // AC-EYEX-13 / UC-EYEX-045: `現在 HH:mm` drawn at the matching grid position.
-  const nowLine = grid.getByText('現在 14:30')
+  const nowLine = grid.getByText('現在 11:45')
   await expect(nowLine).toBeVisible()
   const gridBox = await grid.boundingBox()
   const nowBox = await nowLine.boundingBox()
   if (!gridBox || !nowBox) throw new Error('expected both the grid and the now line to be laid out')
-  // 14:30 is the exact midpoint of the 10:00–19:00 grid, right of the 10rem lane column.
-  const laneColumn = 160
+  // 11:45 is the exact midpoint of the 10:00–13:30 grid, right of the 180px lane column.
+  const laneColumn = 180
   const axisLeft = gridBox.x + laneColumn
   const expected = axisLeft + (gridBox.width - laneColumn) * 0.5
   expect(nowBox.x).toBeGreaterThan(axisLeft)
   expect(Math.abs(nowBox.x - expected)).toBeLessThan(24)
 
   // UC-EYEX-044: the same entries regroup by assignee and by equipment.
-  await expect(grid.getByText('担当者 未割当')).toBeVisible()
-  await expect(grid.getByText(`担当者 ${staffMemberId.slice(0, 8)}`)).toBeVisible()
-  await page.getByRole('button', { name: '設備で見る' }).click()
-  await expect(grid.getByText('設備 未割当')).toBeVisible()
-  await expect(grid.getByText(`設備 ${equipmentId.slice(0, 8)}`)).toBeVisible()
-  await expect(grid.getByText('担当者 未割当')).toHaveCount(0)
+  await expect(grid.getByText('担当者未定')).toBeVisible()
+  await expect(grid.getByText('高橋 健')).toBeVisible()
+  // 軸の切り替えは列見出しのセル自身が兼ねる（帯を 1 段も増やさないため）。
+  await page.getByRole('button', { name: '担当者で見る（設備に切り替え）' }).click()
+  await expect(grid.getByText('設備未定')).toBeVisible()
+  await expect(grid.getByText('測定機A')).toBeVisible()
+  await expect(grid.getByText('担当者未定')).toHaveCount(0)
 
   // UC-EYEX-046: the detail opens beside the ledger, never on top of it.
   await page
@@ -268,15 +301,18 @@ test('shows every channel on one axis with the now line, both lane views and an 
     .first()
     .click()
   const detail = page.getByRole('region', { name: '選択中の予約' })
-  await expect(detail.getByRole('heading', { name: '佐藤 陽子' })).toBeVisible()
+  await expect(detail.getByText('佐藤 陽子')).toBeVisible()
   await expect(detail.getByText('10:00–11:00')).toBeVisible()
   await expect(detail.getByText('予約済み')).toBeVisible()
-  await expect(grid.getByText('現在 14:30')).toBeVisible()
+  await expect(grid.getByText('現在 11:45')).toBeVisible()
 
-  // AC-EYEX-19: another day never shows a now line.
+  // AC-EYEX-19: another day never shows a now line. 面は日付を描かないので、
+  // 「前日の台帳を開いた」ことは前日ぶんの読み込み要求で確かめる。
   await page.goto('/')
   await openLedgerFor(page, '8月31日')
-  await expect(page.getByText(YESTERDAY)).toBeVisible()
+  await expect
+    .poll(() => state.requests.some((entry) => entry.url.includes(`date=${YESTERDAY}`)))
+    .toBe(true)
   await expect(page.getByText(/^現在 /)).toHaveCount(0)
 })
 
@@ -290,15 +326,20 @@ test('receives a walk-in without customer details and links it to an existing cu
   await openLedgerFor(page, '9月1日')
 
   // AC-EYEX-11 / UC-EYEX-047: reception succeeds with a provisional label only.
-  await page.getByRole('button', { name: '店頭のお客様を受け付ける' }).click()
-  const card = page.getByRole('button', { name: /ウォークイン 14:00/ })
+  // 面の行き来は全画面共通の左サイドバー 1 本に集約されたので、そこから来店受付へ。
+  const sidebar = page.getByRole('navigation', { name: '画面の一覧' })
+  await sidebar.getByRole('button', { name: '来店受付', exact: true }).click()
+  await page.getByRole('main').getByRole('button', { name: '＋ 店頭のお客様を受付' }).click()
+  await sidebar.getByRole('button', { name: '予約台帳', exact: true }).click()
+  const card = page.getByRole('button', { name: /ウォークイン 11:00/ })
   await expect(card).toBeVisible()
   await expect(card).toContainText('顧客未登録')
-  await expect(card).toContainText('お待ち')
   await card.click()
 
   // AC-EYEX-12: search an existing customer or register a new one, from here.
   const detail = page.getByRole('region', { name: '選択中の予約' })
+  // 仮の名乗りのまま受付が成立し、待ちの状態として台帳に載っている。
+  await expect(detail).toContainText('お待ち')
   await expect(detail.getByLabel('氏名で顧客を探す')).toBeVisible()
   await expect(
     detail.getByRole('button', { name: '新規顧客として登録して関連付ける' }),
@@ -327,7 +368,7 @@ test('registers a new customer from a walk-in and keeps a departed unregistered 
   await openLedgerFor(page, '9月1日')
 
   // UC-EYEX-049: create the customer from the walk-in and link in one action.
-  await page.getByRole('button', { name: /ウォークイン 14:00/ }).click()
+  await page.getByRole('button', { name: /ウォークイン 11:00/ }).click()
   const detail = page.getByRole('region', { name: '選択中の予約' })
   await detail.getByLabel('お名前').fill('山本 千夏')
   await detail.getByLabel('フリガナ').fill('ヤマモト チナツ')
@@ -364,17 +405,17 @@ test('registers a new customer from a walk-in and keeps a departed unregistered 
   ]
   await page.reload()
   await openLedgerFor(page, '9月1日')
-  await page.getByRole('button', { name: /ウォークイン 14:00/ }).click()
+  await page.getByRole('button', { name: /ウォークイン 11:00/ }).click()
   await page.getByRole('button', { name: '退店として記録する' }).click()
-  await expect(page.getByRole('button', { name: /ウォークイン 14:00/ })).toContainText('退店')
+  // 台帳のコマは 2 行しか持たないので、状態は選択中の 1 件の面が名乗る。
+  await expect(page.getByRole('region', { name: '選択中の予約' })).toContainText('退店')
 
   await page.goto('/')
   await page.getByRole('button', { name: '受付履歴', exact: true }).click()
-  await page.getByLabel('受付経路').selectOption('walkin')
-  await page.getByRole('button', { name: '絞り込む' }).click()
+  await page.getByRole('button', { name: '店頭', exact: true }).click()
   const historyList = page.getByRole('region', { name: '受付履歴' })
   await expect(historyList.getByText('顧客未登録')).toBeVisible()
-  await expect(historyList.getByText(/ウォークイン受付/)).toBeVisible()
+  await expect(historyList.getByText(/を受付/)).toBeVisible()
   expect(
     state.requests.some(
       (entry) => entry.url.includes('/reception-history?') && entry.url.includes('source=walkin'),
@@ -402,7 +443,11 @@ test('runs the in-store journey: arrival, stage handover and colour-free waiting
   await mockStaffApi(page, state)
   await openWorkspace(page)
   await openLedgerFor(page, '9月1日')
-  await page.getByRole('button', { name: '来店受付へ' }).click()
+  // 来店受付の面へは左サイドバー（全画面共通）から移る。
+  await page
+    .getByRole('navigation', { name: '画面の一覧' })
+    .getByRole('button', { name: '来店受付', exact: true })
+    .click()
   await expect(page.getByRole('heading', { name: '銀座店の来店受付' })).toBeVisible()
 
   // UC-EYEX-053 / AC-EYEX-26: the warning is legible as words, not as a colour.
@@ -415,7 +460,7 @@ test('runs the in-store journey: arrival, stage handover and colour-free waiting
   await expect(warnings.getByText('担当者が割り当てられていません。')).toBeVisible()
 
   // UC-EYEX-051: record an arrival, then a no-show and a cancellation.
-  const board = page.getByRole('region', { name: '店内の進み具合' })
+  const board = page.getByRole('grid', { name: '接客の進み具合' })
   await board.getByRole('button', { name: /佐藤 陽子/ }).click()
   const panel = page.getByRole('region', { name: '選択中のお客様' })
   await panel.getByRole('button', { name: '来店済みとして記録する' }).click()
@@ -429,9 +474,9 @@ test('runs the in-store journey: arrival, stage handover and colour-free waiting
   await panel.getByLabel('設備ID').fill(equipmentId)
   await panel.getByLabel('次のご案内').fill('レンズ度数の確認へご案内')
   await panel.getByRole('button', { name: '接客の状況を保存する' }).click()
-  await expect(board.getByRole('button', { name: /佐藤 陽子/ })).toContainText(
-    '次のご案内 レンズ度数の確認へご案内',
-  )
+  // 引き継ぎは次の工程のコマに出る（名乗りのコマではない）。
+  await expect(board).toContainText('次にご案内')
+  await expect(board).toContainText('レンズ度数の確認へご案内')
   const saved = state.requests.filter(
     (entry) =>
       entry.method === 'PATCH' && entry.url.includes(`/reservations/${webReservationId}/progress`),
@@ -479,22 +524,22 @@ test('refuses a stale write, shows the latest version and lets the operator re-a
     currentVersion: 7,
   }
   state.ledger[TODAY] = [walkin({ version: 7, nextGuidance: '他端末が更新しました' })]
-  await page.getByRole('button', { name: /ウォークイン 14:00/ }).click()
+  await page.getByRole('button', { name: /ウォークイン 11:00/ }).click()
   await page.getByRole('button', { name: '退店として記録する' }).click()
-  await expect(page.getByText('別の端末が先に更新しました。表示は最新（版 7）です。')).toBeVisible()
+  await expect(page.getByText('この画面は最新の状態に更新済みです（版 7）。')).toBeVisible()
   expect(state.requests.filter((entry) => entry.url.includes('/progress')).at(-1)?.body).toEqual({
     version: 1,
     progress: 'departed',
   })
 
   // UC-EYEX-173: re-apply the same intent against the latest state.
-  await page.getByRole('button', { name: '最新の状態に再適用する' }).click()
-  await expect(page.getByText(/別の端末が先に更新しました/)).toHaveCount(0)
+  await page.getByRole('button', { name: '最新内容へ再適用' }).click()
+  await expect(page.getByText(/この画面は最新の状態に更新済みです/)).toHaveCount(0)
   expect(state.requests.filter((entry) => entry.url.includes('/progress')).at(-1)?.body).toEqual({
     version: 7,
     progress: 'departed',
   })
-  await expect(page.getByRole('button', { name: /ウォークイン 14:00/ })).toContainText('退店')
+  await expect(page.getByRole('region', { name: '選択中の予約' })).toContainText('退店')
 
   // UC-EYEX-173: or discard the pending input instead, leaving the latest state.
   state.ledger[TODAY] = [walkin({ version: 9 })]
@@ -505,12 +550,10 @@ test('refuses a stale write, shows the latest version and lets the operator re-a
     currentVersion: 11,
   }
   state.ledger[TODAY] = [walkin({ version: 11 })]
-  await page.getByRole('button', { name: /ウォークイン 14:00/ }).click()
+  await page.getByRole('button', { name: /ウォークイン 11:00/ }).click()
   await page.getByRole('button', { name: '退店として記録する' }).click()
-  await expect(
-    page.getByText('別の端末が先に更新しました。表示は最新（版 11）です。'),
-  ).toBeVisible()
-  await page.getByRole('button', { name: '入力を破棄する' }).click()
-  await expect(page.getByText(/別の端末が先に更新しました/)).toHaveCount(0)
-  await expect(page.getByRole('button', { name: /ウォークイン 14:00/ })).toContainText('お待ち')
+  await expect(page.getByText('この画面は最新の状態に更新済みです（版 11）。')).toBeVisible()
+  await page.getByRole('button', { name: 'この入力を破棄' }).click()
+  await expect(page.getByText(/この画面は最新の状態に更新済みです/)).toHaveCount(0)
+  await expect(page.getByRole('region', { name: '選択中の予約' })).toContainText('お待ち')
 })

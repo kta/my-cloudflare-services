@@ -175,6 +175,9 @@ async function mockStaffApi(page: Page, options: Options = {}) {
     return route.fulfill({ json: options.customers ?? [] })
   })
   await page.route('**/api/staff/stores/*/ledger*', (route) => route.fulfill({ json: [] }))
+  // お知らせ／アラートの件数は緑帯が読む。0 件と「未取得」を読み分けさせるため、
+  // 件数そのものを検証できるよう空配列を返す。
+  await page.route('**/api/staff/stores/*/alerts*', (route) => route.fulfill({ json: [] }))
   await page.route('**/api/staff/stores/*/reception-history*', (route) =>
     route.fulfill({ json: [] }),
   )
@@ -214,14 +217,24 @@ async function mockStaffApi(page: Page, options: Options = {}) {
   return recorded
 }
 
+/*
+ * ホームには見出しが無い（`HomeScreen.tsx`）。店舗名と営業状態は緑帯の
+ * ワードマークが名乗るので、到達は主操作の並びで待ち受ける。
+ */
 async function openHome(page: Page) {
   await page.setViewportSize(VIEWPORT)
   await page.goto('/')
-  await expect(page.getByRole('heading', { name: '銀座店のホーム' })).toBeVisible()
+  await expect(page.getByRole('navigation', { name: '主操作' })).toBeVisible()
 }
 
+/*
+ * 時刻の候補は空き枠ではなく店舗設定から間引いて出る（`desiredTimes`）。
+ * 営業 10:00-19:00・候補 6 件では 10:00 / 11:30 / 13:30 / 15:00 / 17:00 / 18:30。
+ */
+const DESIRED_TIME = '11:30'
+
 /** 日 → 時間 → 来店目的（2件）→ 受付可否確認 まで進める。 */
-async function reachCustomerStep(page: Page, startTime = '11:00') {
+async function reachCustomerStep(page: Page, startTime = DESIRED_TIME) {
   await page.getByRole('button', { name: '新しい予約を取る' }).click()
   await expect(page.getByRole('heading', { name: 'ご来店予定の日を伺えますか？' })).toBeVisible()
   await page.getByRole('button', { name: dayLabel(jstToday()) }).click()
@@ -231,12 +244,18 @@ async function reachCustomerStep(page: Page, startTime = '11:00') {
   await page.getByRole('button', { name: 'お客様情報へ進む' }).click()
 }
 
+/*
+ * お客様情報は 2 段（特定 → 詳細入力）。特定の面は電話番号 1 本で、候補か
+ * 「新しいお客様として登録する」を選ぶまで詳細入力へは進まない。
+ * 畳まれた特定の面も DOM に残るので、欄は role で（＝読み上げ木で）指す。
+ */
 async function fillCustomer(page: Page) {
-  await page.getByLabel('お電話番号').fill('09012345678')
-  await page.getByLabel('お名前', { exact: true }).fill('田中花子')
-  await page.getByLabel('フリガナ').fill('タナカハナコ')
-  await page.getByLabel('予約メモ').fill('遠近両用を検討中')
-  await page.getByLabel('店内引き継ぎ事項').fill('担当は鈴木を希望')
+  await page.getByRole('textbox', { name: 'お電話番号' }).fill('09012345678')
+  await page.getByRole('button', { name: '新しいお客様として登録する' }).click()
+  await page.getByRole('textbox', { name: 'お名前', exact: true }).fill('田中花子')
+  await page.getByRole('textbox', { name: 'フリガナ' }).fill('タナカハナコ')
+  await page.getByRole('textbox', { name: '予約メモ' }).fill('遠近両用を検討中')
+  await page.getByRole('textbox', { name: '店内引き継ぎ事項' }).fill('担当は鈴木を希望')
   await page.getByRole('button', { name: '復唱へ進む' }).click()
 }
 
@@ -278,17 +297,15 @@ test('opens every staff destination from the landscape iPad home screen', async 
   await mockStaffApi(page)
   await openHome(page)
 
-  // 選択中店舗と営業状態が常に見える（UC-EYEX-005）。
-  await expect(page.getByLabel('選択中の店舗と営業状態')).toHaveText(
-    '選択中の店舗: 銀座店 · 営業中',
-  )
-  await expect(page.getByRole('button', { name: /銀座店/ }).first()).toContainText('営業中')
+  // 選択中店舗と営業状態が常に見える（UC-EYEX-005）。緑帯のワードマークが名乗る。
+  const bar = page.getByRole('banner')
+  await expect(bar.getByRole('button', { name: /銀座店 · 営業中/ })).toBeVisible()
 
-  // お知らせとアラートは決して合算されない別領域（UC-EYEX-007）。
-  const announcements = page.getByLabel('お知らせ（未読）')
-  const alerts = page.getByLabel('アラート（要対応）')
-  await expect(announcements).toBeVisible()
-  await expect(alerts).toBeVisible()
+  // お知らせとアラートは決して合算されない別の操作（UC-EYEX-007）。
+  const announcements = bar.getByRole('button', { name: /^お知らせ/ })
+  const alerts = bar.getByRole('button', { name: /^アラート/ })
+  await expect(announcements).toHaveText('お知らせ 0件')
+  await expect(alerts).toHaveText('アラート 0件')
   await expect(announcements).not.toContainText('アラート')
   await expect(alerts).not.toContainText('お知らせ')
 
@@ -324,17 +341,19 @@ test('opens every staff destination from the landscape iPad home screen', async 
   await page.getByRole('button', { name: '予約を変更する' }).click()
   await expect(page.getByRole('heading', { name: '予約を検索する' })).toBeVisible()
 
-  // 副操作から 4 つの業務画面へ移動できる（UC-EYEX-003）。
-  const destinations: [string, RegExp][] = [
-    ['受付履歴', /^受付履歴$/],
-    ['顧客台帳', /^お客様を探す$/],
-    ['来店進捗', /^銀座店の来店受付$/],
-    ['予約台帳', /^銀座店の予約台帳$/],
+  // 副操作から 5 つの業務画面へ移動できる（UC-EYEX-003）。顧客台帳だけは
+  // 見出しではなく「探す列」自身が名乗る（`Workspace` の listLabel）。
+  const destinations: [string, () => ReturnType<Page['getByRole']>][] = [
+    ['受付履歴', () => page.getByRole('heading', { name: /^受付履歴$/ })],
+    ['予約を検索', () => page.getByRole('heading', { name: /^予約を検索する$/ })],
+    ['顧客台帳', () => page.getByRole('complementary', { name: 'お客様を探す' })],
+    ['来店受付', () => page.getByRole('heading', { name: /^銀座店の来店受付$/ })],
+    ['予約台帳', () => page.getByRole('heading', { name: /^銀座店の予約台帳$/ })],
   ]
-  for (const [label, heading] of destinations) {
+  for (const [label, destination] of destinations) {
     await openHome(page)
     await secondary.getByRole('button', { name: label }).click()
-    await expect(page.getByRole('heading', { name: heading })).toBeVisible()
+    await expect(destination()).toBeVisible()
   }
 })
 
@@ -348,13 +367,7 @@ test('takes a telephone booking through the five fixed steps and the spoken reci
   // ホームの主操作から予約入力が始まる（UC-EYEX-001 / AC-EYEX-01）。
   await page.getByRole('button', { name: '新しい予約を取る' }).click()
   const steps = page.getByRole('list', { name: '予約入力の工程' }).getByRole('listitem')
-  await expect(steps).toHaveText([
-    /1\s*日/,
-    /2\s*時間/,
-    /3\s*来店目的/,
-    /4\s*お客様情報/,
-    /5\s*復唱する/,
-  ])
+  await expect(steps).toHaveText([/^日/, /^時間/, /^来店目的/, /^お客様情報/, /^復唱する/])
   await expect(steps.nth(0)).toHaveAttribute('aria-current', 'step')
 
   // 各工程の主見出しは、そのまま電話口で読み上げられる質問文（UC-EYEX-010 / AC-EYEX-02）。
@@ -374,7 +387,7 @@ test('takes a telephone booking through the five fixed steps and the spoken reci
   await expect(steps.nth(1)).toHaveAttribute('aria-current', 'step')
   const times = page.getByRole('group', { name: '来店予定時刻' }).getByRole('button')
   await expect(times.first()).toHaveText('10:00')
-  await page.getByRole('button', { name: '11:00', exact: true }).click()
+  await page.getByRole('button', { name: DESIRED_TIME, exact: true }).click()
 
   // 複数の来店目的と合計所要時間（UC-EYEX-015）。
   await expect(page.getByRole('heading', { name: '今回のご来店目的を伺えますか？' })).toBeVisible()
@@ -400,11 +413,12 @@ test('takes a telephone booking through the five fixed steps and the spoken reci
   ).toBeVisible()
   const recital = page.getByText(/^「.*」$/)
   await expect(recital).toContainText('銀座店で')
-  await expect(recital).toContainText('午前11時')
+  await expect(recital).toContainText('午前11時30分')
   await expect(recital).toContainText('視力測定とフィッティング')
   await expect(recital).toContainText('約90分')
   await expect(recital).toContainText('田中花子様')
-  await expect(recital).toContainText('09012345678')
+  // 電話番号は読み違えないよう区切って読み上げる（`spokenPhone`）。
+  await expect(recital).toContainText('090-1234-5678')
 
   await page.getByRole('button', { name: '復唱を終えて予約を確定する' }).click()
   await expect(page.getByRole('heading', { name: '予約を確定しました' })).toBeVisible()
@@ -424,22 +438,23 @@ test('keeps every entered value when the wished slot is lost, when going back, a
   page,
 }) => {
   const today = jstToday()
-  // 希望した 11:00 は提供されず、前後の枠だけが返る。
+  // 希望した 13:30 は提供されず、離れた枠だけが返る。
   await mockStaffApi(page, { offered: ['10:00', '10:30', '11:30', '12:00'] })
   await openHome(page)
 
   await page.getByRole('button', { name: '新しい予約を取る' }).click()
   await page.getByRole('button', { name: dayLabel(today) }).click()
-  await page.getByRole('button', { name: '11:00', exact: true }).click()
+  await page.getByRole('button', { name: '13:30', exact: true }).click()
   await page.getByRole('button', { name: /メガネを新しく作りたい/ }).click()
   await page.getByRole('button', { name: /かけ具合を調整したい/ }).click()
   await page.getByRole('button', { name: 'お客様情報へ進む' }).click()
 
   // 所要時間つきの再検証に落ちたら、入力を保持したまま代替時刻を出す（AC-EYEX-88 / UC-EYEX-014）。
-  await expect(page.getByText('11:00は約90分の受付ができません')).toBeVisible()
+  await expect(page.getByText('13:30は90分の受付ができません')).toBeVisible()
   await expect(page.getByText(/入力内容は保持しています/)).toBeVisible()
   const alternatives = page.getByRole('group', { name: '代替時刻' }).getByRole('button')
-  await expect(alternatives).toHaveText(['10:00', '10:30', '11:30'])
+  // 代替候補は「押せば受け付けられる」ことまで字で言う。
+  await expect(alternatives).toHaveText([/^10:30/, /^11:30/, /^12:00/])
   await expect(page.getByRole('button', { name: /メガネを新しく作りたい/ })).toHaveAttribute(
     'aria-pressed',
     'true',
@@ -447,7 +462,7 @@ test('keeps every entered value when the wished slot is lost, when going back, a
 
   // 前工程へ戻っても選択済みの日・時刻は失われない（UC-EYEX-011）。
   await page.getByRole('button', { name: '戻る' }).click()
-  await expect(page.getByRole('button', { name: '11:00', exact: true })).toHaveAttribute(
+  await expect(page.getByRole('button', { name: '13:30', exact: true })).toHaveAttribute(
     'aria-pressed',
     'true',
   )
@@ -456,14 +471,28 @@ test('keeps every entered value when the wished slot is lost, when going back, a
     'aria-pressed',
     'true',
   )
+
+  /*
+   * 破棄には必ず確認が入り、取り消せば入力は残る（UC-EYEX-017）。最初の工程で
+   * 「戻る」を押すと受付そのものを離れることになるので、そこが確認の入口。
+   */
+  await page.getByRole('button', { name: '戻る' }).click()
+  const dialog = page.getByRole('alertdialog', { name: '入力を破棄しますか？' })
+  await expect(dialog).toContainText('日、時間、来店目的、お客様情報がすべて失われます。')
+  await dialog.getByRole('button', { name: '入力に戻る' }).click()
+  await expect(page.getByRole('button', { name: dayLabel(today) })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  )
+
   await page.getByRole('button', { name: dayLabel(today) }).click()
-  await expect(page.getByRole('button', { name: '11:00', exact: true })).toHaveAttribute(
+  await expect(page.getByRole('button', { name: '13:30', exact: true })).toHaveAttribute(
     'aria-pressed',
     'true',
   )
 
   // 受け付けられる時刻を選び直して入力を続ける。
-  await page.getByRole('button', { name: '11:30', exact: true }).click()
+  await page.getByRole('button', { name: DESIRED_TIME, exact: true }).click()
   // 来店目的の選択も戻り操作をまたいで残っている（UC-EYEX-011）。
   await expect(page.getByRole('button', { name: /かけ具合を調整したい/ })).toHaveAttribute(
     'aria-pressed',
@@ -471,13 +500,6 @@ test('keeps every entered value when the wished slot is lost, when going back, a
   )
   await page.getByRole('button', { name: 'お客様情報へ進む' }).click()
   await fillCustomer(page)
-
-  // 破棄には必ず確認が入り、取り消せば入力は残る（UC-EYEX-017）。
-  await page.getByRole('button', { name: '入力を破棄する' }).click()
-  const dialog = page.getByRole('alertdialog', { name: '入力を破棄しますか？' })
-  await expect(dialog).toContainText('日、時間、来店目的、お客様情報がすべて失われます。')
-  await dialog.getByRole('button', { name: '入力に戻る' }).click()
-  await expect(page.getByText(/^「.*」$/)).toContainText('田中花子様')
 
   // 確定直前の競合では予約を作らず、入力を保持して代替時間を提示する
   // （UC-EYEX-019 / AC-EYEX-08）。
@@ -487,24 +509,34 @@ test('keeps every entered value when the wished slot is lost, when going back, a
       : route.fulfill({ json: [] }),
   )
   await page.getByRole('button', { name: '復唱を終えて予約を確定する' }).click()
-  await expect(page.getByText('11:30は約90分の受付ができません')).toBeVisible()
+  await expect(page.getByText('11:30は90分の受付ができません')).toBeVisible()
   await expect(page.getByRole('heading', { name: '予約を確定しました' })).toHaveCount(0)
-  await page.getByRole('group', { name: '代替時刻' }).getByRole('button', { name: '12:00' }).click()
+  await page
+    .getByRole('group', { name: '代替時刻' })
+    .getByRole('button', { name: /^12:00/ })
+    .click()
   await page.getByRole('button', { name: 'お客様情報へ進む' }).click()
-  await expect(page.getByLabel('お名前', { exact: true })).toHaveValue('田中花子')
-  await expect(page.getByLabel('予約メモ')).toHaveValue('遠近両用を検討中')
+  // 特定の面へ一度戻るが、伺った番号も候補も残っている。
+  await page.getByRole('button', { name: '新しいお客様として登録する' }).click()
+  await expect(page.getByRole('textbox', { name: 'お名前', exact: true })).toHaveValue('田中花子')
+  await expect(page.getByRole('textbox', { name: '予約メモ' })).toHaveValue('遠近両用を検討中')
 
   // 権限のあるスタッフは、入力を失わずに店舗切替を始められる（UC-EYEX-006）。
   await page
+    .getByRole('banner')
     .getByRole('button', { name: /銀座店/ })
-    .first()
     .click()
-  const picker = page.getByRole('region', { name: '作業する店舗を切り替える' })
-  await expect(picker.getByRole('button')).toHaveText([/銀座店\s*選択中/, /丸の内店\s*営業中/])
+  const picker = page.getByRole('dialog', { name: '作業する店舗を切り替える' })
+  await expect(picker.getByRole('button')).toHaveText([
+    /銀座店\s*営業中\s*選択中/,
+    /丸の内店\s*営業中/,
+  ])
   await expect(picker).toContainText('他店舗の空き枠はここに表示しません。')
   // 切替候補を開いただけでは入力は失われない。
-  await expect(page.getByLabel('お名前', { exact: true })).toHaveValue('田中花子')
-  await expect(page.getByLabel('店内引き継ぎ事項')).toHaveValue('担当は鈴木を希望')
+  await expect(page.getByRole('textbox', { name: 'お名前', exact: true })).toHaveValue('田中花子')
+  await expect(page.getByRole('textbox', { name: '店内引き継ぎ事項' })).toHaveValue(
+    '担当は鈴木を希望',
+  )
 })
 
 // @e2e-covers UC-EYEX-021 UC-EYEX-022 UC-EYEX-023 UC-EYEX-024 UC-EYEX-028 UC-EYEX-029 AC-EYEX-03 AC-EYEX-20 AC-EYEX-21 AC-EYEX-91
@@ -515,65 +547,72 @@ test('identifies the customer from a partial phone number without ever deciding 
   await openHome(page)
   await reachCustomerStep(page)
 
-  const panel = page.getByRole('heading', { name: 'お客様を探す' }).locator('..')
-  await expect(panel).toBeVisible()
+  // 4 工程目は「フォーム」ではなく「お客様の特定」。脇の列が選択中の人を名乗る。
+  const selected = page.getByRole('complementary', { name: '選択中のお客様' })
+  await expect(selected).toBeVisible()
 
-  // 全角・ハイフン混じりの部分入力でも正規化して検索する（UC-EYEX-021 / AC-EYEX-20）。
-  await page.getByLabel('電話番号', { exact: true }).fill('０９０-1234')
-  await page.getByRole('button', { name: '候補を探す' }).click()
-  const phoneSearch = recorded.filter((entry) => entry.url.includes('/customers?'))
-  await expect.poll(() => recorded.filter((e) => e.url.includes('/customers?')).length).toBe(1)
-  expect(recorded.filter((e) => e.url.includes('/customers?'))[0]?.url).toContain('phone=0901234')
-  expect(phoneSearch.length).toBeLessThanOrEqual(1)
+  /*
+   * 全角・ハイフン混じりの部分入力でも正規化して検索する（UC-EYEX-021 /
+   * AC-EYEX-20）。押すボタンは無く、入力が止まると静かに 1 度だけ探す。
+   */
+  await page.getByRole('textbox', { name: 'お電話番号' }).fill('０９０-1234')
+  const searches = () => recorded.filter((entry) => entry.url.includes('/customers?'))
+  await expect.poll(() => searches().length).toBe(1)
+  expect(searches()[0]?.url).toContain('phone=0901234')
 
-  // 候補は氏名・かな・電話番号・主利用店舗・来店回数つきで並ぶ（AC-EYEX-03）。
-  const options = page.getByRole('listbox', { name: '顧客候補' }).getByRole('option')
+  // 候補は氏名・電話番号・主利用店舗・来店回数つきで並ぶ（AC-EYEX-03）。
+  const options = page.getByRole('list', { name: '顧客候補' }).getByRole('listitem')
   await expect(options).toHaveCount(2)
-  await expect(options.nth(0)).toContainText('田中花子')
-  await expect(options.nth(0)).toContainText('タナカハナコ')
+  await expect(options.nth(0)).toContainText('田中花子 様')
   await expect(options.nth(0)).toContainText('090-1234-5678')
-  await expect(options.nth(0)).toContainText('主利用店舗 銀座店・来店4回')
-  await expect(options.nth(1)).toContainText('主利用店舗 他店舗・来店1回')
+  await expect(options.nth(0)).toContainText('銀座店4回')
+  await expect(options.nth(1)).toContainText('他店舗1回')
 
   // 正規化後に同じ番号でも自動統合しない（UC-EYEX-028）。
   await expect(page.getByText('同じ電話番号の候補があります。統合はされません。')).toBeVisible()
 
   // 候補が出ただけでは確定しない（UC-EYEX-023 / AC-EYEX-21）。
-  await expect(page.getByRole('region', { name: '選択中のお客様' })).toContainText(
-    'お客様は未確定です',
-  )
-  await expect(options.nth(0)).toHaveAttribute('aria-selected', 'false')
-
-  // 氏名かなでも候補を探せる（UC-EYEX-022）。
-  await page.getByLabel('電話番号', { exact: true }).fill('')
-  await page.getByLabel('氏名かな').fill('タナカ')
-  await page.getByRole('button', { name: '候補を探す' }).click()
-  await expect
-    .poll(() => recorded.filter((e) => e.url.includes('/customers?')).length)
-    .toBeGreaterThan(1)
-  const kanaSearch = recorded.filter((e) => e.url.includes('/customers?')).at(-1)
-  expect(kanaSearch?.url).toContain('kana=%E3%82%BF%E3%83%8A%E3%82%AB')
-  expect(kanaSearch?.url).not.toContain('phone=')
-
-  // スタッフが自分で選んで初めて確定する（UC-EYEX-023）。
-  await options.nth(0).click()
-  await expect(options.nth(0)).toHaveAttribute('aria-selected', 'true')
-  await expect(page.getByRole('region', { name: '選択中のお客様' })).toContainText('田中花子 様')
+  await expect(selected).toContainText('お客様は未確定です')
+  await expect(options.nth(0).getByRole('button')).toHaveAttribute('aria-pressed', 'false')
 
   // 権限が無い情報は、本文も件数も存在の標識も出さない（UC-EYEX-029 / AC-EYEX-91）。
-  const selected = page.getByRole('region', { name: '選択中のお客様' })
-  await expect(selected.getByRole('region', { name: '注意事項' })).toHaveCount(0)
-  await expect(selected.getByRole('region', { name: '来店履歴' })).toHaveCount(0)
-  await expect(selected.getByRole('region', { name: '過去の度数' })).toHaveCount(0)
-  // ヘッダーの管理メニューは顧客情報とは無関係なので、判定は予約入力の本文だけで行う。
-  await expect(
-    page.getByRole('main').getByText(/注意事項|非表示|閲覧できません|件あります/),
-  ).toHaveCount(0)
+  await expect(selected.getByRole('region', { name: '対応時に確認' })).toHaveCount(0)
+  await expect(selected.getByRole('region', { name: '現在の度数' })).toHaveCount(0)
+  await expect(selected.getByRole('region', { name: '最新メモ' })).toHaveCount(0)
+  await expect(page.getByText(/注意事項|非表示|閲覧できません|件あります/)).toHaveCount(0)
+
+  /*
+   * スタッフが自分で選んで初めて確定する（UC-EYEX-023）。選ぶと詳細入力の面へ
+   * 進み、選んだお客様がそのまま予約の入力になる。
+   */
+  await options.nth(0).getByRole('button').click()
+  await expect(page.getByRole('textbox', { name: 'お名前', exact: true })).toHaveValue('田中花子')
+  await page.getByRole('button', { name: '戻る' }).click()
+  await expect(options.nth(0).getByRole('button')).toHaveAttribute('aria-pressed', 'true')
+  // 選ばれたことは色だけでなく状態語でも読める。
+  await expect(options.nth(0)).toContainText('選択中')
+  await expect(options.nth(1)).toContainText('候補')
 
   // 該当が無ければ新規顧客として進める（UC-EYEX-024）。
-  await page.getByRole('button', { name: '新しいお客様として進む' }).click()
+  await page.getByRole('button', { name: '新しいお客様として登録する' }).click()
+  await page.getByRole('button', { name: '戻る' }).click()
   await expect(selected).toContainText('新規のお客様として進みます')
-  await expect(options.nth(0)).toHaveAttribute('aria-selected', 'false')
+  await expect(options.nth(0).getByRole('button')).toHaveAttribute('aria-pressed', 'false')
+
+  /*
+   * かなでも候補を探せる（UC-EYEX-022）。予約入力の特定欄は電話番号専用なので、
+   * かなで探す面は顧客台帳の 1 本の検索欄である（数字以外は氏名として送る）。
+   */
+  await openHome(page)
+  await page
+    .getByRole('navigation', { name: '副操作' })
+    .getByRole('button', { name: '顧客台帳' })
+    .click()
+  await page.getByRole('textbox', { name: '顧客を検索' }).fill('タナカ')
+  await expect.poll(() => searches().length).toBeGreaterThan(1)
+  const kanaSearch = searches().at(-1)
+  expect(kanaSearch?.url).toContain('name=%E3%82%BF%E3%83%8A%E3%82%AB')
+  expect(kanaSearch?.url).not.toContain('phone=')
 })
 
 // @e2e-covers UC-EYEX-018 UC-EYEX-174 UC-EYEX-175 AC-EYEX-111
@@ -613,7 +652,8 @@ test('resends the failed reservation under the very same idempotency key and kee
   expect(stored.local).toEqual([])
   expect(stored.session).toEqual([])
   await page.reload()
-  await expect(page.getByRole('heading', { name: '銀座店のホーム' })).toBeVisible()
+  // 読み込み直すとホーム（主操作の並び）へ戻り、入力は何ひとつ残らない。
+  await expect(page.getByRole('navigation', { name: '主操作' })).toBeVisible()
   await expect(page.getByText('田中花子')).toHaveCount(0)
 })
 
@@ -636,10 +676,11 @@ test('keeps staff screens operable by keyboard, at 200% text, with 44px targets 
   }
 
   // 通常文字と背景は WCAG AA（4.5:1）以上（AC-EYEX-125）。
+  // ホームには見出しが無い（操作の入口だけの面）ので、3 つの導線の字で確かめる。
   for (const selector of [
-    'h1',
     'nav[aria-label="主操作"] button',
     'nav[aria-label="副操作"] button',
+    'nav[aria-label="日付"] button',
   ]) {
     const ratio = await page.evaluate(contrastRatio, selector)
     expect(ratio ?? 0).toBeGreaterThanOrEqual(4.5)
@@ -680,7 +721,7 @@ test('keeps staff screens operable by keyboard, at 200% text, with 44px targets 
   await expect(steps.nth(0)).toContainText('完了')
   await expect(steps.nth(1)).toContainText('現在')
   await expect(steps.nth(2)).toContainText('未完了')
-  await page.getByRole('button', { name: '11:00', exact: true }).click()
+  await page.getByRole('button', { name: DESIRED_TIME, exact: true }).click()
   await expect(page.getByRole('button', { name: /メガネを新しく作りたい/ })).toHaveAttribute(
     'aria-pressed',
     'false',
@@ -715,11 +756,11 @@ test('横向きiPadの予約入力で、入力列も脇の情報列も読める�
   await openHome(page)
   await reachCustomerStep(page)
 
-  const rail = page.getByRole('complementary').filter({ hasText: 'お客様の特定' })
+  const rail = page.getByRole('complementary', { name: '選択中のお客様' })
   const railBox = await rail.boundingBox()
   expect(railBox?.width ?? 0).toBeGreaterThanOrEqual(280)
 
-  const input = page.getByLabel('お電話番号')
+  const input = page.getByRole('textbox', { name: 'お電話番号' })
   const inputBox = await input.boundingBox()
   expect(inputBox?.width ?? 0).toBeGreaterThanOrEqual(280)
 

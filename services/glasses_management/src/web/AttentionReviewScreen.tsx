@@ -19,8 +19,8 @@ import {
 } from './attention-view'
 import { Action, Actions } from './design/controls'
 import { Modal } from './design/dialogs'
-import { TextAreaField, TextField } from './design/forms'
-import { AdminLayout, AdminSurface, SideNavItem } from './design/layouts'
+import { DateTimeField, TextAreaField, TextField } from './design/forms'
+import { AdminLayout, AdminSurface } from './design/layouts'
 import { FailureNotice, StatusNotice } from './design/notices'
 import { Card, CardGrid, StatePill, TitleRow } from './design/surfaces'
 import { ReauthPrompt, requiresPersonalReauthentication } from './ReauthPrompt'
@@ -121,12 +121,11 @@ function NoteFields({
           onChange={(event) => onChange({ ...draft, body: event.target.value })}
         />
       </div>
-      <TextField
+      <DateTimeField
         id={`${idPrefix}-occurred-at`}
         label="発生日時"
-        type="datetime-local"
         value={draft.occurredAt}
-        onChange={(event) => onChange({ ...draft, occurredAt: event.target.value })}
+        onChange={(occurredAt) => onChange({ ...draft, occurredAt })}
       />
       <TextField
         id={`${idPrefix}-basis`}
@@ -435,15 +434,11 @@ export function AttentionReviewScreen({
        `ATTENTION-REVIEW--pending--ipad-landscape.png`。 */
     <AdminSurface label="注意事項の確認">
       <AdminLayout
-        navLabel="確認待ちの節"
-        nav={(pending.length === 0
+        /* 柱は全画面共通の 1 本。確認待ちの並びはそこへ渡す。 */
+        sections={(pending.length === 0
           ? [customerName]
           : pending.map((note) => `${customerName} · ${relativeJstDay(note.occurredAt, today)}`)
-        ).map((label, index) => (
-          <SideNavItem key={label} on={index === 0}>
-            {label}
-          </SideNavItem>
-        ))}
+        ).map((label, index) => ({ label, current: index === 0 }))}
       >
         <h1>注意事項を確認</h1>
 

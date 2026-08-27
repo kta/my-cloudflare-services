@@ -3,7 +3,7 @@ import { expect, type Page, test } from '@playwright/test'
 /*
  * EYEX スタッフ端末の「店舗設定ガイド」と「共有iPad（端末とセキュリティ）」の E2E。
  *
- * どちらもヘッダーの管理メニュー（店舗設定 / 共有端末）から開く。API は
+ * どちらも緑帯の「設定」から入り、共有端末は左サイドバー（画面の一覧）で開く。API は
  * すべて `page.route` で差し替え、SPA だけを実行する。
  *
  * 共有 iPad（横向き 1180×820）が既定の前提なので viewport をそれに合わせ、
@@ -235,21 +235,34 @@ async function mockSettingsApi(page: Page, initial?: Partial<SettingsMock>): Pro
   return state
 }
 
-/** ホーム → ヘッダーの管理メニュー「店舗設定」。 */
+/** 全画面共通の左サイドバー。面の行き来はここ 1 本に集約された。 */
+function sidebar(page: Page) {
+  return page.getByRole('navigation', { name: '画面の一覧' })
+}
+
+/**
+ * ホーム → 緑帯の「設定」で設定ガイドの面に入る。緑帯は 1 本でタブを持たず、
+ * 設定の面への入口はここしかない。ホーム以外の面へ移るとサイドバーが出る。
+ * 権限が無いときは本文が全画面の告知に替わるので、到達の合図はサイドバー側で取る。
+ */
 async function openSettings(page: Page, viewport = VIEWPORT) {
   await page.setViewportSize(viewport)
   await page.goto('/')
-  await page
-    .getByRole('navigation', { name: '管理メニュー' })
-    .getByRole('button', { name: '店舗設定' })
-    .click()
-  const screen = page.getByRole('region', { name: '店舗設定' })
-  await expect(screen).toBeVisible()
-  return screen
+  await expect(page.getByRole('navigation', { name: '主操作' })).toBeVisible()
+  await page.getByRole('banner').getByRole('button', { name: '設定', exact: true }).click()
+  await expect(
+    sidebar(page).getByRole('button', { name: '設定ガイド', exact: true }),
+  ).toHaveAttribute('aria-current', 'page')
+  return page.getByRole('region', { name: '店舗設定' })
+}
+
+/** 入力欄は「編集」を押した先にある。読み取りカードが既定の面である。 */
+async function startEditing(screen: ReturnType<Page['getByRole']>) {
+  await screen.getByRole('button', { name: '編集', exact: true }).click()
 }
 
 function stepRail(page: Page) {
-  return page.getByRole('navigation', { name: '設定工程' })
+  return page.getByRole('navigation', { name: '設定の工程' })
 }
 
 async function goToStep(page: Page, pattern: RegExp) {
@@ -262,11 +275,15 @@ test('設定ガイドは6工程を決まった順で並べ、状態を語で示�
 }) => {
   await mockSettingsApi(page)
   const screen = await openSettings(page)
-  await expect(screen.getByRole('heading', { name: '銀座店 · 設定ガイド' })).toBeVisible()
+  // 面の名乗りは緑帯の副題（`銀座店 · 設定ガイド`）が持ち、本文の見出しは工程名になった。
+  await expect(page.getByRole('banner')).toContainText('銀座店 · 設定ガイド')
+  await expect(screen.getByRole('heading', { name: '店舗と営業時間', level: 1 })).toBeVisible()
 
   // AC-EYEX-40: 店舗と営業時間 → 来店目的 → スタッフと技能 → 設備と点検 → Web予約 → 影響確認と公開。
   const steps = stepRail(page).getByRole('button')
   await expect(steps).toHaveCount(6)
+  // 設定が届く前は全工程が未完了なので、届いたことを待ってから状態の語を読む。
+  await expect(steps.nth(1)).toHaveAttribute('aria-label', '工程2 来店目的 完了')
   const names = await steps.evaluateAll((nodes) =>
     nodes.map((node) => node.getAttribute('aria-label') ?? ''),
   )
@@ -296,22 +313,25 @@ test('設定ガイドは6工程を決まった順で並べ、状態を語で示�
     '未完了',
     '未完了',
   ])
-  const rail = stepRail(page)
-  await expect(rail).toContainText('編集中')
-  await expect(rail).toContainText('完了')
-  await expect(rail).toContainText('未完了')
+  // レールに描かれる字は番号か ✓ と工程名だけで、状態の語は読み上げの名前が運ぶ。
+  // 色に頼らず 3 つの状態が語で区別できることを、その名前の上で確かめる。
+  expect(names.some((name) => name.endsWith(' 編集中'))).toBe(true)
+  expect(names.some((name) => name.endsWith(' 完了'))).toBe(true)
+  expect(names.some((name) => name.endsWith(' 未完了'))).toBe(true)
   await expect(steps.first()).toHaveAttribute('aria-current', 'step')
 
   // AC-EYEX-47: ガイドを頭から進めず、工程4へ直接飛べる。
   await goToStep(page, /^工程4 設備と点検/)
-  await expect(screen.getByRole('heading', { name: '設備と点検', level: 2 })).toBeVisible()
-  await expect(screen.getByRole('region', { name: '設備' })).toBeVisible()
+  await expect(screen.getByRole('heading', { name: '設備と点検', level: 1 })).toBeVisible()
+  // 設備の読み取りカードは設備名で名乗る（フィクスチャは視力測定機 1 台）。
+  await expect(screen.getByText('視力測定機', { exact: true })).toBeVisible()
   await expect(steps.nth(3)).toHaveAttribute('aria-current', 'step')
   await expect(steps.first()).not.toHaveAttribute('aria-current', 'step')
 
-  // 直接飛んだ先からさらに工程2へ戻れる（順路に縛られない）。
+  // 直接飛んだ先からさらに工程2へ戻れる（順路に縛られない）。工程2の見出しは
+  // 選んでいる来店目的の名前になる。
   await goToStep(page, /^工程2 来店目的/)
-  await expect(screen.getByRole('heading', { name: '来店目的', level: 2 })).toBeVisible()
+  await expect(screen.getByRole('heading', { name: '視力測定', level: 1 })).toBeVisible()
 })
 
 // @e2e-covers AC-EYEX-72 AC-EYEX-73 AC-EYEX-74
@@ -326,7 +346,15 @@ test('SP幅では6工程がヘッダー直下に固定表示され、横スク�
   const steps = rail.getByRole('button')
   await expect(steps).toHaveCount(6)
   for (let index = 0; index < 6; index += 1) await expect(steps.nth(index)).toBeVisible()
-  await expect(rail).toHaveCSS('position', 'sticky')
+  // 固定表示は position ではなく「高さの決まった列」で実現されている。緑帯の
+  // 真下に始まり、本文をどれだけ送っても 6 工程がその位置から動かないことで見る。
+  const barBox = await page.getByRole('banner').boundingBox()
+  const railTop = async () => (await rail.boundingBox())?.y
+  expect(await railTop()).toBe(barBox?.height)
+  await page.mouse.move(SP_VIEWPORT.width / 2, SP_VIEWPORT.height / 2)
+  await page.mouse.wheel(0, 2000)
+  expect(await railTop()).toBe(barBox?.height)
+  for (let index = 0; index < 6; index += 1) await expect(steps.nth(index)).toBeVisible()
 
   // AC-EYEX-72: 横スクロールを必要としない。
   const overflow = await page.evaluate(() => ({
@@ -345,9 +373,12 @@ test('SP幅では6工程がヘッダー直下に固定表示され、横スク�
 
   // AC-EYEX-74: 5番目は SP 幅でも `Web予約`。略語の `Web` は出さない。
   await goToStep(page, /^工程5 Web予約/)
-  await expect(screen.getByRole('heading', { name: 'Web予約', level: 2 })).toBeVisible()
-  await expect(rail.getByText('Web予約', { exact: true }).first()).toBeVisible()
-  await expect(rail.getByText('Web', { exact: true })).toHaveCount(0)
+  await expect(screen.getByRole('heading', { name: 'Web予約', level: 1 })).toBeVisible()
+  // レールの 1 行は `5　Web予約` の 1 つのテキストなので、行の字で確かめる。
+  await expect(steps.nth(4)).toContainText('Web予約')
+  // 略語の `Web` 単体は出さない（`Web予約` の一部としてしか現れない）。
+  const railText = (await rail.textContent()) ?? ''
+  expect(/Web(?!予約)/.test(railText)).toBe(false)
   const overflowAtWebStep = await page.evaluate(
     () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
   )
@@ -360,9 +391,14 @@ test('営業時間・臨時営業・受付停止を設定でき、受付停止�
 }) => {
   const state = await mockSettingsApi(page)
   const screen = await openSettings(page)
-  const hours = screen.getByRole('region', { name: '営業時間' })
 
-  // UC-EYEX-087: 通常営業時間。火曜は休業日として保持されている。
+  // 読み取りカードが既定の面。火曜は休業日として保持されている。
+  await expect(screen.getByText('月–土 10:00–19:00')).toBeVisible()
+  await expect(screen.getByText('毎週火曜日・9月23日')).toBeVisible()
+
+  // UC-EYEX-087: 通常営業時間は「編集」の先の欄で変える。
+  await startEditing(screen)
+  const hours = screen.getByRole('region', { name: '営業時間の編集' })
   await expect(hours.getByLabel('月曜を営業日にする')).toBeChecked()
   await expect(hours.getByLabel('火曜を営業日にする')).not.toBeChecked()
   await expect(hours.getByLabel('月曜の営業開始')).toHaveValue('10:00')
@@ -371,29 +407,23 @@ test('営業時間・臨時営業・受付停止を設定でき、受付停止�
   await expect(hours.getByLabel('火曜の営業開始')).toHaveValue('10:00')
 
   // UC-EYEX-087: 臨時営業・休業日。既存の休業日に臨時営業を足せる。
-  const exceptions = screen.getByRole('region', { name: '臨時営業・休業日' })
-  await expect(exceptions.getByRole('list', { name: '臨時営業・休業日' })).toContainText(
-    '2026-09-23',
-  )
-  await expect(exceptions.getByRole('list', { name: '臨時営業・休業日' })).toContainText('休業')
-  await exceptions.getByLabel('日付').fill('2026-10-12')
-  await exceptions.getByLabel('区分').selectOption('open')
-  await exceptions.getByLabel('理由').fill('祝日営業')
-  await exceptions.getByRole('button', { name: '臨時設定を追加' }).click()
-  const exceptionRows = exceptions
-    .getByRole('list', { name: '臨時営業・休業日' })
-    .getByRole('listitem')
+  const exceptionRows = hours.getByRole('list', { name: '臨時営業・休業日' }).getByRole('listitem')
+  await expect(exceptionRows.first()).toContainText('2026-09-23')
+  await expect(exceptionRows.first()).toContainText('休業')
+  await hours.getByLabel('日付').fill('2026-10-12')
+  await hours.getByLabel('区分').selectOption('open')
+  await hours.getByLabel('理由').fill('祝日営業')
+  await hours.getByRole('button', { name: '臨時設定を追加' }).click()
   await expect(exceptionRows).toHaveCount(2)
   await expect(exceptionRows.nth(1)).toContainText('2026-10-12')
   await expect(exceptionRows.nth(1)).toContainText('臨時営業')
   await expect(exceptionRows.nth(1)).toContainText('10:00–17:00')
 
   // UC-EYEX-087 / AC-EYEX-65 / UC-EYEX-116: 受付停止と、その効き目の説明。
-  const reception = screen.getByRole('region', { name: '受付停止' })
-  await expect(reception).toContainText(
+  await expect(hours).toContainText(
     '受付停止は新しいWeb予約だけを止めます。既存予約は取り消されません。',
   )
-  await reception.getByLabel('受付状態').selectOption('paused')
+  await hours.getByLabel('受付状態').selectOption('paused')
 
   await screen.getByRole('button', { name: '設定を保存' }).click()
   await expect(screen.getByText('設定を保存しました。')).toBeVisible()
@@ -428,16 +458,23 @@ test('新規店舗は標準テンプレートから来店目的を作り、顧�
   await expect(template).toContainText('Web非公開')
 
   await template.getByRole('button', { name: '標準テンプレートを読み込む' }).click()
-  const purposeList = screen.getByRole('region', { name: '来店目的' })
-  await expect(purposeList.getByRole('button')).toHaveCount(4)
+  // 読み込んだ 4 つは、どれを編集中かを選ぶ絞り込みとして並ぶ。
+  for (const name of [
+    '視力測定・新調相談',
+    'フィッティング調整',
+    '修理・部品交換受付',
+    'コンタクトレンズ相談',
+  ])
+    await expect(screen.getByRole('button', { name, exact: true })).toBeVisible()
 
   // UC-EYEX-118: スタッフ向け名称と顧客向け表示名は別々の入力。
-  const editor = screen.getByRole('region', { name: '来店目的の設定' })
+  await startEditing(screen)
+  const editor = screen.getByRole('region', { name: '来店目的の編集' })
   const preview = screen.getByRole('region', { name: 'Web予約プレビュー' })
   await expect(editor.getByLabel('スタッフ向け名称')).toHaveValue('視力測定・新調相談')
   await expect(editor.getByLabel('顧客向け表示名')).toHaveValue('メガネを新しく作りたい')
   await editor.getByLabel('スタッフ向け名称').fill('視力測定（新規）')
-  await expect(purposeList.getByRole('button', { name: '視力測定（新規）' })).toBeVisible()
+  await expect(screen.getByRole('button', { name: '視力測定（新規）', exact: true })).toBeVisible()
   await expect(preview).toContainText('メガネを新しく作りたい')
   await expect(preview).not.toContainText('視力測定（新規）')
 
@@ -472,8 +509,10 @@ test('スタッフの技能・勤務・休憩・受付可否と、設備の台�
 
   // UC-EYEX-090
   await goToStep(page, /^工程3 スタッフと技能/)
-  const staff = screen.getByRole('region', { name: 'スタッフ' })
-  await expect(staff).toContainText('山田検査員')
+  // 読み取りは 1 人 1 枚のカード。編集欄はその先にある。
+  await expect(screen).toContainText('山田検査員')
+  await startEditing(screen)
+  const staff = screen.getByRole('region', { name: 'スタッフと技能の編集' })
   await expect(staff.getByLabel('山田検査員は予約を受け付ける')).toBeChecked()
   await staff.getByLabel('山田検査員の技能').fill('眼鏡作製技能, 調整')
   await staff.getByLabel('山田検査員の勤務開始').fill('09:30')
@@ -484,15 +523,14 @@ test('スタッフの技能・勤務・休憩・受付可否と、設備の台�
 
   // UC-EYEX-091
   await goToStep(page, /^工程4 設備と点検/)
-  const equipment = screen.getByRole('region', { name: '設備' })
+  // 点検停止は設備と同じ 1 枚のカードに並ぶ（日付は行に収まる `9/1` 表記）。
+  await expect(screen).toContainText('視力測定機 · 9/1 09:00–10:00')
+  await expect(screen).toContainText('定期点検')
+  await startEditing(screen)
+  const equipment = screen.getByRole('region', { name: '設備の編集' })
   await equipment.getByLabel('視力測定機の台数').fill('3')
   await equipment.getByLabel('視力測定機の利用可能開始').fill('11:00')
   await equipment.getByLabel('視力測定機の利用可能終了').fill('18:00')
-  const maintenance = screen.getByRole('region', { name: '点検停止' })
-  await expect(maintenance.getByRole('list', { name: '点検停止' })).toContainText('視力測定機')
-  await expect(maintenance.getByRole('list', { name: '点検停止' })).toContainText('2026-09-01')
-  await expect(maintenance.getByRole('list', { name: '点検停止' })).toContainText('09:00–10:00')
-  await expect(maintenance.getByRole('list', { name: '点検停止' })).toContainText('定期点検')
 
   await screen.getByRole('button', { name: '設定を保存' }).click()
   await expect(screen.getByText('設定を保存しました。')).toBeVisible()
@@ -519,7 +557,8 @@ test('来店目的を非公開にしても既存予約と履歴は削除され�
   const screen = await openSettings(page)
   await goToStep(page, /^工程2 来店目的/)
 
-  const editor = screen.getByRole('region', { name: '来店目的の設定' })
+  await startEditing(screen)
+  const editor = screen.getByRole('region', { name: '来店目的の編集' })
   await expect(editor.getByLabel('Web予約に公開する')).toBeChecked()
   await expect(editor).toContainText(
     '非公開にすると新規の選択肢から外れます。既存予約と履歴は削除されません。',
@@ -544,8 +583,11 @@ test('来店目的を非公開にしても既存予約と履歴は削除され�
   expect(saved.staff).toHaveLength(1)
   expect(saved.equipment).toHaveLength(1)
 
-  // 非公開のあとも来店目的の一覧から消えない。
-  await expect(screen.getByRole('region', { name: '来店目的' }).getByRole('button')).toHaveCount(2)
+  // 非公開のあとも来店目的の一覧（絞り込み）から消えない。
+  await expect(screen.getByRole('button', { name: '視力測定', exact: true })).toBeVisible()
+  await expect(
+    screen.getByRole('button', { name: 'フィッティング調整', exact: true }),
+  ).toBeVisible()
 })
 
 // @e2e-covers UC-EYEX-109 UC-EYEX-110 UC-EYEX-111 UC-EYEX-112 UC-EYEX-113 UC-EYEX-114 AC-EYEX-63 AC-EYEX-71
@@ -561,25 +603,23 @@ test('Web予約工程は公開状態から期限後の案内までを一覧し�
   const panel = screen.getByRole('region', { name: 'Web予約設定' })
   for (const term of [
     '公開状態',
-    '公開期間',
+    '受付終了',
     '公開する来店目的',
     '受付時間',
-    '予約可能日数',
+    '予約可能期間',
     '直前受付期限',
     '変更・取消期限',
     '期限後の案内',
   ]) {
     await expect(panel).toContainText(term)
   }
-  // UC-EYEX-112: 受付曜日と時間帯は営業時間から実際に導出される（火曜は休業日）。
-  await expect(panel).toContainText('月 10:00–19:00')
-  await expect(panel).toContainText('火 休業日')
+  // UC-EYEX-112: 受付曜日と時間帯は営業時間から実際に導出される（火曜は休業日なので
+  // 月–土 でひとまとまりに読め、日曜だけ別の時間帯として並ぶ）。
+  await expect(panel).toContainText('月–土 10:00–19:00')
+  await expect(panel).toContainText('日 10:00–18:00')
   // 公開状態・公開期間・公開する来店目的・日数・期限は API 未提供なので推測せず 未取得。
   await expect(panel).toContainText('未取得')
   await expect(panel).toContainText('Web予約の公開設定はまだ取得できていません。')
-  await expect(panel).toContainText(
-    '受付停止は新しいWeb予約だけを止めます。既存予約は取り消されません。',
-  )
 
   // UC-EYEX-114 / AC-EYEX-71: 同じ画面で顧客向けページをプレビューする。
   const preview = screen.getByRole('region', { name: '店舗ページプレビュー' })
@@ -596,36 +636,40 @@ test('settings.read がなければ設定は何も見えず、settings.manage �
 }) => {
   const state = await mockSettingsApi(page, { permissions: ['store.read'] })
 
-  // 閲覧権限なし: 中身も、その存在も出さない。
+  // 閲覧権限なし: 中身も、その存在も出さない。工程レールごと出さない。
   let screen = await openSettings(page)
-  await expect(screen).toContainText('設定を閲覧する権限がありません。')
+  await expect(
+    page.getByRole('region', { name: 'この設定を表示する権限がありません' }),
+  ).toContainText('権限のある管理者に確認してください。設定の存在や内容はこれ以上表示しません。')
+  await expect(screen).toHaveCount(0)
   await expect(stepRail(page)).toHaveCount(0)
-  await expect(screen.getByRole('region', { name: '営業時間' })).toHaveCount(0)
-  await expect(screen.getByRole('button', { name: '設定を保存' })).toHaveCount(0)
+  await expect(page.getByText('10:00–19:00')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '設定を保存' })).toHaveCount(0)
 
   // 閲覧のみ: 値は読めるが、編集手段は提供されない。
   state.permissions = ['store.read', 'settings.read']
   screen = await openSettings(page)
-  await expect(screen.getByRole('region', { name: '営業時間' })).toContainText('10:00–19:00')
+  await expect(screen).toContainText('月–土 10:00–19:00')
   await expect(screen).toContainText('設定を変更する権限がありません。')
   await expect(screen.getByRole('button', { name: '設定を保存' })).toHaveCount(0)
+  await expect(screen.getByRole('button', { name: '編集', exact: true })).toHaveCount(0)
   await expect(screen.getByLabel('月曜を営業日にする')).toHaveCount(0)
   await expect(screen.getByLabel('受付状態')).toHaveCount(0)
   await goToStep(page, /^工程2 来店目的/)
   await expect(screen.getByLabel('顧客向け表示名')).toHaveCount(0)
-  await expect(screen.getByRole('region', { name: '来店目的の設定' })).toContainText('視力測定')
+  // 読み取りカードは残る（見えないのは編集手段だけ）。
+  await expect(screen).toContainText('視力測定')
   expect(state.savedBodies).toHaveLength(0)
 })
 
-/** ホーム → ヘッダーの管理メニュー「共有端末」。 */
+/** ホーム → 緑帯の「設定」→ サイドバーの「共有端末」（共有iPad の面はその先）。 */
 async function openSharedTerminals(page: Page) {
   await page.setViewportSize(VIEWPORT)
   await page.goto('/')
-  await page
-    .getByRole('navigation', { name: '管理メニュー' })
-    .getByRole('button', { name: '共有端末' })
-    .click()
-  await expect(page.getByRole('heading', { name: '共有iPad', level: 2 })).toBeVisible()
+  await expect(page.getByRole('navigation', { name: '主操作' })).toBeVisible()
+  await page.getByRole('banner').getByRole('button', { name: '設定', exact: true }).click()
+  await sidebar(page).getByRole('button', { name: '共有端末', exact: true }).click()
+  await expect(page.getByRole('heading', { name: '共有iPad', level: 1 })).toBeVisible()
 }
 
 type TerminalMock = { terminals: Record<string, unknown>[]; createAuth: string[] }
@@ -671,9 +715,12 @@ test('共有iPadの登録トークンは一度だけ警告付きで表示され�
 
   // UC-EYEX-131: 端末名を付けて登録する。名前は必須。
   await page.getByRole('button', { name: '共有iPadを登録' }).click()
+  // 名前を入れずに登録しようとしても発行はされない。
+  await page.getByRole('button', { name: '登録する' }).click()
   await expect(page.getByText('端末名を入力してください。')).toBeVisible()
+  expect(state.createAuth).toEqual([])
   await page.getByLabel('端末名').fill('検査室iPad')
-  await page.getByRole('button', { name: '共有iPadを登録' }).click()
+  await page.getByRole('button', { name: '登録する' }).click()
 
   const issued = page.getByRole('dialog', { name: '検査室iPadを登録しました' })
   await expect(issued).toBeVisible()
@@ -697,7 +744,7 @@ test('共有iPadの登録トークンは一度だけ警告付きで表示され�
   await issued.getByRole('button', { name: '控えたので閉じる' }).click()
   await expect(issued).toHaveCount(0)
   await expect(page.locator('body')).not.toContainText(ISSUED_TOKEN)
-  await expect(page.getByRole('cell', { name: '検査室iPad' })).toBeVisible()
+  await expect(page.getByRole('article', { name: '銀座店 検査室iPad' })).toBeVisible()
   const afterClose = await page.evaluate(() => ({
     local: Object.entries(localStorage),
     session: Object.entries(sessionStorage),
@@ -715,12 +762,14 @@ test('共有iPad一覧は端末名・店舗・最終通信・状態を示し、�
   page.on('request', (request) => {
     if (request.url().includes('/revoke')) revokeRequests += 1
   })
+  // 最終通信は「今から何分前か」で読ませるので、時計を固定してから開く。
+  await page.clock.setFixedTime(new Date('2026-08-27T03:00:00.000Z'))
   await openSharedTerminals(page)
 
   // UC-EYEX-150 / AC-EYEX-96: 端末名、店舗、最終通信、状態。
-  const row = page.getByRole('row').filter({ hasText: '受付カウンターiPad' })
+  const row = page.getByRole('article', { name: '銀座店 受付カウンターiPad' })
   await expect(row).toContainText('銀座店')
-  await expect(row).toContainText('2026年8月27日 11:58')
+  await expect(row).toContainText('最終通信 2分前')
   await expect(row).toContainText('利用中')
 
   // AC-EYEX-83 / UC-EYEX-136: 失効は確認を挟み、その前に要求は飛ばない。
@@ -748,7 +797,7 @@ test('共有iPad一覧は端末名・店舗・最終通信・状態を示し、�
   await row.getByRole('button', { name: '失効' }).click()
   await page.getByRole('alertdialog').getByRole('button', { name: '失効する' }).click()
   await expect(page.getByRole('alertdialog')).toHaveCount(0)
-  await expect(row).toContainText('失効済み')
+  await expect(row).toContainText('停止中')
   await expect(row.getByRole('button', { name: '失効' })).toHaveCount(0)
   expect(revokeRequests).toBe(1)
   expect(state.terminals).toHaveLength(1)
@@ -764,25 +813,20 @@ test('日常業務はPINを求めず、管理操作は本人確認を要求し�
   // PIN 入力も求めない。
   await page.setViewportSize(VIEWPORT)
   await page.goto('/')
-  await expect(page.getByRole('heading', { name: '銀座店のホーム' })).toBeVisible()
+  // ホームには見出しが無い。主操作の並びが出ていることをホーム到達の合図にする。
+  await expect(page.getByRole('navigation', { name: '主操作' })).toBeVisible()
   await expect(page.getByRole('textbox', { name: /PIN/ })).toHaveCount(0)
   await expect(page.getByRole('dialog')).toHaveCount(0)
-  await page
-    .getByRole('navigation', { name: '管理メニュー' })
-    .getByRole('button', { name: '店舗設定' })
-    .click()
+  await page.getByRole('banner').getByRole('button', { name: '設定', exact: true }).click()
   await expect(page.getByRole('region', { name: '店舗設定' })).toBeVisible()
   await expect(page.getByRole('textbox', { name: /PIN/ })).toHaveCount(0)
-  await page
-    .getByRole('navigation', { name: '管理メニュー' })
-    .getByRole('button', { name: '共有端末' })
-    .click()
-  await expect(page.getByRole('heading', { name: '共有iPad', level: 2 })).toBeVisible()
+  await sidebar(page).getByRole('button', { name: '共有端末', exact: true }).click()
+  await expect(page.getByRole('heading', { name: '共有iPad', level: 1 })).toBeVisible()
   await expect(page.getByRole('textbox', { name: /PIN/ })).toHaveCount(0)
 
   // AC-EYEX-82: 管理操作は個人PINまたは個人ログインを要求し、この場では実行しない。
-  const pin = page.getByRole('region', { name: '個人PIN' })
-  await expect(pin).toContainText('個人モードの切替と管理再認証に使う4〜6桁のPINです。')
+  const pin = page.getByRole('region', { name: '個人モード' })
+  await expect(pin).toContainText('スタッフ選択＋4〜6桁PIN')
   await pin.getByRole('button', { name: '個人PINを設定・変更' }).click()
   await expect(pin).toContainText(
     '個人PINの設定と変更は本人のみが行えます。この操作は管理コンソールで行います。',
@@ -792,10 +836,11 @@ test('日常業務はPINを求めず、管理操作は本人確認を要求し�
     '本人確認後にPIN再設定を開始できます。PINそのものは管理者にも表示されません。この操作は管理コンソールで行います。',
   )
 
-  // UC-EYEX-152: 無操作ロック時間はこの画面の管轄外。既定値を推測せず 未取得 と言う。
+  // UC-EYEX-152: 無操作ロック時間はこの画面の管轄外。既定値を推測せず 未取得 と言い、
+  // 変更もこの面では実行しない。
   const idle = page.getByRole('region', { name: '無操作ロック' })
   await expect(idle).toContainText('未取得')
-  await expect(idle).toContainText(
-    '無操作ロック時間はこの画面から取得できません。確認と変更はこの操作は管理コンソールで行います。',
-  )
+  await expect(idle).toContainText('無操作ロック時間はこの画面から取得できません。')
+  await idle.getByRole('button', { name: '変更' }).click()
+  await expect(idle).toContainText('無操作ロック時間の変更はこの操作は管理コンソールで行います。')
 })

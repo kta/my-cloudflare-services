@@ -1,23 +1,19 @@
-import {
-  AvailabilitySlotsResponse,
-  type Recording,
-  Reservation,
-  ReservationChangeHistoryEntry,
-} from '@app/contracts'
-import { Field, Notice, Textarea, TextInput } from '@app/ui'
+import { AvailabilitySlotsResponse, type Recording, Reservation } from '@app/contracts'
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import {
   Action,
   Actions,
   FilterButton,
-  FilterInput,
+  FilterDate,
   FilterLine,
-  FilterSelect,
+  FilterToggle,
   SearchField,
 } from './design/controls'
+import { TextAreaField, TextField } from './design/forms'
 import { FullScreenState, Panel, Workspace } from './design/layouts'
-import { Card, ListRow } from './design/surfaces'
-import type { StaffApi, StaffScreenProps } from './staff-screen'
+import { FailureNotice } from './design/notices'
+import { Card, ListRow, Waveform } from './design/surfaces'
+import type { StaffScreenProps } from './staff-screen'
 
 /**
  * Local view of an iPad recording.
@@ -153,11 +149,6 @@ const STATUS_LABEL = {
   cancelled: '取消済み',
   no_show: '無断キャンセル',
 } as const
-const HISTORY_ACTION_LABEL = {
-  changed: '日時・内容を変更',
-  cancelled: '予約を取消',
-  no_show: '無断キャンセルとして記録',
-} as const
 
 /** Half-width digits, no separators — the shape the API normalises to. */
 function normaliseDigits(term: string): string {
@@ -208,22 +199,17 @@ async function readJson(response: Response): Promise<unknown> {
 
 export const FOCUS_RING =
   'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus'
-/** `.workspace{height:calc(100% - 76px);grid-template-columns:390px 1fr}` */
-const WORKSPACE = 'grid h-full grid-cols-[390px_1fr]'
-/** `.list{padding:16px;background:#e7ede9;border-right:1px solid var(--l);overflow:auto}` */
-const LIST_PANE = 'overflow-auto border-line border-r bg-panel p-4'
-/** `.detail{padding:22px;overflow:auto}` */
-const DETAIL_PANE = 'overflow-auto p-5.5'
-/** `.filterline{display:flex;gap:8px;margin:10px 0}` */
-const FILTER_LINE = 'mt-2.5 flex flex-wrap items-center gap-2'
-/** `.filter{min-height:44px;border:1px solid var(--l);background:#fff;border-radius:8px;padding:0 12px}` */
-const FILTER = `min-h-11 rounded-ctl border border-line bg-surface px-3 font-sans text-ink text-sm ${FOCUS_RING}`
-/** `.row{background:#fff;border:1px solid var(--l);border-radius:9px;padding:14px;margin-top:10px}` */
-const ROW = `mt-2.5 block w-full rounded-card border border-line bg-surface p-3.5 text-left font-sans ${FOCUS_RING}`
-/** `.row.selected{border:3px solid var(--g);background:var(--gs)}` */
-const ROW_SELECTED = `mt-2.5 block w-full rounded-card border-[3px] border-pine bg-pine-soft p-3.5 text-left font-sans ${FOCUS_RING}`
-/** `.card{background:#fff;border:1px solid var(--l);border-radius:9px;padding:14px}` */
-const CARD = 'rounded-card border border-line bg-surface p-3.5 font-sans text-ink'
+/**
+ * `.workspace{height:calc(100% - 76px);grid-template-columns:390px 1fr}`
+ *
+ * 390px は 4 の倍数でない実測値なので、任意値クラスではなく純粋な配置として
+ * インライン style で持つ（`docs/frontend/REBUILD.md` の規約）。
+ *
+ * `.list` / `.detail` / `.row` / `.card` の寸法は `design/layouts` と
+ * `design/surfaces` の語彙が持っている。ここに写しを置くと同じ実測値が 2 か所に
+ * 増えてどちらが正か読めなくなるので、この面が固有に持つのは `.audio` だけ。
+ */
+const WORKSPACE_COLUMNS = { gridTemplateColumns: '390px 1fr' }
 /**
  * `.audio{border:1px solid var(--l);padding:14px;border-radius:9px;margin-top:14px}`
  * モックの `.audio` は地色を持たない。台紙の色をそのまま透かす。
@@ -244,9 +230,9 @@ export function EmptyState({ heading, onClear }: { heading: string; onClear: () 
       <p className="mt-1 text-ink-muted text-sm">
         検索語またはフィルターを変更してください。履歴自体は削除されていません。
       </p>
-      <button type="button" className={`mt-3 ${FILTER}`} onClick={onClear}>
-        フィルターをすべて解除
-      </button>
+      <FilterLine>
+        <FilterButton onClick={onClear}>フィルターをすべて解除</FilterButton>
+      </FilterLine>
     </div>
   )
 }
@@ -311,9 +297,18 @@ type Props = StaffScreenProps & {
 export function RecordingPanel({
   recording,
   permissions,
+  frame = 'card',
+  wave = false,
 }: {
   recording?: RecordingView
   permissions: RecordingPermissions
+  /**
+   * 受付履歴では `.card` の中に置かれるので、罫を持つと板が二重になる。
+   * 面の外枠を持つかどうかだけを選ばせる。
+   */
+  frame?: 'card' | 'bare'
+  /** 受付履歴のモックだけが波形を持つ。予約検索の `.audio` には無い。 */
+  wave?: boolean
 }) {
   const audioRef = useRef<HTMLAudioElement>(null)
   const [position, setPosition] = useState(0)
@@ -344,7 +339,7 @@ export function RecordingPanel({
   const available = recording?.state === 'available' ? recording : undefined
 
   return (
-    <section aria-label="iPad録音" className={AUDIO}>
+    <section aria-label="iPad録音" className={frame === 'card' ? AUDIO : 'mt-2'}>
       {/*
        * モックの `.audio` は再生ボタンと 1 行の説明が並ぶだけ。実アプリは
        * 一時停止も要るので同じ行に足すが、行そのものは増やさない。
@@ -412,6 +407,7 @@ export function RecordingPanel({
           </small>
         </>
       )}
+      {available && wave && <Waveform />}
       {/* モックの `.audio small` — 持ち出せないことをどの状態でも言い続ける。 */}
       <small className="block">{note}</small>
     </section>
@@ -430,19 +426,13 @@ function CardRow({ label, children }: { label: string; children: ReactNode }) {
   )
 }
 
-async function loadHistory(
-  api: StaffApi,
-  storeId: string,
-  reservationId: string,
-): Promise<ReservationChangeHistoryEntry[]> {
-  const response = await api(`/api/staff/stores/${storeId}/reservations/${reservationId}/history`)
-  if (!response.ok) return []
-  const parsed = ReservationChangeHistoryEntry.array().safeParse(await readJson(response))
-  return parsed.success ? parsed.data : []
-}
-
-type Filters = { term: string; dateFrom: string; dateTo: string; source: string; status: string }
-const NO_FILTERS: Filters = { term: '', dateFrom: '', dateTo: '', source: '', status: '' }
+/*
+ * 承認済みモックの絞り込みは検索語と 2 つのピルだけで、日付欄も状態の選択肢も
+ * 持たない。期間は「今日以降」の 1 段、予約元は「ウォークイン以外」の 1 段しか
+ * 無い。段を増やしたくなったら、まずモックを見直す。
+ */
+type Filters = { term: string; upcomingOnly: boolean; bookedOnly: boolean }
+const NO_FILTERS: Filters = { term: '', upcomingOnly: false, bookedOnly: false }
 
 /**
  * Selected-store reservation search, detail, change and cancellation.
@@ -466,7 +456,6 @@ export function ReservationSearchScreen({
   const [searchError, setSearchError] = useState<string>()
   const [forbidden, setForbidden] = useState(false)
   const [selected, setSelected] = useState<Reservation>()
-  const [history, setHistory] = useState<ReservationChangeHistoryEntry[]>([])
   const [panel, setPanel] = useState<'none' | 'change' | 'cancel'>('none')
   const [changeDate, setChangeDate] = useState(today)
   const [slots, setSlots] = useState<AvailabilitySlotsResponse['slots']>()
@@ -487,7 +476,6 @@ export function ReservationSearchScreen({
       setCancelError(undefined)
       setChangeDate(formatJstDay(reservation.startAt))
       onReservationOpened?.(reservation.id)
-      void loadHistory(api, storeId, reservation.id).then(setHistory)
     },
     [api, storeId, onReservationOpened],
   )
@@ -511,10 +499,8 @@ export function ReservationSearchScreen({
     const params = new URLSearchParams()
     const classified = classifySearchTerm(next.term)
     if (classified) params.set(classified.field, classified.value)
-    if (next.dateFrom) params.set('dateFrom', next.dateFrom)
-    if (next.dateTo) params.set('dateTo', next.dateTo)
-    if (next.source) params.set('source', next.source)
-    if (next.status) params.set('status', next.status)
+    // 「今後の予約」の基準日は注入された today。画面は時計を読まない。
+    if (next.upcomingOnly) params.set('dateFrom', today)
     // The store is in the path, never in the query: no cross-store search exists.
     const response = await api(`/api/staff/stores/${storeId}/reservations?${params.toString()}`)
     if (response.status === 403) {
@@ -537,7 +523,6 @@ export function ReservationSearchScreen({
     // Candidates only: nothing is bound until the operator picks (AC-EYEX-21).
     setResults(parsed.data)
     setSelected(undefined)
-    setHistory([])
     setPanel('none')
   }
 
@@ -609,7 +594,6 @@ export function ReservationSearchScreen({
     setSlotStartTime(undefined)
     setChangeReason('')
     setChangeError(undefined)
-    setHistory(await loadHistory(api, storeId, parsed.data.id))
   }
 
   const applyCancel = async () => {
@@ -652,7 +636,6 @@ export function ReservationSearchScreen({
     setCancelReason('')
     setCancelConfirmation('')
     setCancelError(undefined)
-    setHistory(await loadHistory(api, storeId, parsed.data.id))
   }
 
   if (forbidden) return <PermissionDenied onBack={() => navigate({ screen: 'home' })} />
@@ -662,8 +645,16 @@ export function ReservationSearchScreen({
     void search(NO_FILTERS)
   }
 
+  /*
+   * 「電話・店頭・Web予約」はウォークインを外すという合成条件で、契約の
+   * `source` は単一値しか取れない。サーバへ渡せないのでここで落とす。
+   */
+  const visible = filters.bookedOnly
+    ? results?.filter((reservation) => reservation.source !== 'walkin')
+    : results
+
   // 0 件は「空の一覧」ではなく面ごと入れ替わる（承認済みモック `#empty`）。
-  if (results?.length === 0) return <EmptyReservations onClear={clearFilters} />
+  if (visible?.length === 0) return <EmptyReservations onClear={clearFilters} />
 
   return (
     /*
@@ -691,52 +682,27 @@ export function ReservationSearchScreen({
                 value={filters.term}
                 onChange={(term) => setFilters((current) => ({ ...current, term }))}
               />
+              {/* 承認済みモックの `.filterline` はこの 2 つのピルだけ。並びもモックのまま。 */}
               <FilterLine>
-                {/* 並びはモックのまま（状態が先、予約元が後）。 */}
-                <FilterSelect
-                  id="reservation-status"
-                  label="状態"
-                  value={filters.status}
-                  onChange={(status) => setFilters((current) => ({ ...current, status }))}
+                <FilterToggle
+                  pressed={filters.upcomingOnly}
+                  onToggle={() => {
+                    const next = { ...filters, upcomingOnly: !filters.upcomingOnly }
+                    setFilters(next)
+                    // 期間はサーバ側の条件なので、押した時点で検索し直す。
+                    void search(next)
+                  }}
                 >
-                  <option value="">今後の予約</option>
-                  <option value="confirmed">予約済み</option>
-                  <option value="checked_in">来店済み</option>
-                  <option value="cancelled">取消済み</option>
-                  <option value="no_show">無断キャンセル</option>
-                </FilterSelect>
-                <FilterSelect
-                  id="reservation-source"
-                  label="予約元"
-                  value={filters.source}
-                  onChange={(source) => setFilters((current) => ({ ...current, source }))}
+                  今後の予約
+                </FilterToggle>
+                <FilterToggle
+                  pressed={filters.bookedOnly}
+                  onToggle={() =>
+                    setFilters((current) => ({ ...current, bookedOnly: !current.bookedOnly }))
+                  }
                 >
-                  <option value="">電話・店頭・Web予約</option>
-                  <option value="staff">電話・店頭</option>
-                  <option value="web">Web予約</option>
-                  <option value="walkin">ウォークイン</option>
-                </FilterSelect>
-              </FilterLine>
-              <FilterLine>
-                <FilterInput
-                  id="reservation-date-from"
-                  type="date"
-                  label="開始日"
-                  className="w-32"
-                  value={filters.dateFrom}
-                  onChange={(dateFrom) => setFilters((current) => ({ ...current, dateFrom }))}
-                />
-                <FilterInput
-                  id="reservation-date-to"
-                  type="date"
-                  label="終了日"
-                  className="w-32"
-                  value={filters.dateTo}
-                  onChange={(dateTo) => setFilters((current) => ({ ...current, dateTo }))}
-                />
-                <FilterButton type="submit" variant="primary">
-                  検索する
-                </FilterButton>
+                  電話・店頭・Web予約
+                </FilterToggle>
               </FilterLine>
             </form>
             {/*
@@ -754,7 +720,7 @@ export function ReservationSearchScreen({
               </p>
             )}
             <section aria-label="検索結果">
-              {results?.map((reservation) => {
+              {visible?.map((reservation) => {
                 const open = selected?.id === reservation.id
                 return (
                   <ListRow
@@ -834,9 +800,8 @@ export function ReservationSearchScreen({
                   <h2>変更先の枠を探す</h2>
                   <p>元の予約は保持したままです。切り替えは変更先を確保できたときだけ行います。</p>
                   <FilterLine>
-                    <FilterInput
+                    <FilterDate
                       id="change-date"
-                      type="date"
                       label="変更先の日"
                       value={changeDate}
                       onChange={setChangeDate}
@@ -865,15 +830,14 @@ export function ReservationSearchScreen({
                       ))}
                     </FilterLine>
                   )}
-                  <Field label="変更理由" htmlFor="change-reason">
-                    <Textarea
-                      id="change-reason"
-                      className="min-h-11"
-                      value={changeReason}
-                      onChange={(event) => setChangeReason(event.target.value)}
-                    />
-                  </Field>
-                  {changeError && <Notice tone="danger">{changeError}</Notice>}
+                  <TextAreaField
+                    id="change-reason"
+                    className="min-h-11"
+                    value={changeReason}
+                    onChange={(event) => setChangeReason(event.target.value)}
+                    label="変更理由"
+                  />
+                  {changeError && <FailureNotice>{changeError}</FailureNotice>}
                   <Actions>
                     <Action
                       variant="primary"
@@ -890,27 +854,25 @@ export function ReservationSearchScreen({
               {panel === 'cancel' && (
                 <Panel label="予約取消">
                   <h2>予約を取り消す</h2>
-                  <Field label="取消理由" htmlFor="cancel-reason">
-                    <Textarea
-                      id="cancel-reason"
-                      className="min-h-11"
-                      value={cancelReason}
-                      onChange={(event) => setCancelReason(event.target.value)}
-                    />
-                  </Field>
-                  <Field label="確認入力" htmlFor="cancel-confirmation">
-                    <TextInput
-                      id="cancel-confirmation"
-                      className="min-h-11"
-                      placeholder="取消"
-                      value={cancelConfirmation}
-                      onChange={(event) => setCancelConfirmation(event.target.value)}
-                    />
-                  </Field>
+                  <TextAreaField
+                    id="cancel-reason"
+                    className="min-h-11"
+                    value={cancelReason}
+                    onChange={(event) => setCancelReason(event.target.value)}
+                    label="取消理由"
+                  />
+                  <TextField
+                    id="cancel-confirmation"
+                    className="min-h-11"
+                    placeholder="取消"
+                    value={cancelConfirmation}
+                    onChange={(event) => setCancelConfirmation(event.target.value)}
+                    label="確認入力"
+                  />
                   <p>
                     確認のため「取消」と入力してください。実行者・日時・変更前内容を履歴に残します。
                   </p>
-                  {cancelError && <Notice tone="danger">{cancelError}</Notice>}
+                  {cancelError && <FailureNotice>{cancelError}</FailureNotice>}
                   <Actions>
                     <Action
                       variant="danger"
@@ -923,33 +885,6 @@ export function ReservationSearchScreen({
                   </Actions>
                 </Panel>
               )}
-              <Card label="変更履歴" className="mt-3.5">
-                <b>変更履歴</b>
-                {history.length === 0 ? (
-                  <span className="mt-1 block">変更履歴はありません。</span>
-                ) : (
-                  <ul className="mt-1">
-                    {history.map((entry) => (
-                      <li key={entry.id} className="border-line border-b py-2 last:border-b-0">
-                        <b className="block">{HISTORY_ACTION_LABEL[entry.action]}</b>
-                        <small className="block">
-                          <span>{formatJstDateTime(entry.occurredAt)}</span>
-                          {` · 実行者 ${entry.actorId}`}
-                        </small>
-                        <span className="block">
-                          {`変更前 ${STATUS_LABEL[entry.before.status]} · `}
-                          <span>{formatJstDateTime(entry.before.startAt)}</span>
-                        </span>
-                        <span className="block">
-                          {`変更後 ${STATUS_LABEL[entry.after.status]} · `}
-                          <span>{formatJstTime(entry.after.startAt)}</span>
-                        </span>
-                        {entry.reason && <small className="block">{`理由 ${entry.reason}`}</small>}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </Card>
             </>
           )
         }

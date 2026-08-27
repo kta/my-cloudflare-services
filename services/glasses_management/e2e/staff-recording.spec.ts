@@ -250,14 +250,20 @@ async function mockStaffApi(page: Page, mocks: Mocks) {
   })
 }
 
-/** ホーム → ヘッダー管理メニュー「録音運用」まで進める。 */
+/**
+ * ホーム → 緑帯「設定」→ 左サイドバー「録音運用」まで進める。
+ *
+ * 面の行き来は全画面共通の左サイドバー 1 本に集約された。サイドバーはホームには
+ * 出ないので、まず緑帯の「設定」で設定ガイドへ入り、そこから柱を使う。
+ */
 async function openRecordingOps(page: Page) {
   await page.setViewportSize(VIEWPORT)
   await page.goto('/')
-  await expect(page.getByRole('heading', { name: '銀座店のホーム' })).toBeVisible()
+  await expect(page.getByRole('navigation', { name: '主操作' })).toBeVisible()
+  await page.getByRole('banner').getByRole('button', { name: '設定' }).click()
   await page
-    .getByRole('navigation', { name: '管理メニュー' })
-    .getByRole('button', { name: '録音運用' })
+    .getByRole('navigation', { name: '画面の一覧' })
+    .getByRole('button', { name: '録音運用', exact: true })
     .click()
   const screen = page.getByRole('region', { name: '録音運用' })
   await expect(screen).toBeVisible()
@@ -369,7 +375,9 @@ test('最低保持期限より前の削除は成立予約でも破棄受付で�
 
   // 成立予約の録音は最低30日。期限前の手動削除は拒否され、期限そのものが出る
   // (UC-EYEX-123 / UC-EYEX-125 / AC-EYEX-75)。
-  await expect(screen).toContainText('成立した予約の録音は、録音完了から最低30日間保持します。')
+  // 保存期間のカードが最低保証そのものを常時名乗る（面の文言は「最低N日未満には
+  // 設定できません」に変わった）。
+  await expect(screen).toContainText('最低30日未満には設定できません')
   await row(page, storedId).getByRole('button', { name: '削除する' }).click()
   const refusal = screen.getByText(/保持期間中のため削除できません。/)
   await expect(refusal).toBeVisible()
@@ -384,7 +392,7 @@ test('最低保持期限より前の削除は成立予約でも破棄受付で�
 
   // 破棄した受付の録音は最低24時間。こちらも同じく拒否される
   // (UC-EYEX-124 / AC-EYEX-76)。
-  await expect(screen).toContainText('破棄した受付の録音は、録音終了から最低24時間保持します。')
+  await expect(screen).toContainText('最低24時間未満には設定できません')
   await row(page, discardedId).getByRole('button', { name: '削除する' }).click()
   await expect(screen.getByText(/保持期間中のため削除できません。/)).toBeVisible()
   await expect(row(page, discardedId)).toContainText('保存済み')
@@ -577,8 +585,17 @@ test('録音を扱える店舗スタッフは再生・一時停止・シーク�
   // (UC-EYEX-042)。
   mocks.permissions = ['store.read', 'reservation.read']
   mocks.requests.length = 0
-  await openRecordingOps(page)
-  await expect(page.getByText('この店舗で録音を扱う権限がありません。')).toBeVisible()
+  // 権限が無い面は `録音運用` のリージョンごと出ないので、遷移は自前で行う。
+  await page.goto('/')
+  await expect(page.getByRole('navigation', { name: '主操作' })).toBeVisible()
+  await page.getByRole('banner').getByRole('button', { name: '設定' }).click()
+  await page
+    .getByRole('navigation', { name: '画面の一覧' })
+    .getByRole('button', { name: '録音運用', exact: true })
+    .click()
+  await expect(
+    page.getByRole('heading', { name: 'この設定を表示する権限がありません' }),
+  ).toBeVisible()
   await expect(row(page, storedId)).toHaveCount(0)
   expect(mocks.requests.some((request) => request.url.includes('/recordings'))).toBe(false)
 })
@@ -835,23 +852,33 @@ function microphoneCalls(page: Page) {
   )
 }
 
-/** ホーム → 主操作「新しい予約を取る」まで進め、録音面を返す。 */
+/**
+ * ホーム → 主操作「新しい予約を取る」まで進め、録音面を返す。
+ *
+ * 録音の面は下部進捗バーの `status[name="iPad録音"]` に移った。
+ */
 async function openBooking(page: Page) {
   await page.setViewportSize(VIEWPORT)
   await page.goto('/')
-  await expect(page.getByRole('heading', { name: '銀座店のホーム' })).toBeVisible()
-  await page.getByRole('button', { name: '新しい予約を取る' }).click()
+  await expect(page.getByRole('navigation', { name: '主操作' })).toBeVisible()
+  await page
+    .getByRole('navigation', { name: '主操作' })
+    .getByRole('button', { name: '新しい予約を取る' })
+    .click()
   await expect(page.getByRole('heading', { name: 'ご来店予定の日を伺えますか？' })).toBeVisible()
-  return page.getByRole('region', { name: 'iPad録音' })
+  return page.getByRole('status', { name: 'iPad録音' })
 }
 
 /** 日 → 時刻 → 来店目的 → お客様情報 → 復唱 まで進める。 */
 async function reachRecital(page: Page) {
   await page.getByRole('button', { name: dayLabel(jstToday()) }).click()
-  await page.getByRole('button', { name: '11:00', exact: true }).click()
+  // 時刻候補は営業時間を間引いた 6 件（10:00 / 11:30 / 13:30 / 15:00 / 17:00 / 18:30）。
+  await page.getByRole('button', { name: '11:30', exact: true }).click()
   await page.getByRole('button', { name: /メガネを新しく作りたい/ }).click()
   await page.getByRole('button', { name: 'お客様情報へ進む' }).click()
+  // お客様情報は 2 段。まず伺った番号でお客様を特定し、そのあと詳細を入力する。
   await page.getByLabel('お電話番号').fill('09012345678')
+  await page.getByRole('button', { name: '新しいお客様として登録する' }).click()
   await page.getByLabel('お名前', { exact: true }).fill('田中花子')
   await page.getByLabel('フリガナ').fill('タナカハナコ')
   await page.getByRole('button', { name: '復唱へ進む' }).click()
@@ -868,7 +895,7 @@ test('録音は取得目的・閲覧者・最低保持期間を説明してか�
 
   // 最初の要求より前に、何のために録り・誰が聞き・最低どれだけ残すかを言う
   // (UC-EYEX-033 / AC-EYEX-113)。
-  await expect(indicator.getByTestId('recording-state')).toHaveText('権限確認')
+  await expect(indicator).toContainText('権限確認')
   await expect(indicator).toContainText('予約内容の復唱を、聞き間違いの確認のために記録します。')
   await expect(indicator).toContainText(
     '再生できるのは選択中の店舗で録音を扱えるスタッフだけです。',
@@ -879,7 +906,7 @@ test('録音は取得目的・閲覧者・最低保持期間を説明してか�
   expect(await microphoneCalls(page)).toBe(0)
 
   await indicator.getByRole('button', { name: '録音を開始する' }).click()
-  await expect(indicator.getByTestId('recording-state')).toHaveText('録音中')
+  await expect(indicator).toContainText('録音中')
   expect(await microphoneCalls(page)).toBe(1)
 
   // 録音中は状態だけが残り、説明も操作も畳まれる (AC-EYEX-05)。
@@ -899,9 +926,9 @@ test('録音は取得目的・閲覧者・最低保持期間を説明してか�
 
   // 受付開始から復唱終了まで録れている (UC-EYEX-031)。
   await reachRecital(page)
-  await expect(indicator.getByTestId('recording-state')).toHaveText('録音中')
+  await expect(indicator).toContainText('録音中')
   await page.getByRole('button', { name: '復唱を終えて予約を確定する' }).click()
-  await expect(indicator.getByTestId('recording-state')).toHaveText('保存済み')
+  await expect(indicator).toContainText('保存済み')
   await expect(indicator).toContainText('保存済みです。予約詳細または受付履歴から再生できます。')
 })
 
@@ -948,11 +975,10 @@ test('録音メタデータは受付セッション・店舗・録音主体・�
   await stubMicrophone(page, 'granted')
   await mockBookingApi(page, mocks)
   const indicator = await openBooking(page)
-  await indicator.getByRole('button', { name: '録音を開始する' }).click()
-  await expect(indicator.getByTestId('recording-state')).toHaveText('録音中')
+  await expect(indicator).toContainText('録音中')
   await reachRecital(page)
   await page.getByRole('button', { name: '復唱を終えて予約を確定する' }).click()
-  await expect(indicator.getByTestId('recording-state')).toHaveText('保存済み')
+  await expect(indicator).toContainText('保存済み')
 
   // 成立した予約の録音だけが予約 ID を持つ (UC-EYEX-036)。
   const confirmed = mocks.requests.find((entry) => entry.url.endsWith('/recordings'))
@@ -980,12 +1006,13 @@ test('録音メタデータは受付セッション・店舗・録音主体・�
   // 受付セッション ID を持つ (AC-EYEX-89)。
   mocks.requests.length = 0
   const second = await openBooking(page)
-  await second.getByRole('button', { name: '録音を開始する' }).click()
-  await expect(second.getByTestId('recording-state')).toHaveText('録音中')
+  await expect(second).toContainText('録音中')
+  // 受付を打ち切る口は下部バーの「戻る」。最初の工程でもう一度押すと確認が出る。
   await page.getByRole('button', { name: dayLabel(jstToday()) }).click()
-  await page.getByRole('button', { name: '入力を破棄する' }).click()
+  await page.getByRole('button', { name: '戻る' }).click()
+  await page.getByRole('button', { name: '戻る' }).click()
   await page.getByRole('alertdialog').getByRole('button', { name: '破棄する' }).click()
-  await expect(second.getByTestId('recording-state')).toHaveText('保存済み')
+  await expect(second).toContainText('保存済み')
 
   const discarded = mocks.requests.find((entry) => entry.url.endsWith('/recordings'))
   const discardedBody = JSON.parse(discarded?.body ?? '{}') as Record<string, unknown>
@@ -1010,17 +1037,18 @@ test('録音の保存失敗は予約が確定していない段階で見え、�
   await stubMicrophone(page, 'granted')
   await mockBookingApi(page, mocks)
   const indicator = await openBooking(page)
-  await indicator.getByRole('button', { name: '録音を開始する' }).click()
-  await expect(indicator.getByTestId('recording-state')).toHaveText('録音中')
+  await expect(indicator).toContainText('録音中')
 
   // 復唱の前に受付を打ち切ると、録音はそこで終わる。
+  // 受付を打ち切る口は下部バーの「戻る」。最初の工程でもう一度押すと確認が出る。
   await page.getByRole('button', { name: dayLabel(jstToday()) }).click()
-  await page.getByRole('button', { name: '入力を破棄する' }).click()
+  await page.getByRole('button', { name: '戻る' }).click()
+  await page.getByRole('button', { name: '戻る' }).click()
   await page.getByRole('alertdialog').getByRole('button', { name: '破棄する' }).click()
 
   // 予約はまだ 1 件も確定していないのに、保存できなかった事実は見えている
   // (UC-EYEX-034)。
-  await expect(indicator.getByTestId('recording-state')).toHaveText('失敗')
+  await expect(indicator).toContainText('失敗')
   await expect(indicator).toContainText('録音を保存できていません。予約内容には影響しません。')
   await expect(indicator.getByRole('button', { name: '今すぐ再試行' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '予約を確定しました' })).toHaveCount(0)
@@ -1054,24 +1082,24 @@ test('予約成立と録音送信中は別々の事実として並び、確定�
   await stubMicrophone(page, 'granted')
   await mockBookingApi(page, mocks)
   const indicator = await openBooking(page)
-  await indicator.getByRole('button', { name: '録音を開始する' }).click()
   await reachRecital(page)
   await page.getByRole('button', { name: '復唱を終えて予約を確定する' }).click()
 
   // 予約は成立している。録音はまだ送信中。2 つは別の行として読める
   // (UC-EYEX-041 / AC-EYEX-07)。
-  await expect(page.getByRole('heading', { name: '予約を確定しました' })).toBeVisible()
-  await expect(page.getByText('EY-2001')).toBeVisible()
-  await expect(indicator.getByTestId('booking-result')).toHaveText('予約は成立しました')
-  await expect(indicator.getByTestId('recording-state')).toHaveText('送信中')
-  await expect(indicator).toContainText('再試行 1/5')
+  // 予約の成立は本文の確定カードが、録音の状態は下部バーの録音表示が別々に持つ。
+  const result = page.getByRole('region', { name: '予約を確定しました' })
+  await expect(result.getByRole('heading', { name: '予約を確定しました' })).toBeVisible()
+  await expect(result.getByText('EY-2001')).toBeVisible()
+  await expect(indicator).toContainText('送信中')
 
   // 確定後の案内は「どこで保存状態を追えるか」を名指しする (AC-EYEX-07)。
   await expect(page.getByText('録音の保存状態は予約詳細と受付履歴で確認できます。')).toBeVisible()
 
   release()
-  await expect(indicator.getByTestId('recording-state')).toHaveText('保存済み')
-  await expect(indicator.getByTestId('booking-result')).toHaveText('予約は成立しました')
+  await expect(indicator).toContainText('保存済み')
+  // 録音が保存済みになっても、予約成立の事実はそのまま隣に残っている。
+  await expect(result.getByRole('heading', { name: '予約を確定しました' })).toBeVisible()
 
   await page.getByRole('button', { name: '受付履歴を開く' }).click()
   await expect(page.getByRole('heading', { name: '受付履歴' })).toBeVisible()
@@ -1163,7 +1191,7 @@ test('受付履歴の各イベントは録音日時・録音者・長さを添�
   )
   await page.setViewportSize(VIEWPORT)
   await page.goto('/')
-  await expect(page.getByRole('heading', { name: '銀座店のホーム' })).toBeVisible()
+  await expect(page.getByRole('navigation', { name: '主操作' })).toBeVisible()
   await page
     .getByRole('navigation', { name: '副操作' })
     .getByRole('button', { name: '受付履歴' })
@@ -1220,11 +1248,10 @@ test('録音本体はメタデータとは別に非公開の保管先へ送ら�
   await stubMicrophone(page, 'granted')
   await mockBookingApi(page, mocks)
   const indicator = await openBooking(page)
-  await indicator.getByRole('button', { name: '録音を開始する' }).click()
-  await expect(indicator.getByTestId('recording-state')).toHaveText('録音中')
+  await expect(indicator).toContainText('録音中')
   await reachRecital(page)
   await page.getByRole('button', { name: '復唱を終えて予約を確定する' }).click()
-  await expect(indicator.getByTestId('recording-state')).toHaveText('保存済み')
+  await expect(indicator).toContainText('保存済み')
 
   // メタデータの登録で作られた録音 ID 宛に、本体だけが別途送られる
   // (UC-EYEX-035)。
@@ -1313,11 +1340,14 @@ test('予約検索から開いた予約は、許可されたスタッフに録�
   )
   await page.setViewportSize(VIEWPORT)
   await page.goto('/')
-  await expect(page.getByRole('heading', { name: '銀座店のホーム' })).toBeVisible()
-  await page.getByRole('button', { name: '予約を検索', exact: true }).click()
+  await expect(page.getByRole('navigation', { name: '主操作' })).toBeVisible()
+  await page
+    .getByRole('navigation', { name: '副操作' })
+    .getByRole('button', { name: '予約を検索', exact: true })
+    .click()
   await expect(page.getByRole('heading', { name: '予約を検索する' })).toBeVisible()
   await page.getByLabel('氏名・電話番号・予約番号').fill('田中 花子')
-  await page.getByRole('button', { name: '検索する' }).click()
+  await page.getByLabel('氏名・電話番号・予約番号').press('Enter')
 
   // 検索結果を開くまでは、その予約の録音面は出ない。
   await expect(page.getByRole('region', { name: 'iPad録音' })).toHaveCount(0)
@@ -1385,12 +1415,14 @@ test('遠隔失効された共有iPadは次の通信で再登録画面だけを�
     page.getByRole('heading', { name: 'この端末の利用は停止されています' }),
   ).toBeVisible()
   await expect(
-    page.getByText('共有セッションが失効しました。端末を再登録してください。'),
+    page.getByText(
+      '共有セッションが管理者によって失効されました。未送信の顧客情報や録音は送信されません。',
+    ),
   ).toBeVisible()
   await expect(page.getByRole('button', { name: '端末を再登録する' })).toBeVisible()
 
   // 業務画面へは戻らない。ホームもその導線も無い。
-  await expect(page.getByRole('heading', { name: '銀座店のホーム' })).toHaveCount(0)
+  await expect(page.getByRole('navigation', { name: '主操作' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: '新しい予約を取る' })).toHaveCount(0)
   await expect(page.getByRole('navigation', { name: '副操作' })).toHaveCount(0)
 

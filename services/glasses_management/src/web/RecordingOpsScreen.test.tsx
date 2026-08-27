@@ -1,6 +1,7 @@
 import type { Recording, StorePermission } from '@app/contracts'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { expect, test, vi } from 'vitest'
+import { screenSections } from './app-chrome'
 import { RecordingOpsScreen } from './RecordingOpsScreen'
 
 const STORE_ID = '00000000-0000-4000-8000-000000000010'
@@ -322,12 +323,14 @@ test('録音を扱う権限が無ければ一覧も再生も出さず、承認�
 /** 承認済みモック `operations-approved.html#recording-ops` の骨格 */
 test('録音運用の節をモックどおりに出す', async () => {
   renderScreen(defaultRoutes([stored]))
-  const sections = await screen.findByRole('navigation', { name: '録音運用の節' })
-  // 管理タブは 76px の緑バーが持つ。面が 2 本目の緑帯を持つのはモックに無い。
-  expect(screen.queryByRole('navigation', { name: '設定タブ' })).toBeNull()
-
-  for (const label of ['保存期間', '保存・削除状態', '保全一覧'])
-    expect(within(sections).getByRole('button', { name: label })).toBeInTheDocument()
+  /* 節は面が描かず、全画面共通の柱へ渡す。面の側では渡した中身で確かめる。 */
+  await screen.findByRole('heading', { name: '録音の保存期間' })
+  expect(screenSections.snapshot().map((section) => section.label)).toEqual([
+    '保存期間',
+    '保存・削除状態',
+    '保全一覧',
+  ])
+  expect(screen.queryByRole('navigation')).toBeNull()
 })
 
 /** 承認済みモックの保存期間 3 カード */

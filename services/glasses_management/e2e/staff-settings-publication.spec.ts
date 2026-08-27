@@ -507,22 +507,32 @@ async function mockPublicationApi(page: Page, initial: Partial<Mock> = {}): Prom
   return mock
 }
 
-/** ホーム → ヘッダー「店舗設定」→ 工程6「影響確認と公開」。 */
+/**
+ * ホーム → 緑帯「設定」→ 工程6「影響確認と公開」。
+ *
+ * 面の行き来は緑帯と左サイドバーに集約された。設定ガイドへの入口はホームの
+ * 緑帯にしかないので、そこから入って工程レール（`navigation[設定の工程]`）で
+ * 第6工程を開く。第6工程は自分の見出しを持つだけで、区画の名前はガイド全体の
+ * `店舗設定` のままなので、以降のスコープはその面に切る。
+ */
 async function openImpactStep(page: Page) {
   await page.setViewportSize(VIEWPORT)
   await page.goto('/')
+  await expect(page.getByRole('navigation', { name: '主操作' })).toBeVisible()
+  await page.getByRole('banner').getByRole('button', { name: '設定', exact: true }).click()
+  const region = page.getByRole('region', { name: '店舗設定' })
+  await expect(region).toBeVisible()
   await page
-    .getByRole('navigation', { name: '管理メニュー' })
-    .getByRole('button', { name: '店舗設定' })
-    .click()
-  await expect(page.getByRole('region', { name: '店舗設定' })).toBeVisible()
-  await page
-    .getByRole('navigation', { name: '設定工程' })
+    .getByRole('navigation', { name: '設定の工程' })
     .getByRole('button', { name: /^工程6 影響確認と公開/ })
     .click()
-  const region = page.getByRole('region', { name: '影響確認と公開' })
   await expect(region.getByRole('heading', { name: '影響を確認して公開' })).toBeVisible()
   return region
+}
+
+/** 工程レールで工程を選び直す。ガイド全体の保存は第6工程には無い。 */
+async function goToStep(page: Page, name: RegExp) {
+  await page.getByRole('navigation', { name: '設定の工程' }).getByRole('button', { name }).click()
 }
 
 // @e2e-covers UC-EYEX-095 UC-EYEX-096 UC-EYEX-159 AC-EYEX-45
@@ -532,7 +542,7 @@ test('下書きの保存状態・最終保存時刻・変更者が読め、状�
   const mock = await mockPublicationApi(page)
   const region = await openImpactStep(page)
 
-  const state = region.getByRole('group', { name: '設定の状態' })
+  const state = region.getByRole('region', { name: '設定の状態' })
   // AC-EYEX-45: 画面を離れる前に、保存されているのか・いつの保存なのかが読める。
   await expect(state.getByText('未保存', { exact: true })).toBeVisible()
   // UC-EYEX-096: 保存済み UTC は JST の壁時計として読み返される（09:05Z → 18:05）。
@@ -548,12 +558,16 @@ test('下書きの保存状態・最終保存時刻・変更者が読め、状�
   await expect(state.getByText('確認待ち', { exact: true })).toBeVisible()
   await expect(state.getByText('最終保存 2026年8月26日 18:40')).toBeVisible()
 
-  // ガイド全体を保存すると未保存が解消する。
-  await page.getByRole('button', { name: '設定を保存' }).click()
+  // ガイド全体を保存すると未保存が解消する。保存操作は編集する工程の側にある
+  // ので、工程1で保存してから第6工程へ戻る。
+  await goToStep(page, /^工程1 店舗と営業時間/)
+  await region.getByRole('button', { name: '設定を保存' }).click()
+  await expect(region.getByText('設定を保存しました。')).toBeVisible()
+  await goToStep(page, /^工程6 影響確認と公開/)
   await expect(state.getByText('保存済み', { exact: true })).toBeVisible()
 
   // UC-EYEX-159: 競合は「状態」ではなく別区画の「警告」。
-  const warnings = region.getByRole('group', { name: '警告' })
+  const warnings = region.getByRole('region', { name: '警告' })
   await expect(warnings.getByText('影響予約3件が未解消です')).toBeVisible()
   await expect(warnings.getByText('警告2件')).toBeVisible()
   await expect(state).not.toContainText('未解消')
@@ -577,7 +591,7 @@ test('下書きの保存状態・最終保存時刻・変更者が読め、状�
     mock.draft = draftFixture(item.draft)
     const reopened = await openImpactStep(page)
     await expect(
-      reopened.getByRole('group', { name: '設定の状態' }).getByText(item.label, { exact: true }),
+      reopened.getByRole('region', { name: '設定の状態' }).getByText(item.label, { exact: true }),
     ).toBeVisible()
   }
 })
@@ -588,7 +602,7 @@ test('影響確認は競合予約・Web公開枠・技能不足・設備不足�
 }) => {
   await mockPublicationApi(page)
   const region = await openImpactStep(page)
-  const impact = region.getByRole('group', { name: '影響確認' })
+  const impact = region.getByRole('region', { name: '影響確認' })
 
   // AC-EYEX-66 / UC-EYEX-115: 公開予定枠数と台帳件数。
   await expect(impact.getByText('公開枠 42件 → 38件（-4件）')).toBeVisible()
@@ -596,29 +610,33 @@ test('影響確認は競合予約・Web公開枠・技能不足・設備不足�
   await expect(impact.getByText('確認日時 2026年8月26日 18:06')).toBeVisible()
 
   // AC-EYEX-46: 既存予約の競合が予約単位で並ぶ。
-  const conflicts = impact.getByRole('group', { name: '既存予約との競合' })
-  await expect(conflicts.getByRole('listitem')).toHaveCount(3)
+  const conflicts = impact.getByRole('region', { name: '既存予約との競合' })
+  // 競合は予約単位。3件それぞれに解消の入口が付く。
+  await expect(conflicts.getByRole('button', { name: '解消を記録' })).toHaveCount(3)
   await expect(conflicts.getByText('9/1 10:00 検査の予約が営業時間外になります')).toBeVisible()
+  await expect(conflicts.getByText('9/2 15:00 の予約で使う視力測定機が停止します')).toBeVisible()
+  await expect(conflicts.getByText('9/23 の臨時休業と既存予約が重なります')).toBeVisible()
 
   // AC-EYEX-43 / AC-EYEX-44 / UC-EYEX-097: 技能不足・設備不足・営業時間外設定。
   await expect(
     impact
-      .getByRole('group', { name: '技能不足' })
+      .getByRole('region', { name: '技能不足' })
       .getByText('眼鏡作製技能を持つスタッフが勤務していません'),
   ).toBeVisible()
   await expect(
-    impact.getByRole('group', { name: '設備不足' }).getByText('視力測定機が1台不足します'),
+    impact.getByRole('region', { name: '設備不足' }).getByText('視力測定機が1台不足します'),
   ).toBeVisible()
   await expect(
-    impact.getByRole('group', { name: '営業時間外設定' }).getByText('9/23 は営業時間外の設定です'),
+    impact.getByRole('region', { name: '営業時間外設定' }).getByText('9/23 は営業時間外の設定です'),
   ).toBeVisible()
   await expect(
-    impact.getByRole('group', { name: 'Web公開枠の変化' }).getByText('Web公開枠が4件減ります'),
+    impact.getByRole('region', { name: 'Web公開枠の変化' }).getByText('Web公開枠が4件減ります'),
   ).toBeVisible()
 
   // 重大度は語で読める。色に頼らない（重い順に並ぶ）。
+  // 末尾の「公開できない理由」は群ではなく、公開が止まっている事実そのもの。
   const groupNames = await impact
-    .getByRole('group')
+    .getByRole('region')
     .evaluateAll((nodes) => nodes.map((node) => node.getAttribute('aria-label') ?? ''))
   expect(groupNames).toEqual([
     '既存予約との競合',
@@ -626,15 +644,16 @@ test('影響確認は競合予約・Web公開枠・技能不足・設備不足�
     '設備不足',
     '営業時間外設定',
     'Web公開枠の変化',
+    '公開できない理由',
   ])
   await expect(conflicts.getByText('要対応')).toBeVisible()
-  await expect(impact.getByRole('group', { name: '技能不足' }).getByText('警告')).toBeVisible()
+  await expect(impact.getByRole('region', { name: '技能不足' }).getByText('警告')).toBeVisible()
   await expect(
-    impact.getByRole('group', { name: '営業時間外設定' }).getByText('情報'),
+    impact.getByRole('region', { name: '営業時間外設定' }).getByText('情報'),
   ).toBeVisible()
 
   // UC-EYEX-093: 公開前に何度でも確認し直せる。
-  await impact.getByRole('button', { name: '影響を再確認' }).click()
+  await region.getByRole('button', { name: '影響を再確認' }).click()
   await expect(impact.getByText('確認日時 2026年8月26日 18:06')).toBeVisible()
 })
 
@@ -644,16 +663,17 @@ test('未解消の競合予約がある間は公開できず、代替資源割�
 }) => {
   const mock = await mockPublicationApi(page)
   const region = await openImpactStep(page)
-  const impact = region.getByRole('group', { name: '影響確認' })
-  const publishPanel = region.getByRole('group', { name: '公開' })
+  const impact = region.getByRole('region', { name: '影響確認' })
+  // 「今すぐ公開」と「予約して公開」は別の場所にある。前者は影響確認の直下、
+  // 後者は日時を入れる区画の中。
+  const publishNow = region.getByRole('button', { name: '公開する', exact: true })
+  const schedulePanel = region.getByRole('region', { name: '公開予約' })
 
   // AC-EYEX-109: ブロッキング項目が残る間は公開しない。
-  await expect(publishPanel.getByRole('button', { name: '今すぐ公開する' })).toBeDisabled()
-  await expect(publishPanel.getByRole('button', { name: '公開を予約する' })).toBeDisabled()
+  await expect(publishNow).toBeDisabled()
+  await expect(schedulePanel.getByRole('button', { name: '公開を予約する' })).toBeDisabled()
   await expect(
-    impact.getByText(
-      '影響予約ごとに代替資源割当・例外維持・顧客連絡のいずれかを記録してください。',
-    ),
+    impact.getByText('影響予約ごとに代替設備、例外維持、顧客連絡を記録してください。'),
   ).toBeVisible()
 
   const kinds: { label: string; value: string; note: string }[] = [
@@ -661,7 +681,7 @@ test('未解消の競合予約がある間は公開できず、代替資源割�
     { label: '例外維持', value: 'keep_exception', note: 'この日は例外のまま' },
     { label: '顧客連絡', value: 'customer_contacted', note: '電話で日程変更を合意' },
   ]
-  const conflicts = impact.getByRole('group', { name: '既存予約との競合' })
+  const conflicts = impact.getByRole('region', { name: '既存予約との競合' })
   for (const kind of kinds) {
     await conflicts.getByRole('button', { name: '解消を記録' }).first().click()
     const dialog = page.getByRole('dialog', { name: '影響予約の解消を記録' })
@@ -688,7 +708,7 @@ test('未解消の競合予約がある間は公開できず、代替資源割�
   ])
 
   // 記録し終えてはじめて公開できる。警告区画からも未解消の表示が消える。
-  await expect(publishPanel.getByRole('button', { name: '今すぐ公開する' })).toBeEnabled()
+  await expect(publishNow).toBeEnabled()
   await expect(region.getByText('影響予約3件が未解消です')).toBeHidden()
 })
 
@@ -696,17 +716,17 @@ test('未解消の競合予約がある間は公開できず、代替資源割�
 test('JSTで指定した公開予約は、実行前に再検証・日時変更・取消ができる', async ({ page }) => {
   const mock = await mockPublicationApi(page, { impact: cleanImpact() })
   const region = await openImpactStep(page)
-  const publishPanel = region.getByRole('group', { name: '公開' })
+  const schedulePanel = region.getByRole('region', { name: '公開予約' })
 
   // UC-EYEX-166: 過去の日時は境界で拒否され、要求は送られない。
-  await publishPanel.getByLabel('公開日時（JST）').fill('2020-01-01T09:00')
-  await publishPanel.getByRole('button', { name: '公開を予約する' }).click()
-  await expect(publishPanel.getByText('過去の日時は指定できません。')).toBeVisible()
+  await schedulePanel.getByLabel('公開日時（JST）').fill('2020-01-01T09:00')
+  await schedulePanel.getByRole('button', { name: '公開を予約する' }).click()
+  await expect(schedulePanel.getByText('過去の日時は指定できません。')).toBeVisible()
   expect(callsTo(mock, '/availability/publications', 'POST')).toHaveLength(0)
 
   // AC-EYEX-64 / UC-EYEX-094: 指定日時までは適用されず、公開予約として記録される。
-  await publishPanel.getByLabel('公開日時（JST）').fill('2099-01-01T00:00')
-  await publishPanel.getByRole('button', { name: '公開を予約する' }).click()
+  await schedulePanel.getByLabel('公開日時（JST）').fill('2099-01-01T00:00')
+  await schedulePanel.getByRole('button', { name: '公開を予約する' }).click()
   const requested = callsTo(mock, '/availability/publications', 'POST')
   expect(requested).toHaveLength(1)
   const body = (requested[0]?.body ?? {}) as Record<string, unknown>
@@ -715,18 +735,15 @@ test('JSTで指定した公開予約は、実行前に再検証・日時変更�
   expect(body.scheduledForJst).toBe('2099-01-01T00:00')
 
   // AC-EYEX-105: 予定日時・対象店舗・版が読める。JSTの 00:00 が UTC 往復でずれない。
-  const result = region.getByRole('group', { name: '公開結果' })
-  await expect(result.getByText('公開予約')).toBeVisible()
+  const result = region.getByRole('region', { name: '公開結果' })
+  await expect(result.getByText('公開予約', { exact: true })).toBeVisible()
   await expect(result.getByText(`版 ${versionId}`)).toBeVisible()
   await expect(result.getByText('公開予定 2099年1月1日 00:00')).toBeVisible()
   await expect(result.getByText('実行日時 未実行')).toBeVisible()
 
   // UC-EYEX-161: 実行前の再検証。
   const before = mock.impactRequests
-  await region
-    .getByRole('group', { name: '影響確認' })
-    .getByRole('button', { name: '影響を再確認' })
-    .click()
+  await region.getByRole('button', { name: '影響を再確認' }).click()
   await expect.poll(() => mock.impactRequests).toBe(before + 1)
 
   // UC-EYEX-161: 公開予定の変更。
@@ -755,13 +772,10 @@ test('公開結果は版ID・対象店舗・成功件数・失敗件数とWeb枠
 }) => {
   await mockPublicationApi(page, { impact: cleanImpact() })
   const region = await openImpactStep(page)
-  await region
-    .getByRole('group', { name: '公開' })
-    .getByRole('button', { name: '今すぐ公開する' })
-    .click()
+  await region.getByRole('button', { name: '公開する', exact: true }).click()
 
-  const result = region.getByRole('group', { name: '公開結果' })
-  await expect(result.getByText('完了')).toBeVisible()
+  const result = region.getByRole('region', { name: '公開結果' })
+  await expect(result.getByText('完了', { exact: true })).toBeVisible()
   await expect(result.getByText(`版 ${versionId}`)).toBeVisible()
   await expect(result.getByText('成功 2店舗')).toBeVisible()
   await expect(result.getByText('失敗 0店舗')).toBeVisible()
@@ -769,12 +783,12 @@ test('公開結果は版ID・対象店舗・成功件数・失敗件数とWeb枠
   await expect(result.getByText('予約台帳 18件反映')).toBeVisible()
   await expect(result.getByText('実行日時 2026年8月26日 19:30')).toBeVisible()
 
-  const applied = result.getByRole('group', { name: '反映済みの店舗' })
-  await expect(applied.getByRole('listitem')).toHaveCount(2)
-  await expect(applied.getByRole('listitem').first()).toContainText(ginzaId)
-  await expect(applied.getByRole('listitem').first()).toContainText('第4版')
-  await expect(applied.getByRole('listitem').nth(1)).toContainText(marunouchiId)
-  await expect(result.getByRole('group', { name: '失敗した店舗' })).toBeHidden()
+  const applied = result.getByRole('region', { name: '反映済みの店舗' })
+  // 対象店舗は 2 つで、どちらも当たった版まで読める。
+  await expect(applied.getByText(/第4版/)).toHaveCount(2)
+  await expect(applied.getByText(ginzaId)).toBeVisible()
+  await expect(applied.getByText(marunouchiId)).toBeVisible()
+  await expect(result.getByRole('region', { name: '失敗した店舗' })).toBeHidden()
 })
 
 // @e2e-covers UC-EYEX-163 AC-EYEX-107
@@ -825,27 +839,24 @@ test('部分失敗の再試行は失敗店舗だけを対象とし、成功済�
   })
 
   const region = await openImpactStep(page)
-  await region
-    .getByRole('group', { name: '公開' })
-    .getByRole('button', { name: '今すぐ公開する' })
-    .click()
+  await region.getByRole('button', { name: '公開する', exact: true }).click()
 
-  const result = region.getByRole('group', { name: '公開結果' })
-  await expect(result.getByText('一部失敗')).toBeVisible()
+  const result = region.getByRole('region', { name: '公開結果' })
+  await expect(result.getByText('一部失敗', { exact: true })).toBeVisible()
   await expect(
-    region.getByRole('group', { name: '警告' }).getByText('1店舗で公開が失敗しました'),
+    region.getByRole('region', { name: '警告' }).getByText('1店舗で公開が失敗しました'),
   ).toBeVisible()
 
   // AC-EYEX-107: 再試行対象は失敗店舗だけで、成功済み店舗は入らない。
-  const failedGroup = result.getByRole('group', { name: '失敗した店舗' })
+  const failedGroup = result.getByRole('region', { name: '失敗した店舗' })
   await expect(failedGroup.getByText('再試行対象 1店舗')).toBeVisible()
-  await expect(failedGroup.getByRole('listitem')).toHaveCount(1)
+  await expect(failedGroup.getByText('公開未反映')).toHaveCount(1)
   await expect(failedGroup).toContainText(marunouchiId)
   await expect(failedGroup).toContainText('視力測定機が停止中')
   await expect(failedGroup).not.toContainText(ginzaId)
 
-  await failedGroup.getByRole('button', { name: '失敗した店舗だけ再試行' }).click()
-  await expect(result.getByText('完了')).toBeVisible()
+  await failedGroup.getByRole('button', { name: 'この店舗だけ再試行' }).click()
+  await expect(result.getByText('完了', { exact: true })).toBeVisible()
 
   const retried = callsTo(mock, `/availability/publications/${publicationId}/retry`, 'POST')
   expect(retried).toHaveLength(1)
@@ -854,8 +865,11 @@ test('部分失敗の再試行は失敗店舗だけを対象とし、成功済�
   expect(retried[0]?.postData ?? '').not.toContain(ginzaId)
 
   // 成功済みの銀座店は第4版のまま。同じ版を二度当てていない。
-  const applied = result.getByRole('group', { name: '反映済みの店舗' })
-  await expect(applied.getByRole('listitem').filter({ hasText: ginzaId })).toContainText('第4版')
+  const applied = result.getByRole('region', { name: '反映済みの店舗' })
+  await expect(applied.getByText(ginzaId)).toBeVisible()
+  // 2 店舗とも第4版。銀座店に同じ版を二度当てて第5版になっていない。
+  await expect(applied.getByText(/第4版/)).toHaveCount(2)
+  await expect(applied.getByText(/第5版/)).toHaveCount(0)
   await expect(result.getByText('成功 2店舗')).toBeVisible()
   await expect(result.getByText('失敗 0店舗')).toBeVisible()
 })
@@ -869,14 +883,14 @@ test('過去版は差分を確認できるが直接は再公開できず、復�
     nextImpact: blockedImpact(),
   })
   const region = await openImpactStep(page)
-  const history = region.getByRole('group', { name: '版履歴' })
+  const history = region.getByRole('region', { name: '版履歴' })
   await expect(history.getByText('第3版')).toBeVisible()
   await expect(history.getByText('2026年8月20日 18:00')).toBeVisible()
   await expect(history.getByText('佐藤 美咲')).toBeVisible()
 
   // UC-EYEX-164: 版履歴の差分。
-  await history.getByRole('button', { name: '差分を見る' }).click()
-  const diff = history.getByRole('group', { name: '第3版の差分' })
+  await history.getByRole('button', { name: '版の差分を見る' }).click()
+  const diff = history.getByRole('region', { name: '第3版の差分' })
   await expect(diff.getByRole('row')).toHaveCount(3)
   await expect(diff.getByRole('row').nth(1)).toContainText('受付状態')
   await expect(diff.getByRole('row').nth(1)).toContainText('open')
@@ -892,21 +906,21 @@ test('過去版は差分を確認できるが直接は再公開できず、復�
   await expect(history.getByRole('button', { name: /再公開|この版を公開|版を適用/ })).toHaveCount(0)
 
   // 復元前は公開できていた（= 復元そのものがブロックしたと言える）。
-  const publishPanel = region.getByRole('group', { name: '公開' })
-  await expect(publishPanel.getByRole('button', { name: '今すぐ公開する' })).toBeEnabled()
+  const publishNow = region.getByRole('button', { name: '公開する', exact: true })
+  await expect(publishNow).toBeEnabled()
 
-  await history.getByRole('button', { name: '新しい下書きとして復元' }).click()
+  await history.getByRole('button', { name: '過去版から新しい下書きを作る' }).click()
   expect(callsTo(mock, `/availability/versions/${pastVersionId}/restore`, 'POST')).toHaveLength(1)
   await expect(
     region.getByText('過去版を新しい下書きにしました。公開する前に影響確認を行ってください。'),
   ).toBeVisible()
 
   // AC-EYEX-108: 復元後は影響確認をやり直すまで公開できない。
-  await expect(publishPanel.getByRole('button', { name: '今すぐ公開する' })).toBeDisabled()
+  await expect(publishNow).toBeDisabled()
   await expect(
     region
-      .getByRole('group', { name: '影響確認' })
-      .getByRole('group', { name: '既存予約との競合' }),
+      .getByRole('region', { name: '影響確認' })
+      .getByRole('region', { name: '既存予約との競合' }),
   ).toBeVisible()
 })
 
@@ -919,16 +933,15 @@ test('適用元は全店共通と店舗上書きを区別して示し、上書�
     nextImpact: blockedImpact(),
   })
   const region = await openImpactStep(page)
-  const origin = region.getByRole('group', { name: '適用元' })
+  const origin = region.getByRole('region', { name: '適用元' })
 
   // AC-EYEX-48 / AC-EYEX-69 / UC-EYEX-120 / UC-EYEX-121: 適用元と上書き項目。
   await expect(origin.getByText('店舗上書き', { exact: true })).toBeVisible()
   await expect(origin.getByText('全店共通 第7版')).toBeVisible()
   await expect(origin.getByText('店舗で上書きしている項目')).toBeVisible()
-  const fields = origin.getByRole('listitem')
-  await expect(fields).toHaveCount(2)
-  await expect(fields.nth(0)).toHaveText('営業時間')
-  await expect(fields.nth(1)).toHaveText('来店目的')
+  // 上書きしている項目は 2 つ。日本語の項目名で読める。
+  await expect(origin.getByText('営業時間', { exact: true })).toBeVisible()
+  await expect(origin.getByText('来店目的', { exact: true })).toBeVisible()
 
   // UC-EYEX-160 / AC-EYEX-104: 解除は共通値へ即戻さず、新しい下書きと影響を先に出す。
   await origin.getByRole('button', { name: '店舗上書きを解除' }).click()
@@ -939,16 +952,16 @@ test('適用元は全店共通と店舗上書きを区別して示し、上書�
   // UC-EYEX-092: 解除後は全店共通が適用元になり、上書き項目も解除手段も残らない。
   await expect(origin.getByText('全店共通', { exact: true })).toBeVisible()
   await expect(origin.getByText('店舗上書き', { exact: true })).toBeHidden()
-  await expect(origin.getByRole('listitem')).toHaveCount(0)
+  await expect(origin.getByText('店舗で上書きしている項目')).toBeHidden()
+  await expect(origin.getByText('営業時間', { exact: true })).toBeHidden()
+  await expect(origin.getByText('来店目的', { exact: true })).toBeHidden()
   await expect(origin.getByRole('button', { name: '店舗上書きを解除' })).toBeHidden()
 
   // 影響を確認するまでは公開できない。
-  await expect(
-    region.getByRole('group', { name: '公開' }).getByRole('button', { name: '今すぐ公開する' }),
-  ).toBeDisabled()
+  await expect(region.getByRole('button', { name: '公開する', exact: true })).toBeDisabled()
   await expect(
     region
-      .getByRole('group', { name: '影響確認' })
-      .getByRole('group', { name: '既存予約との競合' }),
+      .getByRole('region', { name: '影響確認' })
+      .getByRole('region', { name: '既存予約との競合' }),
   ).toBeVisible()
 })

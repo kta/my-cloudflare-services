@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
+import { screenSections } from './app-chrome'
 import { SharedTerminalScreen } from './SharedTerminalScreen'
 
 const STORE_ID = '00000000-0000-4000-8000-000000000010'
@@ -55,15 +56,19 @@ test('承認済みモックの共有iPadの節を出す (DEVICE-LIST)', async ()
   const api = vi.fn(async () => jsonResponse([registerDesk]))
   renderScreen(api)
 
-  const sections = await screen.findByRole('navigation', { name: '端末とセキュリティの節' })
-  // 管理タブは 76px の緑バーが持つ。面が 2 本目の緑帯を持つのはモックに無い。
-  expect(screen.queryByRole('navigation', { name: '設定タブ' })).toBeNull()
-  for (const label of ['共有iPad', '無操作ロック', '個人PIN', '共有セッション'])
-    expect(within(sections).getByRole('button', { name: label })).toBeInTheDocument()
-  expect(within(sections).getByRole('button', { name: '共有iPad' })).toHaveAttribute(
-    'aria-current',
-    'page',
-  )
+  /*
+   * 節は面が描かず、全画面共通の柱へ渡す（250px の柱を 2 本立てると本文が
+   * 半分になる）。面の側では、何を渡したかで確かめる。
+   */
+  await screen.findByText('店舗へ登録された端末と共有セッション')
+  expect(screenSections.snapshot().map((section) => section.label)).toEqual([
+    '共有iPad',
+    '無操作ロック',
+    '個人PIN',
+    '共有セッション',
+  ])
+  expect(screenSections.snapshot().find((section) => section.current)?.label).toBe('共有iPad')
+  expect(screen.queryByRole('navigation')).toBeNull()
 
   expect(screen.getByText('店舗へ登録された端末と共有セッション')).toBeInTheDocument()
 })

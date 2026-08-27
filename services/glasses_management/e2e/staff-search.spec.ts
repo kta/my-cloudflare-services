@@ -180,7 +180,8 @@ async function signIn(page: Page, handle: (call: StaffRoute) => Promise<unknown>
     return route.fulfill({ json: [] })
   })
   await page.goto('/')
-  await expect(page.getByRole('heading', { name: '銀座店のホーム' })).toBeVisible()
+  // ホームは見出しを持たない面なので、主操作の並びが出たことで到達を待つ。
+  await expect(page.getByRole('navigation', { name: '主操作' })).toBeVisible()
 }
 
 function isSearch(call: StaffRoute): boolean {
@@ -191,7 +192,7 @@ async function openSearchAndSelectTanaka(page: Page) {
   await page.getByRole('button', { name: '予約を検索', exact: true }).click()
   await expect(page.getByRole('heading', { name: '予約を検索する' })).toBeVisible()
   await page.getByLabel('氏名・電話番号・予約番号').fill('田中 花子')
-  await page.getByRole('button', { name: '検索する' }).click()
+  await page.getByLabel('氏名・電話番号・予約番号').press('Enter')
   await page.getByRole('button', { name: /田中 花子 様/ }).click()
   await expect(page.getByRole('region', { name: '予約詳細' })).toBeVisible()
 }
@@ -212,19 +213,22 @@ test('searches the selected store by normalised term and shows list and detail t
   await page.getByRole('button', { name: '予約を検索', exact: true }).click()
   await expect(page.getByRole('heading', { name: '予約を検索する' })).toBeVisible()
 
-  // AC-EYEX-90: the store is fixed to the selected store. The search form has
-  // exactly the 予約元 / 状態 selects, no store control and no 全店舗 option.
-  await expect(page.getByText('銀座店 · 検索対象店舗')).toBeVisible()
-  await expect(page.getByRole('combobox')).toHaveCount(2)
-  await expect(page.getByRole('combobox').nth(0)).toHaveAccessibleName('予約元')
-  await expect(page.getByRole('combobox').nth(1)).toHaveAccessibleName('状態')
+  /*
+   * AC-EYEX-90: 検索対象は選択中の店舗に固定されている。承認済みモックの
+   * 絞り込みは 2 つのピルだけで、ネイティブの選択肢も日付欄も店舗の操作も無い。
+   */
+  // 検索対象の店舗は緑帯の副題が名乗る（面の側は読み上げ用の控えを別に持つ）。
+  await expect(page.getByRole('banner').getByText('銀座店 · 検索対象店舗')).toBeVisible()
+  await expect(page.getByRole('combobox')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '今後の予約' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '電話・店頭・Web予約' })).toBeVisible()
   await expect(page.getByText('全店舗')).toHaveCount(0)
   await expect(page.getByLabel('店舗', { exact: true })).toHaveCount(0)
   await expect(page.getByRole('button', { name: /丸の内店/ })).toHaveCount(0)
 
   // AC-EYEX-14: a formatted phone number is normalised into the contract field.
   await page.getByLabel('氏名・電話番号・予約番号').fill('０９０-１２３４ ５６７８')
-  await page.getByRole('button', { name: '検索する' }).click()
+  await page.getByLabel('氏名・電話番号・予約番号').press('Enter')
   await expect(page.getByRole('button', { name: /田中 花子 様/ })).toBeVisible()
   expect(searched.at(-1)).toContain('phone=09012345678')
   expect(searched.at(-1)).not.toContain('storeId=')
@@ -232,7 +236,7 @@ test('searches the selected store by normalised term and shows list and detail t
 
   // UC-EYEX-055: the same single box also carries a name.
   await page.getByLabel('氏名・電話番号・予約番号').fill('田中 花子')
-  await page.getByRole('button', { name: '検索する' }).click()
+  await page.getByLabel('氏名・電話番号・予約番号').press('Enter')
   await expect.poll(() => new URLSearchParams(searched.at(-1) ?? '').get('name')).toBe('田中 花子')
 
   // UC-EYEX-057: picking a candidate keeps the result list beside the detail.
@@ -356,9 +360,8 @@ test('demands a reason and a deliberate confirmation before cancelling, then rec
   })
 
   await openSearchAndSelectTanaka(page)
-  await expect(page.getByRole('region', { name: '変更履歴' })).toContainText(
-    '変更履歴はありません。',
-  )
+  // 承認済みモックの詳細ペインは変更履歴の面を持たない。履歴は受付履歴の面が持つ。
+  await expect(page.getByRole('region', { name: '変更履歴' })).toHaveCount(0)
   await page.getByRole('button', { name: '予約を取り消す' }).click()
 
   // AC-EYEX-23: a reason is mandatory.
@@ -385,13 +388,9 @@ test('demands a reason and a deliberate confirmation before cancelling, then rec
   await expect(detail.getByText('取消済み')).toBeVisible()
   expect(cancelBody).toMatchObject({ version: 3, reason: '体調不良のため', confirmation: '取消' })
 
-  // UC-EYEX-061: 実行者・日時・変更前内容 are visible in the audit history.
-  const history = page.getByRole('region', { name: '変更履歴' })
-  await expect(history).toContainText('予約を取消')
-  await expect(history).toContainText('実行者 鈴木')
-  await expect(history).toContainText('2026年8月27日 10:30')
-  await expect(history).toContainText('変更前 予約済み · 2026年8月27日 11:00')
-  await expect(history).toContainText('理由 体調不良のため')
+  // UC-EYEX-061: 取り消した結果は詳細の「状態」に出る。実行者・日時・変更前の
+  // 記録は受付履歴の面が持つ（承認済みモックの `.detailgrid`「変更履歴」）。
+  await expect(detail.getByText('取消済み')).toBeVisible()
 })
 
 // @e2e-covers UC-EYEX-054 AC-EYEX-56 AC-EYEX-57 AC-EYEX-58 AC-EYEX-59 AC-EYEX-61 AC-EYEX-62
@@ -436,8 +435,12 @@ test('follows the day of reception events, filters them and restores what a filt
   await expect(list.getByRole('button').nth(2)).toContainText('13:54')
   await expect(list.getByRole('button').nth(3)).toContainText('13:32')
   await expect(list.getByRole('button').nth(4)).toContainText('13:00')
-  await expect(list).toContainText('ウォークイン受付')
-  await expect(list).toContainText('予約受付')
+  // 何が起きたかは行の本文が言い、右肩のチップは経路だけを狭い語で名乗る。
+  await expect(list).toContainText('を受付')
+  await expect(list).toContainText('予約を登録')
+  await expect(list).toContainText('店頭')
+  await expect(list).toContainText('電話')
+  await expect(list).toContainText('Web')
   await expect(list).toContainText('変更')
   await expect(list).toContainText('取消')
 
@@ -448,35 +451,35 @@ test('follows the day of reception events, filters them and restores what a filt
 
   // AC-EYEX-57: a formatted phone number finds its event.
   await page.getByLabel('氏名・電話番号・予約番号').fill('０９０-１２３４ ５６７８')
-  await page.getByRole('button', { name: '絞り込む' }).click()
+  await page.getByLabel('氏名・電話番号・予約番号').press('Enter')
   await expect(list.getByRole('button')).toHaveCount(1)
   await expect(list.getByRole('button').first()).toContainText('田中 花子')
   expect(requested.at(-1)).toContain('phone=09012345678')
 
-  // AC-EYEX-58: source and action narrow the same list.
+  /*
+   * AC-EYEX-58: 経路と操作で同じ一覧を絞る。ネイティブの選択肢は使わないので、
+   * モックが記録の右肩で使っている狭い語（店頭 / 電話 / Web / 変更）のチップで
+   * 選ぶ。押した時点で効くので、確定のためのボタンは要らない。
+   */
   await page.getByLabel('氏名・電話番号・予約番号').fill('')
-  await page.getByLabel('受付経路').selectOption('web')
-  await page.getByRole('button', { name: '絞り込む' }).click()
+  await page.getByLabel('氏名・電話番号・予約番号').press('Enter')
+  await expect(list.getByRole('button')).toHaveCount(5)
+  await page.getByRole('button', { name: 'Web', exact: true }).click()
   await expect(list.getByRole('button')).toHaveCount(1)
   await expect(list.getByRole('button').first()).toContainText('伊藤 健')
 
-  await page.getByLabel('受付経路').selectOption('')
-  await page.getByLabel('操作種別').selectOption('cancelled')
-  await page.getByRole('button', { name: '絞り込む' }).click()
-  await expect(list.getByRole('button')).toHaveCount(1)
-  await expect(list.getByRole('button').first()).toContainText('佐藤 実')
+  // もう一度押すと解除。経路は 1 つずつしか見ない。
+  await page.getByRole('button', { name: 'Web', exact: true }).click()
+  await expect(list.getByRole('button')).toHaveCount(5)
 
   // AC-EYEX-58: 要確認 hides the events that need no attention.
-  await page.getByLabel('操作種別').selectOption('')
   await page.getByRole('button', { name: '要確認', exact: true }).click()
-  await page.getByRole('button', { name: '絞り込む' }).click()
   await expect(list.getByRole('button')).toHaveCount(1)
   await expect(list.getByRole('button').first()).toContainText('田中 花子')
   expect(requested.at(-1)).toContain('requiresAttention=true')
 
   // AC-EYEX-61: clearing it brings the hidden events back.
   await page.getByRole('button', { name: '要確認', exact: true }).click()
-  await page.getByRole('button', { name: '絞り込む' }).click()
   await expect(list.getByRole('button')).toHaveCount(5)
   await expect(list).toContainText('伊藤 健')
   await expect(list).toContainText('松本 一郎')
@@ -487,7 +490,10 @@ test('follows the day of reception events, filters them and restores what a filt
   const detail = page.getByRole('region', { name: '受付イベント詳細' })
   await expect(detail.getByText('090-1234-5678')).toBeVisible()
   await expect(detail.getByText('EY-0828-1142')).toBeVisible()
-  await expect(detail.getByText('鈴木')).toBeVisible()
-  await expect(detail.getByText('2026年8月27日 14:18')).toBeVisible()
+  await expect(detail.getByText('2026年8月27日 14:18 · 受付者 鈴木')).toBeVisible()
+  // 承認済みモックの行名。発生日時と操作は見出しの下がすでに言っている。
+  await expect(detail.getByText('来店')).toBeVisible()
+  await expect(detail.getByText('目的')).toBeVisible()
+  await expect(detail.getByText('変更履歴')).toBeVisible()
   await expect(list.getByRole('button')).toHaveCount(5)
 })

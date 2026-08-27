@@ -144,13 +144,36 @@ export function VizFlag({ children }: { children: ReactNode }) {
 /**
  * `.bars` — 時間帯ごとの縦の柱。
  *
- * 色は補強でしかない。どの柱にもラベルと数値が文字で付き、抑制された柱は
- * 幅も高さも 0 にする（どちらか一方でも残ると、隠した大きさが読めてしまう）。
+ * 色は補強でしかない。塗りを外しても同じことが読めなければならないので、
+ * この部品は 3 つを守る。
+ *
+ * 1. 値は柱の外へ本文色で置く。柱の上に白を乗せると、緑 2.15 / 橙 2.05 /
+ *    赤 3.18 でどれも 4.5:1 に届かない（`--color-viz-ink` なら 5.00〜7.75）。
+ * 2. 目標は線を引くだけでなく、線の脇で語としても名乗る。
+ * 3. 目標を超えた柱は `▲` と「目標超過」を持つ。色を見分けられなくても、
+ *    どの柱が超えたのかが字で読める。
+ *
+ * 抑制された柱は幅も高さも 0 にする（どちらか一方でも残ると、隠した大きさが
+ * 読めてしまう）。
  */
 export function VizColumnChart({
+  label,
   rows,
+  target,
 }: {
-  rows: { label: string; valueText: string; percent: number; tone: 'plain' | 'warn' | 'critical' }[]
+  /** 何の柱なのか。図として名前を持たないと、読み上げで本文と地続きになる。 */
+  label: string
+  rows: {
+    label: string
+    valueText: string
+    percent: number
+    tone: 'plain' | 'warn' | 'critical'
+    exceedsTarget?: boolean
+    /** 値の下にもう 1 行だけ添える補足（前の工程からの離脱数など）。 */
+    noteText?: string
+  }[]
+  /** 目標線。高さは柱と同じ「一番大きい柱を 100 とした割合」で受ける。 */
+  target?: { percent: number; label: string }
 }) {
   const TONE = {
     plain: 'bg-viz-bar',
@@ -158,31 +181,151 @@ export function VizColumnChart({
     critical: 'bg-viz-critical',
   } as const
   return (
-    <ul
-      className="mt-3 flex items-end gap-3.25 border-viz-axis border-b px-5 py-3"
-      style={{ height: '190px' }}
-    >
-      {rows.map((row) => (
-        <li key={row.label} className="flex h-full flex-1 flex-col justify-end">
-          <span className="text-center text-viz-fine">{row.valueText}</span>
-          <div className="flex h-full items-end">
+    <figure aria-label={label} className="mt-3 mb-0">
+      {/* 柱の面。目標線を柱と同じ座標に置くため、目盛と値は外へ出す。 */}
+      <div className="relative border-viz-axis border-b" style={{ height: '190px' }}>
+        {target !== undefined && (
+          <>
             <div
-              data-bar
               aria-hidden="true"
-              className={cn('relative', TONE[row.tone])}
-              // 棒の頭だけ丸める。高さは実測の割合そのまま。
-              style={{
-                height: `${row.percent}%`,
-                width: row.percent === 0 ? '0%' : '100%',
-                borderRadius: '5px 5px 0 0',
-              }}
+              className="absolute inset-x-0 border-viz-critical border-t border-dashed"
+              style={{ bottom: `${target.percent}%` }}
             />
-          </div>
-          {/* 目盛は基線の下。棒の高さには影響させない。 */}
-          <span className="text-center text-viz-fine">{row.label}</span>
-        </li>
-      ))}
-    </ul>
+            {/* 線だけでは何の線か分からない。線のすぐ上に語で置く。 */}
+            <span
+              className="absolute left-5 bg-viz-paper px-1 text-viz-fine text-viz-ink"
+              style={{ bottom: `${target.percent}%`, marginBottom: '2px' }}
+            >
+              {target.label}
+            </span>
+          </>
+        )}
+        <ul className="absolute inset-0 flex items-end gap-3.25 px-5">
+          {rows.map((row) => (
+            <li
+              key={row.label}
+              className="flex h-full flex-1 items-end justify-center"
+              // 柱が数本しかない観点で、1 本が列いっぱいに広がると帯にしか
+              // 見えない。モックの柱の実測（約 74px）を上限にする。
+              style={{ maxWidth: '74px' }}
+            >
+              <div
+                data-bar
+                aria-hidden="true"
+                className={cn(TONE[row.tone])}
+                // 棒の頭だけ丸める。高さは実測の割合そのまま。
+                style={{
+                  height: `${row.percent}%`,
+                  width: row.percent === 0 ? '0%' : '100%',
+                  borderRadius: '5px 5px 0 0',
+                }}
+              />
+            </li>
+          ))}
+        </ul>
+      </div>
+      {/* 目盛と値は基線の下。柱の高さには影響させない。 */}
+      <ul className="flex gap-3.25 px-5 pt-1">
+        {rows.map((row) => (
+          <li
+            key={row.label}
+            aria-label={`${row.label} ${row.valueText}${row.exceedsTarget === true ? ' 目標超過' : ''}`}
+            className="flex-1 text-center text-viz-fine text-viz-ink"
+            style={{ maxWidth: '74px' }}
+          >
+            <span className="block">{row.label}</span>
+            <span className={cn('block', row.exceedsTarget === true && 'font-bold')}>
+              {row.exceedsTarget === true && (
+                <span aria-hidden="true" className="pr-0.5">
+                  ▲
+                </span>
+              )}
+              {row.valueText}
+            </span>
+            {row.noteText !== undefined && (
+              <span className="block text-viz-ink-muted">{row.noteText}</span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </figure>
+  )
+}
+
+/**
+ * 集計粒度の選び直し（日 / 週 / 月）。
+ *
+ * ネイティブの `<select>` は地域設定の書体と既定の青を持ち込み、モックのどの面
+ * にも無い色が 1 か所だけ出る。選択肢が 3 つしかないので、押しボタンを並べて
+ * 今どれを見ているかを面の上に開いたまま置く。
+ */
+export function VizSegment({
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  label: string
+  options: { value: string; label: string }[]
+  value: string
+  onChange: (next: string) => void
+}) {
+  return (
+    // fieldset にするのは、3 つでひとつの選択という関係を要素の意味で持たせる
+    // ため。既定の枠と余白は面に無いので落とす。
+    <fieldset aria-label={label} className="m-0 flex shrink-0 gap-1 border-0 p-0">
+      {options.map((option) => {
+        const on = option.value === value
+        return (
+          <button
+            key={option.value}
+            type="button"
+            aria-pressed={on}
+            onClick={() => onChange(option.value)}
+            className={cn(
+              'rounded-ctl border px-2 py-1 text-viz-note',
+              on
+                ? 'border-viz-pine bg-viz-pine-soft font-bold text-viz-pine'
+                : 'border-viz-line bg-surface text-viz-ink',
+            )}
+          >
+            {option.label}
+          </button>
+        )
+      })}
+    </fieldset>
+  )
+}
+
+/**
+ * 対象日の欄。`type="date"` はブラウザ既定の `08/27/2026` と青いピッカーを
+ * 持ち込むので、素の text にして表記をこちらで決める。モックの `.pill` と同じ
+ * 淡い緑のピルに収め、期間の名乗りと同じ列に並べる。
+ */
+export function VizPeriodField({
+  id,
+  label,
+  value,
+  onChange,
+}: {
+  id: string
+  label: string
+  value: string
+  onChange: (next: string) => void
+}) {
+  return (
+    <input
+      id={id}
+      type="text"
+      aria-label={label}
+      // 端末にテンキーを出す。日付は数字と区切りだけで打ち切れる。
+      inputMode="numeric"
+      autoComplete="off"
+      placeholder="2026-09-23"
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      className="w-27 shrink-0 rounded-full border border-viz-pine-soft bg-viz-pine-soft px-2.25 py-1.5 text-center font-sans text-viz-note text-viz-pine"
+    />
   )
 }
 
@@ -224,6 +367,7 @@ export function VizInspector({ children }: { children: ReactNode }) {
 export function VizCard({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section
+      data-viz-card
       aria-label={title}
       className="mb-2.5 rounded-card border border-viz-line bg-surface p-3 text-viz-note"
       style={{ lineHeight: 1.6 }}

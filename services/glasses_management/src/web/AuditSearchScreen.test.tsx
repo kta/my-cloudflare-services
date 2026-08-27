@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import { AuditSearchScreen } from './AuditSearchScreen'
+import { screenSections } from './app-chrome'
 
 const STORE_ID = '00000000-0000-4000-8000-000000000010'
 const TODAY = '2026-08-27'
@@ -54,7 +55,7 @@ function renderScreen(
   api: ReturnType<typeof createApi>['api'],
   permissions: readonly string[] = ['audit.read'],
 ) {
-  render(
+  return render(
     <AuditSearchScreen
       storeId={STORE_ID}
       storeName="銀座店"
@@ -71,6 +72,15 @@ function queryOf(url: string): URLSearchParams {
   return new URLSearchParams(url.slice(url.indexOf('?') + 1))
 }
 
+/**
+ * 検索の姿を開く。既定は詳細ビューなので、絞り込みと一覧を読むテストは
+ * まずここを通る（モックの面がどちらを既定にしているかを毎回明示する）。
+ */
+async function openSearch() {
+  await screen.findByRole('heading', { name: '監査イベント詳細' })
+  fireEvent.click(screen.getByRole('button', { name: '監査を検索' }))
+}
+
 afterEach(() => {
   vi.restoreAllMocks()
 })
@@ -79,6 +89,7 @@ test('期間・操作・主体種別・対象で監査を絞り込む (UC-EYEX-1
   const { api, calls } = createApi(() => jsonResponse([publishedEvent, readEvent]))
   renderScreen(api)
 
+  await openSearch()
   await screen.findByRole('table', { name: '監査イベント' })
   const first = queryOf(calls[0]?.url ?? '')
   expect(calls[0]?.url.startsWith(`/api/staff/stores/${STORE_ID}/audit-events?`)).toBe(true)
@@ -87,7 +98,11 @@ test('期間・操作・主体種別・対象で監査を絞り込む (UC-EYEX-1
   fireEvent.change(screen.getByLabelText('開始日時'), { target: { value: '2026-08-26T00:00' } })
   fireEvent.change(screen.getByLabelText('終了日時'), { target: { value: '2026-08-27T00:00' } })
   fireEvent.change(screen.getByLabelText('操作'), { target: { value: 'attention_note.published' } })
-  fireEvent.change(screen.getByLabelText('主体種別'), { target: { value: 'shared_terminal' } })
+  fireEvent.click(
+    within(screen.getByRole('group', { name: '主体種別' })).getByRole('button', {
+      name: '共有端末',
+    }),
+  )
   fireEvent.change(screen.getByLabelText('対象種別'), { target: { value: 'attention_note' } })
   fireEvent.change(screen.getByLabelText('対象ID'), { target: { value: 'EY-A-220' } })
   fireEvent.click(screen.getByRole('button', { name: '監査を検索する' }))
@@ -111,6 +126,7 @@ test('変更前後と相関IDを詳細で読める (UC-EYEX-155, AC-EYEX-102)', 
   const { api } = createApi(() => jsonResponse([publishedEvent]))
   renderScreen(api)
 
+  await openSearch()
   const table = await screen.findByRole('table', { name: '監査イベント' })
   const row = within(table).getAllByRole('row')[1] as HTMLElement
   expect(row).toHaveTextContent('2026年8月26日 17:42')
@@ -141,18 +157,22 @@ test('監査の節をモックどおりに出す', async () => {
   const { api } = createApi(() => jsonResponse([publishedEvent]))
   renderScreen(api)
 
-  const sections = await screen.findByRole('navigation', { name: '監査の節' })
-  // 管理タブは 76px の緑バーが持つ。面が 2 本目の緑帯を持つのはモックに無い。
-  expect(screen.queryByRole('navigation', { name: '設定タブ' })).toBeNull()
-
-  for (const label of ['本日の管理操作', '録音再生', '店舗切替', '注意事項'])
-    expect(within(sections).getByRole('button', { name: label })).toBeInTheDocument()
+  /* 節は面が描かず、全画面共通の柱へ渡す。面の側では渡した中身で確かめる。 */
+  await screen.findByRole('heading', { name: '監査イベント詳細' })
+  expect(screenSections.snapshot().map((section) => section.label)).toEqual([
+    '本日の管理操作',
+    '録音再生',
+    '店舗切替',
+    '注意事項',
+  ])
+  expect(screen.queryByRole('navigation')).toBeNull()
 })
 
 test('変更前後の無いイベントはその旨を示す (AC-EYEX-102)', async () => {
   const { api } = createApi(() => jsonResponse([readEvent]))
   renderScreen(api)
 
+  await openSearch()
   const table = await screen.findByRole('table', { name: '監査イベント' })
   fireEvent.click(within(table).getByRole('button', { name: '詳細' }))
   const detail = await screen.findByRole('region', { name: '監査イベント詳細' })
@@ -164,6 +184,7 @@ test('該当が無ければ理由と回復操作を出す (UC-EYEX-155)', async 
   const { api, calls } = createApi(() => jsonResponse([]))
   renderScreen(api)
 
+  await openSearch()
   const empty = await screen.findByRole('region', { name: '該当なし' })
   expect(empty).toHaveTextContent('条件に一致する監査イベントはありません')
   expect(empty).toHaveTextContent(
@@ -206,6 +227,7 @@ test('端末に監査内容を残さない (完全共有iPad)', async () => {
   const { api } = createApi(() => jsonResponse([publishedEvent]))
   renderScreen(api)
 
+  await openSearch()
   await screen.findByRole('table', { name: '監査イベント' })
   fireEvent.change(screen.getByLabelText('対象ID'), { target: { value: 'EY-A-220' } })
   expect(setItem).not.toHaveBeenCalled()
@@ -223,3 +245,48 @@ test('検索結果があれば先頭のイベントの詳細を既定で開く',
   expect(detail).toHaveTextContent('event: attention_note.published')
   expect(detail).toHaveTextContent('target: attention_note EY-A-220')
 })
+
+/* --- 承認済みモック `operations-approved.html#audit` の骨格 ---------------- */
+
+/**
+ * モックのこの面は詳細ビューである。絞り込みの板を既定で開くと、監査を
+ * 「まず条件を組み立てる面」に変えてしまう。監査で最初に読みたいのは
+ * 直近の 1 件そのものなので、詳細を既定にし、検索はそこから開く。
+ */
+test('既定は詳細ビューで、絞り込みの板は開いていない', async () => {
+  const { api } = createApi(() => jsonResponse([publishedEvent, readEvent]))
+  renderScreen(api)
+
+  const detail = await screen.findByRole('region', { name: '監査イベント詳細' })
+  expect(detail).toHaveTextContent('event: attention_note.published')
+  expect(screen.queryByRole('region', { name: '監査の絞り込み' })).toBeNull()
+  expect(screen.queryByRole('table', { name: '監査イベント' })).toBeNull()
+
+  fireEvent.click(screen.getByRole('button', { name: '監査を検索' }))
+  expect(screen.getByRole('region', { name: '監査の絞り込み' })).toBeInTheDocument()
+  expect(await screen.findByRole('table', { name: '監査イベント' })).toBeInTheDocument()
+})
+
+/** 主体種別はブラウザ既定の `<select>` を使わない（既定の青も英語表記も出さない）。 */
+test('主体種別は押しボタンで選ぶ', async () => {
+  const { api, calls } = createApi(() => jsonResponse([publishedEvent]))
+  const { container } = renderScreen(api)
+
+  await screen.findByRole('region', { name: '監査イベント詳細' })
+  fireEvent.click(screen.getByRole('button', { name: '監査を検索' }))
+  expect(container.querySelector('select')).toBeNull()
+
+  const group = screen.getByRole('group', { name: '主体種別' })
+  expect(within(group).getByRole('button', { name: 'すべて' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  )
+  fireEvent.click(within(group).getByRole('button', { name: '共有端末' }))
+  fireEvent.click(screen.getByRole('button', { name: '監査を検索する' }))
+  await waitFor(() => {
+    expect(calls.length).toBeGreaterThan(1)
+  })
+  expect(queryOf(calls[calls.length - 1]?.url ?? '').get('actorType')).toBe('shared_terminal')
+})
+
+/** モックの節ナビは 4 つ。兄弟の面への行き先はその後ろに続ける。 */

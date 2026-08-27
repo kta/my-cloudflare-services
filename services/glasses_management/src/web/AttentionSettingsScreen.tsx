@@ -23,8 +23,8 @@ import {
 } from './attention-view'
 import { Action, Actions } from './design/controls'
 import { Modal } from './design/dialogs'
-import { SelectField } from './design/forms'
-import { AdminLayout, AdminSurface, SideNavItem } from './design/layouts'
+import { CheckToggle, SelectField } from './design/forms'
+import { AdminLayout, AdminSurface } from './design/layouts'
 import { MatrixCell, MatrixRow, MatrixTable } from './design/matrix'
 import { FailureNotice, StatusNotice } from './design/notices'
 import { Card, CardGrid, StatePill, TitleRow } from './design/surfaces'
@@ -37,8 +37,6 @@ const SECTIONS: { label: string; to?: StaffLocation }[] = [
   { label: '確認待ち' },
   { label: '共有範囲' },
   { label: '入力ルール' },
-  /* 同じタブの下の兄弟の面。ここからしか行けないので並びの末尾に置く。 */
-  { label: '顧客の統合・訂正', to: { screen: 'customer-merge' } },
 ]
 
 type Props = StaffScreenProps & {
@@ -257,18 +255,14 @@ export function AttentionSettingsScreen({ storeId, api, permissions, navigate }:
        `ATTENTION-PERMISSIONS--default--ipad-landscape.png`。 */
     <AdminSurface label="注意事項の権限">
       <AdminLayout
-        navLabel="注意事項の節"
-        nav={SECTIONS.map((section) => (
-          <SideNavItem
-            key={section.label}
-            on={section.label === '権限'}
-            onClick={
-              section.to === undefined ? undefined : () => navigate(section.to as StaffLocation)
-            }
-          >
-            {section.label}
-          </SideNavItem>
-        ))}
+        /*
+         * 柱は全画面共通の 1 本しかないので、この面の節はそこへ渡す。
+         * 別の面への移動はサイドバーが持つので、ここでは並べない。
+         */
+        sections={SECTIONS.map((section) => ({
+          ...section,
+          current: section.label === '権限',
+        }))}
       >
         <TitleRow
           gap={0}
@@ -311,61 +305,73 @@ export function AttentionSettingsScreen({ storeId, api, permissions, navigate }:
 
         {settings && draft && (
           <>
-            {/* 列が増えるとロールの選択が「店舗管理者以.」まで潰れる。表は
-                縮めず、必要なら横スクロールで逃がす。 */}
-            <div className="overflow-x-auto">
-              <MatrixTable
-                className="min-w-4xl"
-                label="注意事項の権限"
-                columns={[
-                  'ロール',
-                  ...capabilityRows.map((row) => capabilityColumnLabel(row.capability)),
-                ]}
-              >
-                {attentionMatrixRows(settings).map((row) => (
-                  <MatrixRow key={row.role} header={row.label}>
-                    {row.cells.map((cell) => (
-                      <MatrixCell key={cell.capability} granted={cell.allowed}>
-                        {cell.label}
-                      </MatrixCell>
-                    ))}
-                  </MatrixRow>
-                ))}
-                {/* いま効いている値の適用元と、それを動かす操作は表の中に置く。
-                    別の場所へ離すと「どの列の話か」が読み取れない。 */}
-                <MatrixRow header="適用元">
-                  {capabilityRows.map((row) => (
-                    <MatrixCell key={row.capability}>{row.originLabel}</MatrixCell>
-                  ))}
-                </MatrixRow>
-                <MatrixRow header="必要なロール">
-                  {capabilityRows.map((row) => (
-                    <MatrixCell key={row.capability}>
-                      <SelectField
-                        hideLabel
-                        id={`attention-role-${row.capability}`}
-                        label={`${row.label}に必要なロール`}
-                        disabled={!mayManage}
-                        value={draft.capabilities[row.capability]}
-                        onChange={(event) => {
-                          const minimumRole = event.target.value as AttentionRole
-                          setDraft({
-                            ...draft,
-                            capabilities: { ...draft.capabilities, [row.capability]: minimumRole },
-                          })
-                        }}
-                      >
-                        {ROLES.map((role) => (
-                          <option key={role} value={role}>
-                            {roleLabel(role)}以上
-                          </option>
-                        ))}
-                      </SelectField>
+            {/*
+              表は「いまどうなっているか」を読む面に戻す。操作をセルへ入れると、
+              5 つの選択が列幅を押し広げて表が枠からはみ出し、右端の選択が
+              「店舗管理者以」で切れていた（承認済みモックの表も読み取り専用）。
+              変えるための操作は表の下へ、1 操作 1 枚のカードとして出す。
+            */}
+            <MatrixTable
+              label="注意事項の権限"
+              columns={[
+                'ロール',
+                ...capabilityRows.map((row) => capabilityColumnLabel(row.capability)),
+              ]}
+            >
+              {attentionMatrixRows(settings).map((row) => (
+                <MatrixRow key={row.role} header={row.label}>
+                  {row.cells.map((cell) => (
+                    <MatrixCell key={cell.capability} granted={cell.allowed}>
+                      {cell.label}
                     </MatrixCell>
                   ))}
                 </MatrixRow>
-              </MatrixTable>
-            </div>
+              ))}
+              {/* いま効いている値の適用元は表の中に置く。別の場所へ離すと
+                  「どの列の話か」が読み取れない。 */}
+              <MatrixRow header="適用元">
+                {capabilityRows.map((row) => (
+                  <MatrixCell key={row.capability}>{row.originLabel}</MatrixCell>
+                ))}
+              </MatrixRow>
+            </MatrixTable>
+
+            <CardGrid>
+              {capabilityRows.map((row) => (
+                /* カードに読み上げ用の名前は付けない。付けると中の選択と
+                   同じ名前の要素が 2 つになり、「公開に必要なロール」で
+                   指したときにどちらを指したのかが決まらなくなる。 */
+                <Card key={row.capability}>
+                  <b>{row.label}</b>
+                  <br />
+                  {mayManage ? (
+                    <SelectField
+                      hideLabel
+                      id={`attention-role-${row.capability}`}
+                      label={`${row.label}に必要なロール`}
+                      value={draft.capabilities[row.capability]}
+                      onChange={(event) => {
+                        const minimumRole = event.target.value as AttentionRole
+                        setDraft({
+                          ...draft,
+                          capabilities: { ...draft.capabilities, [row.capability]: minimumRole },
+                        })
+                      }}
+                    >
+                      {ROLES.map((role) => (
+                        <option key={role} value={role}>
+                          {roleLabel(role)}以上
+                        </option>
+                      ))}
+                    </SelectField>
+                  ) : (
+                    `${row.roleLabel}以上`
+                  )}
+                  <br />
+                  <small>適用元: {row.originLabel}</small>
+                </Card>
+              ))}
+            </CardGrid>
 
             <CardGrid>
               <Card label="登録方式">
@@ -420,18 +426,17 @@ export function AttentionSettingsScreen({ storeId, api, permissions, navigate }:
               <Card label="店舗上書き">
                 <b>店舗上書き</b>
                 <br />
-                <label className="flex min-h-12 items-center gap-3">
-                  <input
-                    type="checkbox"
-                    className="size-6"
+                <span className="flex min-h-12 items-center gap-3">
+                  <CheckToggle
+                    labelledBy="attention-store-override"
                     disabled={!mayManage}
                     checked={draft.storeOverrideAllowed}
-                    onChange={(event) =>
-                      setDraft({ ...draft, storeOverrideAllowed: event.target.checked })
+                    onChange={(storeOverrideAllowed) =>
+                      setDraft({ ...draft, storeOverrideAllowed })
                     }
                   />
-                  店舗ごとの上書きを許可する
-                </label>
+                  <span id="attention-store-override">店舗ごとの上書きを許可する</span>
+                </span>
               </Card>
             </CardGrid>
 

@@ -1,6 +1,7 @@
 import type { RecordingState } from '@app/contracts'
-import { Button, cn, focusRing } from '@app/ui'
+import { cn, focusRing } from '@app/ui'
 import { RecordIndicator } from './design/booking'
+import { Action } from './design/controls'
 import { RECORDING_STATE_LABEL } from './recording'
 
 export type MicrophonePermissionResult = 'granted' | 'denied'
@@ -121,9 +122,10 @@ export function RecordingUploadFailedScreen({
       </div>
       <div className="mt-6 flex flex-wrap justify-end gap-3">
         <SecondaryButton onClick={onOpenReservation}>予約詳細を見る</SecondaryButton>
-        <Button className={TOUCH} onClick={onRetryUpload}>
+        {/* 主操作は緑の面。寸法は全画面状態の 48px（`size="roomy"`）。 */}
+        <Action variant="primary" size="roomy" onClick={onRetryUpload}>
           今すぐ再試行
-        </Button>
+        </Action>
       </div>
     </section>
   )

@@ -75,6 +75,49 @@ const changed = {
 
 type Route = { url: string; init?: RequestInit }
 
+/** 選択した記録がぶら下がる予約。来店日時と目的はここからしか取れない。 */
+const reservation = {
+  id: '00000000-0000-4000-8000-000000000902',
+  organizationId: 'org-1',
+  storeId: STORE_ID,
+  reservationNumber: 'EY-0828-1142',
+  source: 'staff' as const,
+  status: 'confirmed' as const,
+  startAt: '2026-08-28T02:00:00.000Z', // 8月28日（金）11:00 JST
+  endAt: '2026-08-28T03:00:00.000Z',
+  purposeIds: ['00000000-0000-4000-8000-000000000020'],
+  customer: { name: '田中 花子', kana: 'タナカ ハナコ', phone: '090-1234-5678', email: null },
+  recital: '8月28日11時にご来店ください。',
+  reservationMemo: null,
+  handoffNote: null,
+  version: 1,
+  createdAt: '2026-08-26T05:18:00.000Z',
+}
+
+const availabilitySettings = {
+  version: 3,
+  receptionStatus: 'open' as const,
+  businessHours: [],
+  exceptions: [],
+  staff: [],
+  shifts: [],
+  equipment: [],
+  maintenance: [],
+  purposes: [
+    {
+      id: '00000000-0000-4000-8000-000000000020',
+      staffName: '視力測定・新調相談',
+      customerLabel: '視力測定・新調相談',
+      durationMinutes: 60,
+      slotIntervalMinutes: 30,
+      isPublic: true,
+      requiredSkills: [],
+      requiredEquipment: [],
+      maxConcurrent: 1,
+    },
+  ],
+}
+
 function renderScreen(
   entries: unknown[],
   extra: {
@@ -85,7 +128,11 @@ function renderScreen(
 ) {
   const calls: Route[] = []
   const api = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    calls.push({ url: String(input), init })
+    const url = String(input)
+    calls.push({ url, init })
+    if (url.includes('/availability/settings')) return jsonResponse(availabilitySettings)
+    if (url.endsWith('/history')) return jsonResponse([])
+    if (url.includes('/reservations/')) return jsonResponse(reservation)
     return jsonResponse(entries)
   })
   render(
@@ -128,10 +175,15 @@ test('shows reservation reception, change, cancellation and walk-in reception', 
   const list = await screen.findByRole('region', { name: '受付履歴' })
   await within(list).findAllByRole('button')
   const text = list.textContent ?? ''
-  expect(text).toContain('予約受付')
+  // 何が起きたかは行の本文が言い、右肩のチップは経路だけを名乗る。
+  expect(text).toContain('予約を登録')
+  expect(text).toContain('日時を変更')
+  expect(text).toContain('予約を取消')
+  expect(text).toContain('を受付')
+  expect(text).toContain('店頭')
+  expect(text).toContain('電話')
+  expect(text).toContain('Web')
   expect(text).toContain('変更')
-  expect(text).toContain('取消')
-  expect(text).toContain('ウォークイン受付')
 })
 
 // AC-EYEX-62 / UC-EYEX-056: only the selected store's events, no store filter.
@@ -146,6 +198,15 @@ test('shows only the selected store events and offers no store filter', async ()
   expect(calls[0]?.url).not.toContain('storeId=')
 })
 
+/*
+ * 承認済みモックの `.tools` は検索欄とチップだけで、送信ボタンを持たない。
+ * 確定は欄そのものの submit（Enter）で起こる。
+ */
+function submitSearch() {
+  const field = screen.getByLabelText('氏名・電話番号・予約番号')
+  fireEvent.submit(field.closest('form') as HTMLFormElement)
+}
+
 // AC-EYEX-57: search by name, phone or reservation number.
 test('filters by name, phone and reservation number', async () => {
   const { calls } = renderScreen(allEntries)
@@ -153,37 +214,47 @@ test('filters by name, phone and reservation number', async () => {
   const term = screen.getByLabelText('氏名・電話番号・予約番号')
 
   fireEvent.change(term, { target: { value: '田中' } })
-  fireEvent.click(screen.getByRole('button', { name: '絞り込む' }))
+  submitSearch()
   await waitFor(() => {
     expect(calls.at(-1)?.url).toContain('name=')
   })
 
   fireEvent.change(term, { target: { value: '０９０-１２３４ ５６７８' } })
-  fireEvent.click(screen.getByRole('button', { name: '絞り込む' }))
+  submitSearch()
   await waitFor(() => {
     expect(calls.at(-1)?.url).toContain('phone=09012345678')
   })
 
   fireEvent.change(term, { target: { value: 'EY-0828-1142' } })
-  fireEvent.click(screen.getByRole('button', { name: '絞り込む' }))
+  submitSearch()
   await waitFor(() => {
     expect(calls.at(-1)?.url).toContain('reservationNumber=EY-0828-1142')
   })
 })
 
-// AC-EYEX-58: narrow by source, action and attention state.
+/*
+ * AC-EYEX-58: 経路・操作・要確認で絞り込む。ネイティブの `<select>` は使わない
+ * ので、モックが記録の右肩で使っている狭い語（店頭 / 電話 / Web / 変更）を
+ * そのままチップにする。押されているかどうかは `aria-pressed` が言う。
+ */
 test('filters by reception source, operation type and attention state', async () => {
   const { calls } = renderScreen(allEntries)
   await screen.findByRole('region', { name: '受付履歴' })
-  fireEvent.change(screen.getByLabelText('受付経路'), { target: { value: 'web' } })
-  fireEvent.change(screen.getByLabelText('操作種別'), { target: { value: 'changed' } })
-  fireEvent.click(screen.getByRole('button', { name: '要確認' }))
-  fireEvent.click(screen.getByRole('button', { name: '絞り込む' }))
+  expect(screen.queryAllByRole('combobox')).toHaveLength(0)
+
+  fireEvent.click(screen.getByRole('button', { name: 'Web' }))
+  await waitFor(() => {
+    expect(calls.at(-1)?.url).toContain('source=web')
+  })
+  fireEvent.click(screen.getByRole('button', { name: '変更' }))
   await waitFor(() => {
     const url = calls.at(-1)?.url ?? ''
-    expect(url).toContain('source=web')
     expect(url).toContain('action=changed')
-    expect(url).toContain('requiresAttention=true')
+    expect(url).not.toContain('source=')
+  })
+  fireEvent.click(screen.getByRole('button', { name: '要確認' }))
+  await waitFor(() => {
+    expect(calls.at(-1)?.url).toContain('requiresAttention=true')
   })
 })
 
@@ -193,13 +264,11 @@ test('shows every event again once the attention filter is cleared', async () =>
   await screen.findByRole('region', { name: '受付履歴' })
   const attention = screen.getByRole('button', { name: '要確認' })
   fireEvent.click(attention)
-  fireEvent.click(screen.getByRole('button', { name: '絞り込む' }))
   await waitFor(() => {
     expect(calls.at(-1)?.url).toContain('requiresAttention=true')
   })
 
   fireEvent.click(attention)
-  fireEvent.click(screen.getByRole('button', { name: '絞り込む' }))
   await waitFor(() => {
     expect(calls.at(-1)?.url).not.toContain('requiresAttention')
   })
@@ -216,9 +285,66 @@ test('shows the selected event detail while the list stays visible', async () =>
   expect(within(detail).getAllByText(/田中 花子/).length).toBeGreaterThan(0)
   expect(within(detail).getByText('090-1234-5678')).toBeInTheDocument()
   expect(within(detail).getByText('EY-0828-1142')).toBeInTheDocument()
-  expect(within(detail).getByText('鈴木')).toBeInTheDocument()
-  expect(within(detail).getByText('2026年8月27日 14:18')).toBeInTheDocument()
+  expect(within(detail).getByText('2026年8月27日 14:18 · 受付者 鈴木')).toBeInTheDocument()
   expect(within(list).getByRole('button', { name: /伊藤 健/ })).toBeInTheDocument()
+})
+
+/*
+ * 承認済みモックの `.detailgrid` は「来店 / 目的 / 予約番号 / 受付経路」と
+ * 「顧客照合 / 変更履歴」。発生日時と操作は見出しの下がすでに言っているので、
+ * カードは「いつ来るのか・何をしに来るのか」を持つ。
+ */
+test('names the detail rows as the approved mock does', async () => {
+  renderScreen(allEntries)
+  const list = await screen.findByRole('region', { name: '受付履歴' })
+  fireEvent.click(within(list).getByRole('button', { name: /田中 花子/ }))
+  const detail = await screen.findByRole('region', { name: '受付イベント詳細' })
+  expect(within(detail).getByText('来店')).toBeInTheDocument()
+  expect(await within(detail).findByText('2026年8月28日 11:00')).toBeInTheDocument()
+  expect(within(detail).getByText('目的')).toBeInTheDocument()
+  expect(within(detail).getByText('視力測定・新調相談')).toBeInTheDocument()
+  expect(within(detail).getByText('受付経路')).toBeInTheDocument()
+  expect(within(detail).getByText('顧客照合')).toBeInTheDocument()
+  expect(within(detail).getByText('変更履歴')).toBeInTheDocument()
+  // 実装が持っていた「発生日時 / 操作」はモックに無い。
+  expect(within(detail).queryByText('発生日時')).not.toBeInTheDocument()
+  expect(within(detail).queryByText('操作')).not.toBeInTheDocument()
+})
+
+/*
+ * 右肩のバッジは状態そのもの。通常の状態を失敗の色（danger）で出すと、
+ * 「予約が取れている」ことが赤で伝わってしまう。通常は緑、注意は琥珀。
+ */
+test('shows the state badge in the role colour, not in danger red', async () => {
+  renderScreen(allEntries)
+  const list = await screen.findByRole('region', { name: '受付履歴' })
+  fireEvent.click(within(list).getByRole('button', { name: /伊藤 健/ }))
+  const detail = await screen.findByRole('region', { name: '受付イベント詳細' })
+  const normal = within(detail).getByText('予約済み')
+  expect(normal.className).toContain('bg-pine-soft')
+  expect(normal.className).not.toContain('danger')
+
+  fireEvent.click(within(list).getByRole('button', { name: /田中 花子/ }))
+  const attention = await within(
+    await screen.findByRole('region', { name: '受付イベント詳細' }),
+  ).findByText('要確認')
+  expect(attention.className).toContain('bg-amber-soft')
+})
+
+/*
+ * 記録の右肩は経路だけを名乗る狭いチップ（店頭 / 電話 / Web / 変更）。
+ * 「ウォークイン受付」「予約受付」のような長い操作名はモックに無い。
+ */
+test('labels each event with the approved narrow route chip', async () => {
+  renderScreen(allEntries)
+  const list = await screen.findByRole('region', { name: '受付履歴' })
+  const chip = (name: RegExp) =>
+    within(within(list).getByRole('button', { name })).getByText(/^(店頭|電話|Web|変更|取消|無断)$/)
+      .textContent
+  expect(chip(/ウォークイン/)).toBe('店頭')
+  expect(chip(/田中 花子/)).toBe('電話')
+  expect(chip(/伊藤 健/)).toBe('Web')
+  expect(chip(/松本 一郎/)).toBe('変更')
 })
 
 // AC-EYEX-60: a recorded phone reception shows the recording and playback for permitted staff.
@@ -242,6 +368,8 @@ test('shows recording information and playback for permitted staff', async () =>
   expect(within(region).getByRole('button', { name: '再生' })).toBeInTheDocument()
   expect(within(region).getByRole('button', { name: '一時停止' })).toBeInTheDocument()
   expect(within(region).queryByRole('button', { name: /ダウンロード/ })).not.toBeInTheDocument()
+  // モックの `.wave` — 録音があることだけを示す装飾。読み上げには出さない。
+  expect(region.querySelector('[data-wave]')).not.toBeNull()
 })
 
 // AC-EYEX-60: staff without permission never see the recording.
@@ -321,15 +449,14 @@ test('renders the approved tools row: a 2px pine search box beside filter chips'
   expect(field.className).toContain('border-pine')
   expect(field.className).toContain('bg-surface')
   expect(field.className).toContain('rounded-ctl')
-  for (const label of ['受付経路', '操作種別']) {
-    const control = screen.getByLabelText(label)
+  for (const label of ['要確認', '店頭', '電話', 'Web', '変更']) {
+    const control = screen.getAllByRole('button', { name: label })[0] as HTMLElement
     expect(control.className).toContain('min-h-11')
     expect(control.className).toContain('border-line')
     expect(control.className).toContain('rounded-ctl')
   }
   // フィルターは一覧のリージョンの外。リージョンには受付イベントだけが並ぶ。
   const list = screen.getByRole('region', { name: '受付履歴' })
-  expect(within(list).queryByLabelText('受付経路')).not.toBeInTheDocument()
   expect(within(list).getAllByRole('button')).toHaveLength(allEntries.length)
 })
 
@@ -349,7 +476,9 @@ test('groups the events under the approved day heading and marks the open one', 
   expect(open.className).toContain('border-2')
   expect(open.className).toContain('border-pine')
   expect(open.className).toContain('bg-pine-soft')
-  expect(within(open).getByText('選択中')).toBeInTheDocument()
+  // 選択は罫と `aria-pressed` が言う。モックに「選択中」の行は無い。
+  expect(within(open).queryByText('選択中')).not.toBeInTheDocument()
+  expect(open).toHaveAttribute('aria-pressed', 'true')
 })
 
 // 詳細ペインは `.detailhead` + `.detailgrid`（1.15fr .85fr）の 2 枚組。
@@ -376,8 +505,7 @@ test('offers the approved recovery action when no event matches', async () => {
     screen.getByText('検索語またはフィルターを変更してください。履歴自体は削除されていません。'),
   ).toBeInTheDocument()
 
-  fireEvent.change(screen.getByLabelText('受付経路'), { target: { value: 'web' } })
-  fireEvent.click(screen.getByRole('button', { name: '絞り込む' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Web' }))
   await waitFor(() => {
     expect(calls.at(-1)?.url).toContain('source=web')
   })
@@ -385,7 +513,7 @@ test('offers the approved recovery action when no event matches', async () => {
   await waitFor(() => {
     expect(calls.at(-1)?.url).not.toContain('source=web')
   })
-  expect(screen.getByLabelText('受付経路')).toHaveValue('')
+  expect(screen.getByRole('button', { name: 'Web' })).toHaveAttribute('aria-pressed', 'false')
 })
 
 // exception-states-approved.html `#permission-denied`。

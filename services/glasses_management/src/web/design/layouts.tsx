@@ -1,5 +1,6 @@
 import { cn } from '@app/ui'
-import { type ReactNode, useId } from 'react'
+import { type ReactNode, useEffect, useId } from 'react'
+import { type ScreenSection, screenSections } from '../app-chrome'
 
 /*
  * 面の骨格。モックには 4 種類しか無く、どれも「バーの下を 2 列に割る」形をとる。
@@ -21,11 +22,33 @@ import { type ReactNode, useId } from 'react'
  */
 
 /** 業務面: 390px の一覧 + 詳細。 */
-export function Workspace({ list, detail }: { list: ReactNode; detail: ReactNode }) {
+export function Workspace({
+  list,
+  detail,
+  listLabel,
+  detailLabel,
+}: {
+  list: ReactNode
+  detail: ReactNode
+  /*
+   * 2 つの列が何の列なのかは、見出しではなく列自体が名乗る必要がある（左は
+   * 探す列、右は選んだ 1 件の列で、詳細側の見出しは選んだ人の名前になる）。
+   * 名前は画素を持たないので、突き合わせ台は渡さないまま変わらない。
+   */
+  listLabel?: string
+  detailLabel?: string
+}) {
   return (
     <div className="grid min-h-0 flex-1" style={{ gridTemplateColumns: '390px 1fr' }}>
-      <aside className="min-h-0 overflow-auto border-line border-r bg-panel p-4">{list}</aside>
-      <section className="min-h-0 overflow-auto p-5.5">{detail}</section>
+      <aside
+        aria-label={listLabel}
+        className="min-h-0 overflow-auto border-line border-r bg-panel p-4"
+      >
+        {list}
+      </aside>
+      <section aria-label={detailLabel} className="min-h-0 overflow-auto p-5.5">
+        {detail}
+      </section>
     </div>
   )
 }
@@ -34,12 +57,38 @@ export function Workspace({ list, detail }: { list: ReactNode; detail: ReactNode
 export function AdminLayout({
   nav,
   navLabel,
+  sections,
   children,
 }: {
-  nav: ReactNode
-  navLabel: string
+  /** モックどおり自前の柱を描く（突き合わせ台がこちらを使う）。 */
+  nav?: ReactNode
+  navLabel?: string
+  /**
+   * 実アプリはこちらを使う。柱は全画面共通の 1 本しかないので、この面の節は
+   * そこへ渡して開いている行き先の下へ入れてもらう。250px の柱を 2 本立てると
+   * 本文が半分になってしまう。
+   */
+  sections?: ScreenSection[]
   children: ReactNode
 }) {
+  /*
+   * 節は描画の結果ではなく面の持ち物なので、描画中ではなく効果で書く。
+   * 面を離れたら空にして、前の面の節が残らないようにする。
+   *
+   * 面は描画のたびに新しい配列を作るので、配列そのものを依存にすると効果が
+   * 毎回動いて描画が止まらなくなる。中身を綴った文字列を挟み、その文字列から
+   * 節を組み直して渡す（同じ並びなら文字列も同じで、効果は動かない）。
+   */
+  const signature = sections === undefined ? undefined : JSON.stringify(sections)
+  useEffect(() => {
+    if (signature === undefined) return
+    screenSections.set(JSON.parse(signature) as ScreenSection[])
+    return () => screenSections.set([])
+  }, [signature])
+
+  if (sections !== undefined)
+    return <section className="min-h-0 flex-1 overflow-auto px-7.5 py-6">{children}</section>
+
   return (
     <div className="grid min-h-0 flex-1" style={{ gridTemplateColumns: '250px 1fr' }}>
       <nav

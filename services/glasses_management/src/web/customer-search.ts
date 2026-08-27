@@ -37,6 +37,27 @@ export function buildCustomerSearchQuery(
   return parsed.success ? parsed.data : undefined
 }
 
+/*
+ * 数字・ハイフン類・空白だけでできているか。全角数字と全角ハイフン・波ダッシュ
+ * まで含めるのは、電話で伺った番号をそのまま打つ人がいるため。
+ */
+const PHONE_SHAPED =
+  /^[0-9\uff10-\uff19\s\u3000\-\u2010\u2011\u2012\u2013\u2014\u2015\u30fc\uff0d]+$/
+
+/**
+ * 顧客台帳の左レールは検索欄が 1 本しかない（承認済みモックの
+ * `placeholder:氏名・電話番号`）。打たれた文字列がどちらなのかを、欄ではなく
+ * ここで決める。数字だけなら電話番号、1 文字でも他が混じれば氏名。
+ */
+export function customerSearchTermFor(raw: string): CustomerSearchTerm | undefined {
+  const value = raw.trim()
+  if (value === '') return undefined
+  if (PHONE_SHAPED.test(value))
+    // ハイフンだけを打った状態は「まだ番号ではない」。桁が残らないなら検索しない。
+    return normalisePhone(value) === '' ? undefined : { field: 'phone', value: raw }
+  return { field: 'name', value: raw }
+}
+
 /** 選択中店舗にスコープした検索 URL。検索語は 1 つだけ付く。 */
 export function customerSearchPath(storeId: string, query: CustomerSearchQuery): string {
   const params = new URLSearchParams()

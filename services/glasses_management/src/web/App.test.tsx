@@ -5,11 +5,77 @@ import { createSharedTerminalController } from './shared-terminal'
 import { createStaffNavigation } from './staff-navigation'
 import { createStoreSwitchController } from './store-switch'
 
-test('renders the glasses-management service shell', () => {
-  render(<App />)
+test('店舗が注入されていないときは、日本語で「店舗未選択」だけを言う', () => {
+  const { container } = render(<App />)
 
-  expect(screen.getByRole('heading', { name: 'Glasses Management' })).toBeInTheDocument()
-  expect(screen.getByRole('status')).toHaveTextContent('Service shell is ready.')
+  expect(
+    screen.getByRole('heading', { name: '作業する店舗が選ばれていません' }),
+  ).toBeInTheDocument()
+  // 開発中の英語メモを製品の面に残さない（ワードマークの EYEX だけが欧字）。
+  expect((container.textContent ?? '').replace('EYEX', '')).not.toMatch(/[A-Za-z]/)
+})
+
+/*
+ * 承認済みモック `store-switch-approved.html` の切替シート。名前・副題・状態語
+ * の 3 つが 1 行に揃っていること、末尾の但し書きが残っていることまで見る。
+ * どれも「切り替えてよいか」を押す前に読ませるためのもので、飾りではない。
+ */
+test('切替シートはモックどおり見出し・検索欄・副題つきの店舗行・境界の但し書きを持つ', () => {
+  const controller = createStoreSwitchController(
+    { id: 'store-a', name: '銀座店', isActive: true },
+    async () => true,
+  )
+  render(
+    <App
+      storeSwitchController={controller}
+      accessibleStores={[
+        { id: 'store-a', name: '銀座店', isActive: true, openAlerts: 2 },
+        { id: 'store-b', name: '丸の内店', isActive: true, isAssigned: true },
+        { id: 'store-c', name: '新宿店', isActive: false, suspendedReason: '設備点検中' },
+      ]}
+    />,
+  )
+
+  fireEvent.click(screen.getByRole('button', { name: /EYEX予約/ }))
+  const sheet = screen.getByRole('dialog', { name: '作業する店舗を切り替える' })
+  expect(within(sheet).getByLabelText('店舗名で検索')).toBeInTheDocument()
+  expect(within(sheet).getByRole('button', { name: /^銀座店/ })).toHaveTextContent(
+    '銀座店営業中 · 警告2件選択中',
+  )
+  expect(within(sheet).getByRole('button', { name: /^丸の内店/ })).toHaveTextContent(
+    '丸の内店担当店舗営業中',
+  )
+  expect(within(sheet).getByRole('button', { name: /^新宿店/ })).toHaveTextContent(
+    '新宿店設備点検中受付停止',
+  )
+  expect(sheet).toHaveTextContent(
+    '他店舗の空き枠はここに表示しません。切替後、その店舗の予約台帳で確認してください。',
+  )
+})
+
+test('切替シートの検索欄は店舗名だけで絞り込む', () => {
+  const controller = createStoreSwitchController(
+    { id: 'store-a', name: '銀座店', isActive: true },
+    async () => true,
+  )
+  render(
+    <App
+      storeSwitchController={controller}
+      accessibleStores={[
+        { id: 'store-a', name: '銀座店', isActive: true },
+        { id: 'store-b', name: '丸の内店', isActive: true, isAssigned: true },
+      ]}
+    />,
+  )
+
+  fireEvent.click(screen.getByRole('button', { name: /EYEX予約/ }))
+  fireEvent.change(screen.getByLabelText('店舗名で検索'), { target: { value: '丸の内' } })
+  const sheet = screen.getByRole('dialog', { name: '作業する店舗を切り替える' })
+  expect(within(sheet).getByRole('button', { name: /^丸の内店/ })).toBeInTheDocument()
+  expect(within(sheet).queryByRole('button', { name: /^銀座店/ })).toBeNull()
+  // 副題の語では絞らない（「担当店舗」で消えないこと）。
+  fireEvent.change(screen.getByLabelText('店舗名で検索'), { target: { value: '担当店舗' } })
+  expect(within(sheet).queryByRole('button', { name: /店$/ })).toBeNull()
 })
 
 test('hides shared-terminal customer state immediately when the page leaves the foreground', () => {
@@ -242,25 +308,6 @@ test('reproduces the approved home chrome: wordmark, notification counts and 設
   expect(navigation.snapshot()).toEqual({ screen: 'settings' })
 })
 
-test('states the notification counts as not loaded rather than guessing zero', () => {
-  render(
-    <App
-      storeSwitchController={createStoreSwitchController(
-        { id: 'store-a', name: '銀座店', isActive: true },
-        async () => true,
-      )}
-      accessibleStores={[{ id: 'store-a', name: '銀座店', isActive: true }]}
-      navigation={createStaffNavigation()}
-      today="2026-08-27"
-      renderScreen={() => null}
-    />,
-  )
-
-  const bar = screen.getByRole('banner')
-  expect(within(bar).getByRole('button', { name: 'お知らせ 未取得' })).toBeInTheDocument()
-  expect(within(bar).getByRole('button', { name: 'アラート 未取得' })).toBeInTheDocument()
-})
-
 test('shows a stopped store in the wordmark instead of a separate status line', () => {
   render(
     <App
@@ -278,46 +325,14 @@ test('shows a stopped store in the wordmark instead of a separate status line', 
   expect(screen.getByRole('button', { name: /EYEX予約/ })).toHaveTextContent('銀座店 · 受付停止')
 })
 
-test('reproduces the approved business chrome: four tabs and one primary action', () => {
-  // LEDGER-DAY--walkin-now--ipad-landscape.png / staff-approved.html #ledger.
-  const navigation = createStaffNavigation()
-  navigation.navigate({ screen: 'ledger', date: '2026-08-27' })
-  render(
-    <App
-      storeSwitchController={createStoreSwitchController(
-        { id: 'store-a', name: '銀座店', isActive: true },
-        async () => true,
-      )}
-      accessibleStores={[{ id: 'store-a', name: '銀座店', isActive: true }]}
-      navigation={navigation}
-      today="2026-08-27"
-      renderScreen={(location) => <p>screen:{location.screen}</p>}
-    />,
-  )
-
-  const tabs = within(screen.getByRole('navigation', { name: '業務メニュー' })).getAllByRole(
-    'button',
-  )
-  expect(tabs.map((tab) => tab.textContent)).toEqual([
-    '予約台帳',
-    '来店受付',
-    '受付履歴',
-    '顧客台帳',
-  ])
-  // The active tab is a white pill, and says so to assistive tech as well.
-  expect(tabs[0]).toHaveAttribute('aria-current', 'page')
-  expect(tabs[1]).not.toHaveAttribute('aria-current')
-
-  fireEvent.click(screen.getByRole('button', { name: '＋ 予約を取る' }))
-  expect(navigation.snapshot()).toEqual({ screen: 'booking' })
-})
-
+/* 行き先は柱が持つ。押せば必ずその面が開く。 */
 test.each([
-  ['来店受付', { screen: 'journey' }],
   ['受付履歴', { screen: 'reception-history' }],
-  ['顧客台帳', { screen: 'customers' }],
+  ['予約検索', { screen: 'reservation-search' }],
   ['予約台帳', { screen: 'ledger', date: '2026-08-27' }],
-] as const)('the business tab %s opens its screen', (label, expected) => {
+  ['分析', { screen: 'analytics' }],
+  ['お知らせ', { screen: 'alerts' }],
+] as const)('サイドバーの %s を押すとその面が開く', (label, expected) => {
   const navigation = createStaffNavigation()
   navigation.navigate({ screen: 'reception-history' })
   render(
@@ -334,7 +349,7 @@ test.each([
   )
 
   fireEvent.click(
-    within(screen.getByRole('navigation', { name: '業務メニュー' })).getByRole('button', {
+    within(screen.getByRole('navigation', { name: '画面の一覧' })).getByRole('button', {
       name: label,
     }),
   )
@@ -358,42 +373,6 @@ test('keeps the home bar free of business tabs and of the admin destinations', (
   expect(screen.queryByRole('navigation', { name: '業務メニュー' })).not.toBeInTheDocument()
   expect(screen.queryByRole('navigation', { name: '管理メニュー' })).not.toBeInTheDocument()
   expect(screen.queryByRole('button', { name: '監査ログ' })).not.toBeInTheDocument()
-})
-
-test('設定の面はバーの 3 つのタブから互いへ行き来できる', () => {
-  /*
-   * operations-approved.html のバーは 端末とセキュリティ / 利用者とロール /
-   * 監査ログ、settings-approved.html は 設定ガイド / 設定一覧 / 変更履歴。
-   * どちらも 2 本目の帯を持たないので、面から面への行き来はバーが担う。
-   * 各面の中の節（共有iPad・無操作ロック…）は、その面の左サイドが持つ。
-   */
-  const navigation = createStaffNavigation()
-  navigation.navigate({ screen: 'settings' })
-  render(
-    <App
-      storeSwitchController={createStoreSwitchController(
-        { id: 'store-a', name: '銀座店', isActive: true },
-        async () => true,
-      )}
-      accessibleStores={[{ id: 'store-a', name: '銀座店', isActive: true }]}
-      navigation={navigation}
-      today="2026-08-27"
-      renderScreen={(location) => <p>screen:{location.screen}</p>}
-    />,
-  )
-
-  for (const [label, expected] of [
-    ['設定一覧', 'shared-terminals'],
-    ['変更履歴', 'audit'],
-    ['設定ガイド', 'settings'],
-  ] as const) {
-    const menu = screen.getByRole('navigation', { name: '設定メニュー' })
-    fireEvent.click(within(menu).getByRole('button', { name: label }))
-    expect(navigation.snapshot()).toEqual({ screen: expected })
-    act(() => {
-      navigation.navigate({ screen: 'settings' })
-    })
-  }
 })
 
 test('gives every chrome control the 44px touch-target floor', () => {
@@ -447,32 +426,6 @@ test('予約フローのバーは業務タブも 予約を取る も出さない
 test('来店受付の主操作は予約ではなく店頭客の受付である', () => {
   const bar = renderChrome('journey')
   expect(bar.getByRole('button', { name: '＋ 店頭のお客様を受付' })).toBeVisible()
-  expect(
-    within(bar.getByRole('navigation', { name: '業務メニュー' }))
-      .getAllByRole('button')
-      .map((button) => button.textContent),
-  ).toEqual(['予約台帳', '来店受付', '顧客台帳'])
-})
-
-test('予約台帳のタブは 4 つで、主操作は予約を取る', () => {
-  const bar = renderChrome('ledger')
-  expect(
-    within(bar.getByRole('navigation', { name: '業務メニュー' }))
-      .getAllByRole('button')
-      .map((button) => button.textContent),
-  ).toEqual(['予約台帳', '来店受付', '受付履歴', '顧客台帳'])
-  expect(bar.getByRole('button', { name: '＋ 予約を取る' })).toBeVisible()
-})
-
-test('設定ガイドのバーは、そこから出られるタブを持つ', () => {
-  // 操作を 1 つも持たないと、ガイドに入った利用者が出られなくなる。
-  const bar = renderChrome('settings')
-  expect(
-    within(bar.getByRole('navigation', { name: '設定メニュー' }))
-      .getAllByRole('button')
-      .map((button) => button.textContent),
-  ).toEqual(['設定ガイド', '設定一覧', '変更履歴'])
-  expect(bar.getByRole('button', { name: /銀座店 · 設定ガイド/ })).toBeVisible()
 })
 
 /* ------------------------------------------------------------------ *
@@ -587,4 +540,64 @@ test('EX-STORE-UNSAVED: 店舗ピッカーを閉じ、店舗名つきの 2 択�
   })
   expect(stay.className).toContain('bg-pine')
   expect(discard.className).toContain('text-danger')
+})
+
+test('件数が分かるまでは、件数の場所に「未取得」と書かない', () => {
+  /*
+   * モックの語彙に「未取得」は無い。読み込みの途中でだけ出る言葉を混ぜると、
+   * 0 件なのか取れていないのかを利用者が読み分けられない。分かるまでは
+   * 件数そのものを出さず、名前だけを出す。
+   */
+  const navigation = createStaffNavigation()
+  navigation.navigate({ screen: 'home' })
+  render(
+    <App
+      navigation={navigation}
+      today="2026-08-27"
+      storeSwitchController={createStoreSwitchController(
+        { id: 'store-a', name: '銀座店', isActive: true },
+        async () => true,
+      )}
+      renderScreen={() => <p>画面</p>}
+    />,
+  )
+
+  const bar = within(screen.getByRole('banner'))
+  expect(bar.getByRole('button', { name: 'お知らせ' })).toBeVisible()
+  expect(bar.getByRole('button', { name: 'アラート' })).toBeVisible()
+  expect(bar.queryByText(/未取得/)).toBeNull()
+})
+
+/* ------------------------------------------------------------------ *
+ * 全画面共通の左サイドバー
+ * ------------------------------------------------------------------ */
+
+test('業務の面では、すべての行き先が左サイドバーに 1 か所で並ぶ', () => {
+  const bar = renderChrome('ledger')
+  const sidebar = within(screen.getByRole('navigation', { name: '画面の一覧' }))
+  for (const label of [
+    '予約台帳',
+    '来店受付',
+    '受付履歴',
+    '予約検索',
+    '顧客台帳',
+    '設定ガイド',
+    '共有端末',
+    '録音運用',
+    '注意事項',
+    '監査ログ',
+    '顧客の統合・訂正',
+    '分析',
+    'お知らせ',
+  ])
+    expect(sidebar.getByRole('button', { name: label })).toBeVisible()
+  // 移動の手段を 2 つ置かない。バーはタブを持たない。
+  expect(bar.queryByRole('navigation')).toBeNull()
+  expect(sidebar.getByRole('button', { name: '予約台帳' })).toHaveAttribute('aria-current', 'page')
+})
+
+test('予約フローとホームは柱を出さない', () => {
+  // 受付の途中で別の面へ移す動線を置かない。ホームは主操作を大きく見せる面。
+  renderChrome('booking')
+  expect(screen.queryByRole('navigation', { name: '画面の一覧' })).toBeNull()
 })

@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { expect, test, vi } from 'vitest'
 import { StaffWorkspace } from './StaffWorkspace'
 
@@ -336,13 +336,15 @@ test('threads the shared-terminal id into the recording operations screen', asyn
 
   await screen.findByRole('button', { name: /新しい予約を取る/ })
   /*
-   * 緑帯は 1 本しかないので、運用の面へはバーのタブと各面の左サイドを辿って
-   * 行く（operations-approved.html）。録音運用は 端末とセキュリティ の節ナビの
-   * 先にある。ここが切れると実アプリから到達できなくなる。
+   * 行き先はすべて左サイドバーに 1 か所で並ぶ。タブと節ナビを渡り歩かないと
+   * 辿り着けない面が残ると、利用者はその面を「無い」と受け取る。
    */
   fireEvent.click(screen.getByRole('button', { name: '設定' }))
-  fireEvent.click(await screen.findByRole('button', { name: '設定一覧' }))
-  fireEvent.click(await screen.findByRole('button', { name: '録音運用' }))
+  fireEvent.click(
+    within(await screen.findByRole('navigation', { name: '画面の一覧' })).getByRole('button', {
+      name: '録音運用',
+    }),
+  )
   fireEvent.click(await screen.findByRole('button', { name: '保全する' }))
   expect(await screen.findByRole('dialog')).toHaveTextContent('個人')
 })

@@ -1,7 +1,7 @@
 import { AvailabilityStoreSettings, LedgerEntry, type ReceptionProgress } from '@app/contracts'
-import { Field, Select, Textarea, TextInput } from '@app/ui'
 import { type ReactNode, useCallback, useEffect, useState } from 'react'
 import { Action } from './design/controls'
+import { SelectField, TextAreaField, TextField } from './design/forms'
 import { JourneyBoard, type JourneyCell } from './design/ledger'
 import { Card, StatePill, TitleRow } from './design/surfaces'
 import { ConflictPanel } from './LedgerScreen'
@@ -395,13 +395,12 @@ export function JourneyScreen({
                   >
                     無断キャンセルとして記録する
                   </Action>
-                  <Field label="取消の理由" htmlFor="journey-cancel-reason">
-                    <TextInput
-                      id="journey-cancel-reason"
-                      value={cancelReason}
-                      onChange={(event) => setCancelReason(event.target.value)}
-                    />
-                  </Field>
+                  <TextField
+                    id="journey-cancel-reason"
+                    value={cancelReason}
+                    onChange={(event) => setCancelReason(event.target.value)}
+                    label="取消の理由"
+                  />
                   <Action
                     variant="danger"
                     className="w-full"
@@ -430,44 +429,40 @@ export function JourneyScreen({
                 </div>
               )}
 
-              <Field label="店内工程" htmlFor="journey-stage">
-                <Select
-                  id="journey-stage"
-                  value={stage}
-                  onChange={(event) => setStage(event.target.value as ReceptionProgress)}
-                >
-                  {STAGE_OPTIONS.map((option) => (
-                    <option key={option.key} value={option.key}>
-                      {option.label}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
+              <SelectField
+                id="journey-stage"
+                value={stage}
+                onChange={(event) => setStage(event.target.value as ReceptionProgress)}
+                label="店内工程"
+              >
+                {STAGE_OPTIONS.map((option) => (
+                  <option key={option.key} value={option.key}>
+                    {option.label}
+                  </option>
+                ))}
+              </SelectField>
 
               {selected.entryType === 'reservation' && (
                 <>
-                  <Field label="担当者ID" htmlFor="journey-staff">
-                    <TextInput
-                      id="journey-staff"
-                      value={staffId}
-                      onChange={(event) => setStaffId(event.target.value)}
-                    />
-                  </Field>
-                  <Field label="設備ID" htmlFor="journey-equipment">
-                    <TextInput
-                      id="journey-equipment"
-                      value={equipmentId}
-                      onChange={(event) => setEquipmentId(event.target.value)}
-                    />
-                  </Field>
-                  <Field label="次のご案内" htmlFor="journey-guidance">
-                    <Textarea
-                      id="journey-guidance"
-                      rows={3}
-                      value={guidance}
-                      onChange={(event) => setGuidance(event.target.value)}
-                    />
-                  </Field>
+                  <TextField
+                    id="journey-staff"
+                    value={staffId}
+                    onChange={(event) => setStaffId(event.target.value)}
+                    label="担当者ID"
+                  />
+                  <TextField
+                    id="journey-equipment"
+                    value={equipmentId}
+                    onChange={(event) => setEquipmentId(event.target.value)}
+                    label="設備ID"
+                  />
+                  <TextAreaField
+                    id="journey-guidance"
+                    rows={3}
+                    value={guidance}
+                    onChange={(event) => setGuidance(event.target.value)}
+                    label="次のご案内"
+                  />
                 </>
               )}
 

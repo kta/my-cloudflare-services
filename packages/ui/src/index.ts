@@ -16,7 +16,6 @@ export {
   Button,
   type ButtonVariant,
   buttonClass,
-  Card,
   Chip,
   Field,
   focusRing,

@@ -10,17 +10,13 @@ import type { StaffLocation } from './staff-navigation'
  * - 予約フローと設定ガイドはバーに操作を持たない。副題だけが今どこかを名乗る。
  */
 
-type BarTab = { label: string; to: StaffLocation }
-
 export type BarSpec = {
-  /**
-   * `home` だけが お知らせ / アラート / 設定 の 3 つを出す。`admin` は設定と
-   * 運用の面で、タブの並びは同じでも読み上げる名前が業務の面と違う。
-   */
+  /** `home` だけが お知らせ / アラート / 設定 の 3 つを出す。 */
   kind: 'home' | 'business' | 'admin' | 'plain'
   /** ワードマークの 2 行目。 */
   subtitle: string
-  tabs: BarTab[]
+  /* バーは行き先を持たない。移動はすべて左サイドバーが担う。 */
+  tabs: never[]
   primary?: { label: string; to: StaffLocation }
 }
 
@@ -38,14 +34,8 @@ const OPERATION_SCREENS = new Set<StaffLocation['screen']>([
   'alerts',
 ])
 
-export function barFor(
-  location: StaffLocation,
-  store: StoreSummary,
-  today: string | undefined,
-): BarSpec {
-  const ledger: StaffLocation = { screen: 'ledger', date: today ?? '' }
+export function barFor(location: StaffLocation, store: StoreSummary): BarSpec {
   const name = store.name
-  const tab = (label: string, to: StaffLocation): BarTab => ({ label, to })
 
   switch (location.screen) {
     case 'home':
@@ -68,57 +58,49 @@ export function barFor(
       return {
         kind: 'admin',
         subtitle: `${name} · 設定ガイド`,
-        tabs: [
-          tab('設定ガイド', { screen: 'settings' }),
-          tab('設定一覧', { screen: 'shared-terminals' }),
-          tab('変更履歴', { screen: 'audit' }),
-        ],
+        tabs: [],
       }
     case 'ledger':
       return {
         kind: 'business',
         subtitle: `${name} · ${store.isActive ? '営業中' : '受付停止'}`,
-        tabs: [
-          tab('予約台帳', ledger),
-          tab('来店受付', { screen: 'journey' }),
-          tab('受付履歴', { screen: 'reception-history' }),
-          tab('顧客台帳', { screen: 'customers' }),
-        ],
+        tabs: [],
         primary: { label: '＋ 予約を取る', to: { screen: 'booking' } },
       }
     case 'journey':
       return {
         kind: 'business',
         subtitle: `${name} · 来店受付`,
-        tabs: [
-          tab('予約台帳', ledger),
-          tab('来店受付', { screen: 'journey' }),
-          tab('顧客台帳', { screen: 'customers' }),
-        ],
+        tabs: [],
         // 店頭に立っているお客様を通す面なので、主操作は予約ではない。
         primary: { label: '＋ 店頭のお客様を受付', to: { screen: 'journey' } },
       }
     case 'reception-history':
+      /*
+       * `reception-history-approved.html` のバーは `予約台帳 / 受付履歴 /
+       * 予約検索` の 3 本。来店受付と顧客台帳はここには無く、予約台帳から辿る。
+       */
       return {
         kind: 'business',
         subtitle: `${name} · 受付履歴`,
-        tabs: [
-          tab('予約台帳', ledger),
-          tab('来店受付', { screen: 'journey' }),
-          tab('受付履歴', { screen: 'reception-history' }),
-          tab('顧客台帳', { screen: 'customers' }),
-        ],
+        tabs: [],
+        // 履歴を見ている最中に「では予約を」と言われる面なので、主操作を持つ。
+        primary: { label: '＋ 予約を取る', to: { screen: 'booking' } },
       }
     case 'reservation-search':
-    case 'customers':
       return {
         kind: 'business',
-        subtitle: location.screen === 'customers' ? `${name} · 顧客台帳` : `${name} · 検索対象店舗`,
-        tabs: [
-          tab('予約台帳', ledger),
-          tab('予約検索', { screen: 'reservation-search' }),
-          tab('顧客台帳', { screen: 'customers' }),
-        ],
+        subtitle: `${name} · 検索対象店舗`,
+        tabs: [],
+        // 検索して見つからなかったときの続きが「取る」なので、ここにも置く。
+        primary: { label: '＋ 予約を取る', to: { screen: 'booking' } },
+      }
+    case 'customers':
+      // 顧客台帳のモックはタブだけで主操作を持たない。検索と同じ枝に置かない。
+      return {
+        kind: 'business',
+        subtitle: `${name} · 顧客台帳`,
+        tabs: [],
       }
     case 'reservation-detail':
       return { kind: 'plain', subtitle: `${name} · 予約`, tabs: [] }
@@ -130,14 +112,57 @@ export function barFor(
     return {
       kind: 'admin',
       subtitle: `${name} · 設定`,
-      tabs: [
-        tab('端末とセキュリティ', { screen: 'shared-terminals' }),
-        tab('利用者とロール', { screen: 'attention-settings' }),
-        tab('監査ログ', { screen: 'audit' }),
-      ],
+      tabs: [],
     }
 
   return { kind: 'plain', subtitle: `${name} · 営業中`, tabs: [] }
+}
+
+/* ------------------------------------------------------------------ *
+ * 全画面共通の左サイドバー
+ * ------------------------------------------------------------------ */
+
+/*
+ * 承認済みモックは、面の行き来を緑バーのタブと各面の左サイドに分けて持たせて
+ * いる。その形は面ごとにタブの並びが変わり、同じ面が 2 つの名で呼ばれ、
+ * 深いものは 3 階層辿らないと出てこない（分析・お知らせ）。実際に到達できない
+ * 面が生まれもした。
+ *
+ * そこで、行き先はすべて 1 本の左サイドバーに集める。250px の左サイドは元から
+ * 設定・運用の面が持っていた形なので、見た目の語彙は増えない。緑バーは店舗と
+ * 主操作だけを持つ。モックからの意図的な逸脱で、理由は `docs/frontend/REBUILD.md`
+ * に残す。
+ */
+
+type SidebarItem = { label: string; to: StaffLocation }
+export type SidebarGroup = { label: string; items: SidebarItem[] }
+
+export function sidebarFor(today: string | undefined): SidebarGroup[] {
+  return [
+    {
+      label: '業務',
+      items: [
+        { label: '予約台帳', to: { screen: 'ledger', date: today ?? '' } },
+        { label: '来店受付', to: { screen: 'journey' } },
+        { label: '受付履歴', to: { screen: 'reception-history' } },
+        { label: '予約検索', to: { screen: 'reservation-search' } },
+        { label: '顧客台帳', to: { screen: 'customers' } },
+      ],
+    },
+    {
+      label: '設定・運用',
+      items: [
+        { label: '設定ガイド', to: { screen: 'settings' } },
+        { label: '共有端末', to: { screen: 'shared-terminals' } },
+        { label: '録音運用', to: { screen: 'recording-ops' } },
+        { label: '注意事項', to: { screen: 'attention-settings' } },
+        { label: '監査ログ', to: { screen: 'audit' } },
+        { label: '顧客の統合・訂正', to: { screen: 'customer-merge' } },
+        { label: '分析', to: { screen: 'analytics' } },
+        { label: 'お知らせ', to: { screen: 'alerts' } },
+      ],
+    },
+  ]
 }
 
 /* ------------------------------------------------------------------ *
@@ -173,3 +198,46 @@ function createBarOverlay() {
 }
 
 export const barOverlay = createBarOverlay()
+
+/* ------------------------------------------------------------------ *
+ * 面からサイドバーへ書き込む節
+ * ------------------------------------------------------------------ */
+
+/**
+ * 開いている面の中の節（`operations-approved.html` の `.side` が並べていたもの）。
+ *
+ * 250px の柱を面ごとに 2 本立てると、本文が半分になってしまう。柱は 1 本に
+ * して、その面の節は開いている行き先の下へ入れる。どの節を出すかは面しか
+ * 知らないので、面が書きサイドバーが読む。
+ */
+export type ScreenSection = { label: string; to?: StaffLocation; current?: boolean }
+
+function createSectionStore() {
+  let current: ScreenSection[] = []
+  const listeners = new Set<() => void>()
+  const same = (next: ScreenSection[]) =>
+    next.length === current.length &&
+    next.every(
+      (section, index) =>
+        section.label === current[index]?.label &&
+        section.current === current[index]?.current &&
+        section.to?.screen === current[index]?.to?.screen,
+    )
+  return {
+    snapshot: () => current,
+    subscribe(listener: () => void) {
+      listeners.add(listener)
+      return () => {
+        listeners.delete(listener)
+      }
+    },
+    set(next: ScreenSection[]) {
+      // 同じ並びで起こすと、面の描画ごとに柱が揺れる。
+      if (same(next)) return
+      current = next
+      for (const listener of listeners) listener()
+    },
+  }
+}
+
+export const screenSections = createSectionStore()

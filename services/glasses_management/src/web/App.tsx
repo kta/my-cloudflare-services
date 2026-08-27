@@ -1,12 +1,26 @@
-import { Notice } from '@app/ui'
 import { type ReactNode, useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { barFor, barOverlay } from './app-chrome'
+import { barFor, barOverlay, screenSections, sidebarFor } from './app-chrome'
 import { AppBar, BarButton, BarPush, PlainBar, Screen, Wordmark } from './design/chrome'
-import { Action } from './design/controls'
+import { Action, SearchField } from './design/controls'
+import { SwitchOption, SwitchSheet } from './design/dialogs'
 import { ExceptionContent, FullScreenState } from './design/layouts'
+import { FailureNotice } from './design/notices'
+import {
+  AppSidebar,
+  SidebarGroup,
+  SidebarItem,
+  SidebarSection,
+  SidebarSections,
+} from './design/sidebar'
+import { Card } from './design/surfaces'
 import { bindSharedTerminalLifecycle, type createSharedTerminalController } from './shared-terminal'
 import type { createStaffNavigation, StaffLocation } from './staff-navigation'
-import type { createStoreSwitchController, SelectedStore } from './store-switch'
+import {
+  type createStoreSwitchController,
+  filterStores,
+  type SelectedStore,
+  storeSwitchOptions,
+} from './store-switch'
 
 /* 承認済みモックの `.bar button` — 透明・白文字・44px 角丸 8px。 */
 
@@ -29,7 +43,8 @@ type AppProps = {
   today?: string
   /**
    * ヘッダーの件数 (UC-EYEX-007)。お知らせとアラートは決して合算しない。通知 API
-   * が未実装のため任意で、未指定のときは 0 と推測せず「未取得」と言う。
+   * を読み終えるまでは undefined。0 件と推測せず、件数そのものを出さない
+   * （「未取得」と書くとモックに無い言葉が増え、0 件との読み分けも増える）。
    */
   notifications?: { unreadAnnouncements: number; openAlerts: number }
   /**
@@ -72,12 +87,20 @@ export function App({
     () => undefined,
   )
   /* 面が書いたバーの上書き（予約フローのチップと副題）。 */
+  /* 開いている面が書いた節。柱がその面の行き先の下へ入れる。 */
+  const sections = useSyncExternalStore(
+    screenSections.subscribe,
+    screenSections.snapshot,
+    screenSections.snapshot,
+  )
   const overlay = useSyncExternalStore(
     barOverlay.subscribe,
     barOverlay.snapshot,
     barOverlay.snapshot,
   )
   const [storePickerOpen, setStorePickerOpen] = useState(false)
+  /* 切替シートの絞り込み。シートを閉じるたびに捨てる（前回の入力を残さない）。 */
+  const [storeQuery, setStoreQuery] = useState('')
   const [discardConfirmation, setDiscardConfirmation] = useState<
     { fromStore: string; toStore: string } | undefined
   >()
@@ -162,59 +185,22 @@ export function App({
         void recordThenCommit(fromStoreId, store)
       }
     }
-    if (discardConfirmation) {
-      /*
-       * 承認済みモック `exception-states-approved.html#unsaved-store-switch`。
-       * 判断が済むまで台帳へは戻れないので、業務クロムごと差し替える（店舗
-       * ピッカーもここで閉じる — 幕を 2 枚重ねない）。
-       */
-      const commit = () => {
-        if (pendingAudit) {
-          const nextStore = accessibleStores.find((store) => store.id === pendingAudit.toStoreId)
-          if (nextStore) void recordThenCommit(pendingAudit.fromStoreId, nextStore)
-        }
-        setDiscardConfirmation(undefined)
-        setPendingAudit(undefined)
+    const commitDiscard = () => {
+      if (pendingAudit) {
+        const nextStore = accessibleStores.find((store) => store.id === pendingAudit.toStoreId)
+        if (nextStore) void recordThenCommit(pendingAudit.fromStoreId, nextStore)
       }
-      return (
-        <Screen>
-          <PlainBar subtitle={`${discardConfirmation.fromStore} · 入力中の予約あり`} />
-          <ExceptionContent dialogLabelledBy="unsaved-store-switch-title">
-            <h1 id="unsaved-store-switch-title">店舗を切り替える前に確認してください</h1>
-            {/*
-             * 失敗ではなく警告なので琥珀。design/layouts の Panel と同じ見た目だが、
-             * 読み上げでは「注意書き」と分かる必要があるので role を持たせる。
-             */}
-            <section
-              role="note"
-              aria-label={`${discardConfirmation.fromStore}で入力中の予約があります`}
-              className="mt-4.5 rounded-panel border border-amber-line bg-amber-soft p-6"
-            >
-              <b>{`${discardConfirmation.fromStore}で入力中の予約があります`}</b>
-              <p>{`入力内容と録音は${discardConfirmation.toStore}へ持ち越しません。`}</p>
-            </section>
-            <div className="mt-5 flex flex-wrap justify-end gap-3">
-              {/* 危険な方を既定にしない: 主操作は入力を守る側に置く。 */}
-              <Action
-                size="roomy"
-                variant="primary"
-                onClick={() => {
-                  setDiscardConfirmation(undefined)
-                  setPendingAudit(undefined)
-                }}
-              >
-                {`${discardConfirmation.fromStore}で入力を続ける`}
-              </Action>
-              <Action size="roomy" variant="danger" disabled={isSwitching} onClick={commit}>
-                {`入力を破棄して${discardConfirmation.toStore}へ切り替える`}
-              </Action>
-            </div>
-          </ExceptionContent>
-        </Screen>
-      )
+      setDiscardConfirmation(undefined)
+      setPendingAudit(undefined)
     }
     /* 緑バーの中身は面ごとに違う。承認済みモックの実測は app-chrome が持つ。 */
-    const bar = barFor(location ?? { screen: 'home' }, storeSnapshot.selectedStore, today)
+    const bar = barFor(location ?? { screen: 'home' }, storeSnapshot.selectedStore)
+    /*
+     * 予約フローは電話を受けている最中の面なので、別の面への動線を置かない
+     * （途中で移ると入力が消える）。ホームは主操作 2 枚を大きく見せる面で、
+     * モックどおり柱を持たない。
+     */
+    const showSidebar = location !== undefined && !['home', 'booking'].includes(location.screen)
     return (
       /* The workspace chrome is a banner landmark, not part of the screen's
          main content: assistive tech and tests both need to tell "which store /
@@ -230,8 +216,19 @@ export function App({
           {/* モックでは飾りに見えるが、店舗切替の入口はここしかない。 */}
           <Wordmark
             variant={bar.kind === 'home' ? 'booking' : 'workspace'}
-            subtitle={overlay.subtitle ?? bar.subtitle}
-            onClick={() => setStorePickerOpen((open) => !open)}
+            /*
+             * 破棄確認の間は、どの店舗の入力を抱えたまま止まっているのかを
+             * 帯が名乗る（確認は業務クロムの上に重なるだけで、帯は残る）。
+             */
+            subtitle={
+              discardConfirmation
+                ? `${discardConfirmation.fromStore} · 入力中の予約あり`
+                : (overlay.subtitle ?? bar.subtitle)
+            }
+            onClick={() => {
+              setStoreQuery('')
+              setStorePickerOpen((open) => !open)
+            }}
           />
           {overlay.chip && (
             <BarPush variant="booking">
@@ -239,24 +236,6 @@ export function App({
                 {overlay.chip}
               </p>
             </BarPush>
-          )}
-          {bar.tabs.length > 0 && (
-            <nav
-              /* 業務の面と設定の面で、同じ帯でも名乗る名前を分ける。 */
-              aria-label={bar.kind === 'admin' ? '設定メニュー' : '業務メニュー'}
-              className="flex items-center gap-3"
-            >
-              {bar.tabs.map((tab) => (
-                <BarButton
-                  key={tab.label}
-                  on={tab.to.screen === location?.screen}
-                  current={tab.to.screen === location?.screen}
-                  onClick={() => navigation?.navigate(tab.to)}
-                >
-                  {tab.label}
-                </BarButton>
-              ))}
-            </nav>
           )}
           {bar.primary && (
             <BarPush>
@@ -275,14 +254,14 @@ export function App({
                 variant="booking"
                 onClick={() => navigation?.navigate({ screen: 'alerts' })}
               >
-                {`お知らせ ${notifications ? `${notifications.unreadAnnouncements}件` : '未取得'}`}
+                {notifications ? `お知らせ ${notifications.unreadAnnouncements}件` : 'お知らせ'}
               </BarButton>
               <BarButton
                 outline
                 variant="booking"
                 onClick={() => navigation?.navigate({ screen: 'alerts' })}
               >
-                {`アラート ${notifications ? `${notifications.openAlerts}件` : '未取得'}`}
+                {notifications ? `アラート ${notifications.openAlerts}件` : 'アラート'}
               </BarButton>
               <BarButton
                 outline
@@ -294,72 +273,172 @@ export function App({
             </BarPush>
           )}
         </AppBar>
-        <div className="min-h-0 flex-1 overflow-auto">
-          {switchError && (
-            <div className="mx-auto max-w-6xl px-5 pt-5">
-              <Notice tone="danger">{switchError}</Notice>
-            </div>
+        {/*
+         * バーの下は「250px の柱 + 本文」の 2 列。柱は全画面共通で、行き先と、
+         * 開いている面の節を並べる。予約フローと例外の面は業務から離れる面
+         * なので柱を出さない（受付の途中で別の面へ移す動線を置かない）。
+         */}
+        <div className="flex min-h-0 flex-1">
+          {showSidebar && (
+            <AppSidebar>
+              {sidebarFor(today).map((group) => (
+                <SidebarGroup key={group.label} label={group.label}>
+                  {group.items.map((item) => {
+                    const current = item.to.screen === location?.screen
+                    return (
+                      <div key={item.label}>
+                        <SidebarItem
+                          current={current}
+                          onClick={() => navigation?.navigate(item.to)}
+                        >
+                          {item.label}
+                        </SidebarItem>
+                        {current && sections.length > 0 && (
+                          <SidebarSections>
+                            {sections.map((section) => (
+                              <SidebarSection
+                                key={section.label}
+                                current={section.current === true}
+                                onClick={
+                                  section.to === undefined
+                                    ? undefined
+                                    : () => navigation?.navigate(section.to as StaffLocation)
+                                }
+                              >
+                                {section.label}
+                              </SidebarSection>
+                            ))}
+                          </SidebarSections>
+                        )}
+                      </div>
+                    )
+                  })}
+                </SidebarGroup>
+              ))}
+            </AppSidebar>
           )}
-          {location && renderScreen ? (
-            renderScreen(location)
-          ) : (
-            <section className="mx-auto max-w-6xl px-5 py-8">
-              <p className="font-sans text-sm text-ink-muted">選択中の店舗</p>
-              <h2 className="font-display text-3xl font-semibold">
-                {storeSnapshot.selectedStore.name}の予約台帳
-              </h2>
-              <Notice tone="info">
-                店舗を切り替えると、検索条件・選択中の予約・入力中の内容は引き継ぎません。
-              </Notice>
-            </section>
-          )}
+          {/*
+           * 面は自分で列を作る（`Workspace` の 390px レールなど）。ここを縦の
+           * flex にしておかないと `flex-1` が効かず、地色の列がバーの下いっぱいに
+           * 伸びずに途中で切れる。
+           */}
+          <div className="flex min-h-0 flex-1 flex-col overflow-auto">
+            {switchError && (
+              <div className="p-5.5">
+                <FailureNotice>{switchError}</FailureNotice>
+              </div>
+            )}
+            {location && renderScreen ? (
+              renderScreen(location)
+            ) : (
+              <section className="p-5.5 font-sans text-body text-ink">
+                <h1>{`${storeSnapshot.selectedStore.name}の予約台帳`}</h1>
+                <Card className="mt-4.5">
+                  店舗を切り替えると、検索条件・選択中の予約・入力中の内容は引き継ぎません。
+                </Card>
+              </section>
+            )}
+          </div>
         </div>
         {storePickerOpen && (
-          <div className="fixed inset-0 z-10 bg-ink/40 p-5" role="presentation">
-            <section
-              className="mx-auto mt-20 max-w-md rounded-ctl bg-surface shadow-lg"
-              aria-label="作業する店舗を切り替える"
-            >
-              <div className="border-b border-line p-5">
-                <h2 className="font-display text-xl font-semibold">作業する店舗を切り替える</h2>
-                <p className="mt-1 text-sm text-ink-muted">他店舗の空き枠はここに表示しません。</p>
+          /*
+           * 承認済みモック `store-switch-approved.html` の切替シート。幕は台帳を
+           * 消さず上に掛かるだけで、左へ寄せて「今どの店舗を見ていたか」を
+           * 残したまま切り替えさせる。
+           */
+          <SwitchSheet
+            title="作業する店舗を切り替える"
+            titleId="store-switch-title"
+            search={
+              <SearchField
+                label="店舗名で検索"
+                placeholder="店舗名で検索"
+                value={storeQuery}
+                onChange={setStoreQuery}
+              />
+            }
+            boundary="他店舗の空き枠はここに表示しません。切替後、その店舗の予約台帳で確認してください。"
+          >
+            {storeSwitchOptions(
+              filterStores(accessibleStores, storeQuery),
+              storeSnapshot.selectedStore.id,
+            ).map((option) => (
+              <SwitchOption
+                key={option.store.id}
+                name={option.store.name}
+                note={option.note}
+                state={option.state}
+                selected={option.selected}
+                suspended={option.suspended}
+                disabled={isSwitching}
+                onClick={() => selectStore(option.store)}
+              />
+            ))}
+          </SwitchSheet>
+        )}
+        {discardConfirmation && (
+          /*
+           * 承認済みモック `exception-states-approved.html#unsaved-store-switch`。
+           *
+           * 業務クロムごと差し替えず、その上に重ねる。差し替えると入力中の面
+           * (`BookingFlow`) が unmount され、この確認が守ると宣言した下書きが、
+           * 確認を出しただけで消えてしまう（さらに「未入力」に戻るので、以後の
+           * 切替では確認そのものが出なくなる）。判断が済むまで手前は塞ぐので、
+           * 幕は全面に敷き、店舗ピッカーは開く時点で閉じてある。
+           */
+          <div className="fixed inset-0 z-50 overflow-auto bg-paper">
+            <ExceptionContent dialogLabelledBy="unsaved-store-switch-title">
+              <h1 id="unsaved-store-switch-title">店舗を切り替える前に確認してください</h1>
+              {/*
+               * 失敗ではなく警告なので琥珀。design/layouts の Panel と同じ見た目だが、
+               * 読み上げでは「注意書き」と分かる必要があるので role を持たせる。
+               */}
+              <section
+                role="note"
+                aria-label={`${discardConfirmation.fromStore}で入力中の予約があります`}
+                className="mt-4.5 rounded-panel border border-amber-line bg-amber-soft p-6"
+              >
+                <b>{`${discardConfirmation.fromStore}で入力中の予約があります`}</b>
+                <p>{`入力内容と録音は${discardConfirmation.toStore}へ持ち越しません。`}</p>
+              </section>
+              <div className="mt-5 flex flex-wrap justify-end gap-3">
+                {/* 危険な方を既定にしない: 主操作は入力を守る側に置く。 */}
+                <Action
+                  size="roomy"
+                  variant="primary"
+                  onClick={() => {
+                    setDiscardConfirmation(undefined)
+                    setPendingAudit(undefined)
+                  }}
+                >
+                  {`${discardConfirmation.fromStore}で入力を続ける`}
+                </Action>
+                <Action
+                  size="roomy"
+                  variant="danger"
+                  disabled={isSwitching}
+                  onClick={commitDiscard}
+                >
+                  {`入力を破棄して${discardConfirmation.toStore}へ切り替える`}
+                </Action>
               </div>
-              <ul className="divide-y divide-line">
-                {accessibleStores.map((store) => (
-                  <li key={store.id}>
-                    <button
-                      type="button"
-                      disabled={isSwitching}
-                      className="min-h-12 w-full px-5 py-3 text-left focus-visible:outline focus-visible:outline-2 disabled:cursor-not-allowed disabled:opacity-50"
-                      onClick={() => selectStore(store)}
-                    >
-                      <span className="font-semibold">{store.name}</span>
-                      <span className="ml-2 text-sm text-ink-muted">
-                        {store.id === storeSnapshot.selectedStore.id
-                          ? '選択中'
-                          : store.isActive
-                            ? '営業中'
-                            : '受付停止'}
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </section>
+            </ExceptionContent>
           </div>
         )}
       </Screen>
     )
   }
+  /*
+   * 店舗も画面も注入されていないとき。業務のクロムを名乗れないので、例外・回復と
+   * 同じ全画面の姿で「まだ何も選ばれていない」ことだけを日本語で言う。英語の
+   * 開発メモを製品の面に出さない。
+   */
   return (
-    <main className="mx-auto flex min-h-dvh max-w-2xl flex-col justify-center gap-5 px-6 py-12">
-      <header className="border-b border-line pb-4">
-        <p className="font-sans text-sm text-ink-muted">EYEX reservation service</p>
-        <h1 className="font-display text-3xl font-semibold tracking-tight text-ink">
-          Glasses Management
-        </h1>
-      </header>
-      <Notice tone="success">Service shell is ready.</Notice>
-    </main>
+    <Screen>
+      <PlainBar subtitle="店舗未選択" />
+      <FullScreenState glyph="●" title="作業する店舗が選ばれていません">
+        <p>店舗を選ぶと、その店舗の予約台帳から業務を始められます。</p>
+      </FullScreenState>
+    </Screen>
   )
 }

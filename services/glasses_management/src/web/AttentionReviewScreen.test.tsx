@@ -2,6 +2,7 @@ import { ATTENTION_INPUT_GUIDANCE } from '@app/contracts'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import { AttentionReviewScreen } from './AttentionReviewScreen'
+import { screenSections } from './app-chrome'
 
 const STORE_ID = '00000000-0000-4000-8000-000000000010'
 const CUSTOMER_ID = '00000000-0000-4000-8000-000000000020'
@@ -148,7 +149,8 @@ test('確認待ちの待ち行列・3カード・公開前チェックを出す'
   const card = await waitFor(() => noteCard('注意事項 確認待ち 版1'))
   // 管理タブは 76px の緑バーが持つ。面が 2 本目の緑帯を持つのはモックに無い。
   expect(screen.queryByRole('navigation', { name: '設定タブ' })).toBeNull()
-  expect(screen.getByRole('navigation', { name: '確認待ちの節' })).toBeInTheDocument()
+  /* 確認待ちの並びは全画面共通の柱が持つ。面の側では渡した中身で確かめる。 */
+  expect(screenSections.snapshot().length).toBeGreaterThan(0)
   expect(screen.getByRole('heading', { name: '注意事項を確認' })).toBeInTheDocument()
 
   expect(within(card).getByRole('region', { name: '発生した事実 版1' })).toHaveTextContent(

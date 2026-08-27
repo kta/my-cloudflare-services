@@ -1,7 +1,7 @@
 import { AvailabilityStoreSettings, CustomerCandidate, LedgerEntry } from '@app/contracts'
-import { Field, TextInput } from '@app/ui'
 import { type ReactNode, useCallback, useEffect, useState } from 'react'
 import { Action, Actions } from './design/controls'
+import { TextField } from './design/forms'
 import { Compare, Panel } from './design/layouts'
 import { type LedgerCell, LedgerGrid, type LedgerLane } from './design/ledger'
 import { Card, StatePill } from './design/surfaces'
@@ -412,13 +412,12 @@ export function LedgerScreen({ storeId, storeName, api, date, now }: LedgerScree
 
                   {selected.customerId === null && (
                     <div className="space-y-3">
-                      <Field label="氏名で顧客を探す" htmlFor="walkin-search-name">
-                        <TextInput
-                          id="walkin-search-name"
-                          value={searchName}
-                          onChange={(event) => setSearchName(event.target.value)}
-                        />
-                      </Field>
+                      <TextField
+                        id="walkin-search-name"
+                        value={searchName}
+                        onChange={(event) => setSearchName(event.target.value)}
+                        label="氏名で顧客を探す"
+                      />
                       <Action
                         className="w-full"
                         onClick={() => {
@@ -465,33 +464,30 @@ export function LedgerScreen({ storeId, storeName, api, date, now }: LedgerScree
                           {`${candidate.name} · ${candidate.phone}`}
                         </Action>
                       ))}
-                      <Field label="お名前" htmlFor="walkin-new-name">
-                        <TextInput
-                          id="walkin-new-name"
-                          value={newCustomer.name}
-                          onChange={(event) =>
-                            setNewCustomer({ ...newCustomer, name: event.target.value })
-                          }
-                        />
-                      </Field>
-                      <Field label="フリガナ" htmlFor="walkin-new-kana">
-                        <TextInput
-                          id="walkin-new-kana"
-                          value={newCustomer.kana}
-                          onChange={(event) =>
-                            setNewCustomer({ ...newCustomer, kana: event.target.value })
-                          }
-                        />
-                      </Field>
-                      <Field label="電話番号" htmlFor="walkin-new-phone">
-                        <TextInput
-                          id="walkin-new-phone"
-                          value={newCustomer.phone}
-                          onChange={(event) =>
-                            setNewCustomer({ ...newCustomer, phone: event.target.value })
-                          }
-                        />
-                      </Field>
+                      <TextField
+                        id="walkin-new-name"
+                        value={newCustomer.name}
+                        onChange={(event) =>
+                          setNewCustomer({ ...newCustomer, name: event.target.value })
+                        }
+                        label="お名前"
+                      />
+                      <TextField
+                        id="walkin-new-kana"
+                        value={newCustomer.kana}
+                        onChange={(event) =>
+                          setNewCustomer({ ...newCustomer, kana: event.target.value })
+                        }
+                        label="フリガナ"
+                      />
+                      <TextField
+                        id="walkin-new-phone"
+                        value={newCustomer.phone}
+                        onChange={(event) =>
+                          setNewCustomer({ ...newCustomer, phone: event.target.value })
+                        }
+                        label="電話番号"
+                      />
                       <Action
                         variant="primary"
                         className="w-full"

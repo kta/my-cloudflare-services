@@ -1,5 +1,6 @@
 import { cn } from '@app/ui'
-import type { CSSProperties, ReactNode } from 'react'
+import type { ReactNode } from 'react'
+import { formatIsoDateJa } from './forms'
 
 /*
  * 操作の語彙。モックの実測は次のとおりで、面によって高さが 2 段ある。
@@ -36,6 +37,7 @@ export function Action({
   variant = 'default',
   size = 'compact',
   inset = 'wide',
+  type = 'button',
   disabled = false,
   describedBy,
   className,
@@ -60,12 +62,19 @@ export function Action({
   disabled?: boolean
   /** 押せない理由など、この操作を説明している要素の id。 */
   describedBy?: string
+  /**
+   * ログイン等、form の submit で確定させたい面がある（Enter で送信できないと
+   * キーボードだけの利用者が確定に辿り着けない）。既定は button のままなので、
+   * 突き合わせ台の画素は動かない。
+   */
+  type?: 'button' | 'submit'
   className?: string
   onClick?: () => void
 }) {
   return (
     <button
-      type="button"
+      // 押せない状態では submit も起こさない（`disabled` の意味を型で守る）。
+      type={disabled ? 'button' : type}
       aria-disabled={disabled || undefined}
       aria-describedby={describedBy}
       onClick={disabled ? undefined : onClick}
@@ -145,6 +154,39 @@ export function FilterButton({
   )
 }
 
+/**
+ * 押している間だけ効く絞り込み（`.filter` と同じ寸法・同じ罫）。
+ *
+ * ネイティブの `<select>` を置くとブラウザ既定の見た目が絞り込みの列に混ざり、
+ * 選ばれている値も畳まれて見えなくなる。承認済みモックの絞り込みは「今の条件を
+ * 名乗るピル」なので、値ではなく条件そのものを 1 つずつ押せる形で持つ。
+ * 押されていることは地色だけでなく `aria-pressed` でも出す。
+ */
+export function FilterToggle({
+  children,
+  pressed,
+  onToggle,
+}: {
+  children: ReactNode
+  pressed: boolean
+  onToggle: () => void
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={pressed}
+      onClick={onToggle}
+      className={cn(
+        'min-h-11 rounded-ctl border px-3 font-sans text-body',
+        // 押されていない既定はモックの白いピルそのもの。押すと面の primary。
+        pressed ? VARIANT.primary : VARIANT.default,
+      )}
+    >
+      {children}
+    </button>
+  )
+}
+
 /** 絞り込みの並び（`.filterline{display:flex;gap:8px;margin:10px 0}`）。 */
 export function FilterLine({ children }: { children: ReactNode }) {
   return <div className="my-2.5 flex flex-wrap gap-2">{children}</div>
@@ -188,7 +230,12 @@ export function SearchField({
       placeholder={placeholder}
       onChange={(event) => onChange?.(event.target.value)}
       className={cn(
-        'w-full border-2 border-pine bg-surface font-sans text-ink placeholder:text-ink-muted',
+        /*
+         * 何を打つ欄なのかは、モックでは薄い字ではなく本文と同じ濃さで書いて
+         * ある（`.search` は板に本文色の文字を置いている）。薄くすると読める
+         * かどうかが地色との差に依るようになるので、濃さは落とさない。
+         */
+        'w-full border-2 border-pine bg-surface font-sans text-ink placeholder:text-ink',
         size === 'roomy'
           ? 'min-h-14 rounded-card p-3.75 text-search'
           : 'min-h-12 rounded-ctl p-3 text-body',
@@ -231,71 +278,40 @@ export function FilterSelect({
   )
 }
 
-export function FilterInput({
+/**
+ * 絞り込みの日付。`type="date"` を使わないのは `design/forms` と同じ理由で、
+ * ブラウザ既定の書式（`mm/dd/yy`）と選択色が絞り込みの列に持ち込まれるため。
+ * 値は `YYYY-MM-DD` のままで、打った日は隣で日本語に読み返す。
+ */
+export function FilterDate({
   label,
   id,
-  type = 'text',
   value,
   className,
   onChange,
 }: {
   label: string
   id?: string
-  type?: 'text' | 'date'
   value: string
   className?: string
   onChange?: (next: string) => void
 }) {
+  const readback = formatIsoDateJa(value)
   return (
-    <input
-      id={id}
-      type={type}
-      aria-label={label}
-      value={value}
-      onChange={(event) => onChange?.(event.target.value)}
-      className={cn(FILTER_FIELD, className)}
-    />
-  )
-}
-
-/**
- * 検索欄の見た目だけを持つ板（モックの `.search` は入力ではなく div で、
- * 中の文字は淡色のプレースホルダではなく本文色で描かれている）。
- * 突き合わせ台は状態を持たないので、入力ではなくこの板で描く。
- *
- * `<input>` に替えるとブラウザ既定の見た目が出てモックとずれるので、板のまま
- * `role` と名前だけを与え、読み上げ上は検索欄として振る舞わせる。
- */
-export function SearchPlate({
-  children,
-  label,
-  className,
-  style,
-}: {
-  children: ReactNode
-  /** 何を探す欄なのか。板は `<label>` を持てないので必ず渡す。 */
-  label: string
-  className?: string
-  style?: CSSProperties
-}) {
-  return (
-    /*
-     * `<input type="search">` にすると、ブラウザ既定の見た目が出てモックと
-     * ずれる。板のまま、役割と名前だけを足す。
-     */
-    // biome-ignore lint/a11y/useSemanticElements: 上記のとおり要素は替えられない。
-    <div
-      role="searchbox"
-      tabIndex={0}
-      aria-label={label}
-      className={cn(
-        'min-h-12 rounded-ctl border-2 border-pine bg-surface p-3 font-sans text-body text-ink',
-        className,
-      )}
-      style={style}
-    >
-      {children}
-    </div>
+    <span className="flex items-center gap-2">
+      <input
+        id={id}
+        type="text"
+        aria-label={label}
+        inputMode="numeric"
+        autoComplete="off"
+        placeholder="2026-09-23"
+        value={value}
+        onChange={(event) => onChange?.(event.target.value)}
+        className={cn(FILTER_FIELD, className)}
+      />
+      {readback !== undefined && <small className="font-sans">{readback}</small>}
+    </span>
   )
 }
 

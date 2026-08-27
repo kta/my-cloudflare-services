@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createRef } from 'react'
 import { describe, expect, it, vi } from 'vitest'
-import { Button, Card, Chip, Field, Notice, Select, Textarea, TextInput } from './index'
+import { Button, buttonClass, Chip, Field, Notice, Select, Textarea, TextInput } from './index'
 
 describe('Button', () => {
   it('renders a non-submitting button by default while preserving supplied attributes and refs', () => {
@@ -77,10 +77,9 @@ describe('form controls', () => {
 })
 
 describe('status primitives', () => {
-  it('keeps card and chip content visible and applies each chip tone', () => {
+  it('keeps chip content visible and applies each chip tone', () => {
     render(
       <>
-        <Card>Project summary</Card>
         <Chip tone="success">Saved</Chip>
         <Chip tone="warning">Review needed</Chip>
         <Chip tone="danger">Failed</Chip>
@@ -88,7 +87,6 @@ describe('status primitives', () => {
       </>,
     )
 
-    expect(screen.getByText('Project summary')).toBeVisible()
     expect(screen.getByText('Saved')).toHaveClass('text-pine')
     expect(screen.getByText('Review needed')).toHaveClass('text-amber')
     expect(screen.getByText('Failed')).toHaveClass('text-danger')
@@ -114,5 +112,19 @@ describe('Button interactions', () => {
 
     await user.click(screen.getByRole('button', { name: 'Delete item' }))
     expect(onDelete).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('defaults', () => {
+  it('falls back to the primary button look when no variant is given', () => {
+    // `buttonClass()` は <a> / Link 側から引数無しで呼ばれる。既定が primary から
+    // ずれると、同じ意味のリンクとボタンが別物に見える。
+    expect(buttonClass()).toContain('bg-pine')
+  })
+
+  it('treats a notice without a tone as an error that interrupts', () => {
+    // 既定が status に落ちると、通信失敗が読み上げに割り込まなくなる。
+    render(<Notice>Could not save</Notice>)
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not save')
   })
 })

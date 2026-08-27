@@ -3,25 +3,11 @@ import { useCallback, useEffect, useState } from 'react'
 import { Action, Actions } from './design/controls'
 import { Modal } from './design/dialogs'
 import { TextField } from './design/forms'
-import { AdminLayout, AdminSurface, SideNavItem } from './design/layouts'
+import { AdminLayout, AdminSurface } from './design/layouts'
 import { FailureNotice, StatusNotice } from './design/notices'
 import { AdminRow, Card, CardGrid, StatePill, TitleRow } from './design/surfaces'
 import type { StaffLocation } from './staff-navigation'
 import type { StaffScreenProps } from './staff-screen'
-
-/** 節ナビ。モック `operations-approved.html#devices` の 4 つと、その順序。 */
-const SECTIONS: { label: string; to?: StaffLocation }[] = [
-  { label: '共有iPad', to: { screen: 'shared-terminals' } },
-  { label: '無操作ロック' },
-  { label: '個人PIN' },
-  { label: '共有セッション' },
-  /*
-   * モックの節ナビはこの面の中の節だけを並べる。ただし 2 本目の帯を作らない
-   * 以上、同じタブの下にある別の面へはここからしか行けない。到達できない画面を
-   * 作らないために、兄弟の面も同じ並びの末尾に置く。
-   */
-  { label: '録音運用', to: { screen: 'recording-ops' } },
-]
 
 const LOAD_FAILURE = '共有iPadの一覧を取得できませんでした。もう一度お試しください。'
 const CREATE_FAILURE = '共有iPadを登録できませんでした。もう一度お試しください。'
@@ -66,14 +52,15 @@ type Props = StaffScreenProps & {
  * operator is reading it: it is never stored, never re-fetchable, and the only
  * way out of the panel discards it (UC-EYEX-131).
  */
-export function SharedTerminalScreen({
-  storeId,
-  storeName,
-  api,
-  navigate,
-  now,
-  idleLockSeconds,
-}: Props) {
+/** 節ナビ。モック `operations-approved.html#devices` の 4 つと、その順序。 */
+const SECTIONS: { label: string; to?: StaffLocation }[] = [
+  { label: '共有iPad', to: { screen: 'shared-terminals' } },
+  { label: '無操作ロック' },
+  { label: '個人PIN' },
+  { label: '共有セッション' },
+]
+
+export function SharedTerminalScreen({ storeId, storeName, api, now, idleLockSeconds }: Props) {
   const [terminals, setTerminals] = useState<SharedTerminal[]>()
   const [failure, setFailure] = useState<string>()
   const [registering, setRegistering] = useState(false)
@@ -191,18 +178,14 @@ export function SharedTerminalScreen({
   return (
     <AdminSurface label="端末とセキュリティ">
       <AdminLayout
-        navLabel="端末とセキュリティの節"
-        nav={SECTIONS.map((section) => (
-          <SideNavItem
-            key={section.label}
-            on={section.label === '共有iPad'}
-            onClick={
-              section.to === undefined ? undefined : () => navigate(section.to as StaffLocation)
-            }
-          >
-            {section.label}
-          </SideNavItem>
-        ))}
+        /*
+         * 柱は全画面共通の 1 本しかないので、この面の節はそこへ渡す。
+         * 別の面への移動はサイドバーが持つので、ここでは並べない。
+         */
+        sections={SECTIONS.map((section) => ({
+          ...section,
+          current: section.label === '共有iPad',
+        }))}
       >
         <TitleRow
           gap={0}

@@ -3,7 +3,7 @@ import { expect, type Page, test } from '@playwright/test'
 /*
  * EYEX スタッフ端末の「店舗運用の分析」と「お知らせとアラート」の E2E。
  *
- * どちらもヘッダーの管理メニュー（分析 / お知らせ）から開く。API はすべて
+ * どちらも全画面共通の左サイドバー（設定・運用の群）から開く。API はすべて
  * `page.route` で差し替え、SPA だけを実行する。
  *
  * この spec の主張の中心は否定形である。サーバが抑制した値は、数字・割合・
@@ -547,14 +547,28 @@ async function mockStaffApi(page: Page, mocks: Mocks) {
   })
 }
 
+/**
+ * 面の行き来は全画面共通の左サイドバー 1 本に集約された。ホームには柱が出ない
+ * ので、緑帯の `設定` で設定ガイドへ入ってから柱で行き先を選ぶ。
+ */
 async function openAdmin(page: Page, label: string) {
   await page.setViewportSize(VIEWPORT)
   await page.goto('/')
-  await expect(page.getByRole('heading', { name: '銀座店のホーム' })).toBeVisible()
+  // ホームには見出しが無い。主操作の並びが出たことをホーム到達の合図にする。
+  await expect(page.getByRole('navigation', { name: '主操作' })).toBeVisible()
+  await page.getByRole('banner').getByRole('button', { name: '設定', exact: true }).click()
   await page
-    .getByRole('navigation', { name: '管理メニュー' })
-    .getByRole('button', { name: label })
+    .getByRole('navigation', { name: '画面の一覧' })
+    .getByRole('button', { name: label, exact: true })
     .click()
+}
+
+/**
+ * 分析は「観点」をひとつ選んで掘り下げる面になった。指標・分布・離脱は観点ごとに
+ * 別の段に出るので、確かめたいものの観点へ移ってから読む。
+ */
+async function openSection(page: Page, label: string) {
+  await page.getByRole('navigation', { name: '指標' }).getByRole('button', { name: label }).click()
 }
 
 async function openAnalytics(page: Page) {
@@ -598,12 +612,14 @@ test('分析は日・週・月の予約・来店・取消・無断キャンセ�
   await expect(page.getByText('比較対象 2026-08-26〜2026-08-26')).toBeVisible()
 
   // 予約・来店・取消・無断キャンセルの四つが揃う (UC-EYEX-099)。
-  for (const [label, value] of [
-    ['予約', '128件'],
-    ['来店', '120件'],
-    ['取消', '8件'],
-    ['無断キャンセル', '14件'],
+  // 指標は観点ごとの段に分かれたので、観点を移りながら四つを確かめる。
+  for (const [view, label, value] of [
+    ['予約と来店', '予約', '128件'],
+    ['予約と来店', '来店', '120件'],
+    ['取消・無断キャンセル', '取消', '8件'],
+    ['取消・無断キャンセル', '無断キャンセル', '14件'],
   ] as const) {
+    await openSection(page, view)
     const section = page.getByRole('region', { name: label, exact: true })
     await expect(section).toContainText(value)
     // 指標定義が指標ごとに読める (AC-EYEX-49)。
@@ -616,15 +632,18 @@ test('分析は日・週・月の予約・来店・取消・無断キャンセ�
   await expect(noShows).toContainText('店舗目標 8件（+6件）')
   await expect(noShows.getByText('目標超過')).toBeVisible()
   // 目標が未設定の指標は、0 をでっち上げずに未設定と言う (AC-EYEX-52)。
+  await openSection(page, '予約と来店')
   await expect(page.getByRole('region', { name: '予約', exact: true })).toContainText(
     '店舗目標は未設定です',
   )
 
   // 粒度を替えると期間そのものが替わる (UC-EYEX-099)。
-  await page.getByLabel('集計粒度').selectOption('week')
+  // 集計粒度はネイティブの select ではなく、押しボタン 3 つの組になった。
+  const granularity = page.getByRole('group', { name: '集計粒度' })
+  await granularity.getByRole('button', { name: '週' }).click()
   await expect(page.getByText('2026-08-24〜2026-08-30（週）')).toBeVisible()
   await expect(page.getByText('比較対象 2026-08-17〜2026-08-23')).toBeVisible()
-  await page.getByLabel('集計粒度').selectOption('month')
+  await granularity.getByRole('button', { name: '月' }).click()
   await expect(page.getByText('2026-08-01〜2026-08-31（月）')).toBeVisible()
   await expect(page.getByText('比較対象 2026-07-01〜2026-07-31')).toBeVisible()
 
@@ -680,6 +699,7 @@ test('来店目的・予約元・時間帯・担当者の内訳と、受付か�
   }
 
   // 待ち時間は平均一つではなく分布で読む (AC-EYEX-50 / UC-EYEX-101)。
+  await openSection(page, '待ち時間')
   const wait = page.getByRole('region', { name: '受付から接客開始まで の分布' })
   await expect(wait).toContainText('中央値 8分 / 平均 9分 / 90パーセンタイル 18分 / 最大 32分')
   await expect(wait).toContainText('対象40件')
@@ -691,6 +711,7 @@ test('来店目的・予約元・時間帯・担当者の内訳と、受付か�
   await expect(wait).toContainText('20件')
 
   // 関連工程（接客の所要時間）も同じ形で並ぶ (UC-EYEX-101)。
+  await openSection(page, '工程所要時間')
   const duration = page.getByRole('region', { name: '接客の所要時間 の分布' })
   await expect(duration).toContainText(
     '中央値 42分 / 平均 45分 / 90パーセンタイル 70分 / 最大 96分',
@@ -706,6 +727,7 @@ test('Web予約の離脱と運用品質の警告、除外行、断定しない�
   await openAnalytics(page)
 
   // 開始→枠選択→確認→完了 と、その間で失われた数 (UC-EYEX-103)。
+  await openSection(page, 'Web予約')
   const funnel = page.getByRole('region', { name: 'Web予約の離脱' })
   await expect(funnel).toContainText('対象100件')
   await expect(funnel).toContainText('最大の離脱は「枠選択」')
@@ -721,6 +743,7 @@ test('Web予約の離脱と運用品質の警告、除外行、断定しない�
   }
 
   // 録音保存失敗と設定矛盾が、件数と次の操作つきで並ぶ (UC-EYEX-104)。
+  await openSection(page, '録音・運用品質')
   const quality = page.getByRole('region', { name: '運用品質の警告' })
   await expect(quality).toContainText('録音の保存に失敗した接客があります。')
   await expect(quality).toContainText('録音運用画面で保存状況を確認してください。')
@@ -737,6 +760,7 @@ test('Web予約の離脱と運用品質の警告、除外行、断定しない�
   await expect(exclusions).toContainText('担当者別の内訳は実際の件数より少なく見えます。')
 
   // 原因候補は断定せず、根拠件数と確認対象を持つ (AC-EYEX-51)。
+  await openSection(page, '取消・無断キャンセル')
   const causes = page.getByRole('region', { name: '無断キャンセルの原因候補' })
   await expect(causes).toContainText(
     '原因を断定するものではありません。根拠件数とあわせて確認してください。',
@@ -850,6 +874,7 @@ test('抑制された指標と逆算できる内訳は、数字も割合も棒�
   await expect(page.getByText('期間を広げてもう一度集計してください。')).toBeVisible()
 
   // 指標そのもの: 現在値も前期間差も残らない (UC-EYEX-107 / AC-EYEX-53)。
+  await openSection(page, '取消・無断キャンセル')
   const metric = page.getByRole('region', { name: '無断キャンセル', exact: true })
   await expect(metric.getByText('非表示').first()).toBeVisible()
   await expect(metric).toContainText(
@@ -858,6 +883,7 @@ test('抑制された指標と逆算できる内訳は、数字も割合も棒�
   await expectNoDigits(page, '無断キャンセル')
 
   // 逆算できる関連内訳も同時に消える。合計から引ける兄弟を一つも残さない (AC-EYEX-119 / UC-EYEX-180)。
+  await openSection(page, '予約と来店')
   const breakdown = page.getByRole('region', { name: '担当者の内訳' })
   await expect(breakdown).toContainText(
     '非表示にした値から逆算できるため、あわせて非表示にしています。',
@@ -867,12 +893,13 @@ test('抑制された指標と逆算できる内訳は、数字も割合も棒�
   await expectNoDigits(page, '担当者の内訳')
 
   // 分布と離脱も同じ扱い (UC-EYEX-180)。
+  await openSection(page, '待ち時間')
   await expectNoDigits(page, '受付から接客開始まで の分布')
+  await openSection(page, 'Web予約')
   await expectNoDigits(page, 'Web予約の離脱')
 
   // 画面全体としても、抑制された領域の外にしか数字は無い。
-  const main = page.getByRole('main')
-  await expect(main).toContainText('非表示')
+  await expect(page.getByRole('region', { name: 'レポート' })).toContainText('非表示')
 })
 
 // @e2e-covers UC-EYEX-102 AC-EYEX-55
@@ -930,14 +957,17 @@ test('店舗を切り替えると分析はその店舗だけに切り替わり�
   // 銀座店の明細（担当者「山田」「佐藤」）が見えている。
   await expect(page.getByRole('region', { name: '担当者の内訳' })).toContainText('山田')
 
-  await page.locator('header button').first().click()
-  await expect(page.getByRole('region', { name: '作業する店舗を切り替える' })).toBeVisible()
+  // 店舗切替の入口は緑帯のワードマークだけになった。
+  await page.getByRole('banner').getByRole('button').first().click()
+  await expect(page.getByRole('dialog', { name: '作業する店舗を切り替える' })).toBeVisible()
   await page.getByRole('button', { name: /丸の内店/ }).click()
-  await expect(page.getByRole('heading', { name: '丸の内店のホーム' })).toBeVisible()
+  // 切替でホームへ戻る。ホームに見出しは無いので主操作の並びで待つ。
+  await expect(page.getByRole('navigation', { name: '主操作' })).toBeVisible()
 
+  await page.getByRole('banner').getByRole('button', { name: '設定', exact: true }).click()
   await page
-    .getByRole('navigation', { name: '管理メニュー' })
-    .getByRole('button', { name: '分析' })
+    .getByRole('navigation', { name: '画面の一覧' })
+    .getByRole('button', { name: '分析', exact: true })
     .click()
   await page.getByLabel('対象日').fill('2026-08-27')
 
@@ -947,11 +977,11 @@ test('店舗を切り替えると分析はその店舗だけに切り替わり�
   await expect(page.getByRole('region', { name: '担当者の内訳' })).toContainText('丸の内の鈴木')
 
   // 銀座店の明細は一片も残らない (AC-EYEX-55)。
-  const main = page.getByRole('main')
-  await expect(main).not.toContainText('山田')
-  await expect(main).not.toContainText('佐藤')
-  await expect(main).not.toContainText('214件')
-  await expect(main).not.toContainText('128件')
+  const surface = page.getByRole('region', { name: '店舗運用の分析' })
+  await expect(surface).not.toContainText('山田')
+  await expect(surface).not.toContainText('佐藤')
+  await expect(surface).not.toContainText('214件')
+  await expect(surface).not.toContainText('128件')
 
   // 集計要求そのものが切替後の店舗宛てに出ている。
   const analytics = mocks.requests.filter((entry) => entry.url.includes('/analytics'))
@@ -967,11 +997,13 @@ test('分析の権限が無ければ数値も要求も出ない', async ({ page 
   await mockStaffApi(page, mocks)
   await openAdmin(page, '分析')
 
-  await expect(page.getByText('分析を閲覧する権限がありません。')).toBeVisible()
+  // 権限が無い操作者には、集計の存在も内容もこれ以上見せない。
+  const denied = page.getByRole('region', { name: '権限がありません' })
+  await expect(denied).toContainText('この設定を表示する権限がありません')
   await expect(page.getByLabel('集計粒度')).toHaveCount(0)
-  const main = page.getByRole('main')
-  await expect(main).not.toContainText('対象件数')
-  await expect(main).not.toContainText('件')
+  await expect(page.getByRole('region', { name: '店舗運用の分析' })).toHaveCount(0)
+  await expect(denied).not.toContainText('対象件数')
+  await expect(denied).not.toContainText('件')
 
   // 画面が空なのではなく、そもそもサーバへ聞いていない (UC-EYEX-106)。
   expect(mocks.requests.filter((entry) => entry.url.includes('/analytics'))).toEqual([])
@@ -1020,7 +1052,7 @@ test('データがない期間と集計失敗は、素の0ではなく理由と�
       '集計を読み込めませんでした。通信を確認してもう一度お試しください。数値は表示していません。',
     ),
   ).toBeVisible()
-  await expect(page.getByRole('main')).not.toContainText('対象件数')
+  await expect(page.getByRole('region', { name: 'レポート' })).not.toContainText('対象件数')
 
   failing = false
   await page.getByRole('button', { name: '再試行する' }).click()

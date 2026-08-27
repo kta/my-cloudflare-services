@@ -1,9 +1,7 @@
 import { type CustomerCandidate, CustomerDetail } from '@app/contracts'
-import { Button, Card, Chip, Field, TextInput } from '@app/ui'
 import {
   createContext,
   type FormEvent,
-  type KeyboardEvent,
   type ReactNode,
   useContext,
   useEffect,
@@ -16,6 +14,7 @@ import {
   type CustomerSelection,
   chooseNewCustomer,
   customerSearchPath,
+  customerSearchTermFor,
   emptyCustomerSelection,
   parseCustomerCandidates,
   possibleDuplicates,
@@ -24,10 +23,10 @@ import {
   withCandidates,
 } from './customer-search'
 import { AttentionCard, Candidate, RailSummary } from './design/booking'
-import { SearchField } from './design/controls'
-import { BookingLayout } from './design/layouts'
+import { Action, Actions, SearchField } from './design/controls'
+import { BookingLayout, Workspace } from './design/layouts'
 import { FailureNotice } from './design/notices'
-import { Notice } from './design/surfaces'
+import { Card, ListRow, Notice } from './design/surfaces'
 import type { StaffScreenProps } from './staff-screen'
 
 /*
@@ -76,12 +75,28 @@ type CustomerPanelProps = StaffScreenProps & {
   storeNames?: Record<string, string>
 }
 
-function Region({ label, children }: { label: string; children: ReactNode }) {
+/*
+ * 顧客台帳の詳細に並ぶ面は、承認済みモック `staff-approved.html#customer-ledger`
+ * では見出しつきのカードではなく `.card` の中の太字 1 行である。見出し要素に
+ * すると字寸法が上がって面の高さが変わるので、`<b>` のままにする。名前は
+ * 読み上げのために面自身が持つ。
+ */
+function Region({
+  label,
+  tone = 'plain',
+  children,
+}: {
+  label: string
+  /** 対応時に確認だけは淡赤の注意面（`.attention`）。役割と色を食い違わせない。 */
+  tone?: 'plain' | 'attention'
+  children: ReactNode
+}) {
   return (
-    <section aria-label={label} className="rounded-ctl border border-line bg-surface p-4 text-ink">
-      <h3 className="font-display text-base font-semibold">{label}</h3>
-      <div className="mt-2 text-sm">{children}</div>
-    </section>
+    <Card tone={tone} label={label} className="mt-2.5">
+      <b>{label}</b>
+      <br />
+      {children}
+    </Card>
   )
 }
 
@@ -118,26 +133,25 @@ export function CustomerPanel({
   const [fetchedDetail, setFetchedDetail] = useState<CustomerDetail>()
   const detail = detailOverride ?? fetchedDetail
   const [phone, setPhone] = useState('')
-  const [name, setName] = useState('')
-  const [kana, setKana] = useState('')
+  /* 顧客台帳の左レールはモックどおり検索欄が 1 本。どの検索語かは入力から決める。 */
+  const [query, setQuery] = useState('')
   const [selection, setSelection] = useState<CustomerSelection>(emptyCustomerSelection)
   const [searched, setSearched] = useState(false)
   const [hint, setHint] = useState<string>()
   const [error, setError] = useState<string>()
-  const [busy, setBusy] = useState(false)
 
   const selected = selectedCandidate(selection)
   const bound = selected !== undefined || selection.newCustomer
 
+  const bookingStep = useContext(BookingCustomerStepContext)
+  const bookingMode = mode === 'booking' && bookingStep !== null
+
   const currentTerm = (): CustomerSearchTerm | undefined => {
-    for (const term of [
-      { field: 'phone', value: phone },
-      { field: 'name', value: name },
-      { field: 'kana', value: kana },
-    ] as CustomerSearchTerm[]) {
-      if (buildCustomerSearchQuery(term)) return term
+    if (bookingMode) {
+      const term: CustomerSearchTerm = { field: 'phone', value: phone }
+      return buildCustomerSearchQuery(term) ? term : undefined
     }
-    return undefined
+    return customerSearchTermFor(query)
   }
 
   const search = async () => {
@@ -149,7 +163,6 @@ export function CustomerPanel({
     }
     setHint(undefined)
     setError(undefined)
-    setBusy(true)
     const wasBound = bound
     try {
       const response = await api(customerSearchPath(storeId, query))
@@ -161,7 +174,6 @@ export function CustomerPanel({
       setError('顧客候補を取得できませんでした。通信状況を確認して、もう一度お試しください。')
     } finally {
       setSearched(true)
-      setBusy(false)
       // 検索し直したら以前のお客様は必ず外れる（古い顧客が紐づいたままにしない）。
       if (wasBound) onSelect(undefined)
     }
@@ -192,12 +204,6 @@ export function CustomerPanel({
     onSelect(undefined)
   }
 
-  const onOptionKeyDown = (event: KeyboardEvent<HTMLDivElement>, candidate: CustomerCandidate) => {
-    if (event.key !== 'Enter' && event.key !== ' ') return
-    event.preventDefault()
-    pick(candidate)
-  }
-
   const duplicated = possibleDuplicates(selection.candidates).length > 0
   const attentionNotes = permissions.attentionNotes ? (detail?.attentionNotes ?? []) : []
   // 権限が無ければ他店舗で記録された行は「無かったこと」として落とす。件数も
@@ -212,23 +218,23 @@ export function CustomerPanel({
     storeNames?.[candidate.primaryStoreId] ??
     (candidate.primaryStoreId === storeId ? storeName : '他店舗')
 
-  const bookingStep = useContext(BookingCustomerStepContext)
-  const bookingMode = mode === 'booking' && bookingStep !== null
-
   /*
-   * モックの主列には「候補を探す」ボタンが無い。入力が止まったら静かに探し、
-   * Enter でも探せるようにする（キーボード操作だけで完結させるため）。
+   * モックには「候補を探す」ボタンが無い（予約フローの主列も顧客台帳の左レール
+   * も検索欄だけ）。入力が止まったら静かに探し、Enter でも探せるようにする
+   * （キーボード操作だけで完結させるため）。
    */
   const searchRef = useRef(search)
   searchRef.current = search
   useEffect(() => {
-    if (!bookingMode) return undefined
-    if (!buildCustomerSearchQuery({ field: 'phone', value: phone })) return undefined
+    const term: CustomerSearchTerm | undefined = bookingMode
+      ? { field: 'phone', value: phone }
+      : customerSearchTermFor(query)
+    if (term === undefined || buildCustomerSearchQuery(term) === undefined) return undefined
     const timer = setTimeout(() => {
       void searchRef.current()
     }, SEARCH_DEBOUNCE_MS)
     return () => clearTimeout(timer)
-  }, [bookingMode, phone])
+  }, [bookingMode, phone, query])
 
   const confirm = (candidate: CustomerCandidate | undefined) => {
     if (candidate) pick(candidate)
@@ -344,217 +350,170 @@ export function CustomerPanel({
     )
   }
 
+  /*
+   * 顧客台帳（承認済みモック `staff-approved.html#customer-ledger`）。
+   *
+   *   .workspace{grid-template-columns:390px 1fr}
+   *   .list{padding:16px;background:#e7ede9}   ← 白いカードを載せない地色の列
+   *   .customer-top{grid-template-columns:repeat(3,1fr)}
+   *
+   * 左は「探す列」で、検索欄が 1 本と候補の行だけ。ラベル付きの欄を 3 つ並べた
+   * フォームにすると、電話を受けながら片手で辿る列ではなくなる。
+   */
   return (
-    <div className="grid gap-5 bg-paper p-5 text-ink lg:grid-cols-3">
-      <div className="flex flex-col gap-4">
-        <Card>
-          <h2 className="font-display text-xl font-semibold">お客様を探す</h2>
-          <div className="mt-4 flex flex-col gap-3">
-            <Field label="電話番号" htmlFor="customer-search-phone">
-              <TextInput
-                id="customer-search-phone"
-                inputMode="tel"
-                autoComplete="off"
-                className="min-h-12"
-                value={phone}
-                onChange={(event) => setPhone(event.target.value)}
-              />
-            </Field>
-            <Field label="氏名" htmlFor="customer-search-name">
-              <TextInput
-                id="customer-search-name"
-                autoComplete="off"
-                className="min-h-12"
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-              />
-            </Field>
-            <Field label="氏名かな" htmlFor="customer-search-kana">
-              <TextInput
-                id="customer-search-kana"
-                autoComplete="off"
-                className="min-h-12"
-                value={kana}
-                onChange={(event) => setKana(event.target.value)}
-              />
-            </Field>
-            <Button className="min-h-12" onClick={search} disabled={busy}>
-              候補を探す
-            </Button>
-            {hint !== undefined && (
-              <p aria-live="polite" className="text-sm text-danger">
-                {hint}
-              </p>
-            )}
-            {error !== undefined && (
-              <p role="alert" className="text-sm text-danger">
-                {error}
-              </p>
-            )}
-          </div>
-        </Card>
-
-        {duplicated && (
-          <p className="rounded-ctl border border-line bg-amber-soft p-3 text-sm text-amber">
-            同じ電話番号の候補があります。統合はされません。
-          </p>
-        )}
-
-        {selection.candidates.length > 0 && (
-          <div role="listbox" aria-label="顧客候補" className="flex flex-col gap-2">
-            {selection.candidates.map((candidate) => {
-              const isSelected = selected?.id === candidate.id
-              return (
-                <div
-                  key={candidate.id}
-                  role="option"
-                  aria-selected={isSelected}
-                  tabIndex={0}
-                  onClick={() => pick(candidate)}
-                  onKeyDown={(event) => onOptionKeyDown(event, candidate)}
-                  className={`min-h-12 cursor-pointer rounded-ctl border bg-surface p-3 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber ${
-                    isSelected ? 'border-pine bg-pine/10' : 'border-line'
-                  }`}
-                >
-                  <span className="flex items-center justify-between gap-2">
-                    <b className="font-semibold">{candidate.name}</b>
-                    {isSelected && <Chip tone="success">選択中</Chip>}
-                  </span>
-                  <span className="mt-1 block text-ink-muted">
-                    {candidate.kana}
-                    <br />
-                    {candidate.phone}
-                    <br />
-                    主利用店舗 {primaryStoreLabel(candidate)}・来店{candidate.visitCount}回
-                  </span>
-                </div>
-              )
-            })}
-          </div>
-        )}
-
-        {searched && selection.candidates.length === 0 && error === undefined && (
-          <p className="text-sm text-ink-muted">該当するお客様は見つかりませんでした</p>
-        )}
-
-        <Button variant="ghost" className="min-h-12" onClick={pickNewCustomer}>
-          新しいお客様として進む
-        </Button>
-      </div>
-
-      <section aria-label="選択中のお客様" className="flex flex-col gap-4 lg:col-span-2">
-        {!bound && (
-          <p className="rounded-ctl border border-line bg-surface p-4 text-sm text-ink-muted">
-            お客様は未確定です
-          </p>
-        )}
-        {selection.newCustomer && (
-          <p className="rounded-ctl border border-line bg-surface p-4 text-sm">
-            新規のお客様として進みます
-          </p>
-        )}
-        {selected !== undefined && (
-          <>
-            <h2 className="font-display text-2xl font-semibold">{selected.name} 様</h2>
-            {detail === undefined ? (
-              <p className="rounded-ctl border border-line bg-surface p-4 text-sm text-ink-muted">
-                顧客情報は未取得です
-              </p>
-            ) : (
-              <>
-                {detail.currentPrescription !== null && (
-                  <Region label="現在の度数">
-                    <PrescriptionLines prescription={detail.currentPrescription} />
-                  </Region>
-                )}
-                {detail.latestNote !== null && (
-                  <Region label="最新メモ">
-                    <p>
-                      {detail.latestNote.body}
-                      <br />
-                      <span className="text-ink-muted">
-                        {detail.latestNote.recordedOn}・{detail.latestNote.storeName}・
-                        {detail.latestNote.recordedBy}
-                      </span>
-                    </p>
-                  </Region>
-                )}
-                {ownedGlasses.length > 0 && (
-                  <Region label="保有メガネ">
-                    <ul className="flex list-none flex-col gap-1">
-                      {ownedGlasses.map((glasses) => (
-                        <li key={`${glasses.label}-${glasses.purchasedOn}`}>
-                          {glasses.label}（{glasses.lensType}）
-                          <span className="text-ink-muted">
-                            {' '}
-                            {glasses.purchasedOn}・{glasses.storeName}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  </Region>
-                )}
-                {attentionNotes.length > 0 && (
-                  <Region label="注意事項">
-                    <ul className="flex flex-col gap-2">
-                      {attentionNotes.map((note) => (
-                        <li key={`${note.recordedOn}-${note.body}`}>
-                          {note.body}
-                          <br />
-                          <span className="text-ink-muted">
-                            根拠 {note.basis}・記録者 {note.recordedBy}・記録日 {note.recordedOn}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  </Region>
-                )}
-                {mode === 'ledger' && permissions.attentionNotes && selected && (
-                  /*
-                   * 注意事項は顧客に紐づくので、入口は「すでに選んだ顧客」からだけにする。
-                   * 権限が無いときはボタン自体を出さない（存在を示唆しない, AC-EYEX-91）。
-                   */
-                  <Button
-                    variant="ghost"
-                    className="min-h-12 self-start"
-                    onClick={() =>
-                      navigate({
-                        screen: 'attention-review',
-                        customerId: selected.id,
-                        customerName: selected.name,
-                      })
-                    }
-                  >
-                    注意事項を確認・登録する
-                  </Button>
-                )}
-                {mode === 'ledger' && pastPrescriptions.length > 0 && (
-                  <Region label="過去の度数">
-                    <ul className="flex flex-col gap-2">
-                      {pastPrescriptions.map((prescription) => (
-                        <li key={prescription.measuredOn}>
-                          <PrescriptionLines prescription={prescription} />
-                        </li>
-                      ))}
-                    </ul>
-                  </Region>
-                )}
-                {mode === 'ledger' && visitHistory.length > 0 && (
-                  <Region label="来店履歴">
-                    <ul className="flex list-none flex-col gap-1">
-                      {visitHistory.map((visit) => (
-                        <li key={`${visit.visitedOn}-${visit.summary}`}>
-                          {visit.visitedOn}・{visit.storeName}・{visit.summary}
-                        </li>
-                      ))}
-                    </ul>
-                  </Region>
-                )}
-              </>
-            )}
-          </>
-        )}
-      </section>
-    </div>
+    <Workspace
+      listLabel="お客様を探す"
+      detailLabel="選択中のお客様"
+      list={
+        <>
+          <form
+            onSubmit={(event: FormEvent) => {
+              event.preventDefault()
+              void search()
+            }}
+          >
+            <SearchField
+              id="customer-search"
+              label="顧客を検索"
+              placeholder="氏名・電話番号"
+              value={query}
+              onChange={setQuery}
+            />
+          </form>
+          {hint !== undefined && (
+            <p aria-live="polite" className="font-sans text-danger text-note">
+              {hint}
+            </p>
+          )}
+          {error !== undefined && <FailureNotice>{error}</FailureNotice>}
+          {duplicated && <Notice>同じ電話番号の候補があります。統合はされません。</Notice>}
+          {selection.candidates.map((candidate) => (
+            <ListRow
+              key={candidate.id}
+              label={candidate.name}
+              selected={selected?.id === candidate.id}
+              onSelect={() => pick(candidate)}
+            >
+              <b>{candidate.name}</b>
+              <br />
+              {candidate.phone}
+            </ListRow>
+          ))}
+          {searched && selection.candidates.length === 0 && error === undefined && (
+            <p className="font-sans text-note">該当するお客様は見つかりませんでした</p>
+          )}
+        </>
+      }
+      detail={
+        <>
+          {!bound && <Card>お客様は未確定です</Card>}
+          {selection.newCustomer && <Card>新規のお客様として進みます</Card>}
+          {selected !== undefined && (
+            <>
+              <h1>{selected.name} 様</h1>
+              {detail === undefined ? (
+                <Card className="mt-2.5">顧客情報は未取得です</Card>
+              ) : (
+                <>
+                  {/* `.card` 自身が margin-top:10px を持つので、格子側は間隔を足さない。 */}
+                  <div className="grid grid-cols-3 gap-3">
+                    {detail.currentPrescription !== null && (
+                      <Region label="現在の度数">
+                        <PrescriptionLines prescription={detail.currentPrescription} />
+                      </Region>
+                    )}
+                    {detail.latestNote !== null && (
+                      <Region label="最新メモ">
+                        {detail.latestNote.body}
+                        <br />
+                        <small className="text-ink-muted">
+                          {detail.latestNote.recordedOn}・{detail.latestNote.storeName}・
+                          {detail.latestNote.recordedBy}
+                        </small>
+                      </Region>
+                    )}
+                    {ownedGlasses.length > 0 && (
+                      <Region label="現在のメガネ">
+                        <ul className="list-none">
+                          {ownedGlasses.map((glasses) => (
+                            <li key={`${glasses.label}-${glasses.purchasedOn}`}>
+                              {glasses.label}（{glasses.lensType}）
+                              <small className="text-ink-muted">
+                                {' '}
+                                {glasses.purchasedOn}・{glasses.storeName}
+                              </small>
+                            </li>
+                          ))}
+                        </ul>
+                      </Region>
+                    )}
+                  </div>
+                  {attentionNotes.length > 0 && (
+                    /*
+                     * 接客の直前に読むものなので、時系列（履歴）の後ろへ回さず
+                     * 淡赤の注意面で先に置く（モックの `.attention`）。
+                     */
+                    <Region label="対応時に確認" tone="attention">
+                      <ul className="list-none">
+                        {attentionNotes.map((note) => (
+                          <li key={`${note.recordedOn}-${note.body}`}>
+                            {note.body}
+                            <br />
+                            <small>
+                              根拠 {note.basis}・記録者 {note.recordedBy}・記録日 {note.recordedOn}
+                            </small>
+                          </li>
+                        ))}
+                      </ul>
+                    </Region>
+                  )}
+                  {mode === 'ledger' && pastPrescriptions.length > 0 && (
+                    <Region label="過去の度数">
+                      <ul className="list-none">
+                        {pastPrescriptions.map((prescription) => (
+                          <li key={prescription.measuredOn}>
+                            <PrescriptionLines prescription={prescription} />
+                          </li>
+                        ))}
+                      </ul>
+                    </Region>
+                  )}
+                  {mode === 'ledger' && visitHistory.length > 0 && (
+                    <Region label="来店履歴">
+                      <ul className="list-none">
+                        {visitHistory.map((visit) => (
+                          <li key={`${visit.visitedOn}-${visit.summary}`}>
+                            {visit.visitedOn}・{visit.storeName}・{visit.summary}
+                          </li>
+                        ))}
+                      </ul>
+                    </Region>
+                  )}
+                  {mode === 'ledger' && permissions.attentionNotes && (
+                    /*
+                     * 注意事項は顧客に紐づくので、入口は「すでに選んだ顧客」からだけ。
+                     * 権限が無いときはボタン自体を出さない（存在を示唆しない, AC-EYEX-91）。
+                     */
+                    <Actions>
+                      <Action
+                        onClick={() =>
+                          navigate({
+                            screen: 'attention-review',
+                            customerId: selected.id,
+                            customerName: selected.name,
+                          })
+                        }
+                      >
+                        注意事項を確認・登録する
+                      </Action>
+                    </Actions>
+                  )}
+                </>
+              )}
+            </>
+          )}
+        </>
+      }
+    />
   )
 }

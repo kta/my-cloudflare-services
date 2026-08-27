@@ -7,11 +7,11 @@ import {
   type CustomerMergeSummary,
   type StorePermission,
 } from '@app/contracts'
-import { Field, Select, Textarea, TextInput } from '@app/ui'
 import { useState } from 'react'
 import { mergeImpactRows, mergeImpactTotal } from './attention-view'
 import { Action, Actions } from './design/controls'
 import { Modal } from './design/dialogs'
+import { SelectField, TextAreaField, TextField } from './design/forms'
 import { Compare, FullScreenState } from './design/layouts'
 import { FailureNotice, StatusNotice } from './design/notices'
 import { Card, CardGrid, FieldCard } from './design/surfaces'
@@ -284,22 +284,18 @@ export function CustomerMergeScreen({ storeId, api, permissions, navigate }: Pro
         <br />
         比較しただけでは何も変わりません。統合は明示的に実行したときだけ行われます。
         <div className="mt-3.5 grid grid-cols-2 gap-3">
-          <Field label="残す顧客ID" htmlFor="merge-primary">
-            <TextInput
-              id="merge-primary"
-              className="min-h-12"
-              value={primaryId}
-              onChange={(event) => setPrimaryId(event.target.value)}
-            />
-          </Field>
-          <Field label="重複している顧客ID" htmlFor="merge-duplicate">
-            <TextInput
-              id="merge-duplicate"
-              className="min-h-12"
-              value={duplicateId}
-              onChange={(event) => setDuplicateId(event.target.value)}
-            />
-          </Field>
+          <TextField
+            id="merge-primary"
+            value={primaryId}
+            onChange={(event) => setPrimaryId(event.target.value)}
+            label="残す顧客ID"
+          />
+          <TextField
+            id="merge-duplicate"
+            value={duplicateId}
+            onChange={(event) => setDuplicateId(event.target.value)}
+            label="重複している顧客ID"
+          />
         </div>
         <Actions mt={4}>
           <Action onClick={comparePair}>重複候補を比較する</Action>
@@ -350,27 +346,23 @@ export function CustomerMergeScreen({ storeId, api, permissions, navigate }: Pro
       <Card className="mt-4.5" label="誤った顧客関連を解除">
         <b>誤った顧客関連を解除</b>
         <div className="mt-3.5 grid grid-cols-2 gap-3">
-          <Field label="受付種別" htmlFor="release-entry-type">
-            <Select
-              id="release-entry-type"
-              className="min-h-12"
-              value={entryType}
-              onChange={(event) =>
-                setEntryType(event.target.value as CustomerLinkReleaseInput['entryType'])
-              }
-            >
-              <option value="reservation">予約</option>
-              <option value="walkin">ウォークイン</option>
-            </Select>
-          </Field>
-          <Field label="受付ID" htmlFor="release-entry-id">
-            <TextInput
-              id="release-entry-id"
-              className="min-h-12"
-              value={entryId}
-              onChange={(event) => setEntryId(event.target.value)}
-            />
-          </Field>
+          <SelectField
+            id="release-entry-type"
+            value={entryType}
+            onChange={(event) =>
+              setEntryType(event.target.value as CustomerLinkReleaseInput['entryType'])
+            }
+            label="受付種別"
+          >
+            <option value="reservation">予約</option>
+            <option value="walkin">ウォークイン</option>
+          </SelectField>
+          <TextField
+            id="release-entry-id"
+            value={entryId}
+            onChange={(event) => setEntryId(event.target.value)}
+            label="受付ID"
+          />
         </div>
         <Actions mt={4}>
           <Action
@@ -390,14 +382,14 @@ export function CustomerMergeScreen({ storeId, api, permissions, navigate }: Pro
           <p>
             {`${mergeImpactTotal(preview.impact)}件の履歴が残す顧客へ移ります。統合は自動では行われず、実行者・日時・変更前後が監査記録に残ります。`}
           </p>
-          <Field label="統合する理由" htmlFor="merge-reason" error={mergeReasonError}>
-            <Textarea
-              id="merge-reason"
-              rows={2}
-              value={mergeReason}
-              onChange={(event) => setMergeReason(event.target.value)}
-            />
-          </Field>
+          <TextAreaField
+            id="merge-reason"
+            rows={2}
+            value={mergeReason}
+            onChange={(event) => setMergeReason(event.target.value)}
+            label="統合する理由"
+            error={mergeReasonError}
+          />
           <Actions>
             <Action size="roomy" onClick={() => setConfirmingMerge(false)}>
               キャンセル
@@ -414,14 +406,14 @@ export function CustomerMergeScreen({ storeId, api, permissions, navigate }: Pro
           <p>
             この受付から顧客との関連だけを外します。受付そのものは残り、実行者・日時・変更前後が監査記録に残ります。
           </p>
-          <Field label="解除する理由" htmlFor="release-reason" error={releaseReasonError}>
-            <Textarea
-              id="release-reason"
-              rows={2}
-              value={releaseReason}
-              onChange={(event) => setReleaseReason(event.target.value)}
-            />
-          </Field>
+          <TextAreaField
+            id="release-reason"
+            rows={2}
+            value={releaseReason}
+            onChange={(event) => setReleaseReason(event.target.value)}
+            label="解除する理由"
+            error={releaseReasonError}
+          />
           <Actions>
             <Action size="roomy" onClick={() => setConfirmingRelease(false)}>
               キャンセル

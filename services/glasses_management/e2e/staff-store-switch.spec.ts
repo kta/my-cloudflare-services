@@ -130,6 +130,8 @@ function ledgerFor(storeId: string, date: string) {
       assignedStaffId: null,
       assignedEquipmentIds: [],
       nextGuidance: null,
+      // 予約行は purposeNames 必須（台帳セルの「目的 · 予約元」表示のため）。
+      purposeNames: ['視力測定'],
       warnings: [],
       version: 1,
     },
@@ -252,18 +254,25 @@ async function mockStaffApi(page: Page, options: Options = {}) {
   return recorded
 }
 
+/* ホームには見出しが無い（HomeScreen.tsx）。到達は主操作のナビで待つ。 */
+async function expectHome(page: Page, storeName = '銀座店') {
+  await expect(page.getByRole('navigation', { name: '主操作' })).toBeVisible()
+  await expect(headerStoreButton(page)).toContainText(storeName)
+}
+
 async function openWorkspace(page: Page, storeName = '銀座店') {
   await page.setViewportSize(VIEWPORT)
   await page.goto('/')
-  await expect(page.getByRole('heading', { name: `${storeName}のホーム` })).toBeVisible()
+  await expectHome(page, storeName)
 }
 
+/* 店舗切替の入口は緑帯のワードマーク（副題に店舗名と営業状態が出る）。 */
 function headerStoreButton(page: Page) {
-  return page.locator('header button').first()
+  return page.getByRole('banner').getByRole('button').first()
 }
 
 function picker(page: Page) {
-  return page.getByRole('region', { name: '作業する店舗を切り替える' })
+  return page.getByRole('dialog', { name: '作業する店舗を切り替える' })
 }
 
 async function openPicker(page: Page) {
@@ -274,17 +283,23 @@ async function openPicker(page: Page) {
 
 async function switchToGinza(page: Page) {
   await openPicker(page)
-  await page.getByRole('button', { name: /銀座店/ }).click()
-  await expect(page.getByRole('heading', { name: '銀座店のホーム' })).toBeVisible()
+  await picker(page)
+    .getByRole('button', { name: /銀座店/ })
+    .click()
+  // 未保存入力があるときだけ破棄確認が挟まる（UC-EYEX-065 / AC-EYEX-29）。
+  const discard = page.getByRole('button', { name: '入力を破棄して銀座店へ切り替える' })
+  if (await discard.isVisible()) await discard.click()
+  await expectHome(page, '銀座店')
 }
 
 async function switchToMarunouchi(page: Page) {
   await openPicker(page)
-  await page.getByRole('button', { name: /丸の内店/ }).click()
-  // 未保存入力があるときだけ破棄確認が挟まる（UC-EYEX-065 / AC-EYEX-29）。
-  const discard = page.getByRole('button', { name: '破棄して切り替える' })
+  await picker(page)
+    .getByRole('button', { name: /丸の内店/ })
+    .click()
+  const discard = page.getByRole('button', { name: '入力を破棄して丸の内店へ切り替える' })
   if (await discard.isVisible()) await discard.click()
-  await expect(page.getByRole('heading', { name: '丸の内店のホーム' })).toBeVisible()
+  await expectHome(page, '丸の内店')
 }
 
 // @e2e-covers UC-EYEX-064 AC-EYEX-27
@@ -299,7 +314,7 @@ test('lists every switch candidate with its name, trading state and warning, and
   // 店舗名・営業状態・運用警告（受付停止）が候補ごとに読める（AC-EYEX-27 / UC-EYEX-064）。
   const candidates = list.getByRole('button')
   await expect(candidates).toHaveText([
-    /銀座店\s*選択中/,
+    /銀座店\s*営業中\s*選択中/,
     /丸の内店\s*営業中/,
     /日本橋店\s*受付停止/,
   ])
@@ -329,14 +344,16 @@ test('switches to another store in the area only after the audit record is accep
   await openWorkspace(page)
 
   await openPicker(page)
-  await page.getByRole('button', { name: /丸の内店/ }).click()
+  await picker(page)
+    .getByRole('button', { name: /丸の内店/ })
+    .click()
 
   // 監査記録が失敗する間は、ローカルの選択店舗は動かない（UC-EYEX-071）。
   await expect(
     page.getByText('店舗を切り替えられませんでした。通信を確認してもう一度お試しください。'),
   ).toBeVisible()
   await expect(headerStoreButton(page)).toContainText('銀座店')
-  await expect(page.getByRole('heading', { name: '銀座店のホーム' })).toBeVisible()
+  await expectHome(page, '銀座店')
 
   // 監査記録には実行者の切替元・切替先が載る（UC-EYEX-071）。
   const firstAudit = recorded.find((entry) => entry.url.includes('/store-switches'))
@@ -345,8 +362,10 @@ test('switches to another store in the area only after the audit record is accep
   expect(firstAudit.headers.authorization).toBe('Bearer staff-e2e')
 
   // 記録が通れば切替が成立し、切替先のホームへ移る（UC-EYEX-063 / AC-EYEX-28）。
-  await page.getByRole('button', { name: /丸の内店/ }).click()
-  await expect(page.getByRole('heading', { name: '丸の内店のホーム' })).toBeVisible()
+  await picker(page)
+    .getByRole('button', { name: /丸の内店/ })
+    .click()
+  await expectHome(page, '丸の内店')
   await expect(picker(page)).toHaveCount(0)
   const audits = recorded.filter((entry) => entry.url.includes('/store-switches'))
   expect(audits).toHaveLength(2)
@@ -355,19 +374,23 @@ test('switches to another store in the area only after the audit record is accep
     toStoreId: marunouchiId,
   })
 
-  // 選択店舗名は、どの業務画面でもヘッダーに出続ける（UC-EYEX-066 / AC-EYEX-28）。
-  const destinations: [string, RegExp][] = [
-    ['予約台帳', /^丸の内店の予約台帳$/],
-    ['来店進捗', /^丸の内店の来店受付$/],
-    ['受付履歴', /^受付履歴$/],
-    ['顧客台帳', /^お客様を探す$/],
+  /*
+   * 選択店舗名は、どの業務画面でもヘッダーに出続ける（UC-EYEX-066 / AC-EYEX-28）。
+   * 画面名は帯のタブが担うので、面が着いたことは各面が持つ見出し（顧客台帳だけは
+   * 探す列そのものの名前）で確かめる。
+   */
+  const destinations: [string, (page: Page) => ReturnType<Page['getByRole']>][] = [
+    ['予約台帳', (target) => target.getByRole('heading', { name: /^丸の内店の予約台帳$/ })],
+    ['来店受付', (target) => target.getByRole('heading', { name: /^丸の内店の来店受付$/ })],
+    ['受付履歴', (target) => target.getByRole('heading', { name: /^受付履歴$/ })],
+    ['顧客台帳', (target) => target.getByRole('complementary', { name: 'お客様を探す' })],
   ]
-  for (const [label, heading] of destinations) {
+  for (const [label, landmark] of destinations) {
     await page
       .getByRole('navigation', { name: '副操作' })
       .getByRole('button', { name: label })
       .click()
-    await expect(page.getByRole('heading', { name: heading })).toBeVisible()
+    await expect(landmark(page)).toBeVisible()
     await expect(headerStoreButton(page)).toContainText('丸の内店')
     await expect(headerStoreButton(page)).not.toContainText('銀座店')
     // 選択は端末メモリだけにあるので、次の画面は切替をやり直してから開く。
@@ -375,11 +398,12 @@ test('switches to another store in the area only after the audit record is accep
     await switchToMarunouchi(page)
   }
 
-  // ヘッダーの管理メニューから開く画面でも同じ（AC-EYEX-28）。
-  await page
-    .getByRole('navigation', { name: '管理メニュー' })
-    .getByRole('button', { name: '店舗設定' })
-    .click()
+  // 緑帯の 設定 から開く運用の面でも同じ（AC-EYEX-28）。設定・運用の面へは
+  // ホームの 設定 → 全画面共通の左サイドバー の順に辿る。
+  await page.getByRole('banner').getByRole('button', { name: '設定', exact: true }).click()
+  await expect(
+    page.getByRole('navigation', { name: '画面の一覧' }).getByRole('button', { name: '監査ログ' }),
+  ).toBeVisible()
   await expect(headerStoreButton(page)).toContainText('丸の内店')
 })
 
@@ -393,7 +417,8 @@ test('carries no search term, no selected reservation and no entered input acros
   // 銀座店で予約入力を途中まで進める（日と時刻まで選んだ状態）。
   await page.getByRole('button', { name: '新しい予約を取る' }).click()
   await page.getByRole('group', { name: '来店予定日' }).getByRole('button').first().click()
-  await page.getByRole('button', { name: '10:30', exact: true }).click()
+  // 時刻工程は空き枠ではなく営業時間から候補を作る（10:00〜19:00 の 6 候補）。
+  await page.getByRole('button', { name: '11:30', exact: true }).click()
   await expect(page.getByRole('heading', { name: '今回のご来店目的を伺えますか？' })).toBeVisible()
   await page.getByRole('button', { name: /メガネを新しく作りたい/ }).click()
 
@@ -413,8 +438,7 @@ test('carries no search term, no selected reservation and no entered input acros
   await page.getByRole('button', { name: '予約を変更する' }).click()
   await expect(page.getByRole('heading', { name: '予約を検索する' })).toBeVisible()
   await page.getByLabel('氏名・電話番号・予約番号').fill('丸の内花子')
-  await page.getByLabel('予約元').selectOption('staff')
-  await page.getByRole('button', { name: '検索する' }).click()
+  await page.getByLabel('氏名・電話番号・予約番号').press('Enter')
   const results = page.getByRole('region', { name: '検索結果' })
   await expect(results).toContainText('丸の内花子')
   await results.getByRole('button').first().click()
@@ -428,8 +452,9 @@ test('carries no search term, no selected reservation and no entered input acros
 
   await page.getByRole('button', { name: '予約を変更する' }).click()
   await expect(page.getByLabel('氏名・電話番号・予約番号')).toHaveValue('')
-  await expect(page.getByLabel('予約元')).toHaveValue('')
-  await expect(results).toContainText('検索条件を入力してください。')
+  // 検索結果も選択中の予約も空に戻り、詳細列は「まだ何も選んでいない」を言う。
+  await expect(results.getByRole('article')).toHaveCount(0)
+  await expect(page.getByText('候補から予約を選択してください。')).toBeVisible()
   await expect(page.getByText('丸の内花子')).toHaveCount(0)
 })
 
@@ -444,8 +469,10 @@ test('interrupts a store switch that would destroy unsaved booking input and let
   await page.getByRole('button', { name: '新しい予約を取る' }).click()
   await expect(page.getByRole('heading', { name: 'ご来店予定の日を伺えますか？' })).toBeVisible()
   await openPicker(page)
-  await page.getByRole('button', { name: /丸の内店/ }).click()
-  await expect(page.getByRole('heading', { name: '丸の内店のホーム' })).toBeVisible()
+  await picker(page)
+    .getByRole('button', { name: /丸の内店/ })
+    .click()
+  await expectHome(page, '丸の内店')
 
   // 日を選んだ時点で失うものが生まれる。ここからの切替は必ず確認を挟む。
   await page.getByRole('button', { name: '新しい予約を取る' }).click()
@@ -453,25 +480,35 @@ test('interrupts a store switch that would destroy unsaved booking input and let
   await expect(page.getByRole('heading', { name: 'ご来店予定の時刻を伺えますか？' })).toBeVisible()
 
   await openPicker(page)
-  await page.getByRole('button', { name: /銀座店/ }).click()
-  const dialog = page.getByRole('dialog')
-  await expect(dialog).toContainText('未保存の入力を破棄して銀座店へ切り替えますか')
-
-  // 「現在の店舗で続ける」を選べば切り替わらず、入力もそのまま残る。
-  await dialog.getByRole('button', { name: '現在の店舗で続ける' }).click()
-  await expect(page.getByRole('dialog')).toHaveCount(0)
-  await expect(page.getByRole('heading', { name: 'ご来店予定の時刻を伺えますか？' })).toBeVisible()
-  // 切替は起きていない。選択中の店舗は丸の内店のままである。
-  await expect(
-    page.getByRole('region', { name: '作業する店舗を切り替える' }).getByRole('button'),
-  ).toHaveText([/銀座店\s*営業中/, /丸の内店\s*選択中/, /日本橋店\s*受付停止/])
-
-  // 破棄を選んだときだけ切り替わる。切替候補は開いたままなので選び直すだけでよい。
   await picker(page)
     .getByRole('button', { name: /銀座店/ })
     .click()
-  await page.getByRole('button', { name: '破棄して切り替える' }).click()
-  await expect(page.getByRole('heading', { name: '銀座店のホーム' })).toBeVisible()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog).toContainText('丸の内店で入力中の予約があります')
+  await expect(dialog).toContainText('入力内容と録音は銀座店へ持ち越しません。')
+
+  /*
+   * 入力を守る側を選べば切り替わらず、入力もそのまま残る。
+   * 現状の App.tsx は確認の面を業務クロムごと差し替えるため、確認を出した時点で
+   * BookingFlow が unmount され、守るはずだった入力が消える（実装の不具合）。
+   */
+  await dialog.getByRole('button', { name: '丸の内店で入力を続ける' }).click()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'ご来店予定の時刻を伺えますか？' })).toBeVisible()
+  // 切替は起きていない。選択中の店舗は丸の内店のままである。
+  await openPicker(page)
+  await expect(picker(page).getByRole('button')).toHaveText([
+    /銀座店\s*営業中/,
+    /丸の内店\s*営業中\s*選択中/,
+    /日本橋店\s*受付停止/,
+  ])
+
+  // 破棄を選んだときだけ切り替わる。
+  await picker(page)
+    .getByRole('button', { name: /銀座店/ })
+    .click()
+  await page.getByRole('button', { name: '入力を破棄して銀座店へ切り替える' }).click()
+  await expectHome(page, '銀座店')
 })
 
 // @e2e-covers UC-EYEX-067 UC-EYEX-068 UC-EYEX-069 AC-EYEX-31
@@ -494,16 +531,18 @@ test('scopes every availability and ledger request to the selected store and off
   await openWorkspace(page)
   await page.getByRole('button', { name: '新しい予約を取る' }).click()
   await page.getByRole('group', { name: '来店予定日' }).getByRole('button').first().click()
-  // 営業時間内だが銀座店では受け付けられない 13:00 を選ぶと、代替として提示されるのは
+  // 営業時間内だが銀座店では受け付けられない 13:30 を選ぶと、代替として提示されるのは
   // 銀座店の空き枠だけで、丸の内店の枠（15:00 台）は決して混ざらない。
-  await page.getByRole('button', { name: '13:00', exact: true }).click()
+  await page.getByRole('button', { name: '13:30', exact: true }).click()
   await page.getByRole('button', { name: /メガネを新しく作りたい/ }).click()
   await page.getByRole('button', { name: 'お客様情報へ進む' }).click()
   const alternatives = page.getByRole('group', { name: '代替時刻' }).getByRole('button')
   await expect(alternatives.first()).toBeVisible()
   for (const text of await alternatives.allInnerTexts()) {
-    expect(slotTimes[ginzaId]).toContain(text.trim())
-    expect(slotTimes[marunouchiId]).not.toContain(text.trim())
+    // 候補は `10:00　受付可能` の形なので、先頭の時刻だけを取り出して照合する。
+    const time = text.trim().split(/\s+/)[0] ?? ''
+    expect(slotTimes[ginzaId]).toContain(time)
+    expect(slotTimes[marunouchiId]).not.toContain(time)
   }
 
   // 他店舗の予約を作る・変える導線は無く、切替はヘッダーだけ（UC-EYEX-068）。
@@ -512,9 +551,8 @@ test('scopes every availability and ledger request to the selected store and off
   await expect(bookingBody.getByRole('combobox', { name: /店舗/ })).toHaveCount(0)
   await openWorkspace(page)
   await page.getByRole('button', { name: '予約を変更する' }).click()
-  await expect(
-    page.getByText('銀座店の予約だけを表示します。他店舗はヘッダーの店舗切替で変更してください。'),
-  ).toBeVisible()
+  await expect(page.getByText('銀座店の予約だけを表示')).toBeVisible()
+  await expect(page.getByText('他店舗はヘッダーから切り替えてください。')).toBeVisible()
   await expect(page.getByRole('combobox', { name: /店舗/ })).toHaveCount(0)
   await expect(page.getByRole('button', { name: /丸の内店/ })).toHaveCount(0)
 
@@ -546,7 +584,7 @@ test('shows stores the operator has no permission for only as the organization s
   await page.unrouteAll({ behavior: 'ignoreErrors' })
   await mockStaffApi(page, { stores: [ginza, marunouchi, nihonbashi] })
   await page.reload()
-  await expect(page.getByRole('heading', { name: '銀座店のホーム' })).toBeVisible()
+  await expectHome(page, '銀座店')
   list = await openPicker(page)
   const summarised = list.getByRole('button', { name: /日本橋店/ })
   await expect(summarised).toHaveText(/日本橋店\s*受付停止/)
@@ -576,7 +614,7 @@ test('signs in with a personal account as the acting subject, without a staff pi
   await page.getByRole('button', { name: 'ログインする' }).click()
 
   // ログイン後は個人アカウントのトークンが操作主体として全リクエストに載る（UC-EYEX-130）。
-  await expect(page.getByRole('heading', { name: '銀座店のホーム' })).toBeVisible()
+  await expectHome(page, '銀座店')
   const login = recorded.find((entry) => entry.url.includes('/api/auth/login'))
   if (!login) throw new Error('no personal login was sent')
   expect(JSON.parse(login.body).email).toBe('staff@eyex.example')

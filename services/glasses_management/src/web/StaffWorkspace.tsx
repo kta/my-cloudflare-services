@@ -1,6 +1,5 @@
 import { AlertRecord, Recording, SharedTerminal, Store, StorePermission } from '@app/contracts'
 import { toJstDateString } from '@app/shared'
-import { Button, Card, Field, Notice, TextInput } from '@app/ui'
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { AlertsScreen } from './AlertsScreen'
 import { AnalyticsScreen } from './AnalyticsScreen'
@@ -11,6 +10,10 @@ import { AuditSearchScreen } from './AuditSearchScreen'
 import { BookingFlow } from './BookingFlow'
 import { CustomerMergeScreen } from './CustomerMergeScreen'
 import { CustomerPanel } from './CustomerPanel'
+import { Action } from './design/controls'
+import { TextField } from './design/forms'
+import { FailureNotice } from './design/notices'
+import { Card } from './design/surfaces'
 import { HomeScreen } from './HomeScreen'
 import { JourneyScreen } from './JourneyScreen'
 import { LedgerScreen } from './LedgerScreen'
@@ -552,39 +555,37 @@ export function StaffWorkspace({
               })()
             }}
           >
-            <Field label="メールアドレス" htmlFor="staff-email">
-              <TextInput
-                id="staff-email"
-                type="email"
-                autoComplete="email"
-                required
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-              />
-            </Field>
-            <Field label="パスワード" htmlFor="staff-password">
-              <TextInput
-                id="staff-password"
-                type="password"
-                autoComplete="current-password"
-                required
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-              />
-            </Field>
-            {loginError && <Notice tone="danger">{loginError}</Notice>}
-            <Button type="submit" className="w-full">
+            <TextField
+              id="staff-email"
+              type="email"
+              autoComplete="email"
+              required
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              label="メールアドレス"
+            />
+            <TextField
+              id="staff-password"
+              type="password"
+              autoComplete="current-password"
+              required
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              label="パスワード"
+            />
+            {loginError && <FailureNotice>{loginError}</FailureNotice>}
+            <Action type="submit" variant="primary" className="w-full">
               ログインする
-            </Button>
+            </Action>
           </form>
         </Card>
       </main>
     )
   return (
     <main className="mx-auto flex min-h-dvh max-w-lg items-center px-5">
-      <Notice tone="danger">
+      <FailureNotice>
         利用可能な店舗を読み込めませんでした。通信を確認して再読み込みしてください。
-      </Notice>
+      </FailureNotice>
     </main>
   )
 }

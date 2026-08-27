@@ -5,6 +5,7 @@ import {
   chooseNewCustomer,
   clearSelection,
   customerSearchPath,
+  customerSearchTermFor,
   emptyCustomerSelection,
   normalisePhone,
   parseCustomerCandidates,
@@ -174,5 +175,36 @@ describe('possibleDuplicates (UC-EYEX-028)', () => {
   test('ignores candidates with no phone number at all', () => {
     const noPhone = { ...hanako, id: ichiro.id, phone: '' }
     expect(possibleDuplicates([{ ...hanako, phone: '' }, noPhone])).toEqual([])
+  })
+})
+
+/*
+ * 顧客台帳の左レールはモックどおり検索欄が 1 本しかない（`staff-approved.html`
+ * の `.search{placeholder:氏名・電話番号}`）。打たれた 1 本の文字列がどちらの
+ * 検索語なのかは、欄ではなくここで決める。
+ */
+describe('1 本の検索欄から検索語を決める', () => {
+  test('数字・ハイフン・空白だけなら電話番号として扱う', () => {
+    expect(customerSearchTermFor('090-1234-5678')).toEqual({
+      field: 'phone',
+      value: '090-1234-5678',
+    })
+    expect(customerSearchTermFor('０９０ １２３４')).toEqual({
+      field: 'phone',
+      value: '０９０ １２３４',
+    })
+  })
+
+  test('文字が混じれば氏名として扱う', () => {
+    expect(customerSearchTermFor('田中 花子')).toEqual({ field: 'name', value: '田中 花子' })
+    // 数字を含む氏名でも、数字以外があれば氏名。電話番号に落とさない。
+    expect(customerSearchTermFor('田中090')).toEqual({ field: 'name', value: '田中090' })
+  })
+
+  test('空・空白だけなら検索語にならない', () => {
+    expect(customerSearchTermFor('')).toBeUndefined()
+    expect(customerSearchTermFor('　 ')).toBeUndefined()
+    // ハイフンだけでは電話番号にならない（正規化すると桁が残らない）。
+    expect(customerSearchTermFor('--')).toBeUndefined()
   })
 })

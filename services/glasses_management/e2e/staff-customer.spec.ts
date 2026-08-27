@@ -157,22 +157,29 @@ async function mockStaffApi(page: Page, permissions: { current: string[] }) {
   })
 }
 
-/** ホーム → 副操作「顧客台帳」 → 電話番号で検索 → 候補を選ぶ、まで進める。 */
+/**
+ * ホーム → 副操作「顧客台帳」 → 検索欄に電話番号 → 候補を選ぶ、まで進める。
+ *
+ * 承認済みモック `staff-approved.html#customer-ledger` の左レールは検索欄が
+ * 1 本きりで、探すボタンを持たない（打ち終わると静かに探す）。
+ */
 async function openCustomerRecord(page: Page) {
   await page.setViewportSize(VIEWPORT)
   await page.goto('/')
-  await expect(page.getByRole('heading', { name: '銀座店のホーム' })).toBeVisible()
+  // ホームは見出しを持たない面（HomeScreen.tsx）なので、主操作の導線で到着を待つ。
+  await expect(page.getByRole('navigation', { name: '主操作' })).toBeVisible()
   await page
     .getByRole('navigation', { name: '副操作' })
     .getByRole('button', { name: '顧客台帳' })
     .click()
-  await expect(page.getByRole('heading', { name: 'お客様を探す' })).toBeVisible()
-  await page.getByLabel('電話番号', { exact: true }).fill('09012345678')
-  await page.getByRole('button', { name: '候補を探す' }).click()
-  const option = page.getByRole('listbox', { name: '顧客候補' }).getByRole('option')
-  await expect(option).toHaveCount(1)
-  await option.click()
-  await expect(option).toHaveAttribute('aria-selected', 'true')
+  const list = page.getByRole('complementary', { name: 'お客様を探す' })
+  await expect(list).toBeVisible()
+  await list.getByLabel('顧客を検索').fill('09012345678')
+  // 行は 1 件のまとまり（article）で、押せるのはその内側の button。
+  const candidate = list.getByRole('article', { name: '田中花子' })
+  await expect(candidate).toHaveCount(1)
+  await candidate.getByRole('button').click()
+  await expect(candidate).toHaveAttribute('aria-current', 'true')
   return page.getByRole('region', { name: '選択中のお客様' })
 }
 
@@ -184,11 +191,11 @@ test('shows the picked customer の現在情報・注意事項 before the histor
   const selected = await openCustomerRecord(page)
   await expect(selected).toContainText('田中花子 様')
 
-  // 候補を選ぶだけで、現在度数・最新メモ・保有メガネ・注意事項が揃う（UC-EYEX-025 / AC-EYEX-04）。
+  // 候補を選ぶだけで、現在度数・最新メモ・現在のメガネ・対応時に確認が揃う（UC-EYEX-025 / AC-EYEX-04）。
   const current = selected.getByRole('region', { name: '現在の度数' })
   const note = selected.getByRole('region', { name: '最新メモ' })
-  const glasses = selected.getByRole('region', { name: '保有メガネ' })
-  const attention = selected.getByRole('region', { name: '注意事項' })
+  const glasses = selected.getByRole('region', { name: '現在のメガネ' })
+  const attention = selected.getByRole('region', { name: '対応時に確認' })
   await expect(current).toBeVisible()
   await expect(note).toBeVisible()
   await expect(glasses).toBeVisible()
@@ -210,7 +217,7 @@ test('shows the picked customer の現在情報・注意事項 before the histor
   await expect(pastRows.nth(0)).toContainText('測定日 2024-05-10・店舗 銀座店・記録者 佐藤検査員')
   await expect(pastRows.nth(1)).toContainText('測定日 2023-04-02・店舗 丸の内店・記録者 高橋検査員')
 
-  // 注意事項は必ず根拠・記録者・記録日つき（UC-EYEX-030）。
+  // 対応時に確認は必ず根拠・記録者・記録日つき（UC-EYEX-030）。
   const attentionRows = attention.getByRole('listitem')
   await expect(attentionRows).toHaveCount(1)
   await expect(attentionRows.first()).toContainText('鼻あての金属で肌が荒れやすい。')
@@ -227,8 +234,8 @@ test('shows the picked customer の現在情報・注意事項 before the histor
   expect(labels).toEqual([
     '現在の度数',
     '最新メモ',
-    '保有メガネ',
-    '注意事項',
+    '現在のメガネ',
+    '対応時に確認',
     '過去の度数',
     '来店履歴',
   ])
@@ -253,7 +260,7 @@ test('shows the chain-wide history only while the store grants customer.history'
   await expect(grantedVisits).toHaveCount(2)
   await expect(grantedVisits.nth(0)).toContainText('2026-06-01・銀座店・視力測定')
   await expect(grantedVisits.nth(1)).toContainText('2025-12-20・丸の内店・フィッティング調整')
-  await expect(granted.getByRole('region', { name: '保有メガネ' })).toContainText('丸の内店')
+  await expect(granted.getByRole('region', { name: '現在のメガネ' })).toContainText('丸の内店')
   await expect(granted.getByRole('region', { name: '過去の度数' })).toContainText('丸の内店')
 
   // 同じ顧客・同じ API 応答でも、customer.history が無い店舗では選択中店舗の行だけ。
@@ -266,7 +273,7 @@ test('shows the chain-wide history only while the store grants customer.history'
   await expect(
     withheld.getByRole('region', { name: '過去の度数' }).getByRole('listitem'),
   ).toHaveCount(1)
-  await expect(withheld.getByRole('region', { name: '保有メガネ' })).not.toContainText('丸の内店')
+  await expect(withheld.getByRole('region', { name: '現在のメガネ' })).not.toContainText('丸の内店')
   // 伏せた行の件数も、存在の標識も出さない。
   await expect(withheld).not.toContainText('丸の内店')
 })

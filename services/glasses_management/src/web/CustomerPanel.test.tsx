@@ -96,9 +96,14 @@ function jsonApi(candidates: CustomerCandidate[]) {
   return vi.fn(async () => new Response(JSON.stringify(candidates), { status: 200 }))
 }
 
-async function searchByPhone(value: string) {
-  fireEvent.change(screen.getByLabelText('電話番号'), { target: { value } })
-  fireEvent.click(screen.getByRole('button', { name: '候補を探す' }))
+/*
+ * 顧客台帳の左レールはモックどおり検索欄が 1 本きり（`氏名・電話番号`）で、
+ * 探すボタンを持たない。Enter（form submit）で確定的に探す。
+ */
+async function searchLedger(value: string) {
+  const field = screen.getByLabelText('顧客を検索')
+  fireEvent.change(field, { target: { value } })
+  fireEvent.submit(field.closest('form') as HTMLFormElement)
 }
 
 /** 予約フローの 4 工程目として描くときの足場（工程見出しは予約フローのもの）。 */
@@ -291,8 +296,8 @@ test('keeps 現在度数 and 過去度数 in separate regions with 測定日・�
       detail={detail}
     />,
   )
-  await searchByPhone('090-1234')
-  fireEvent.click(await screen.findByRole('option', { name: /田中 花子/ }))
+  await searchLedger('090-1234')
+  fireEvent.click(await screen.findByRole('button', { name: /田中 花子/ }))
 
   const current = screen.getByRole('region', { name: '現在の度数' })
   const past = screen.getByRole('region', { name: '過去の度数' })
@@ -317,8 +322,8 @@ test('the ledger puts 現在情報 before 履歴 (AC-EYEX-16)', async () => {
       detail={detail}
     />,
   )
-  await searchByPhone('090-1234')
-  fireEvent.click(await screen.findByRole('option', { name: /田中 花子/ }))
+  await searchLedger('090-1234')
+  fireEvent.click(await screen.findByRole('button', { name: /田中 花子/ }))
 
   const current = screen.getByRole('region', { name: '現在の度数' })
   const history = screen.getByRole('region', { name: '来店履歴' })
@@ -335,14 +340,14 @@ test('shows cross-store visit history only to permitted staff (UC-EYEX-026, AC-E
       detail={detail}
     />,
   )
-  await searchByPhone('090-1234')
-  fireEvent.click(await screen.findByRole('option', { name: /田中 花子/ }))
+  await searchLedger('090-1234')
+  fireEvent.click(await screen.findByRole('button', { name: /田中 花子/ }))
   const history = screen.getByRole('region', { name: '来店履歴' })
   expect(history).toHaveTextContent('丸の内店')
   expect(history).toHaveTextContent('視力測定・新調')
 })
 
-test('carries 根拠・記録者・記録日 on every 注意事項 (UC-EYEX-030)', async () => {
+test('carries 根拠・記録者・記録日 on every 対応時に確認 (UC-EYEX-030)', async () => {
   render(
     <CustomerPanel
       {...staffProps(jsonApi([hanako]))}
@@ -352,9 +357,9 @@ test('carries 根拠・記録者・記録日 on every 注意事項 (UC-EYEX-030)
       detail={detail}
     />,
   )
-  await searchByPhone('090-1234')
-  fireEvent.click(await screen.findByRole('option', { name: /田中 花子/ }))
-  const attention = screen.getByRole('region', { name: '注意事項' })
+  await searchLedger('090-1234')
+  fireEvent.click(await screen.findByRole('button', { name: /田中 花子/ }))
+  const attention = screen.getByRole('region', { name: '対応時に確認' })
   expect(attention).toHaveTextContent('根拠 接客記録')
   expect(attention).toHaveTextContent('記録者 佐藤 美咲')
   expect(attention).toHaveTextContent('記録日 2026-02-10')
@@ -370,12 +375,12 @@ test('hides even the existence of restricted information from unpermitted staff 
       detail={detail}
     />,
   )
-  await searchByPhone('090-1234')
-  fireEvent.click(await screen.findByRole('option', { name: /田中 花子/ }))
+  await searchLedger('090-1234')
+  fireEvent.click(await screen.findByRole('button', { name: /田中 花子/ }))
 
   // 注意事項は権限がなければ領域ごと存在しない。来店履歴は自店舗分だけが残り、
   // 他店舗分が「ある」ことを示す痕跡（件数・伏字・無効化された枠）を一切出さない。
-  expect(screen.queryByRole('region', { name: '注意事項' })).toBeNull()
+  expect(screen.queryByRole('region', { name: '対応時に確認' })).toBeNull()
   const history = screen.getByRole('region', { name: '来店履歴' })
   expect(history).toHaveTextContent('銀座店')
   expect(history).toHaveTextContent('フィッティング調整')
@@ -407,8 +412,8 @@ test('renders an explicit 未取得 state when no detail has been loaded', async
       permissions={allowed}
     />,
   )
-  await searchByPhone('090-1234')
-  fireEvent.click(await screen.findByRole('option', { name: /田中 花子/ }))
+  await searchLedger('090-1234')
+  fireEvent.click(await screen.findByRole('button', { name: /田中 花子/ }))
   expect(screen.getByText('顧客情報は未取得です')).toBeInTheDocument()
   expect(screen.queryByRole('region', { name: '現在の度数' })).toBeNull()
 })
@@ -424,8 +429,8 @@ test('never writes customer data to browser storage', async () => {
       detail={detail}
     />,
   )
-  await searchByPhone('090-1234')
-  fireEvent.click(await screen.findByRole('option', { name: /田中 花子/ }))
+  await searchLedger('090-1234')
+  fireEvent.click(await screen.findByRole('button', { name: /田中 花子/ }))
   expect(setItem).not.toHaveBeenCalled()
   setItem.mockRestore()
 })
@@ -448,9 +453,8 @@ test('loads the chosen customer record from the server instead of waiting to be 
     />,
   )
 
-  fireEvent.change(screen.getByLabelText('電話番号'), { target: { value: '090' } })
-  fireEvent.click(screen.getByRole('button', { name: '候補を探す' }))
-  fireEvent.click(await screen.findByRole('option', { name: /田中 花子/ }))
+  await searchLedger('090')
+  fireEvent.click(await screen.findByRole('button', { name: /田中 花子/ }))
 
   await waitFor(() =>
     expect(
@@ -477,9 +481,8 @@ test('opens the attention-note review for the chosen customer from the ledger', 
     />,
   )
 
-  fireEvent.change(screen.getByLabelText('電話番号'), { target: { value: '090' } })
-  fireEvent.click(screen.getByRole('button', { name: '候補を探す' }))
-  fireEvent.click(await screen.findByRole('option', { name: /田中 花子/ }))
+  await searchLedger('090')
+  fireEvent.click(await screen.findByRole('button', { name: /田中 花子/ }))
 
   fireEvent.click(await screen.findByRole('button', { name: '注意事項を確認・登録する' }))
 

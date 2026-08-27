@@ -3,23 +3,28 @@ import { useCallback, useEffect, useState } from 'react'
 import { EmptyResult, PermissionDenied } from './admin-chrome'
 import { auditDiffRows, formatJstInstant, jstWallClockToInstant } from './attention-view'
 import { Action, Actions } from './design/controls'
-import { SelectField, TextField } from './design/forms'
-import { AdminLayout, AdminSurface, SideNavItem } from './design/layouts'
+import { DateTimeField, TextField, ToggleFilter } from './design/forms'
+import { AdminLayout, AdminSurface } from './design/layouts'
 import { MatrixCell, MatrixRow, MatrixTable } from './design/matrix'
 import { FailureNotice, StatusNotice } from './design/notices'
-import { AuditRecord, Card, DiffPair } from './design/surfaces'
+import { AuditRecord, Card, DiffPair, TitleRow } from './design/surfaces'
 import type { StaffLocation } from './staff-navigation'
 import type { StaffScreenProps } from './staff-screen'
 
-/** 節ナビ。モック `operations-approved.html#audit` の 4 つと、その順序。 */
+/** モック `operations-approved.html#audit` の節。この面の中の絞り込みである。 */
 const SECTIONS: { label: string; to?: StaffLocation }[] = [
   { label: '本日の管理操作', to: { screen: 'audit' } },
-  { label: '録音再生' },
+  { label: '録音再生', to: { screen: 'recording-ops' } },
+  /* 店舗切替はバーのシートで起きる。ここは節の名前としてだけ置く。 */
   { label: '店舗切替' },
-  { label: '注意事項' },
-  /* 同じタブの下の兄弟の面。ここからしか行けないので並びの末尾に置く。 */
-  { label: '分析', to: { screen: 'analytics' } },
-  { label: 'お知らせ', to: { screen: 'alerts' } },
+  { label: '注意事項', to: { screen: 'attention-settings' } },
+]
+
+/** 主体種別の絞り込み。ブラウザ既定の `<select>` を使わない理由は下記。 */
+const ACTOR_TYPES: { value: '' | AuditActorType; label: string }[] = [
+  { value: '', label: 'すべて' },
+  { value: 'user', label: '個人' },
+  { value: 'shared_terminal', label: '共有端末' },
 ]
 
 type Props = StaffScreenProps & {
@@ -96,6 +101,12 @@ export function AuditSearchScreen({ storeId, storeName, api, permissions, naviga
   const [failure, setFailure] = useState<string>()
   const [detail, setDetail] = useState<AuditEventView>()
   const [loading, setLoading] = useState(false)
+  /*
+   * モックのこの面は詳細ビューである。絞り込みの板を既定で開くと、監査が
+   * 「まず条件を組み立てる面」になってしまう。監査で最初に読みたいのは直近の
+   * 1 件そのものなので、詳細を既定にし、検索はそこから開く同じ面の別の姿とする。
+   */
+  const [searching, setSearching] = useState(false)
 
   const search = useCallback(
     async (current: Filters) => {
@@ -151,27 +162,41 @@ export function AuditSearchScreen({ storeId, storeName, api, permissions, naviga
        `AUDIT-DETAIL--default--ipad-landscape.png`。 */
     <AdminSurface label="監査">
       <AdminLayout
-        navLabel="監査の節"
-        nav={SECTIONS.map((section) => (
-          <SideNavItem
-            key={section.label}
-            on={section.label === '本日の管理操作'}
-            onClick={
-              section.to === undefined ? undefined : () => navigate(section.to as StaffLocation)
-            }
-          >
-            {section.label}
-          </SideNavItem>
-        ))}
+        /*
+         * 柱は全画面共通の 1 本しかないので、この面の節はそこへ渡す。
+         * 別の面への移動はサイドバーが持つので、ここでは並べない。
+         */
+        sections={SECTIONS.map((section) => ({
+          ...section,
+          current: section.label === '本日の管理操作',
+        }))}
       >
-        <p>{`表示中の店舗 ${storeName} · 権限のある範囲のみ`}</p>
+        <TitleRow
+          push={
+            <Action
+              inset="tight"
+              onClick={() => {
+                setSearching(!searching)
+              }}
+            >
+              {searching ? '詳細に戻る' : '監査を検索'}
+            </Action>
+          }
+        >
+          <h1>{searching ? '監査イベントの検索' : '監査イベント詳細'}</h1>
+        </TitleRow>
 
-        {detail && (
+        {!searching && detail === undefined && (
+          <StatusNotice>
+            {`表示できる監査イベントがありません（${storeName} · 権限のある範囲のみ）。`}
+          </StatusNotice>
+        )}
+
+        {!searching && detail && (
           /* 記録は要約せず、保存されている姿のまま等幅で出す。整形して
              読みやすくすると、後から「本当にこう記録されていたのか」を
              確かめられなくなる。前後の差分だけは人が読む形に開く。 */
           <section aria-label="監査イベント詳細">
-            <h1>監査イベント詳細</h1>
             <AuditRecord
               label="監査イベントの記録"
               lines={[
@@ -202,87 +227,89 @@ export function AuditSearchScreen({ storeId, storeName, api, permissions, naviga
                 </DiffPair>
               </div>
             )}
-            <Actions>
-              <Action inset="tight" onClick={() => setDetail(undefined)}>
-                閉じる
-              </Action>
-            </Actions>
           </section>
         )}
 
-        <div className="mt-4.5">
-          <Card label="監査の絞り込み">
-            <b>監査の絞り込み</b>
-            <div className="mt-2.5 grid gap-3 md:grid-cols-3">
-              <TextField
-                id="audit-from"
-                label="開始日時"
-                type="datetime-local"
-                value={filters.from}
-                onChange={(event) => setFilters({ ...filters, from: event.target.value })}
-              />
-              <TextField
-                id="audit-to"
-                label="終了日時"
-                type="datetime-local"
-                value={filters.to}
-                onChange={(event) => setFilters({ ...filters, to: event.target.value })}
-              />
-              <TextField
-                id="audit-action"
-                label="操作"
-                value={filters.action}
-                onChange={(event) => setFilters({ ...filters, action: event.target.value })}
-              />
-              <SelectField
-                id="audit-actor-type"
-                label="主体種別"
-                value={filters.actorType}
-                onChange={(event) =>
-                  setFilters({ ...filters, actorType: event.target.value as '' | AuditActorType })
-                }
-              >
-                <option value="">すべて</option>
-                <option value="user">個人</option>
-                <option value="shared_terminal">共有端末</option>
-              </SelectField>
-              <TextField
-                id="audit-entity-type"
-                label="対象種別"
-                value={filters.entityType}
-                onChange={(event) => setFilters({ ...filters, entityType: event.target.value })}
-              />
-              <TextField
-                id="audit-entity-id"
-                label="対象ID"
-                value={filters.entityId}
-                onChange={(event) => setFilters({ ...filters, entityId: event.target.value })}
-              />
-            </div>
-            <Actions>
-              <Action
-                variant="primary"
-                inset="tight"
-                disabled={loading}
-                onClick={() => {
-                  void search(filters)
-                }}
-              >
-                監査を検索する
-              </Action>
-            </Actions>
-          </Card>
-        </div>
+        {searching && (
+          <div className="mt-4.5">
+            <Card label="監査の絞り込み">
+              <b>監査の絞り込み</b>
+              <div className="mt-2.5 grid gap-3 md:grid-cols-3">
+                <DateTimeField
+                  id="audit-from"
+                  label="開始日時"
+                  value={filters.from}
+                  onChange={(from) => setFilters({ ...filters, from })}
+                />
+                <DateTimeField
+                  id="audit-to"
+                  label="終了日時"
+                  value={filters.to}
+                  onChange={(to) => setFilters({ ...filters, to })}
+                />
+                <TextField
+                  id="audit-action"
+                  label="操作"
+                  value={filters.action}
+                  onChange={(event) => setFilters({ ...filters, action: event.target.value })}
+                />
+                {/*
+                 * ブラウザ既定の `<select>` は地域設定の書体と既定の青を持ち込み、
+                 * モックのどの面にも無い色が 1 か所だけ出る。選択肢が 3 つしか
+                 * ないので、押した状態を面の上に開いたまま並べる。
+                 */}
+                <div className="flex flex-col gap-1.5">
+                  <span className="font-sans text-note">主体種別</span>
+                  <fieldset aria-label="主体種別" className="m-0 flex flex-wrap gap-2 border-0 p-0">
+                    {ACTOR_TYPES.map((actorType) => (
+                      <ToggleFilter
+                        key={actorType.label}
+                        on={filters.actorType === actorType.value}
+                        onClick={() => setFilters({ ...filters, actorType: actorType.value })}
+                      >
+                        {actorType.label}
+                      </ToggleFilter>
+                    ))}
+                  </fieldset>
+                </div>
+                <TextField
+                  id="audit-entity-type"
+                  label="対象種別"
+                  value={filters.entityType}
+                  onChange={(event) => setFilters({ ...filters, entityType: event.target.value })}
+                />
+                <TextField
+                  id="audit-entity-id"
+                  label="対象ID"
+                  value={filters.entityId}
+                  onChange={(event) => setFilters({ ...filters, entityId: event.target.value })}
+                />
+              </div>
+              <Actions>
+                <Action
+                  variant="primary"
+                  inset="tight"
+                  disabled={loading}
+                  onClick={() => {
+                    void search(filters)
+                  }}
+                >
+                  監査を検索する
+                </Action>
+              </Actions>
+            </Card>
+          </div>
+        )}
 
         {failure && <FailureNotice>{failure}</FailureNotice>}
-        {events?.length === 0 && (
+        {searching && events?.length === 0 && (
           <EmptyResult
             title="条件に一致する監査イベントはありません"
             onClearFilters={clearFilters}
           />
         )}
 
-        {events !== undefined && events.length > 0 && (
+        {searching && events !== undefined && events.length > 0 && (
           <div className="mt-3 overflow-x-auto">
             <MatrixTable
               label="監査イベント"
@@ -302,7 +329,15 @@ export function AuditSearchScreen({ storeId, storeName, api, permissions, naviga
                     </span>
                   </MatrixCell>
                   <MatrixCell>
-                    <Action inset="tight" onClick={() => setDetail(event)}>
+                    <Action
+                      inset="tight"
+                      onClick={() => {
+                        setDetail(event)
+                        // 詳細を選んだら詳細ビューへ戻す。表の下に開くと、
+                        // どちらを読んでいるのかが面の中で二重になる。
+                        setSearching(false)
+                      }}
+                    >
                       詳細
                     </Action>
                   </MatrixCell>

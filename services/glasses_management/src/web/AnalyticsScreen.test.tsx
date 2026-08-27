@@ -80,6 +80,16 @@ function baseReport(overrides: Partial<AnalyticsReport> = {}): AnalyticsReport {
           { key: 'p2', label: '受け取り', value: 30, suppressed: false },
         ],
       },
+      {
+        dimension: 'hour',
+        metric: 'reservations',
+        suppressed: false,
+        suppressionReason: null,
+        items: [
+          { key: '10', label: '10時', value: 38, suppressed: false },
+          { key: '14', label: '14時', value: 93, suppressed: false },
+        ],
+      },
     ],
     stageDistributions: [
       {
@@ -97,6 +107,7 @@ function baseReport(overrides: Partial<AnalyticsReport> = {}): AnalyticsReport {
         buckets: [
           { label: '0〜5分', fromMinutes: 0, toMinutes: 5, count: 10 },
           { label: '5〜10分', fromMinutes: 5, toMinutes: 10, count: 20 },
+          { label: '10分以上', fromMinutes: 10, toMinutes: null, count: 10 },
         ],
       },
     ],
@@ -189,6 +200,15 @@ function renderScreen(
   )
 }
 
+/**
+ * 左列の観点をひとつ選ぶ。モックのこの面は「観点をひとつ選んで掘り下げる」
+ * 形なので、どの観点の数字を読むテストなのかを必ず明示する。
+ */
+async function openSection(label: string) {
+  await screen.findByRole('navigation', { name: '指標' })
+  fireEvent.click(screen.getByRole('button', { name: label }))
+}
+
 afterEach(() => {
   vi.restoreAllMocks()
 })
@@ -213,7 +233,7 @@ test('the requested granularity and date are sent to the server', async () => {
   expect(calls[0]?.url).toBe(
     `/api/staff/stores/${STORE_ID}/analytics?granularity=day&date=${TODAY}`,
   )
-  fireEvent.change(screen.getByLabelText('集計粒度'), { target: { value: 'month' } })
+  fireEvent.click(screen.getByRole('button', { name: '月' }))
   await waitFor(() => {
     expect(calls).toHaveLength(2)
   })
@@ -227,6 +247,7 @@ test('current value, previous-period difference and store target share one unit'
   renderScreen(api)
   expect(await screen.findByText('128件')).toBeTruthy()
   expect(screen.getByText('前期間 96件（+32件）')).toBeTruthy()
+  await openSection('取消・無断キャンセル')
   expect(screen.getByText('店舗目標 8件（+6件）')).toBeTruthy()
 })
 
@@ -241,6 +262,7 @@ test('a metric with no configured target says so instead of inventing one', asyn
 test('an over-target metric lists cause candidates with evidence counts, not a cause', async () => {
   const { api } = createApi(() => jsonResponse(baseReport()))
   renderScreen(api)
+  await openSection('取消・無断キャンセル')
   const region = await screen.findByRole('region', { name: '無断キャンセルの原因候補' })
   expect(within(region).getByText(/原因を断定するものではありません/)).toBeTruthy()
   expect(
@@ -255,6 +277,7 @@ test('an over-target metric lists cause candidates with evidence counts, not a c
 test('wait time is shown as a distribution, not only an average', async () => {
   const { api } = createApi(() => jsonResponse(baseReport()))
   renderScreen(api)
+  await openSection('待ち時間')
   const region = await screen.findByRole('region', { name: '受付から接客開始まで の分布' })
   expect(
     within(region).getByText('中央値 8分 / 平均 9.2分 / 90パーセンタイル 18分 / 最大 32分'),
@@ -273,6 +296,7 @@ test('breakdowns and the web booking funnel are readable as text', async () => {
   const purpose = await screen.findByRole('region', { name: '来店目的の内訳' })
   expect(within(purpose).getByText('視力測定')).toBeTruthy()
   expect(within(purpose).getByText('60件')).toBeTruthy()
+  await openSection('Web予約')
   const funnel = screen.getByRole('region', { name: 'Web予約の離脱' })
   expect(within(funnel).getByText('枠選択')).toBeTruthy()
   expect(within(funnel).getByText('-30件')).toBeTruthy()
@@ -284,6 +308,7 @@ test('breakdowns and the web booking funnel are readable as text', async () => {
 test('excluded rows show their count, reason and interpretation caveat', async () => {
   const { api } = createApi(() => jsonResponse(baseReport()))
   renderScreen(api)
+  await openSection('録音・運用品質')
   const region = await screen.findByRole('region', { name: '除外したデータ' })
   expect(within(region).getByText('3件')).toBeTruthy()
   expect(within(region).getByText('工程の時刻が欠けている来店を除外しました。')).toBeTruthy()
@@ -295,6 +320,7 @@ test('excluded rows show their count, reason and interpretation caveat', async (
 test('operational quality warnings carry their next action', async () => {
   const { api } = createApi(() => jsonResponse(baseReport()))
   renderScreen(api)
+  await openSection('録音・運用品質')
   const region = await screen.findByRole('region', { name: '運用品質の警告' })
   expect(within(region).getByText('録音の保存に失敗した接客があります。')).toBeTruthy()
   expect(within(region).getByText('録音運用画面で保存状況を確認してください。')).toBeTruthy()
@@ -461,22 +487,24 @@ test('指標一覧・レポート・確認することの3列で組む', async (
   await screen.findByText('対象件数 214件')
 
   const metrics = screen.getByRole('navigation', { name: '指標' })
-  expect(within(metrics).getByRole('button', { name: '予約' })).toHaveAttribute(
+  expect(within(metrics).getByRole('button', { name: '予約と来店' })).toHaveAttribute(
     'aria-current',
     'page',
   )
-  expect(within(metrics).getByRole('button', { name: '無断キャンセル' })).toBeTruthy()
+  expect(within(metrics).getByRole('button', { name: '取消・無断キャンセル' })).toBeTruthy()
 
   const inspector = screen.getByRole('complementary', { name: '確認すること' })
-  expect(within(inspector).getByRole('region', { name: '無断キャンセルの原因候補' })).toBeTruthy()
   expect(within(inspector).getByRole('region', { name: '対象データ' })).toHaveTextContent(
     '来店214件 / 除外3件',
   )
+  await openSection('取消・無断キャンセル')
+  expect(within(inspector).getByRole('region', { name: '無断キャンセルの原因候補' })).toBeTruthy()
 })
 
 test('分布の柱は抑制時に幅も高さも残さない', async () => {
   const { api } = createApi(() => jsonResponse(baseReport()))
   renderScreen(api)
+  await openSection('待ち時間')
   const region = await screen.findByRole('region', { name: '受付から接客開始まで の分布' })
   const bars = region.querySelectorAll('[data-bar]')
   expect(bars.length).toBeGreaterThan(0)
@@ -490,7 +518,7 @@ test('nothing is written to browser storage', async () => {
   const { api } = createApi(() => jsonResponse(baseReport()))
   renderScreen(api)
   await screen.findByText('対象件数 214件')
-  fireEvent.change(screen.getByLabelText('集計粒度'), { target: { value: 'week' } })
+  fireEvent.click(screen.getByRole('button', { name: '週' }))
   await waitFor(() => {
     expect(setItem).not.toHaveBeenCalled()
   })
@@ -503,5 +531,88 @@ test('nothing is written to browser storage', async () => {
 test('日本語を含む値は等幅で描かない', async () => {
   const { api } = createApi(() => jsonResponse(baseReport()))
   renderScreen(api)
+  await openSection('取消・無断キャンセル')
   expect(await screen.findByText(/^根拠件数 /)).not.toHaveClass('font-mono')
+})
+
+/* --- 承認済みモックの情報構造（6 つの指標・柱のグラフ・3 枚の点検カード） ---- */
+
+/**
+ * モックの左列は「予約と来店 / 待ち時間 / 工程所要時間 / 取消・無断キャンセル /
+ * Web予約 / 録音・運用品質」の 6 つで、指標そのものではなく“見る観点”である。
+ * 観点をひとつ選ぶと、中央の列がその観点だけを掘り下げる。
+ */
+test('左列はモックの6観点で、選んだ観点だけを中央に掘り下げる', async () => {
+  const { api } = createApi(() => jsonResponse(baseReport()))
+  renderScreen(api)
+  await screen.findByText('対象件数 214件')
+
+  const metrics = screen.getByRole('navigation', { name: '指標' })
+  expect(
+    within(metrics)
+      .getAllByRole('button')
+      .map((button) => button.textContent),
+  ).toEqual([
+    '予約と来店',
+    '待ち時間',
+    '工程所要時間',
+    '取消・無断キャンセル',
+    'Web予約',
+    '録音・運用品質',
+  ])
+
+  // 既定は先頭の観点。無断キャンセルは別の観点なので中央に出ない。
+  const report = screen.getByRole('region', { name: 'レポート' })
+  expect(within(report).getByRole('heading', { name: '予約' })).toBeInTheDocument()
+  expect(within(report).queryByRole('heading', { name: '無断キャンセル' })).toBeNull()
+
+  fireEvent.click(within(metrics).getByRole('button', { name: '取消・無断キャンセル' }))
+  expect(within(report).getByRole('heading', { name: '無断キャンセル' })).toBeInTheDocument()
+  expect(within(report).queryByRole('heading', { name: '予約' })).toBeNull()
+})
+
+/** モックの中心は柱のグラフ。数字を縦に積むだけの面にはしない。 */
+test('観点ごとに柱のグラフを持ち、目標線と超過の符号を出す', async () => {
+  const { api } = createApi(() => jsonResponse(baseReport()))
+  renderScreen(api)
+  await screen.findByText('対象件数 214件')
+
+  const chart = await screen.findByRole('figure', { name: '時間帯の内訳' })
+  expect(within(chart).getAllByRole('listitem').length).toBeGreaterThan(0)
+
+  fireEvent.click(screen.getByRole('button', { name: '待ち時間' }))
+  const wait = await screen.findByRole('figure', { name: '受付から接客開始まで の分布' })
+  expect(within(wait).getByText('10分以上')).toBeInTheDocument()
+})
+
+/** モックの点検欄は 3 枚。並べれば並べるほど、どれから見るのかが消える。 */
+test('点検欄は多くとも3枚に絞る', async () => {
+  const { api } = createApi(() => jsonResponse(baseReport()))
+  renderScreen(api)
+  await screen.findByText('対象件数 214件')
+
+  const inspector = screen.getByRole('complementary', { name: '確認すること' })
+  expect(inspector.querySelectorAll('[data-viz-card]')).toHaveLength(1)
+  await openSection('取消・無断キャンセル')
+  // 原因候補が並んでも、点検欄は「対象データ」を含めて 3 枚を超えない。
+  expect(inspector.querySelectorAll('[data-viz-card]').length).toBeLessThanOrEqual(3)
+})
+
+/**
+ * ブラウザ既定の `<select>` と `type="date"` は、地域設定で `08/27/2026` の
+ * 英語表記と既定の青を持ち込む。モックにはどちらの色も表記も無い。
+ */
+test('集計粒度と対象日にブラウザ既定の部品を使わない', async () => {
+  const { api } = createApi(() => jsonResponse(baseReport()))
+  const { container } = renderScreen(api)
+  await screen.findByText('対象件数 214件')
+
+  expect(container.querySelector('select')).toBeNull()
+  expect(container.querySelector('input[type="date"]')).toBeNull()
+  // 粒度は押しボタンで選ぶ。選択中は `aria-pressed` が名乗る。
+  expect(screen.getByRole('button', { name: '日' })).toHaveAttribute('aria-pressed', 'true')
+  fireEvent.click(screen.getByRole('button', { name: '月' }))
+  await waitFor(() => {
+    expect(screen.getByRole('button', { name: '月' })).toHaveAttribute('aria-pressed', 'true')
+  })
 })

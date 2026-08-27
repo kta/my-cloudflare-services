@@ -1,6 +1,11 @@
-import { ReceptionHistoryEntry } from '@app/contracts'
+import {
+  AvailabilityPurpose,
+  ReceptionHistoryEntry,
+  Reservation,
+  ReservationChangeHistoryEntry,
+} from '@app/contracts'
 import { useCallback, useEffect, useState } from 'react'
-import { FilterButton, FilterLine, FilterSelect, SearchField } from './design/controls'
+import { FilterLine, FilterToggle, SearchField } from './design/controls'
 import { Workspace } from './design/layouts'
 import { Card, StatePill, TitleRow } from './design/surfaces'
 import {
@@ -15,16 +20,46 @@ import {
   type RecordingPermissions,
   type RecordingView,
 } from './ReservationSearchScreen'
-import type { StaffScreenProps } from './staff-screen'
+import type { StaffApi, StaffScreenProps } from './staff-screen'
 
 const SOURCE_LABEL = { staff: '電話・店頭', web: 'Web予約', walkin: 'ウォークイン' } as const
-const ACTION_LABEL = {
-  created: '予約受付',
-  changed: '変更',
-  cancelled: '取消',
+/**
+ * 記録の右肩に出る狭い語（承認済みモックの `.source`）。
+ *
+ * 「ウォークイン受付」のような長い操作名を置くと 390px の列でチップが折れる。
+ * モックは経路を 1〜2 文字で名乗らせ、何が起きたかは行の本文が言う。
+ */
+const ROUTE_CHIP = { staff: '電話', web: 'Web', walkin: '店頭' } as const
+/** 経路ではなく「予約に手を入れた」ことが要点になる操作だけ、語を差し替える。 */
+const ACTION_CHIP = { changed: '変更', cancelled: '取消', no_show: '無断' } as const
+
+function chipOf(entry: ReceptionHistoryEntry): string {
+  if (entry.action === 'changed') return ACTION_CHIP.changed
+  if (entry.action === 'cancelled') return ACTION_CHIP.cancelled
+  if (entry.action === 'no_show') return ACTION_CHIP.no_show
+  return ROUTE_CHIP[entry.source]
+}
+
+const STATUS_LABEL = {
+  confirmed: '予約済み',
+  checked_in: '来店済み',
+  cancelled: '取消済み',
   no_show: '無断キャンセル',
-  walkin_created: 'ウォークイン受付',
 } as const
+
+/*
+ * 経路の絞り込み（AC-EYEX-58）。ネイティブの `<select>` を置くとブラウザ既定の
+ * 見た目が絞り込みの列に混ざり、選ばれている値も畳まれて見えなくなるので、
+ * モックが記録の右肩で使っている語をそのままチップにする。`変更` だけは経路
+ * ではなく操作なので、送る引数が違う。
+ */
+const ROUTE_FILTERS = [
+  { label: '店頭', param: 'source', value: 'walkin' },
+  { label: '電話', param: 'source', value: 'staff' },
+  { label: 'Web', param: 'source', value: 'web' },
+  { label: '変更', param: 'action', value: 'changed' },
+] as const
+type RouteFilter = (typeof ROUTE_FILTERS)[number]['label']
 
 /**
  * 承認済みモック (`reception-history-approved.html`) の記録タイトル。
@@ -48,8 +83,44 @@ function titleOf(entry: ReceptionHistoryEntry): string {
   }
 }
 
-type Filters = { term: string; source: string; action: string; attentionOnly: boolean }
-const NO_FILTERS: Filters = { term: '', source: '', action: '', attentionOnly: false }
+type Filters = { term: string; route: RouteFilter | ''; attentionOnly: boolean }
+const NO_FILTERS: Filters = { term: '', route: '', attentionOnly: false }
+
+/** 選択した記録の「いつ来るのか・何をしに来るのか」。記録自体は持っていない。 */
+type Booking = { startAt: string; purposeIds: string[]; status: keyof typeof STATUS_LABEL }
+
+async function readJson(response: Response): Promise<unknown> {
+  try {
+    return await response.json()
+  } catch {
+    return undefined
+  }
+}
+
+async function loadBooking(
+  api: StaffApi,
+  storeId: string,
+  reservationId: string,
+): Promise<{ booking?: Booking; changes: number }> {
+  const [detail, history] = await Promise.all([
+    api(`/api/staff/stores/${storeId}/reservations/${reservationId}`),
+    api(`/api/staff/stores/${storeId}/reservations/${reservationId}/history`),
+  ])
+  const parsed = detail.ok ? Reservation.safeParse(await readJson(detail)) : undefined
+  const changes = history.ok
+    ? ReservationChangeHistoryEntry.array().safeParse(await readJson(history))
+    : undefined
+  return {
+    booking: parsed?.success
+      ? {
+          startAt: parsed.data.startAt,
+          purposeIds: parsed.data.purposeIds,
+          status: parsed.data.status,
+        }
+      : undefined,
+    changes: changes?.success ? changes.data.length : 0,
+  }
+}
 
 type Props = StaffScreenProps & {
   /** JST `YYYY-MM-DD`, injected: a screen never reads the clock itself. */
@@ -86,6 +157,10 @@ export function ReceptionHistoryScreen({
   const [loadError, setLoadError] = useState<string>()
   const [forbidden, setForbidden] = useState(false)
   const [selectedId, setSelectedId] = useState<string>()
+  const [booking, setBooking] = useState<Booking>()
+  const [changeCount, setChangeCount] = useState(0)
+  /** 目的は id ではなくスタッフが口にする名称でないと読めない。店舗設定が源泉。 */
+  const [purposeNames, setPurposeNames] = useState<Record<string, string>>()
 
   const load = useCallback(
     async (query: Filters) => {
@@ -95,8 +170,8 @@ export function ReceptionHistoryScreen({
       // is still a person's name as far as this endpoint is concerned.
       if (classified)
         params.set(classified.field === 'kana' ? 'name' : classified.field, classified.value)
-      if (query.source) params.set('source', query.source)
-      if (query.action) params.set('action', query.action)
+      const route = ROUTE_FILTERS.find((candidate) => candidate.label === query.route)
+      if (route) params.set(route.param, route.value)
       // Clearing 要確認 drops the parameter entirely, so nothing is hidden (AC-EYEX-61).
       if (query.attentionOnly) params.set('requiresAttention', 'true')
       // The store lives in the path: no other store's events can be requested.
@@ -134,7 +209,50 @@ export function ReceptionHistoryScreen({
     void load(NO_FILTERS)
   }, [load])
 
+  useEffect(() => {
+    let active = true
+    void api(`/api/staff/stores/${storeId}/availability/settings`)
+      .then(async (response) => {
+        if (!response.ok) return undefined
+        // 設定全体はこの面の関心ではない。目的の名称だけを契約から読む。
+        const body = (await readJson(response)) as { purposes?: unknown } | undefined
+        return AvailabilityPurpose.array().safeParse(body?.purposes)
+      })
+      .then((parsed) => {
+        if (!active || !parsed?.success) return
+        setPurposeNames(
+          Object.fromEntries(parsed.data.map((purpose) => [purpose.id, purpose.staffName])),
+        )
+      })
+      .catch(() => undefined)
+    return () => {
+      active = false
+    }
+  }, [api, storeId])
+
   const selected = entries?.find((entry) => entry.id === selectedId)
+  const selectedReservationId = selected?.reservationId
+
+  /*
+   * 記録は「何が起きたか」しか持たない。モックの詳細が名乗る「来店」「目的」
+   * 「変更履歴」は予約の側にあるので、開いた記録の予約だけを取りに行く。
+   */
+  useEffect(() => {
+    setBooking(undefined)
+    setChangeCount(0)
+    if (!selectedReservationId) return undefined
+    let active = true
+    void loadBooking(api, storeId, selectedReservationId)
+      .then((result) => {
+        if (!active) return
+        setBooking(result.booking)
+        setChangeCount(result.changes)
+      })
+      .catch(() => undefined)
+    return () => {
+      active = false
+    }
+  }, [api, storeId, selectedReservationId])
 
   if (forbidden) return <PermissionDenied onBack={() => navigate({ screen: 'home' })} />
 
@@ -162,47 +280,36 @@ export function ReceptionHistoryScreen({
             />
           </div>
           {/* 押している間だけ緑地。押されていることを色以外に aria-pressed が持つ。 */}
-          <FilterButton
-            variant={filters.attentionOnly ? 'primary' : 'default'}
-            onClick={() =>
-              setFilters((current) => ({ ...current, attentionOnly: !current.attentionOnly }))
-            }
+          <FilterToggle
+            pressed={filters.attentionOnly}
+            onToggle={() => {
+              const next = { ...filters, attentionOnly: !filters.attentionOnly }
+              setFilters(next)
+              // チップは押した時点で効く。確定のためのボタンをモックは持たない。
+              void load(next)
+            }}
           >
-            <span aria-hidden="true">要確認</span>
-            <span className="sr-only">要確認</span>
-          </FilterButton>
+            要確認
+          </FilterToggle>
         </div>
         <FilterLine>
-          <FilterSelect
-            id="history-source"
-            label="受付経路"
-            value={filters.source}
-            onChange={(source) => setFilters((current) => ({ ...current, source }))}
-          >
-            <option value="">すべての経路</option>
-            <option value="staff">電話・店頭</option>
-            <option value="web">Web予約</option>
-            <option value="walkin">ウォークイン</option>
-          </FilterSelect>
-          <FilterSelect
-            id="history-action"
-            label="操作種別"
-            value={filters.action}
-            onChange={(action) => setFilters((current) => ({ ...current, action }))}
-          >
-            <option value="">すべての操作</option>
-            <option value="created">予約受付</option>
-            <option value="changed">変更</option>
-            <option value="cancelled">取消</option>
-            <option value="no_show">無断キャンセル</option>
-            <option value="walkin_created">ウォークイン受付</option>
-          </FilterSelect>
-          <button
-            type="submit"
-            className={`min-h-11 rounded-ctl border border-pine bg-pine px-3 font-sans text-body text-on-pine ${FOCUS_RING}`}
-          >
-            絞り込む
-          </button>
+          {ROUTE_FILTERS.map((route) => (
+            <FilterToggle
+              key={route.label}
+              pressed={filters.route === route.label}
+              onToggle={() => {
+                // 同じチップをもう一度押すと解除。経路は 1 つずつしか見ない。
+                const next = {
+                  ...filters,
+                  route: (filters.route === route.label ? '' : route.label) as Filters['route'],
+                }
+                setFilters(next)
+                void load(next)
+              }}
+            >
+              {route.label}
+            </FilterToggle>
+          ))}
         </FilterLine>
       </form>
       {loadError && (
@@ -241,9 +348,13 @@ export function ReceptionHistoryScreen({
                 : 'border border-line bg-surface'
             }`}
           >
-            {/* `.source{float:right}` — 何の記録かを行の右肩に置く。 */}
+            {/* `.source{float:right}` — どこから入った記録かを行の右肩に置く。 */}
             <span className="float-right text-grid">
-              <StatePill>{ACTION_LABEL[entry.action]}</StatePill>
+              <StatePill tone={entry.requiresAttention ? 'caution' : 'plain'}>
+                {chipOf(entry)}
+              </StatePill>
+              {/* 琥珀だけに頼らない。色を見られなくても語で「要確認」と分かる。 */}
+              {entry.requiresAttention && <span className="sr-only">要確認</span>}
             </span>
             {/* 時刻は数字なので等幅。和文はここに混ぜない。 */}
             <time className="block font-bold font-mono text-grid text-pine">
@@ -253,12 +364,6 @@ export function ReceptionHistoryScreen({
             <span className="block text-grid text-ink-muted">
               {SOURCE_LABEL[entry.source]} · {entry.actorId}
             </span>
-            {entry.requiresAttention && (
-              <span className="block font-bold text-danger text-note">要確認</span>
-            )}
-            {selectedId === entry.id && (
-              <span className="block text-ink-muted text-note">選択中</span>
-            )}
           </button>
         ))}
       </section>
@@ -272,10 +377,18 @@ export function ReceptionHistoryScreen({
   ) : (
     <section aria-label="受付イベント詳細" className="font-sans">
       {/* `.detailhead` — 何が起きたか、いつ、誰が。状態は右肩の `.badge`。 */}
+      {/*
+       * 右肩は状態そのもの。通常の状態を失敗の色（danger）で出すと「予約が
+       * 取れている」ことが赤で伝わってしまうので、通常は緑、注意は琥珀にする。
+       */}
       <TitleRow
         push={
-          <StatePill tone={selected.requiresAttention ? 'danger' : 'plain'}>
-            {selected.requiresAttention ? '要確認' : '確認不要'}
+          <StatePill tone={selected.requiresAttention ? 'caution' : 'plain'}>
+            {selected.requiresAttention
+              ? '要確認'
+              : booking
+                ? STATUS_LABEL[booking.status]
+                : '受付済み'}
           </StatePill>
         }
       >
@@ -291,21 +404,29 @@ export function ReceptionHistoryScreen({
       <div className="mt-3.5 grid gap-3" style={{ gridTemplateColumns: '1.15fr .85fr' }}>
         <Card>
           <b className="block">予約内容</b>
-          <DetailLine label="発生日時" value={formatJstDateTime(selected.occurredAt)} />
-          <DetailLine label="操作" value={ACTION_LABEL[selected.action]} />
+          {/* 「いつ来るのか」は記録の発生時刻ではない。予約の来店日時を出す。 */}
+          <DetailLine
+            label="来店"
+            value={booking ? formatJstDateTime(booking.startAt) : '予約なし'}
+          />
+          <DetailLine label="目的" value={purposeLabel(booking, purposeNames)} />
           <DetailLine label="予約番号" value={selected.reservationNumber ?? '予約なし'} />
           <DetailLine label="受付経路" value={SOURCE_LABEL[selected.source]} />
+          <b className="mt-3.5 block">iPad録音</b>
           <RecordingPanel
             recording={resolveRecording?.(selected) ?? recording}
             permissions={permissions}
+            frame="bare"
+            wave
           />
         </Card>
         <Card>
           <b className="block">お客様</b>
           <p className="mt-1 font-bold">{selected.customerName ?? '顧客未登録'}</p>
           <p className="text-grid">{selected.customerPhone ?? '未登録'}</p>
-          <DetailLine label="受付者" value={selected.actorId} />
           <DetailLine label="顧客照合" value={selected.customerName ? '既存顧客' : '顧客未登録'} />
+          {/* 変更履歴はモックどおりここに戻す（予約検索の詳細はこれを持たない）。 */}
+          <DetailLine label="変更履歴" value={changeCount === 0 ? 'なし' : `${changeCount}件`} />
         </Card>
       </div>
     </section>
@@ -320,6 +441,21 @@ export function ReceptionHistoryScreen({
       <Workspace list={list} detail={detail} />
     </div>
   )
+}
+
+/**
+ * 目的は id ではなく、スタッフが口にする名称でなければ読めない。名称が届いて
+ * いないあいだは件数で代わりを言わせる（「—」だと目的が無いのと区別できない）。
+ */
+function purposeLabel(
+  booking: Booking | undefined,
+  names: Record<string, string> | undefined,
+): string {
+  if (!booking) return '予約なし'
+  const resolved = booking.purposeIds.map((id) => names?.[id]).filter((name) => name !== undefined)
+  if (resolved.length === booking.purposeIds.length && resolved.length > 0)
+    return resolved.join('・')
+  return `${booking.purposeIds.length}件`
 }
 
 /** `.row{display:flex;justify-content:space-between;border-top:1px solid …}` */

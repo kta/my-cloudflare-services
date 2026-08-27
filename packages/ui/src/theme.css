@@ -103,6 +103,9 @@
   --color-danger-panel-line: #d2a099; /* 例外画面の罫線 */
   --color-attention-line: #d6a99f; /* 予約フローの注意事項の罫線 */
   --color-record: #9b3425; /* 録音の経過時間（approved.html の --danger） */
+  /* 録音の波形。再生位置を持たない装飾なので、本文とも罫とも別の段で持つ
+     （受付履歴モックの `.wave` が repeating-linear-gradient で敷く色）。 */
+  --color-wave: #89b4a2;
   --color-walkin-soft: #fff0e8; /* 台帳のウォークイン行 */
   --color-amber: #7a5415; /* 失敗ではない注意 */
   --color-amber-ink: #4b3713; /* 琥珀の面の上に置く文字 */
@@ -125,6 +128,9 @@
   --color-summary: #f0f5f2; /* Web 予約の要約帯 */
   --color-grid-head: #dce5e0; /* 台帳の見出し行 */
   --color-app-frame: #dce3df; /* 端末外枠の外側 */
+  /* 幕の上に浮く面の影。切替シートのように「手前に来た」ことを縁だけで
+     言えない面で使う（モック store-switch の `0 24px 70px #10271e66`）。 */
+  --color-sheet-shadow: #10271e66;
 
   /* --- 端末モック（reception-history-approved / store-switch-approved）の方言。
      この 2 面は他より後に描かれていて、寸法体系ごと違う。上に 25px の iOS

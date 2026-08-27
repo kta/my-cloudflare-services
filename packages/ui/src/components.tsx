@@ -159,12 +159,6 @@ export function Field({
   )
 }
 
-export function Card({ children, className }: { children: ReactNode; className?: string }) {
-  return (
-    <div className={cn('rounded-ctl border border-line bg-surface p-5', className)}>{children}</div>
-  )
-}
-
 /**
  * Soft status chip: pill shape, soft fill, strong-color text and a 6px
  * leading dot. Tones are semantic — `success` for good/done/saved, `warning`

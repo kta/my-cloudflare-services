@@ -1,5 +1,5 @@
 import { AppBar, BarButton, BarPush, Screen, Wordmark } from '../../design/chrome'
-import { SearchPlate } from '../../design/controls'
+import { SearchField } from '../../design/controls'
 import { Workspace } from '../../design/layouts'
 import { Card, ListRow } from '../../design/surfaces'
 
@@ -36,7 +36,7 @@ export default function CustomerCurrent() {
       <Workspace
         list={
           <>
-            <SearchPlate label="顧客を検索">氏名・電話番号</SearchPlate>
+            <SearchField label="顧客を検索" value="" placeholder="氏名・電話番号" />
             <ListRow selected>
               <b>田中 花子</b>
               <br />

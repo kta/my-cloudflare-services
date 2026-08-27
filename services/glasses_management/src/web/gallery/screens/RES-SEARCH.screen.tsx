@@ -1,5 +1,5 @@
 import { AppBar, BarButton, BarPush, Screen, Wordmark } from '../../design/chrome'
-import { FilterButton, FilterLine, SearchPlate } from '../../design/controls'
+import { FilterButton, FilterLine, SearchField } from '../../design/controls'
 import { Workspace } from '../../design/layouts'
 import { Card, ListRow } from '../../design/surfaces'
 
@@ -39,7 +39,7 @@ export default function ReservationSearch() {
       <Workspace
         list={
           <>
-            <SearchPlate label="予約を検索">氏名・電話番号・予約番号</SearchPlate>
+            <SearchField label="予約を検索" value="" placeholder="氏名・電話番号・予約番号" />
             <FilterLine>
               <FilterButton>今後の予約</FilterButton>
               <FilterButton>電話・店頭・Web予約</FilterButton>
