@@ -26,6 +26,11 @@ const VARIANT: Record<ActionVariant, string> = {
   danger: 'border-danger bg-surface text-danger',
 }
 
+/*
+ * 焦点の輪は `app.css` の `:focus-visible` が全要素に一括で敷いている
+ * （モックの `outline:3px solid var(--focus)`）。部品ごとには足さない。
+ */
+
 export function Action({
   children,
   variant = 'default',
@@ -113,16 +118,26 @@ export function Actions({
 export function FilterButton({
   children,
   variant = 'default',
+  type = 'button',
+  disabled = false,
   onClick,
 }: {
   children: ReactNode
   variant?: ActionVariant
+  /**
+   * 絞り込みは form の submit で確定させたい面がある（Enter で検索できないと
+   * 電話を受けながらの入力が止まる）。既定は button のままなので、突き合わせ台
+   * の画素は動かない。
+   */
+  type?: 'button' | 'submit'
+  disabled?: boolean
   onClick?: () => void
 }) {
   return (
     <button
-      type="button"
-      onClick={onClick}
+      type={type}
+      aria-disabled={disabled || undefined}
+      onClick={disabled ? undefined : onClick}
       className={cn('min-h-11 rounded-ctl border px-3 font-sans text-body', VARIANT[variant])}
     >
       {children}
@@ -140,32 +155,105 @@ export function FilterLine({ children }: { children: ReactNode }) {
  *   一覧    `.search{min-height:48px;border:2px solid var(--g);…;padding:12px}`
  *   予約入力 `.search{min-height:56px;border-radius:9px;padding:15px;font-size:20px}`
  */
-function _SearchBox({
+export function SearchField({
   value,
   placeholder,
   label,
+  id,
   size = 'compact',
+  inputMode,
   onChange,
 }: {
   value: string
   placeholder?: string
   label: string
+  id?: string
   size?: 'compact' | 'roomy'
+  /** 電話番号だけを打ち込む欄では、端末にテンキーを出させる。 */
+  inputMode?: 'tel'
   onChange?: (next: string) => void
 }) {
   return (
     <input
-      type="search"
+      /*
+       * `type="search"` にすると Safari が独自の取消印を描き、モックの板と
+       * 幅が変わる。素の text にして、役割は aria-label と placeholder が言う。
+       */
+      type="text"
+      id={id}
       aria-label={label}
+      autoComplete="off"
+      inputMode={inputMode}
       value={value}
       placeholder={placeholder}
       onChange={(event) => onChange?.(event.target.value)}
       className={cn(
-        'w-full border-2 border-pine bg-surface font-sans text-ink',
+        'w-full border-2 border-pine bg-surface font-sans text-ink placeholder:text-ink-muted',
         size === 'roomy'
           ? 'min-h-14 rounded-card p-3.75 text-search'
           : 'min-h-12 rounded-ctl p-3 text-body',
       )}
+    />
+  )
+}
+
+/*
+ * 絞り込みの入力。モックの `.filter` は押しボタンだけだが、実アプリでは同じ
+ * 高さ・同じ罫の中に選択と日付が並ぶ。見た目は `FilterButton` と同じ 1 段に
+ * 揃え、種類だけを変える（絞り込みの列に 2 種類の背丈を作らない）。
+ */
+const FILTER_FIELD =
+  'min-h-11 rounded-ctl border border-line bg-surface px-3 font-sans text-body text-ink'
+
+export function FilterSelect({
+  label,
+  id,
+  value,
+  children,
+  onChange,
+}: {
+  label: string
+  id?: string
+  value: string
+  children: ReactNode
+  onChange?: (next: string) => void
+}) {
+  return (
+    <select
+      id={id}
+      aria-label={label}
+      value={value}
+      onChange={(event) => onChange?.(event.target.value)}
+      className={FILTER_FIELD}
+    >
+      {children}
+    </select>
+  )
+}
+
+export function FilterInput({
+  label,
+  id,
+  type = 'text',
+  value,
+  className,
+  onChange,
+}: {
+  label: string
+  id?: string
+  type?: 'text' | 'date'
+  value: string
+  className?: string
+  onChange?: (next: string) => void
+}) {
+  return (
+    <input
+      id={id}
+      type={type}
+      aria-label={label}
+      value={value}
+      onChange={(event) => onChange?.(event.target.value)}
+      className={cn(FILTER_FIELD, className)}
     />
   )
 }
@@ -231,5 +319,32 @@ export function SearchValue({ children, label }: { children: ReactNode; label: s
     >
       {children}
     </output>
+  )
+}
+
+/**
+ * ガイド付き設定（端末方言）の主操作（`.primary{height:42px;border:0;
+ * border-radius:8px;background:var(--g);color:#fff;padding:0 18px;
+ * font-weight:700;float:right;margin-top:14px}`）。
+ *
+ * 右下へ回り込ませるのは、本文の高さが工程ごとに変わっても「次へ進む」が
+ * 常に本文の終わりの右にいるため。絶対配置にすると短い工程で宙に浮く。
+ */
+export function TerminalFormPrimary({
+  children,
+  onClick,
+}: {
+  children: ReactNode
+  onClick?: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="float-right mt-3.5 rounded-ctl border-0 bg-terminal-pine px-4.5 py-0 font-bold text-on-pine"
+      style={{ height: '42px' }}
+    >
+      {children}
+    </button>
   )
 }

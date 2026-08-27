@@ -1,7 +1,12 @@
 import { Recording, RecordingRetentionSettings, type StorePermission } from '@app/contracts'
-import { Button, Card, Chip, Field, Notice, Textarea, TextInput } from '@app/ui'
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
-import { AdminCard, AdminCardGrid, AdminRow, AdminScreen, PermissionDenied } from './admin-chrome'
+import { PermissionDenied } from './admin-chrome'
+import { Action, Actions } from './design/controls'
+import { Modal } from './design/dialogs'
+import { TextAreaField, TextField, ToggleFilter } from './design/forms'
+import { AdminLayout, AdminSurface, SideNavItem } from './design/layouts'
+import { FailureNotice } from './design/notices'
+import { AdminRow, Card, CardGrid, StatePill } from './design/surfaces'
 import { ReauthPrompt } from './ReauthPrompt'
 import {
   canRetryRecording,
@@ -13,10 +18,19 @@ import {
   RECORDING_OPS_FILTERS,
   RECORDING_STATE_LABEL,
   recordingLabel,
-  recordingStateTone,
   retentionLabel,
 } from './recording'
+import type { StaffLocation } from './staff-navigation'
 import type { StaffScreenProps } from './staff-screen'
+
+/** 節ナビ。モック `operations-approved.html#recording-ops` の 3 つと、その順序。 */
+const SECTIONS: { label: string; to?: StaffLocation }[] = [
+  { label: '保存期間', to: { screen: 'recording-ops' } },
+  { label: '保存・削除状態' },
+  { label: '保全一覧' },
+  /* 同じタブの下の兄弟の面。ここからしか行けないので並びの末尾に置く。 */
+  { label: '共有端末', to: { screen: 'shared-terminals' } },
+]
 
 export type RecordingOpsScreenProps = StaffScreenProps & {
   /** 注入された時刻。保持期限の残りはこの値からだけ導く。 */
@@ -26,8 +40,6 @@ export type RecordingOpsScreenProps = StaffScreenProps & {
   /** 完全共有 iPad で開いているときだけ端末 id。保全・解除に個人再認証が要る。 */
   terminalId: string | null
 }
-
-const TOUCH = 'min-h-12'
 
 /** 保全・解除は共有端末では個人再認証を挟む (AC-EYEX-101)。 */
 type PendingAction = { kind: 'hold' | 'release'; recording: Recording }
@@ -223,331 +235,319 @@ export function RecordingOpsScreen({
   return (
     /* 承認済みモック `operations-approved.html#recording-ops` /
        `RECORDING-OPS--failure-hold--ipad-landscape.png` の骨格と文言。 */
-    <AdminScreen
-      label="録音運用"
-      navigate={navigate}
-      sectionsLabel="録音運用の節"
-      activeSection="保存期間"
-      sections={[
-        { label: '保存期間', to: { screen: 'recording-ops' } },
-        { label: '保存・削除状態' },
-        { label: '保全一覧' },
-      ]}
-    >
-      <h2 className="font-display font-semibold text-2xl text-ink">録音の保存期間</h2>
-
-      {failure && (
-        <div className="mt-3">
-          <Notice tone="danger">{failure}</Notice>
-        </div>
-      )}
-
-      <AdminCardGrid>
-        <AdminCard title="成立予約">
-          {mayManage ? (
-            /* カード見出しが「成立予約」と言っているので、可視ラベルを重ねない。
-               名前は aria-label で入力自身に持たせる。 */
-            <TextInput
-              id="retention-days"
-              aria-label="成立予約の保存日数"
-              className={TOUCH}
-              inputMode="numeric"
-              value={confirmedDays}
-              onChange={(event) => setConfirmedDays(event.target.value)}
-            />
-          ) : (
-            <span className="block">
-              {confirmedDays === '' ? '未取得' : `${confirmedDays}日保存`}
-            </span>
-          )}
-          <small className="mt-1 block font-sans text-ink-muted text-xs">
-            {`最低${MINIMUM_CONFIRMED_RETENTION_DAYS}日未満には設定できません`}
-          </small>
-        </AdminCard>
-        <AdminCard title="破棄した受付">
-          {mayManage ? (
-            <TextInput
-              id="retention-hours"
-              aria-label="破棄受付の保存時間"
-              className={TOUCH}
-              inputMode="numeric"
-              value={discardedHours}
-              onChange={(event) => setDiscardedHours(event.target.value)}
-            />
-          ) : (
-            <span className="block">
-              {discardedHours === '' ? '未取得' : `${discardedHours}時間保存`}
-            </span>
-          )}
-          <small className="mt-1 block font-sans text-ink-muted text-xs">
-            {`最低${MINIMUM_DISCARDED_RETENTION_HOURS}時間未満には設定できません`}
-          </small>
-        </AdminCard>
-        <AdminCard title="適用元">
-          <span className="block">組織共通値</span>
-          {mayManage && (
-            /* モックの `.card` の既定ボタン。ここは保存操作ではなく「これから
-               店舗の値を入れる」導線なので、押しただけで保存を走らせない。 */
-            <Button
-              className="mt-2 min-h-11"
-              onClick={() => {
-                document.getElementById('retention-days')?.focus()
-              }}
-            >
-              店舗上書きを設定
-            </Button>
-          )}
-        </AdminCard>
-      </AdminCardGrid>
-
-      {mayManage && (
-        <div className="mt-3 flex flex-col gap-3">
-          {retentionFailure && <Notice tone="danger">{retentionFailure}</Notice>}
-          <div>
-            <Button
-              className={TOUCH}
-              onClick={() => {
-                void saveRetention()
-              }}
-            >
-              保存期間を更新
-            </Button>
-          </div>
-        </div>
-      )}
-
-      <section aria-label="対応が必要" className="mt-4.5">
-        <h3 className="font-display font-semibold text-ink text-lg">対応が必要</h3>
-        {failedRows.length === 0 && heldRows.length === 0 && (
-          <p className="mt-2 font-sans text-ink-muted text-sm">対応が必要な録音はありません。</p>
-        )}
-        {failedRows.map((recording) => (
-          <AdminRow
-            key={recording.id}
-            tone="error"
-            label={`${recordingLabel(recording.id)} 保存失敗`}
+    <AdminSurface label="録音運用">
+      <AdminLayout
+        navLabel="録音運用の節"
+        nav={SECTIONS.map((section) => (
+          <SideNavItem
+            key={section.label}
+            on={section.label === '保存期間'}
+            onClick={
+              section.to === undefined ? undefined : () => navigate(section.to as StaffLocation)
+            }
           >
-            <b className="font-sans font-bold text-ink">{recordingLabel(recording.id)}</b>
-            <span className="font-sans text-ink text-sm">保存失敗</span>
-            <span className="font-sans text-ink text-sm">
-              {recording.reservationId === null ? '予約は成立していません' : '予約は成立済み'}
-            </span>
+            {section.label}
+          </SideNavItem>
+        ))}
+      >
+        <h1>録音の保存期間</h1>
+
+        {failure && <FailureNotice>{failure}</FailureNotice>}
+
+        <CardGrid>
+          <Card label="成立予約">
+            <b>成立予約</b>
+            <br />
             {mayManage ? (
-              <Button
-                variant="danger"
-                className="min-h-11"
+              /* カード見出しが「成立予約」と言っているので、可視ラベルを重ねない。
+                 名前は aria-label で入力自身に持たせる。 */
+              <TextField
+                hideLabel
+                id="retention-days"
+                label="成立予約の保存日数"
+                inputMode="numeric"
+                value={confirmedDays}
+                onChange={(event) => setConfirmedDays(event.target.value)}
+              />
+            ) : confirmedDays === '' ? (
+              '未取得'
+            ) : (
+              `${confirmedDays}日保存`
+            )}
+            <br />
+            <small>{`最低${MINIMUM_CONFIRMED_RETENTION_DAYS}日未満には設定できません`}</small>
+          </Card>
+          <Card label="破棄した受付">
+            <b>破棄した受付</b>
+            <br />
+            {mayManage ? (
+              <TextField
+                hideLabel
+                id="retention-hours"
+                label="破棄受付の保存時間"
+                inputMode="numeric"
+                value={discardedHours}
+                onChange={(event) => setDiscardedHours(event.target.value)}
+              />
+            ) : discardedHours === '' ? (
+              '未取得'
+            ) : (
+              `${discardedHours}時間保存`
+            )}
+            <br />
+            <small>{`最低${MINIMUM_DISCARDED_RETENTION_HOURS}時間未満には設定できません`}</small>
+          </Card>
+          <Card label="適用元">
+            <b>適用元</b>
+            <br />
+            組織共通値
+            <br />
+            {mayManage && (
+              /* ここは保存操作ではなく「これから店舗の値を入れる」導線なので、
+                 押しただけで保存を走らせない。 */
+              <Action
+                inset="tight"
                 onClick={() => {
-                  void retry(recording)
+                  document.getElementById('retention-days')?.focus()
                 }}
               >
-                再試行
-              </Button>
-            ) : (
-              <span />
+                店舗上書きを設定
+              </Action>
             )}
-          </AdminRow>
-        ))}
-        {heldRows.map((recording) => (
-          <AdminRow
-            key={recording.id}
-            tone="warning"
-            label={`${recordingLabel(recording.id)} 保全中`}
-          >
-            <b className="font-sans font-bold text-ink">{recordingLabel(recording.id)}</b>
-            <span className="font-sans text-ink text-sm">保全中</span>
-            <span className="font-sans text-ink text-sm">
-              {`理由: ${recording.holdReason ?? '記録されています'}`}
-            </span>
-            <Button
-              variant="danger"
-              className="min-h-11"
-              onClick={() => {
-                setPosition(0)
-                setSelected(recording)
-              }}
+          </Card>
+        </CardGrid>
+
+        {mayManage && (
+          <>
+            {retentionFailure && <FailureNotice>{retentionFailure}</FailureNotice>}
+            <Actions>
+              <Action
+                inset="tight"
+                onClick={() => {
+                  void saveRetention()
+                }}
+              >
+                保存期間を更新
+              </Action>
+            </Actions>
+          </>
+        )}
+
+        <section aria-label="対応が必要">
+          <h2>対応が必要</h2>
+          {failedRows.length === 0 && heldRows.length === 0 && (
+            <p>対応が必要な録音はありません。</p>
+          )}
+          {failedRows.map((recording) => (
+            <AdminRow
+              key={recording.id}
+              tone="error"
+              label={`${recordingLabel(recording.id)} 保存失敗`}
             >
-              詳細
-            </Button>
-          </AdminRow>
-        ))}
-      </section>
-
-      <fieldset className="mt-4.5 flex flex-wrap gap-2 border-0 p-0">
-        <legend className="font-sans text-ink-muted text-sm">録音の状態で絞り込む</legend>
-        <Button
-          variant={filter === null ? 'primary' : 'ghost'}
-          aria-pressed={filter === null}
-          className={TOUCH}
-          onClick={() => setFilter(null)}
-        >
-          すべて
-        </Button>
-        {RECORDING_OPS_FILTERS.map((entry) => (
-          <Button
-            key={entry.state}
-            variant={filter === entry.state ? 'primary' : 'ghost'}
-            aria-pressed={filter === entry.state}
-            className={TOUCH}
-            onClick={() => setFilter(entry.state)}
-          >
-            {entry.label}
-          </Button>
-        ))}
-      </fieldset>
-
-      <ul className="flex flex-col gap-3">
-        {rows.map((recording) => (
-          <li key={recording.id} data-testid={`recording-${recording.id}`}>
-            <Card className="flex flex-col gap-3">
-              <div className="flex flex-wrap items-center gap-3">
-                <Chip tone={recordingStateTone(recording.state)}>
-                  {RECORDING_STATE_LABEL[recording.state]}
-                </Chip>
-                <span className="font-sans text-ink text-sm">
-                  {formatRecordingInstant(recording.startedAt)}
-                </span>
-                <span className="font-sans text-ink text-sm">録音者 {recording.recorderId}</span>
-                <span className="font-sans text-ink text-sm">
-                  {formatRecordingDuration(recording.durationSeconds)}
-                </span>
-                <span className="font-sans text-ink-muted text-sm">
-                  {retentionLabel({ retentionUntil: recording.retentionUntil, now })}
-                </span>
-              </div>
-              {recording.holdReason && (
-                <p className="font-sans text-ink-muted text-sm">
-                  保全理由: {recording.holdReason}
-                  {recording.heldBy ? ` · 指定者 ${recording.heldBy}` : ''}
-                </p>
+              <b>{recordingLabel(recording.id)}</b>
+              <span>保存失敗</span>
+              <span>
+                {recording.reservationId === null ? '予約は成立していません' : '予約は成立済み'}
+              </span>
+              {mayManage ? (
+                <Action
+                  inset="tight"
+                  onClick={() => {
+                    void retry(recording)
+                  }}
+                >
+                  再試行
+                </Action>
+              ) : (
+                <span />
               )}
-              {recording.failureReason && (
-                <p className="font-sans text-danger text-sm">失敗理由: {recording.failureReason}</p>
-              )}
-              <div className="flex flex-wrap gap-2">
-                {recording.state === 'stored' || recording.state === 'held' ? (
-                  <Button
-                    variant="ghost"
-                    className={TOUCH}
-                    onClick={() => {
-                      setPosition(0)
-                      setSelected(recording)
-                    }}
-                  >
-                    再生する
-                  </Button>
-                ) : null}
-                {mayManage && canRetryRecording(recording.state) && (
-                  <Button
-                    className={TOUCH}
-                    onClick={() => {
-                      void retry(recording)
-                    }}
-                  >
-                    再試行
-                  </Button>
-                )}
-                {mayManage && recording.state !== 'held' && recording.state !== 'deleted' && (
-                  <Button
-                    variant="ghost"
-                    className={TOUCH}
-                    onClick={() => openAction('hold', recording)}
-                  >
-                    保全する
-                  </Button>
-                )}
-                {mayManage && recording.state === 'held' && (
-                  <Button
-                    variant="ghost"
-                    className={TOUCH}
-                    onClick={() => openAction('release', recording)}
-                  >
-                    保全を解除する
-                  </Button>
-                )}
-                {mayManage && recording.state !== 'deleted' && (
-                  <Button
-                    variant="danger"
-                    className={TOUCH}
-                    onClick={() => {
-                      void remove(recording)
-                    }}
-                  >
-                    削除する
-                  </Button>
-                )}
-              </div>
-            </Card>
-          </li>
-        ))}
-      </ul>
-
-      {selected && (
-        <section
-          aria-label="録音の再生"
-          className="flex flex-col gap-3 rounded-ctl border border-line bg-surface p-5"
-        >
-          <h3 className="font-display font-semibold text-lg text-ink">録音の再生</h3>
-          <dl className="grid grid-cols-3 gap-3 font-sans text-ink text-sm">
-            <div>
-              <dt className="text-ink-muted">録音日時</dt>
-              <dd>{formatRecordingInstant(selected.startedAt)}</dd>
-            </div>
-            <div>
-              <dt className="text-ink-muted">録音者</dt>
-              <dd>{selected.recorderId}</dd>
-            </div>
-            <div>
-              <dt className="text-ink-muted">長さ</dt>
-              <dd>{formatRecordingDuration(selected.durationSeconds)}</dd>
-            </div>
-          </dl>
-          {/* biome-ignore lint/a11y/useMediaCaption: staff-only audio evidence has no caption track. */}
-          <audio
-            ref={audioRef}
-            src={`${base}/recordings/${selected.id}/audio`}
-            preload="none"
-            controlsList="nodownload"
-          />
-          <div className="flex flex-wrap items-center gap-3">
-            {/* 承認済みモックの `.audio` — 44px の pine の丸。中の ▶ は装飾で、
-                名前は `再生` という文字が運ぶ。 */}
-            <Button
-              className="size-11 rounded-circle p-0"
-              onClick={() => {
-                void audioRef.current?.play?.()
-              }}
+            </AdminRow>
+          ))}
+          {heldRows.map((recording) => (
+            <AdminRow
+              key={recording.id}
+              tone="warning"
+              label={`${recordingLabel(recording.id)} 保全中`}
             >
-              <span aria-hidden="true">▶</span>
-              <span className="sr-only">再生</span>
-            </Button>
-            <Button
-              variant="ghost"
-              className={TOUCH}
-              onClick={() => {
-                audioRef.current?.pause?.()
-              }}
-            >
-              一時停止
-            </Button>
-            <input
-              type="range"
-              aria-label="再生位置"
-              min={0}
-              max={selected.durationSeconds}
-              value={position}
-              className={`${TOUCH} w-full`}
-              onChange={(event) => {
-                const next = Number(event.target.value)
-                setPosition(next)
-                if (audioRef.current) audioRef.current.currentTime = next
-              }}
-            />
-          </div>
-          <p className="font-sans text-ink-muted text-sm">
-            再生操作は監査記録に残ります。音声の保存や持ち出しはできません。
-          </p>
+              <b>{recordingLabel(recording.id)}</b>
+              <span>保全中</span>
+              <span>{`理由: ${recording.holdReason ?? '記録されています'}`}</span>
+              <Action
+                inset="tight"
+                onClick={() => {
+                  setPosition(0)
+                  setSelected(recording)
+                }}
+              >
+                詳細
+              </Action>
+            </AdminRow>
+          ))}
         </section>
-      )}
+
+        <fieldset className="mt-4.5 flex flex-wrap gap-2 border-0 p-0">
+          <legend>録音の状態で絞り込む</legend>
+          <ToggleFilter on={filter === null} onClick={() => setFilter(null)}>
+            すべて
+          </ToggleFilter>
+          {RECORDING_OPS_FILTERS.map((entry) => (
+            <ToggleFilter
+              key={entry.state}
+              on={filter === entry.state}
+              onClick={() => setFilter(entry.state)}
+            >
+              {entry.label}
+            </ToggleFilter>
+          ))}
+        </fieldset>
+
+        <ul className="mt-3 flex flex-col gap-2.25">
+          {rows.map((recording) => (
+            <li key={recording.id} data-testid={`recording-${recording.id}`}>
+              <Card tone={recordingSurfaceTone(recording.state)}>
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <StatePill tone={recording.state === 'failed' ? 'danger' : 'plain'}>
+                    {RECORDING_STATE_LABEL[recording.state]}
+                  </StatePill>
+                  {/* 時刻・長さは桁で読む。等幅は数字と ID にだけ使う。 */}
+                  <span className="font-record text-grid">
+                    {formatRecordingInstant(recording.startedAt)}
+                  </span>
+                  <span>録音者 {recording.recorderId}</span>
+                  <span className="font-record text-grid">
+                    {formatRecordingDuration(recording.durationSeconds)}
+                  </span>
+                  <span>{retentionLabel({ retentionUntil: recording.retentionUntil, now })}</span>
+                </div>
+                {recording.holdReason && (
+                  <p>
+                    保全理由: {recording.holdReason}
+                    {recording.heldBy ? ` · 指定者 ${recording.heldBy}` : ''}
+                  </p>
+                )}
+                {recording.failureReason && <p>失敗理由: {recording.failureReason}</p>}
+                <div className="mt-2.5 flex flex-wrap gap-2.5">
+                  {recording.state === 'stored' || recording.state === 'held' ? (
+                    <Action
+                      inset="tight"
+                      onClick={() => {
+                        setPosition(0)
+                        setSelected(recording)
+                      }}
+                    >
+                      再生する
+                    </Action>
+                  ) : null}
+                  {mayManage && canRetryRecording(recording.state) && (
+                    <Action
+                      inset="tight"
+                      onClick={() => {
+                        void retry(recording)
+                      }}
+                    >
+                      再試行
+                    </Action>
+                  )}
+                  {mayManage && recording.state !== 'held' && recording.state !== 'deleted' && (
+                    <Action inset="tight" onClick={() => openAction('hold', recording)}>
+                      保全する
+                    </Action>
+                  )}
+                  {mayManage && recording.state === 'held' && (
+                    <Action inset="tight" onClick={() => openAction('release', recording)}>
+                      保全を解除する
+                    </Action>
+                  )}
+                  {/* 削除は取り返しがつかない。既定の見た目にしない。 */}
+                  {mayManage && recording.state !== 'deleted' && (
+                    <Action
+                      variant="danger"
+                      inset="tight"
+                      onClick={() => {
+                        void remove(recording)
+                      }}
+                    >
+                      削除する
+                    </Action>
+                  )}
+                </div>
+              </Card>
+            </li>
+          ))}
+        </ul>
+
+        {selected && (
+          <div className="mt-4.5">
+            <Card label="録音の再生">
+              <b>録音の再生</b>
+              <dl className="mt-2.5 grid grid-cols-3 gap-3">
+                <div>
+                  <dt>録音日時</dt>
+                  <dd className="font-record text-grid">
+                    {formatRecordingInstant(selected.startedAt)}
+                  </dd>
+                </div>
+                <div>
+                  <dt>録音者</dt>
+                  <dd>{selected.recorderId}</dd>
+                </div>
+                <div>
+                  <dt>長さ</dt>
+                  <dd className="font-record text-grid">
+                    {formatRecordingDuration(selected.durationSeconds)}
+                  </dd>
+                </div>
+              </dl>
+              {/* biome-ignore lint/a11y/useMediaCaption: staff-only audio evidence has no caption track. */}
+              <audio
+                ref={audioRef}
+                src={`${base}/recordings/${selected.id}/audio`}
+                preload="none"
+                controlsList="nodownload"
+              />
+              <div className="mt-2.5 flex flex-wrap items-center gap-2.5">
+                {/*
+                 * 承認済みモックの `.audio` — 44px の pine の丸。丸は Action の
+                 * 左右余白と両立しないので、ここだけ素のボタンで組む。中の ▶ は
+                 * 装飾で、名前は `再生` という文字が運ぶ。
+                 */}
+                <button
+                  type="button"
+                  className="grid size-11 min-h-11 place-items-center rounded-circle border border-pine bg-pine font-sans text-body text-on-pine"
+                  onClick={() => {
+                    void audioRef.current?.play?.()
+                  }}
+                >
+                  <span aria-hidden="true">▶</span>
+                  <span className="sr-only">再生</span>
+                </button>
+                <Action
+                  inset="tight"
+                  onClick={() => {
+                    audioRef.current?.pause?.()
+                  }}
+                >
+                  一時停止
+                </Action>
+                <input
+                  type="range"
+                  aria-label="再生位置"
+                  min={0}
+                  max={selected.durationSeconds}
+                  value={position}
+                  className="min-h-11 w-full"
+                  onChange={(event) => {
+                    const next = Number(event.target.value)
+                    setPosition(next)
+                    if (audioRef.current) audioRef.current.currentTime = next
+                  }}
+                />
+              </div>
+              <p>再生操作は監査記録に残ります。音声の保存や持ち出しはできません。</p>
+            </Card>
+          </div>
+        )}
+      </AdminLayout>
 
       {reauthFor && terminalId && (
         <ReauthPrompt
@@ -582,8 +582,15 @@ export function RecordingOpsScreen({
           }}
         />
       )}
-    </AdminScreen>
+    </AdminSurface>
   )
+}
+
+/** 状態に応じた面の調子。失敗は赤、保全中は琥珀（モックの `.row` と同じ対応）。 */
+function recordingSurfaceTone(state: Recording['state']) {
+  if (state === 'failed') return 'error' as const
+  if (state === 'held') return 'warning' as const
+  return 'plain' as const
 }
 
 /**
@@ -611,36 +618,25 @@ function ActionDialog({
 }): ReactNode {
   const titleId = 'recording-action-title'
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby={titleId}
-      className="fixed inset-0 flex items-center justify-center bg-ink/40 p-6"
-    >
-      <Card className="flex w-full max-w-xl flex-col gap-4">
-        <h3 id={titleId} className="font-display font-semibold text-xl text-ink">
-          {title}
-        </h3>
-        <p className="font-sans text-ink-muted text-sm">
-          理由は監査記録に残ります。保全中の録音は期限を過ぎても削除されません。
-        </p>
-        <Field label={reasonLabel} htmlFor="recording-action-reason" error={error}>
-          <Textarea
-            id="recording-action-reason"
-            className="min-h-24"
-            value={reason}
-            onChange={(event) => onReasonChange(event.target.value)}
-          />
-        </Field>
-        <div className="flex flex-wrap justify-end gap-3">
-          <Button variant="ghost" className={TOUCH} onClick={onCancel}>
-            キャンセル
-          </Button>
-          <Button className={TOUCH} onClick={onSubmit}>
-            {submitLabel}
-          </Button>
-        </div>
-      </Card>
-    </div>
+    <Modal titleId={titleId} title={title}>
+      <p>理由は監査記録に残ります。保全中の録音は期限を過ぎても削除されません。</p>
+      <div className="mt-3">
+        <TextAreaField
+          id="recording-action-reason"
+          label={reasonLabel}
+          error={error}
+          value={reason}
+          onChange={(event) => onReasonChange(event.target.value)}
+        />
+      </div>
+      <Actions>
+        <Action inset="tight" onClick={onCancel}>
+          キャンセル
+        </Action>
+        <Action variant="primary" inset="tight" onClick={onSubmit}>
+          {submitLabel}
+        </Action>
+      </Actions>
+    </Modal>
   )
 }

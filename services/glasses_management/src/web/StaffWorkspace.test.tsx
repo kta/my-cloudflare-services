@@ -335,8 +335,13 @@ test('threads the shared-terminal id into the recording operations screen', asyn
   )
 
   await screen.findByRole('button', { name: /新しい予約を取る/ })
-  // 運用系は 設定 の中の副タブ (operations-approved.html)。
+  /*
+   * 緑帯は 1 本しかないので、運用の面へはバーのタブと各面の左サイドを辿って
+   * 行く（operations-approved.html）。録音運用は 端末とセキュリティ の節ナビの
+   * 先にある。ここが切れると実アプリから到達できなくなる。
+   */
   fireEvent.click(screen.getByRole('button', { name: '設定' }))
+  fireEvent.click(await screen.findByRole('button', { name: '設定一覧' }))
   fireEvent.click(await screen.findByRole('button', { name: '録音運用' }))
   fireEvent.click(await screen.findByRole('button', { name: '保全する' }))
   expect(await screen.findByRole('dialog')).toHaveTextContent('個人')

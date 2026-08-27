@@ -100,12 +100,23 @@ function renderJourney(api: Mock<StaffApi>) {
   )
 }
 
+/*
+ * 工程盤は `display:grid` の帯組みそのものがモックの見た目なので、行を要素で
+ * 包めない（包むと格子が崩れる）。行は `aria-rowindex` が持つので、1 人目の
+ * 工程セルはそれで取り出す。1 列目はお客様の名乗り（行見出し）なので外す。
+ */
+function stageCellsOfFirstRow(board: HTMLElement): HTMLElement[] {
+  return within(board)
+    .getAllByRole('gridcell')
+    .filter((cell) => cell.getAttribute('aria-rowindex') === '2')
+}
+
 test('heads the board with the approved service stages (JOURNEY-DEFAULT)', async () => {
   const api = mockApi(() => json([reservation()]))
   renderJourney(api)
 
   expect(await screen.findByRole('heading', { name: '接客の進み具合' })).toBeInTheDocument()
-  const board = screen.getByRole('table', { name: '接客の進み具合' })
+  const board = screen.getByRole('grid', { name: '接客の進み具合' })
   expect(
     within(board)
       .getAllByRole('columnheader')
@@ -117,7 +128,7 @@ test('lists in-store customers by stage with their waiting time (UC-EYEX-052)', 
   const api = mockApi(() => json([reservation(), walkin()]))
   renderJourney(api)
 
-  const board = await screen.findByRole('table', { name: '接客の進み具合' })
+  const board = await screen.findByRole('grid', { name: '接客の進み具合' })
   expect(api).toHaveBeenCalledWith(`/api/staff/stores/${STORE_ID}/ledger?date=${DATE}`)
   expect(within(board).getByText('田中 花子')).toBeInTheDocument()
   expect(within(board).getByText('待ち18分')).toBeInTheDocument()
@@ -137,8 +148,8 @@ test('marks the stage already passed, the stage in hand and the one to go next (
   )
   renderJourney(api)
 
-  const board = await screen.findByRole('table', { name: '接客の進み具合' })
-  const cells = within(within(board).getAllByRole('row')[1] as HTMLElement).getAllByRole('cell')
+  const board = await screen.findByRole('grid', { name: '接客の進み具合' })
+  const cells = stageCellsOfFirstRow(board)
   expect(cells[0]).toHaveTextContent('受付済み')
   expect(cells[1]).toHaveTextContent('相談中')
   expect(cells[1]).toHaveTextContent('佐藤 美咲')
@@ -146,15 +157,17 @@ test('marks the stage already passed, the stage in hand and the one to go next (
   expect(cells[2]).toHaveTextContent('測定機A 10:30')
   // The next step is named, not merely tinted.
   expect(cells[2]).toHaveAttribute('data-next', 'true')
-  expect(cells[3]).toHaveTextContent('')
+  // まだ手を付けていない工程は、空白ではなく「未着手」と読み上げる（画素は変えない）。
+  expect(cells[3]).toHaveTextContent('未着手')
+  expect(cells[3]).not.toHaveAttribute('data-next')
 })
 
 test('marks a customer who has not been started as ready to begin (JOURNEY-DEFAULT)', async () => {
   const api = mockApi(() => json([walkin()]))
   renderJourney(api)
 
-  const board = await screen.findByRole('table', { name: '接客の進み具合' })
-  const cells = within(within(board).getAllByRole('row')[1] as HTMLElement).getAllByRole('cell')
+  const board = await screen.findByRole('grid', { name: '接客の進み具合' })
+  const cells = stageCellsOfFirstRow(board)
   expect(cells[0]).toHaveTextContent('相談待ち')
   expect(cells[0]).toHaveTextContent('このまま開始可能')
   expect(cells[0]).toHaveAttribute('data-next', 'true')

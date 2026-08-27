@@ -6,25 +6,23 @@ import {
   AttentionVersionConflict,
   type StorePermission,
 } from '@app/contracts'
-import { Button, Card, Chip, Field, Notice, Textarea, TextInput } from '@app/ui'
-import { type ReactNode, useEffect, useState } from 'react'
-import {
-  AdminCard,
-  AdminCardGrid,
-  AdminScreen,
-  ConflictCompare,
-  PermissionDenied,
-} from './admin-chrome'
+import { useEffect, useState } from 'react'
+import { ConflictCompare, PermissionDenied } from './admin-chrome'
 import {
   attentionActionLabel,
   formatJstInstant,
   instantToJstWallClock,
   jstWallClockToInstant,
   noteStatusLabel,
-  noteStatusTone,
   relativeJstDay,
   versionConflictRows,
 } from './attention-view'
+import { Action, Actions } from './design/controls'
+import { Modal } from './design/dialogs'
+import { TextAreaField, TextField } from './design/forms'
+import { AdminLayout, AdminSurface, SideNavItem } from './design/layouts'
+import { FailureNotice, StatusNotice } from './design/notices'
+import { Card, CardGrid, StatePill, TitleRow } from './design/surfaces'
 import { ReauthPrompt, requiresPersonalReauthentication } from './ReauthPrompt'
 import type { StaffApi, StaffScreenProps } from './staff-screen'
 
@@ -113,70 +111,37 @@ function NoteFields({
   onChange: (draft: NoteDraft) => void
 }) {
   return (
-    <div className="grid gap-4 md:grid-cols-2">
+    <div className="grid gap-3 md:grid-cols-2">
       <div className="md:col-span-2">
-        <Field label="発生した事実" htmlFor={`${idPrefix}-body`}>
-          <Textarea
-            id={`${idPrefix}-body`}
-            rows={3}
-            value={draft.body}
-            onChange={(event) => onChange({ ...draft, body: event.target.value })}
-          />
-        </Field>
+        <TextAreaField
+          id={`${idPrefix}-body`}
+          label="発生した事実"
+          rows={3}
+          value={draft.body}
+          onChange={(event) => onChange({ ...draft, body: event.target.value })}
+        />
       </div>
-      <Field label="発生日時" htmlFor={`${idPrefix}-occurred-at`}>
-        <TextInput
-          id={`${idPrefix}-occurred-at`}
-          type="datetime-local"
-          className="min-h-12"
-          value={draft.occurredAt}
-          onChange={(event) => onChange({ ...draft, occurredAt: event.target.value })}
-        />
-      </Field>
-      <Field label="根拠" htmlFor={`${idPrefix}-basis`}>
-        <TextInput
-          id={`${idPrefix}-basis`}
-          className="min-h-12"
-          value={draft.basis}
-          onChange={(event) => onChange({ ...draft, basis: event.target.value })}
-        />
-      </Field>
+      <TextField
+        id={`${idPrefix}-occurred-at`}
+        label="発生日時"
+        type="datetime-local"
+        value={draft.occurredAt}
+        onChange={(event) => onChange({ ...draft, occurredAt: event.target.value })}
+      />
+      <TextField
+        id={`${idPrefix}-basis`}
+        label="根拠"
+        value={draft.basis}
+        onChange={(event) => onChange({ ...draft, basis: event.target.value })}
+      />
       <div className="md:col-span-2">
-        <Field label="推奨対応" htmlFor={`${idPrefix}-recommended-action`}>
-          <TextInput
-            id={`${idPrefix}-recommended-action`}
-            className="min-h-12"
-            value={draft.recommendedAction}
-            onChange={(event) => onChange({ ...draft, recommendedAction: event.target.value })}
-          />
-        </Field>
+        <TextField
+          id={`${idPrefix}-recommended-action`}
+          label="推奨対応"
+          value={draft.recommendedAction}
+          onChange={(event) => onChange({ ...draft, recommendedAction: event.target.value })}
+        />
       </div>
-    </div>
-  )
-}
-
-function Modal({
-  titleId,
-  title,
-  children,
-}: {
-  titleId: string
-  title: string
-  children: ReactNode
-}) {
-  return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby={titleId}
-      className="fixed inset-0 flex items-center justify-center overflow-y-auto bg-ink/40 p-6"
-    >
-      <Card className="flex w-full max-w-2xl flex-col gap-4">
-        <h2 id={titleId} className="font-display font-semibold text-ink text-xl">
-          {title}
-        </h2>
-        {children}
-      </Card>
     </div>
   )
 }
@@ -468,269 +433,239 @@ export function AttentionReviewScreen({
   return (
     /* 承認済みモック `operations-approved.html#attention-review` /
        `ATTENTION-REVIEW--pending--ipad-landscape.png`。 */
-    <AdminScreen
-      label="注意事項の確認"
-      navigate={navigate}
-      sectionsLabel="確認待ちの節"
-      activeSection={
-        pending[0]
-          ? `${customerName} · ${relativeJstDay(pending[0].occurredAt, today)}`
-          : customerName
-      }
-      sections={
-        pending.length === 0
-          ? [{ label: customerName }]
-          : pending.map((note) => ({
-              label: `${customerName} · ${relativeJstDay(note.occurredAt, today)}`,
-            }))
-      }
-    >
-      <h2 className="font-display font-semibold text-2xl text-ink">注意事項を確認</h2>
-
-      {success && <Notice tone="success">{success}</Notice>}
-      {failure && <Notice tone="danger">{failure}</Notice>}
-      {failure && retry && (
-        <div>
-          <Button
-            type="button"
-            className="min-h-12"
-            onClick={() => {
-              retry()
-            }}
-          >
-            再試行する
-          </Button>
-        </div>
-      )}
-
-      <div className="flex flex-col gap-4">
-        {visible.length === 0 && <Notice tone="info">表示できる注意事項はありません。</Notice>}
-        {visible.map((note) => (
-          <Card key={note.noteId} className="flex flex-col gap-3">
-            <article
-              aria-label={`注意事項 ${noteStatusLabel(note.status)} 版${note.version}`}
-              className="flex flex-col gap-3"
-            >
-              <div className="flex flex-wrap items-center gap-3">
-                <Chip tone={noteStatusTone(note.status)}>{noteStatusLabel(note.status)}</Chip>
-                <span className="font-sans text-ink-muted text-sm">版{note.version}</span>
-                <span className="font-sans text-ink-muted text-sm">記録者 {note.recordedBy}</span>
-              </div>
-              {/* 承認済みモックの 3 カード。事実・根拠・推奨対応は必ず並んで出る。 */}
-              <AdminCardGrid>
-                <AdminCard title="発生した事実" label={`発生した事実 版${note.version}`}>
-                  {note.body}
-                </AdminCard>
-                <AdminCard title="発生日時・根拠" label={`発生日時・根拠 版${note.version}`}>
-                  <span className="block">{formatJstInstant(note.occurredAt)}</span>
-                  <span className="block">{note.basis}</span>
-                </AdminCard>
-                <AdminCard title="推奨対応" label={`推奨対応 版${note.version}`}>
-                  {note.recommendedAction}
-                </AdminCard>
-              </AdminCardGrid>
-              {note.status === 'pending_review' && mayPublish && (
-                <div className="mt-2">
-                  <AdminCard tone="warning" title="公開前チェック">
-                    人格評価、憶測、差別につながる属性は含まれていません。
-                  </AdminCard>
-                </div>
-              )}
-
-              {note.status === 'pending_review' && mayPublish && (
-                <div className="flex flex-col gap-3">
-                  <Field
-                    label="確認の理由"
-                    htmlFor={`attention-reason-${note.noteId}`}
-                    error={reasonErrors[note.noteId] || undefined}
-                  >
-                    <Textarea
-                      id={`attention-reason-${note.noteId}`}
-                      rows={2}
-                      value={reasons[note.noteId] ?? ''}
-                      onChange={(event) =>
-                        setReasons((current) => ({
-                          ...current,
-                          [note.noteId]: event.target.value,
-                        }))
-                      }
-                    />
-                  </Field>
-                  {/* モックの並び: 却下・差戻しは左、公開は右端へ押し出す。 */}
-                  <div className="flex flex-wrap items-center gap-3">
-                    <Button
-                      type="button"
-                      variant="danger"
-                      className="min-h-12"
-                      onClick={() => review(note, 'reject')}
-                    >
-                      却下
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="danger"
-                      className="min-h-12"
-                      onClick={() => review(note, 'return')}
-                    >
-                      差戻し
-                    </Button>
-                    <Button
-                      type="button"
-                      className="ml-auto min-h-12"
-                      onClick={() => review(note, 'publish')}
-                    >
-                      公開する
-                    </Button>
-                  </div>
-                </div>
-              )}
-
-              <div className="flex flex-wrap justify-end gap-3">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  className="min-h-12"
-                  onClick={() => openVersions(note)}
-                >
-                  過去の版を見る
-                </Button>
-                {note.status === 'published' && mayRevise && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    className="min-h-12"
-                    onClick={() => setRevising({ note, draft: draftFrom(note) })}
-                  >
-                    改訂する
-                  </Button>
-                )}
-                {note.status !== 'hidden' && mayHide && (
-                  <Button
-                    type="button"
-                    variant="danger"
-                    className="min-h-12"
-                    onClick={() => setHiding({ note, reason: '' })}
-                  >
-                    非表示にする
-                  </Button>
-                )}
-              </div>
-            </article>
-          </Card>
+    <AdminSurface label="注意事項の確認">
+      <AdminLayout
+        navLabel="確認待ちの節"
+        nav={(pending.length === 0
+          ? [customerName]
+          : pending.map((note) => `${customerName} · ${relativeJstDay(note.occurredAt, today)}`)
+        ).map((label, index) => (
+          <SideNavItem key={label} on={index === 0}>
+            {label}
+          </SideNavItem>
         ))}
-      </div>
+      >
+        <h1>注意事項を確認</h1>
 
-      {mayWrite && settings && (
-        <Card className="flex flex-col gap-4">
-          <h2 className="font-sans font-semibold text-ink text-sm">注意事項を登録</h2>
-          <section
-            aria-label="入力時の案内"
-            className="flex flex-col gap-1 rounded-ctl border border-line bg-paper p-3"
+        {success && <StatusNotice>{success}</StatusNotice>}
+        {failure && <FailureNotice>{failure}</FailureNotice>}
+        {failure && retry && (
+          <Actions>
+            <Action
+              inset="tight"
+              onClick={() => {
+                retry()
+              }}
+            >
+              再試行する
+            </Action>
+          </Actions>
+        )}
+
+        {visible.length === 0 && <StatusNotice>表示できる注意事項はありません。</StatusNotice>}
+        {visible.map((note) => (
+          <article
+            key={note.noteId}
+            aria-label={`注意事項 ${noteStatusLabel(note.status)} 版${note.version}`}
           >
-            <p className="font-sans text-ink text-sm">
-              記録するのは {settings.guidance.record.join('・')} です。
-            </p>
-            <p className="font-sans text-ink text-sm">
-              {settings.guidance.avoid.join('・')} は記録しないでください。
-            </p>
-          </section>
-          <NoteFields idPrefix="attention-new" draft={draft} onChange={setDraft} />
-          {registerError && <Notice tone="danger">{registerError}</Notice>}
-          <div className="flex justify-end">
-            <Button type="button" className="min-h-12" onClick={register}>
-              注意事項を登録する
-            </Button>
+            <div className="mt-4.5 flex flex-wrap items-center gap-2.5">
+              <StatePill tone={note.status === 'hidden' ? 'danger' : 'plain'}>
+                {noteStatusLabel(note.status)}
+              </StatePill>
+              <span>版{note.version}</span>
+              <span>記録者 {note.recordedBy}</span>
+            </div>
+            {/* 承認済みモックの 3 カード。事実・根拠・推奨対応は必ず並んで出る。 */}
+            <CardGrid>
+              <Card label={`発生した事実 版${note.version}`}>
+                <b>発生した事実</b>
+                <br />
+                {note.body}
+              </Card>
+              <Card label={`発生日時・根拠 版${note.version}`}>
+                <b>発生日時・根拠</b>
+                <br />
+                {formatJstInstant(note.occurredAt)}
+                <br />
+                {note.basis}
+              </Card>
+              <Card label={`推奨対応 版${note.version}`}>
+                <b>推奨対応</b>
+                <br />
+                {note.recommendedAction}
+              </Card>
+            </CardGrid>
+            {/*
+             * 公開前チェックを 3 枚のカードの直下に余白なしで置くのは、事実・
+             * 根拠・推奨対応と地続きに読ませるため。一段空けると「別の話」に
+             * 見えて、人格評価が混じった注意事項がそのまま公開される。
+             */}
+            {note.status === 'pending_review' && mayPublish && (
+              <div className="mt-3">
+                <Card tone="warning" label="公開前チェック">
+                  <b>公開前チェック</b>
+                  <br />
+                  人格評価、憶測、差別につながる属性は含まれていません。
+                </Card>
+              </div>
+            )}
+
+            {note.status === 'pending_review' && mayPublish && (
+              <div className="mt-3">
+                <TextAreaField
+                  id={`attention-reason-${note.noteId}`}
+                  label="確認の理由"
+                  error={reasonErrors[note.noteId] || undefined}
+                  rows={2}
+                  value={reasons[note.noteId] ?? ''}
+                  onChange={(event) =>
+                    setReasons((current) => ({
+                      ...current,
+                      [note.noteId]: event.target.value,
+                    }))
+                  }
+                />
+                {/* モックの並び: 却下・差戻しは左、公開は右端へ押し出す。
+                    罫線どうしが接するのはモックの `.title` に gap が無いため。 */}
+                <TitleRow
+                  gap={0}
+                  className="mt-3"
+                  push={
+                    <Action variant="primary" inset="tight" onClick={() => review(note, 'publish')}>
+                      公開する
+                    </Action>
+                  }
+                >
+                  <Action variant="danger" inset="tight" onClick={() => review(note, 'reject')}>
+                    却下
+                  </Action>
+                  <Action inset="tight" onClick={() => review(note, 'return')}>
+                    差戻し
+                  </Action>
+                </TitleRow>
+              </div>
+            )}
+
+            <Actions>
+              <Action inset="tight" onClick={() => openVersions(note)}>
+                過去の版を見る
+              </Action>
+              {note.status === 'published' && mayRevise && (
+                <Action inset="tight" onClick={() => setRevising({ note, draft: draftFrom(note) })}>
+                  改訂する
+                </Action>
+              )}
+              {/* 非表示は元へ戻せない。既定の見た目にしない。 */}
+              {note.status !== 'hidden' && mayHide && (
+                <Action
+                  variant="danger"
+                  inset="tight"
+                  onClick={() => setHiding({ note, reason: '' })}
+                >
+                  非表示にする
+                </Action>
+              )}
+            </Actions>
+          </article>
+        ))}
+
+        {mayWrite && settings && (
+          <div className="mt-4.5">
+            <Card>
+              <b>注意事項を登録</b>
+              <div className="mt-3">
+                <Card label="入力時の案内">
+                  記録するのは {settings.guidance.record.join('・')} です。
+                  <br />
+                  {settings.guidance.avoid.join('・')} は記録しないでください。
+                </Card>
+              </div>
+              <div className="mt-3">
+                <NoteFields idPrefix="attention-new" draft={draft} onChange={setDraft} />
+              </div>
+              {registerError && <FailureNotice>{registerError}</FailureNotice>}
+              <Actions>
+                <Action variant="primary" inset="tight" onClick={register}>
+                  注意事項を登録する
+                </Action>
+              </Actions>
+            </Card>
           </div>
-        </Card>
-      )}
+        )}
+      </AdminLayout>
 
       {revising && (
         <Modal titleId="attention-revise-title" title="注意事項を改訂">
-          <p className="font-sans text-ink-muted text-sm">
-            公開済みの版は上書きされません。改訂すると新しい版が公開され、版
-            {revising.note.version}は過去版として残ります。
+          <p>
+            {`公開済みの版は上書きされません。改訂すると新しい版が公開され、版${revising.note.version}は過去版として残ります。`}
           </p>
-          <NoteFields
-            idPrefix="attention-revision"
-            draft={revising.draft}
-            onChange={(next) => setRevising({ ...revising, draft: next })}
-          />
-          <div className="flex flex-wrap justify-end gap-3">
-            <Button
-              type="button"
-              variant="ghost"
-              className="min-h-12"
-              onClick={() => setRevising(undefined)}
-            >
-              キャンセル
-            </Button>
-            <Button type="button" className="min-h-12" onClick={revise}>
-              改訂版を公開する
-            </Button>
+          <div className="mt-3">
+            <NoteFields
+              idPrefix="attention-revision"
+              draft={revising.draft}
+              onChange={(next) => setRevising({ ...revising, draft: next })}
+            />
           </div>
+          <Actions>
+            <Action inset="tight" onClick={() => setRevising(undefined)}>
+              キャンセル
+            </Action>
+            <Action variant="primary" inset="tight" onClick={revise}>
+              改訂版を公開する
+            </Action>
+          </Actions>
         </Modal>
       )}
 
       {hiding && (
         <Modal titleId="attention-hide-title" title="注意事項を非表示にする">
-          <p className="font-sans text-ink-muted text-sm">
-            記録は削除されません。非表示にした事実と理由が監査記録に残ります。
-          </p>
-          <Field label="非表示にする理由" htmlFor="attention-hide-reason">
-            <Textarea
+          <p>記録は削除されません。非表示にした事実と理由が監査記録に残ります。</p>
+          <div className="mt-3">
+            <TextAreaField
               id="attention-hide-reason"
+              label="非表示にする理由"
               rows={2}
               value={hiding.reason}
               onChange={(event) => setHiding({ ...hiding, reason: event.target.value })}
             />
-          </Field>
-          <div className="flex flex-wrap justify-end gap-3">
-            <Button
-              type="button"
-              variant="ghost"
-              className="min-h-12"
-              onClick={() => setHiding(undefined)}
-            >
-              キャンセル
-            </Button>
-            <Button type="button" variant="danger" className="min-h-12" onClick={hide}>
-              非表示にする
-            </Button>
           </div>
+          <Actions>
+            <Action inset="tight" onClick={() => setHiding(undefined)}>
+              キャンセル
+            </Action>
+            <Action variant="danger" inset="tight" onClick={hide}>
+              非表示にする
+            </Action>
+          </Actions>
         </Modal>
       )}
 
       {versions && (
         <Modal titleId="attention-versions-title" title="注意事項の版履歴">
-          <ul className="flex flex-col gap-3">
+          <ul className="mt-3 flex flex-col gap-2.25">
             {versions.map((version) => (
-              <li key={version.id} className="rounded-ctl border border-line p-3">
-                <p className="font-sans font-medium text-ink text-sm">
-                  版{version.version} · {noteStatusLabel(version.status)}
-                </p>
-                <p className="font-sans text-ink text-sm">{version.body}</p>
-                <p className="font-sans text-ink-muted text-xs">
-                  {formatJstInstant(version.occurredAt)} · 記録者 {version.recordedBy}
-                </p>
+              <li key={version.id}>
+                <Card>
+                  <b>{`版${version.version} · ${noteStatusLabel(version.status)}`}</b>
+                  <br />
+                  {version.body}
+                  <br />
+                  <small>{`${formatJstInstant(version.occurredAt)} · 記録者 ${version.recordedBy}`}</small>
+                </Card>
               </li>
             ))}
           </ul>
-          <div className="flex justify-end">
-            <Button
-              type="button"
-              variant="ghost"
-              className="min-h-12"
-              onClick={() => setVersions(undefined)}
-            >
+          <Actions>
+            <Action inset="tight" onClick={() => setVersions(undefined)}>
               閉じる
-            </Button>
-          </div>
+            </Action>
+          </Actions>
         </Modal>
       )}
 
       {conflict && (
         <Modal titleId="attention-conflict-title" title="別の端末で先に更新されています">
-          <p className="font-sans text-ink text-sm">
+          <p>
             {`この画面は版${conflict.expectedVersion}です。現在の版は版${conflict.currentVersion}です。古い版からは公開できません。`}
           </p>
           <ConflictCompare
@@ -739,7 +674,7 @@ export function AttentionReviewScreen({
               <dl>
                 {versionConflictRows(conflict).map((row) => (
                   <div key={row.field}>
-                    <dt className="text-ink-muted">{row.label}</dt>
+                    <dt>{row.label}</dt>
                     <dd>{row.after}</dd>
                   </div>
                 ))}
@@ -749,7 +684,7 @@ export function AttentionReviewScreen({
               <dl>
                 {versionConflictRows(conflict).map((row) => (
                   <div key={row.field}>
-                    <dt className="text-ink-muted">{row.label}</dt>
+                    <dt>{row.label}</dt>
                     <dd>{row.before}</dd>
                   </div>
                 ))}
@@ -785,6 +720,6 @@ export function AttentionReviewScreen({
           onCancelled={() => setReauth(undefined)}
         />
       )}
-    </AdminScreen>
+    </AdminSurface>
   )
 }

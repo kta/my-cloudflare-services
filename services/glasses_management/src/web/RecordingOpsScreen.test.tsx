@@ -347,11 +347,11 @@ test('保存期間は成立予約・破棄した受付・適用元の3枚で示�
 test('失敗と保全中は対応が必要としてモックの行で先に出す', async () => {
   renderScreen(defaultRoutes([stored, failed, held]))
   const attention = await screen.findByRole('region', { name: '対応が必要' })
-  const failedRow = within(attention).getByRole('group', { name: /保存失敗/ })
+  const failedRow = within(attention).getByRole('article', { name: /保存失敗/ })
   expect(failedRow).toHaveTextContent('保存失敗')
   expect(within(failedRow).getByRole('button', { name: '再試行' })).toBeInTheDocument()
 
-  const heldRow = within(attention).getByRole('group', { name: /保全中/ })
+  const heldRow = within(attention).getByRole('article', { name: /保全中/ })
   expect(heldRow).toHaveTextContent('理由: 予約内容確認')
   expect(within(heldRow).getByRole('button', { name: '詳細' })).toBeInTheDocument()
 })

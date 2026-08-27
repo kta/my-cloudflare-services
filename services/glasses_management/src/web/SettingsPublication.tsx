@@ -11,8 +11,12 @@ import {
   SettingsVersionSummary,
   type StorePermission,
 } from '@app/contracts'
-import { Button, Chip, Field, Notice, Select, Textarea, TextInput } from '@app/ui'
-import { type ReactNode, useCallback, useEffect, useState } from 'react'
+import { type ReactNode, useCallback, useEffect, useId, useState } from 'react'
+import { Action, Actions } from './design/controls'
+import { Modal } from './design/dialogs'
+import { SelectField, TextAreaField, TextField } from './design/forms'
+import { FailureNotice, StatusNotice } from './design/notices'
+import { Card, CardGrid, FieldCard, Preview, StatePill, TitleRow } from './design/surfaces'
 import {
   diffRows,
   draftSaveState,
@@ -39,6 +43,10 @@ import type { StaffScreenProps } from './staff-screen'
  * 中身そのもの（AC-EYEX-108, 109）。したがって「公開する」は影響確認の結果に
  * 従属し、過去版の復元は再公開ではなく新しい下書きを作るだけに留める。
  *
+ * 見た目は承認済みモック `settings-complete-approved.html#impact` の語彙で組む。
+ * 数だけを 4 枚のカードで立て、やることは下の警告面が文章で持つ。数と指示を
+ * 同じ面に混ぜると、どちらも読まれない。
+ *
  * 時計はここにも helper にも無い。JST の今日は `today` で注入される。
  */
 
@@ -59,13 +67,20 @@ const RESOLUTION_OPTIONS: readonly SettingsConflictResolutionKind[] = [
   'customer_contacted',
 ]
 
-const SEVERITY_TONE: Record<SettingsImpactSeverity, 'danger' | 'warning' | 'neutral'> = {
+/**
+ * 重大度は語で読ませる（`IMPACT_SEVERITY_LABEL`）。ピルの色は語を補うだけで、
+ * 情報を色だけに載せない。
+ */
+const SEVERITY_TONE: Record<SettingsImpactSeverity, 'plain' | 'danger' | 'caution'> = {
   blocking: 'danger',
-  warning: 'warning',
-  info: 'neutral',
+  warning: 'caution',
+  info: 'plain',
 }
 
 const LOAD_ERROR = '設定を取得できませんでした。もう一度お試しください。'
+
+/** 公開できない理由を指す先。押せない「公開する」から `aria-describedby` で結ぶ。 */
+const BLOCKED_REASON_ID = 'settings-publication-blocked'
 
 async function readJson(response: Response): Promise<unknown> {
   try {
@@ -76,61 +91,22 @@ async function readJson(response: Response): Promise<unknown> {
 }
 
 /**
- * 名前のついた区画。`<fieldset aria-label>`（role="group"）にするのは、支援技術に
- * 「この見出しの下はここまで」を伝えるため。状態と警告を別の group に分けるのが UC-EYEX-159
- * の要求そのものなので、区画の名前は装飾ではなく仕様である。
+ * 名前のついた区画。承認済みモックの `.preview`（白・1px 罫・角丸 9px）で、
+ * 見出しは中の太字 1 行目が持つ。区画の名前は装飾ではなく仕様なので
+ * （UC-EYEX-159 は状態と警告を別の区画に分けることを求める）、必ず付ける。
  */
-function Panel({
-  label,
-  actions,
-  children,
-}: {
-  label: string
-  actions?: ReactNode
-  children: ReactNode
-}) {
+function Section({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <fieldset
-      aria-label={label}
-      className="flex min-w-0 flex-col gap-3 rounded-ctl border border-line bg-surface p-5"
-    >
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h3 className="font-display font-semibold text-ink text-lg">{label}</h3>
-        {actions}
-      </div>
+    <Preview label={label}>
+      <b className="block">{label}</b>
       {children}
-    </fieldset>
+    </Preview>
   )
 }
 
-/**
- * モックの `.card` — 白地・1px 罫・角丸 9px・見出しを太字で 1 行目に置く。
- * `tone="warning"` は注意を要するカード（`.card.warning`）。
- */
-function Metric({
-  term,
-  value,
-  tone = 'neutral',
-  children,
-}: {
-  term: string
-  value?: string
-  tone?: 'neutral' | 'warning' | 'danger'
-  children?: ReactNode
-}) {
-  const toneClass =
-    tone === 'warning'
-      ? 'border-amber bg-amber-soft'
-      : tone === 'danger'
-        ? 'border-danger-line bg-danger-soft'
-        : 'border-line bg-surface'
-  return (
-    <div className={`rounded-card border p-3 ${toneClass}`}>
-      <p className="font-sans font-semibold text-ink text-sm">{term}</p>
-      {value !== undefined && <p className="font-sans text-ink text-sm">{value}</p>}
-      {children}
-    </div>
-  )
+/** 面の中で 1 段落ぶんの間隔を空けた行。段落の既定余白は使わない。 */
+function Line({ children }: { children: ReactNode }) {
+  return <span className="mt-1.5 block">{children}</span>
 }
 
 export function SettingsPublication({
@@ -160,6 +136,9 @@ export function SettingsPublication({
     useState<SettingsConflictResolutionKind>('alternative_resource')
   const [resolutionNote, setResolutionNote] = useState('')
   const [rescheduling, setRescheduling] = useState(false)
+  // 手前を塞ぐ面の見出しを名前として指すための id（描画には影響しない）。
+  const resolveTitleId = useId()
+  const rescheduleTitleId = useId()
 
   const base = `/api/staff/stores/${storeId}/availability`
 
@@ -210,17 +189,14 @@ export function SettingsPublication({
   }, [api, base, canRead])
 
   if (!canRead) {
-    return (
-      <section aria-label="影響確認と公開" className="space-y-4 p-6">
-        <Notice>設定を閲覧する権限がありません。</Notice>
-      </section>
-    )
+    return <StatusNotice>設定を閲覧する権限がありません。</StatusNotice>
   }
 
   const summary = impact === undefined ? undefined : impactSummary(impact)
   const saveState = draftSaveState({ draft, dirty })
   const warnings = settingsWarnings({ impact, publication })
   const result = publication === undefined ? undefined : publicationView(publication)
+  const canPublish = draft !== undefined && summary?.canPublish === true
 
   const saveDraft = async (status: 'draft' | 'review') => {
     if (draft === undefined) return
@@ -365,503 +341,406 @@ export function SettingsPublication({
     void publish(scheduleInput)
   }
 
+  const openResolution = (reservationId: string, message: string) => {
+    setResolving({ reservationId, message })
+    setResolution('alternative_resource')
+    setResolutionNote('')
+  }
+
   return (
-    <section aria-label="影響確認と公開" className="flex flex-col gap-4">
-      <header className="flex flex-wrap items-baseline justify-between gap-3">
-        <h2 className="font-display font-semibold text-2xl text-ink">影響を確認して公開</h2>
-        <p className="font-sans text-ink-muted text-sm">
-          {draft === undefined
-            ? storeName
-            : `版 draft-${String(draft.draftVersion).padStart(2, '0')}`}
-        </p>
-      </header>
-
-      {error && <Notice>{error}</Notice>}
-      {info && <Notice tone="success">{info}</Notice>}
-
-      {result !== undefined && (
-        <Panel label="公開結果">
-          <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <h4 className="font-display font-semibold text-ink text-lg">
-              版 {result.versionId} の公開結果
-            </h4>
-            <Chip tone={result.statusTone}>{result.statusLabel}</Chip>
-          </div>
-          <p className="font-sans text-ink-muted text-sm">
-            {result.executedLabel} · {result.scheduledLabel}
-          </p>
-          <div className="grid gap-3 sm:grid-cols-3">
-            <Metric term="成功" value={result.appliedLabel} />
-            <Metric
-              term="失敗"
-              value={result.failedLabel}
-              tone={result.failed.length > 0 ? 'danger' : 'neutral'}
-            />
-            <Metric term="反映確認">
-              <p className="font-sans text-ink text-sm">{result.webSlotLabel}</p>
-              <p className="font-sans text-ink text-sm">{result.ledgerLabel}</p>
-            </Metric>
-          </div>
-          {result.applied.length > 0 && (
-            <fieldset aria-label="反映済みの店舗" className="flex min-w-0 flex-col gap-1">
-              <h4 className="font-sans font-medium text-ink text-sm">反映済みの店舗</h4>
-              <ul className="flex flex-col gap-1">
-                {result.applied.map((target) => (
-                  <li key={target.storeId} className="font-sans text-ink-muted text-sm">
-                    <span>{target.storeId}</span>
-                    <span> ・ 第{target.appliedVersion ?? 0}版</span>
-                  </li>
-                ))}
-              </ul>
-            </fieldset>
-          )}
-          {result.failed.length > 0 && (
-            <fieldset aria-label="失敗した店舗" className="flex min-w-0 flex-col gap-2">
-              <h4 className="font-sans font-medium text-ink text-sm">失敗した店舗</h4>
-              <p className="font-sans text-ink-muted text-sm">
-                再試行対象 {result.retryStoreIds.length}店舗
-              </p>
-              <ul className="flex flex-col gap-1">
-                {result.failed.map((target) => (
-                  <li
-                    key={target.storeId}
-                    className="flex flex-wrap items-center gap-3 rounded-card border border-danger-line bg-danger-soft p-3"
-                  >
-                    <span className="font-sans font-semibold text-ink text-sm">
-                      {target.storeId}
-                    </span>
-                    <span className="font-sans text-ink-muted text-sm">
-                      {target.failureReason ?? '理由不明'}
-                    </span>
-                    <span className="font-sans text-ink-muted text-sm">公開未反映</span>
-                  </li>
-                ))}
-              </ul>
-              {canManage && result.canRetry && (
-                <div className="flex flex-wrap gap-2">
-                  <Button className="min-h-12" onClick={() => void postPublication('retry')}>
-                    この店舗だけ再試行
-                  </Button>
-                </div>
-              )}
-            </fieldset>
-          )}
-          {canManage && (result.canCancel || result.canReschedule) && (
-            <div className="flex flex-wrap gap-2">
-              <Button
-                variant="ghost"
-                className="min-h-12"
-                onClick={() => {
-                  setRescheduling(true)
-                }}
-              >
-                公開予定を変更
-              </Button>
-              <Button className="min-h-12" onClick={() => void postPublication('run')}>
-                今すぐ実行
-              </Button>
-              <Button
-                variant="danger"
-                className="min-h-12"
-                onClick={() => void patchPublication({ status: 'cancelled' })}
-              >
-                公開予定を取消
-              </Button>
-            </div>
-          )}
-        </Panel>
-      )}
-
-      <Panel
-        label="影響確認"
-        actions={
-          <Button variant="ghost" className="min-h-12" onClick={() => void loadImpact()}>
-            影響を再確認
-          </Button>
+    <>
+      <TitleRow
+        push={
+          <span>
+            {draft === undefined
+              ? storeName
+              : `版 draft-${String(draft.draftVersion).padStart(2, '0')}`}
+          </span>
         }
       >
+        <h1>影響を確認して公開</h1>
+      </TitleRow>
+
+      {error && <FailureNotice>{error}</FailureNotice>}
+      {info && <StatusNotice>{info}</StatusNotice>}
+
+      {/* ---------------- 影響確認（承認済みモック #impact） ---------------- */}
+      <section aria-label="影響確認">
         {summary === undefined ? (
-          <p className="font-sans text-ink-muted text-sm">影響確認の結果はまだありません。</p>
+          <StatusNotice>影響確認の結果はまだありません。</StatusNotice>
         ) : (
           <>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Metric term="公開予定枠" value={summary.slotLabel} />
-              <Metric term="既存予約" value={summary.ledgerLabel} />
-              <Metric
-                term="ブロッキング"
-                value={summary.blockingLabel}
-                tone={summary.unresolved.length > 0 ? 'warning' : 'neutral'}
-              />
-              <Metric term="警告" value={summary.warningLabel} />
-            </div>
-            <p className="font-sans text-ink-muted text-sm">{summary.evaluatedAtLabel}</p>
-            {summary.groups.map((group) => (
-              <fieldset
-                key={group.kind}
-                aria-label={group.label}
-                className="flex min-w-0 flex-col gap-2 rounded-ctl border border-line p-3"
+            <CardGrid columns={2} mt={4}>
+              <FieldCard title="公開予定枠">{summary.slotLabel}</FieldCard>
+              <FieldCard title="既存予約">{summary.ledgerLabel}</FieldCard>
+              {/* 公開できない理由（ブロッキング）は数だけを琥珀で立てる。 */}
+              <FieldCard
+                title="ブロッキング"
+                tone={summary.unresolved.length > 0 ? 'caution' : 'plain'}
               >
-                <div className="flex flex-wrap items-center gap-2">
-                  <h4 className="font-sans font-medium text-ink text-sm">{group.label}</h4>
-                  <Chip tone={SEVERITY_TONE[group.severity]}>{group.severityLabel}</Chip>
-                </div>
-                <ul className="flex flex-col gap-2">
-                  {group.items.map((item) => (
-                    <li
-                      key={`${item.kind}-${item.reservationId ?? item.message}`}
-                      className="flex flex-wrap items-center justify-between gap-2"
-                    >
-                      <span className="font-sans text-ink text-sm">{item.message}</span>
-                      <span className="flex items-center gap-2">
-                        {/* 群の見出しがすでに重大度を語で示している。差がある
-                            項目だけ、行にも語を添える。 */}
-                        {item.severity !== group.severity && (
-                          <Chip tone={SEVERITY_TONE[item.severity]}>
-                            {IMPACT_SEVERITY_LABEL[item.severity]}
-                          </Chip>
-                        )}
-                        {item.resolution !== null && (
-                          <Chip tone="success">{RESOLUTION_LABEL[item.resolution]}</Chip>
-                        )}
-                        {canManage && item.reservationId !== null && item.resolution === null && (
-                          <Button
-                            variant="ghost"
-                            className="min-h-12"
-                            onClick={() => {
-                              setResolving({
-                                reservationId: item.reservationId ?? '',
-                                message: item.message,
-                              })
-                              setResolution('alternative_resource')
-                              setResolutionNote('')
-                            }}
-                          >
-                            解消を記録
-                          </Button>
-                        )}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </fieldset>
+                {summary.blockingLabel}
+              </FieldCard>
+              <FieldCard title="警告">{summary.warningLabel}</FieldCard>
+            </CardGrid>
+            {summary.groups.map((group) => (
+              <Preview key={group.kind} label={group.label}>
+                <b className="block">{group.label}</b>
+                <StatePill tone={SEVERITY_TONE[group.severity]}>{group.severityLabel}</StatePill>
+                {group.items.map((item) => (
+                  <Line key={`${item.kind}-${item.reservationId ?? item.message}`}>
+                    {item.message}
+                    {/* 群の見出しがすでに重大度を語で示している。差がある
+                        項目だけ、行にも語を添える。 */}
+                    {item.severity !== group.severity && (
+                      <>
+                        {' '}
+                        <StatePill tone={SEVERITY_TONE[item.severity]}>
+                          {IMPACT_SEVERITY_LABEL[item.severity]}
+                        </StatePill>
+                      </>
+                    )}
+                    {item.resolution !== null && (
+                      <>
+                        {' '}
+                        <StatePill>{RESOLUTION_LABEL[item.resolution]}</StatePill>
+                      </>
+                    )}
+                    {canManage && item.reservationId !== null && item.resolution === null && (
+                      <>
+                        {' '}
+                        <Action
+                          inset="tight"
+                          onClick={() => openResolution(item.reservationId ?? '', item.message)}
+                        >
+                          解消を記録
+                        </Action>
+                      </>
+                    )}
+                  </Line>
+                ))}
+              </Preview>
             ))}
+            <Line>{summary.evaluatedAtLabel}</Line>
             {summary.blockedReason !== undefined && (
-              <div className="rounded-card border border-amber bg-amber-soft p-4">
-                <p className="font-sans font-semibold text-ink text-sm">
-                  {summary.blockedHeadline}
-                </p>
-                <p className="font-sans text-ink text-sm">{summary.blockedReason}</p>
-              </div>
-            )}
-            {canManage && summary.unresolved.length > 0 && (
-              <div className="flex flex-wrap justify-end gap-2">
-                <Button
-                  variant="ghost"
-                  className="min-h-12"
-                  onClick={() => {
-                    const first = summary.unresolved[0]
-                    if (first === undefined) return
-                    setResolving({
-                      reservationId: first.reservationId ?? '',
-                      message: first.message,
-                    })
-                    setResolution('alternative_resource')
-                    setResolutionNote('')
-                  }}
-                >
-                  影響予約を解消
-                </Button>
-              </div>
+              <Preview id={BLOCKED_REASON_ID} tone="caution" label="公開できない理由">
+                <b className="block">{summary.blockedHeadline}</b>
+                {summary.blockedReason}
+              </Preview>
             )}
           </>
         )}
-      </Panel>
-
-      <Panel label="設定の状態">
-        <div className="flex flex-wrap items-center gap-2">
-          <Chip tone="neutral">
-            {draft === undefined ? '下書きなし' : settingsStateLabel(draft)}
-          </Chip>
-          <Chip tone={saveState.dirty ? 'warning' : 'success'}>{saveState.label}</Chip>
-        </div>
-        <p className="font-sans text-ink-muted text-sm">{saveState.savedAtLabel}</p>
-        <p className="font-sans text-ink-muted text-sm">{saveState.savedByLabel}</p>
-        {canManage && draft !== undefined && (
-          <div className="flex flex-wrap gap-2">
-            <Button variant="ghost" className="min-h-12" onClick={() => void saveDraft('draft')}>
-              下書きを保存
-            </Button>
-            <Button variant="ghost" className="min-h-12" onClick={() => void saveDraft('review')}>
-              確認へ回す
-            </Button>
-          </div>
-        )}
-      </Panel>
-
-      {warnings.length > 0 && (
-        <Panel label="警告">
-          <p className="font-sans text-ink-muted text-sm">
-            競合と失敗は設定の状態ではありません。状態とは別に解消してください。
-          </p>
-          <ul className="flex flex-col gap-2">
-            {warnings.map((warning) => (
-              <li key={warning.id}>
-                <Chip tone={warning.tone}>{warning.label}</Chip>
-              </li>
-            ))}
-          </ul>
-        </Panel>
-      )}
-
-      {override !== undefined && (
-        <Panel label="適用元">
-          <div className="flex flex-wrap items-center gap-2">
-            <Chip tone={override.origin === 'chain' ? 'neutral' : 'warning'}>
-              {ORIGIN_LABEL[override.origin]}
-            </Chip>
-            <span className="font-sans text-ink-muted text-sm">
-              全店共通 第{override.chainVersion}版
-            </span>
-          </div>
-          {override.overriddenFields.length > 0 && (
-            <div className="flex flex-col gap-2">
-              <p className="font-sans text-ink-muted text-sm">店舗で上書きしている項目</p>
-              <ul className="flex flex-wrap gap-2">
-                {override.overriddenFields.map((field) => (
-                  <li key={field}>
-                    <Chip tone="neutral">{settingsFieldLabel(field)}</Chip>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {releaseNotice !== undefined && (
-            <div className="flex flex-col gap-1 rounded-ctl border border-line bg-paper p-3">
-              <p className="font-sans font-medium text-ink text-sm">{releaseNotice.headline}</p>
-              <p className="font-sans text-ink-muted text-sm">{releaseNotice.detail}</p>
-            </div>
-          )}
-          {canManage && override.origin === 'store_override' && (
-            <div className="flex flex-wrap gap-2">
-              <Button variant="ghost" className="min-h-12" onClick={() => void releaseOverride()}>
-                店舗上書きを解除
-              </Button>
-            </div>
-          )}
-        </Panel>
-      )}
+      </section>
 
       {canManage && (
-        <Panel label="公開">
-          <Field label="公開日時（JST）" htmlFor="publish-schedule" error={scheduleMessage}>
-            <TextInput
-              id="publish-schedule"
-              value={scheduleInput}
-              placeholder="2026-08-30T18:00"
-              onChange={(event) => {
-                setScheduleInput(event.target.value)
-                setScheduleMessage(undefined)
+        <Actions gap={2.5} mt={4}>
+          {summary !== undefined && summary.unresolved.length > 0 && (
+            <Action
+              onClick={() => {
+                const first = summary.unresolved[0]
+                if (first === undefined) return
+                openResolution(first.reservationId ?? '', first.message)
               }}
-            />
-          </Field>
-          <p className="font-sans text-ink-muted text-sm">
-            空欄のまま公開すると、その場で適用されます。日時を入れると公開予約になります。
-          </p>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              className="min-h-12"
-              disabled={draft === undefined || summary?.canPublish !== true}
-              onClick={() => void publish()}
             >
-              公開する
-            </Button>
-            <Button
-              variant="ghost"
-              className="min-h-12"
-              disabled={draft === undefined || summary?.canPublish !== true}
-              onClick={scheduleAndPublish}
-            >
-              公開を予約する
-            </Button>
-          </div>
-        </Panel>
+              影響予約を解消
+            </Action>
+          )}
+          <Action onClick={() => void loadImpact()}>影響を再確認</Action>
+          {/*
+           * 押せないのは事実だが、押せない理由は上の警告面が持っている。
+           * `aria-describedby` でその面へ結び付け、読み上げでも理由に届かせる。
+           */}
+          <Action
+            disabled={!canPublish}
+            describedBy={summary?.blockedReason === undefined ? undefined : BLOCKED_REASON_ID}
+            onClick={() => void publish()}
+          >
+            公開する
+          </Action>
+        </Actions>
       )}
 
-      <Panel label="版履歴">
-        {versions.length === 0 ? (
-          <p className="font-sans text-ink-muted text-sm">公開済みの版はまだありません。</p>
-        ) : (
-          <ul className="flex flex-col gap-2">
-            {versions.map((version) => (
-              <li
-                key={version.versionId}
-                className="flex flex-wrap items-center justify-between gap-2 border-line border-b py-2 last:border-b-0"
+      {/* ---------------- 公開結果（承認済みモック #publish-result） ---------------- */}
+      {result !== undefined && (
+        <Preview label="公開結果">
+          <b className="block">{`版 ${result.versionId} の公開結果`}</b>
+          <StatePill tone={result.statusTone === 'danger' ? 'danger' : 'caution'}>
+            {result.statusLabel}
+          </StatePill>
+          <Line>{`${result.executedLabel} · ${result.scheduledLabel}`}</Line>
+          <CardGrid mt={4}>
+            <FieldCard title="成功">{result.appliedLabel}</FieldCard>
+            <FieldCard title="失敗" tone={result.failed.length > 0 ? 'error' : 'plain'}>
+              {result.failedLabel}
+            </FieldCard>
+            <FieldCard title="反映確認">
+              {/* Web枠と台帳は別々に読ませる。1 行に繋ぐと、どちらが未反映
+                  なのかを目で切り分けられない。 */}
+              <span className="block">{result.webSlotLabel}</span>
+              <span className="block">{result.ledgerLabel}</span>
+            </FieldCard>
+          </CardGrid>
+          {result.applied.length > 0 && (
+            <Preview label="反映済みの店舗">
+              <b className="block">反映済みの店舗</b>
+              {result.applied.map((target) => (
+                <Line key={target.storeId}>
+                  <span>{target.storeId}</span>
+                  <span>{` ・ 第${target.appliedVersion ?? 0}版`}</span>
+                </Line>
+              ))}
+            </Preview>
+          )}
+          {result.failed.length > 0 && (
+            <Preview tone="attention" label="失敗した店舗">
+              <b className="block">失敗した店舗</b>
+              <Line>{`再試行対象 ${result.retryStoreIds.length}店舗`}</Line>
+              {result.failed.map((target) => (
+                <Line key={target.storeId}>
+                  <b>{target.storeId}</b>
+                  <span>{`　${target.failureReason ?? '理由不明'}`}</span>
+                  <span>{'　公開未反映'}</span>
+                </Line>
+              ))}
+              {canManage && result.canRetry && (
+                <Actions gap={2.5} mt={4}>
+                  <Action variant="primary" onClick={() => void postPublication('retry')}>
+                    この店舗だけ再試行
+                  </Action>
+                </Actions>
+              )}
+            </Preview>
+          )}
+          {canManage && (result.canCancel || result.canReschedule) && (
+            <Actions gap={2.5} mt={4}>
+              <Action onClick={() => setRescheduling(true)}>公開予定を変更</Action>
+              <Action onClick={() => void postPublication('run')}>今すぐ実行</Action>
+              {/* 破棄は既定の見た目にしない。 */}
+              <Action
+                variant="danger"
+                onClick={() => void patchPublication({ status: 'cancelled' })}
               >
-                <span className="flex flex-wrap items-center gap-2">
-                  <span className="font-sans font-medium text-ink text-sm">
-                    第{version.version}版
+                公開予定を取消
+              </Action>
+            </Actions>
+          )}
+        </Preview>
+      )}
+
+      {/* ---------------- 設定の状態と警告 ---------------- */}
+      <Section label="設定の状態">
+        <Line>
+          <StatePill>{draft === undefined ? '下書きなし' : settingsStateLabel(draft)}</StatePill>{' '}
+          <StatePill tone={saveState.dirty ? 'caution' : 'plain'}>{saveState.label}</StatePill>
+        </Line>
+        <Line>{saveState.savedAtLabel}</Line>
+        <Line>{saveState.savedByLabel}</Line>
+        {canManage && draft !== undefined && (
+          <Actions gap={2.5} mt={4}>
+            <Action onClick={() => void saveDraft('draft')}>下書きを保存</Action>
+            <Action onClick={() => void saveDraft('review')}>確認へ回す</Action>
+          </Actions>
+        )}
+      </Section>
+
+      {warnings.length > 0 && (
+        <Preview tone="caution" label="警告">
+          <b className="block">警告</b>
+          <Line>競合と失敗は設定の状態ではありません。状態とは別に解消してください。</Line>
+          {warnings.map((warning) => (
+            <Line key={warning.id}>
+              <StatePill tone={warning.tone === 'danger' ? 'danger' : 'caution'}>
+                {warning.label}
+              </StatePill>
+            </Line>
+          ))}
+        </Preview>
+      )}
+
+      {/* ---------------- 適用元 ---------------- */}
+      {override !== undefined && (
+        <Section label="適用元">
+          <Line>
+            <StatePill tone={override.origin === 'chain' ? 'plain' : 'caution'}>
+              {ORIGIN_LABEL[override.origin]}
+            </StatePill>{' '}
+            <span>{`全店共通 第${override.chainVersion}版`}</span>
+          </Line>
+          {override.overriddenFields.length > 0 && (
+            <>
+              <Line>店舗で上書きしている項目</Line>
+              <Line>
+                {override.overriddenFields.map((field) => (
+                  <span key={field}>
+                    <StatePill>{settingsFieldLabel(field)}</StatePill>{' '}
                   </span>
-                  <span className="font-sans text-ink-muted text-sm">
-                    {formatJstInstant(version.publishedAt)}
-                  </span>
-                  <span className="font-sans text-ink-muted text-sm">{version.publishedBy}</span>
-                  <Chip tone="neutral">{ORIGIN_LABEL[version.origin]}</Chip>
-                </span>
-                <span className="flex flex-wrap gap-2">
-                  <Button
-                    variant="ghost"
-                    className="min-h-12"
-                    onClick={() => void openDiff(version.versionId)}
-                  >
-                    版の差分を見る
-                  </Button>
-                  {canManage && (
-                    <Button
-                      variant="ghost"
-                      className="min-h-12"
-                      onClick={() => void restoreVersion(version.versionId)}
-                    >
-                      過去版から新しい下書きを作る
-                    </Button>
-                  )}
-                </span>
-              </li>
-            ))}
-          </ul>
+                ))}
+              </Line>
+            </>
+          )}
+          {releaseNotice !== undefined && (
+            <>
+              <Line>
+                <b>{releaseNotice.headline}</b>
+              </Line>
+              <Line>{releaseNotice.detail}</Line>
+            </>
+          )}
+          {canManage && override.origin === 'store_override' && (
+            <Actions gap={2.5} mt={4}>
+              <Action onClick={() => void releaseOverride()}>店舗上書きを解除</Action>
+            </Actions>
+          )}
+        </Section>
+      )}
+
+      {/* ---------------- 公開予約 ---------------- */}
+      {canManage && (
+        <Section label="公開予約">
+          <TextField
+            id="publish-schedule"
+            label="公開日時（JST）"
+            error={scheduleMessage}
+            value={scheduleInput}
+            placeholder="2026-08-30T18:00"
+            onChange={(event) => {
+              setScheduleInput(event.target.value)
+              setScheduleMessage(undefined)
+            }}
+          />
+          <Line>
+            空欄のまま公開すると、その場で適用されます。日時を入れると公開予約になります。
+          </Line>
+          <Actions gap={2.5} mt={4}>
+            <Action disabled={!canPublish} onClick={scheduleAndPublish}>
+              公開を予約する
+            </Action>
+          </Actions>
+        </Section>
+      )}
+
+      {/* ---------------- 版履歴 ---------------- */}
+      <Section label="版履歴">
+        {versions.length === 0 ? (
+          <Line>公開済みの版はまだありません。</Line>
+        ) : (
+          versions.map((version) => (
+            <Line key={version.versionId}>
+              <b>{`第${version.version}版`}</b>
+              <span>{`　${formatJstInstant(version.publishedAt)}　`}</span>
+              <span>{version.publishedBy}</span>{' '}
+              <StatePill>{ORIGIN_LABEL[version.origin]}</StatePill>{' '}
+              <Action inset="tight" onClick={() => void openDiff(version.versionId)}>
+                版の差分を見る
+              </Action>{' '}
+              {canManage && (
+                <Action inset="tight" onClick={() => void restoreVersion(version.versionId)}>
+                  過去版から新しい下書きを作る
+                </Action>
+              )}
+            </Line>
+          ))
         )}
         {versionDetail !== undefined && (
-          <fieldset
-            aria-label={`第${versionDetail.version}版の差分`}
-            className="flex min-w-0 flex-col gap-2 overflow-x-auto rounded-ctl border border-line p-3"
-          >
-            <h4 className="font-sans font-medium text-ink text-sm">
-              第{versionDetail.version}版の差分
-            </h4>
-            <table className="w-full min-w-md border-collapse text-left">
+          <Card label={`第${versionDetail.version}版の差分`} className="mt-3.5 overflow-x-auto">
+            <b className="block">{`第${versionDetail.version}版の差分`}</b>
+            <table className="mt-2.5 w-full border-collapse text-left">
               <thead>
                 <tr>
-                  <th className="font-sans text-ink-muted text-xs">項目</th>
-                  <th className="font-sans text-ink-muted text-xs">変更前</th>
-                  <th className="font-sans text-ink-muted text-xs">変更後</th>
+                  <th scope="col" className="border border-line p-2.5 font-bold">
+                    項目
+                  </th>
+                  <th scope="col" className="border border-line p-2.5 font-bold">
+                    変更前
+                  </th>
+                  <th scope="col" className="border border-line p-2.5 font-bold">
+                    変更後
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 {diffRows(versionDetail).map((row) => (
-                  <tr key={row.field} className="border-line border-t">
-                    <td className="font-sans text-ink text-sm">{row.label}</td>
-                    <td className="font-sans text-ink-muted text-sm">{row.before}</td>
-                    <td className="font-sans text-ink text-sm">{row.after}</td>
+                  <tr key={row.field}>
+                    <th scope="row" className="border border-line p-2.5 text-left font-normal">
+                      {row.label}
+                    </th>
+                    <td className="border border-line p-2.5">{row.before}</td>
+                    <td className="border border-line p-2.5">{row.after}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
-            <p className="font-sans text-ink-muted text-sm">
-              過去版は直接公開できません。復元すると新しい下書きになります。
-            </p>
-          </fieldset>
+            <Line>過去版は直接公開できません。復元すると新しい下書きになります。</Line>
+          </Card>
         )}
-      </Panel>
+      </Section>
 
+      {/* ---------------- 手前を塞ぐ確認 ---------------- */}
       {resolving !== undefined && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="影響予約の解消を記録"
-          className="fixed inset-0 flex items-center justify-center bg-ink/40 p-6"
-        >
-          <div className="flex w-full max-w-xl flex-col gap-3 rounded-ctl border border-line bg-surface p-5">
-            <h3 className="font-display font-semibold text-ink text-xl">影響予約の解消を記録</h3>
-            <p className="font-sans text-ink-muted text-sm">{resolving.message}</p>
-            <Field label="対応" htmlFor="resolution-kind">
-              <Select
-                id="resolution-kind"
-                value={resolution}
-                onChange={(event) => {
-                  const next = RESOLUTION_OPTIONS.find((kind) => kind === event.target.value)
-                  if (next !== undefined) setResolution(next)
-                }}
-              >
-                {RESOLUTION_OPTIONS.map((kind) => (
-                  <option key={kind} value={kind}>
-                    {RESOLUTION_LABEL[kind]}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-            <Field label="メモ" htmlFor="resolution-note">
-              <Textarea
-                id="resolution-note"
-                value={resolutionNote}
-                onChange={(event) => {
-                  setResolutionNote(event.target.value)
-                }}
-              />
-            </Field>
-            <div className="flex flex-wrap justify-end gap-2">
-              <Button
-                variant="ghost"
-                className="min-h-12"
-                onClick={() => {
-                  setResolving(undefined)
-                }}
-              >
-                やめる
-              </Button>
-              <Button className="min-h-12" onClick={() => void recordResolution()}>
-                記録する
-              </Button>
-            </div>
+        <Modal title="影響予約の解消を記録" titleId={resolveTitleId}>
+          <p>{resolving.message}</p>
+          <div className="flex flex-col gap-3">
+            <SelectField
+              id="resolution-kind"
+              label="対応"
+              value={resolution}
+              onChange={(event) => {
+                const next = RESOLUTION_OPTIONS.find((kind) => kind === event.target.value)
+                if (next !== undefined) setResolution(next)
+              }}
+            >
+              {RESOLUTION_OPTIONS.map((kind) => (
+                <option key={kind} value={kind}>
+                  {RESOLUTION_LABEL[kind]}
+                </option>
+              ))}
+            </SelectField>
+            <TextAreaField
+              id="resolution-note"
+              label="メモ"
+              value={resolutionNote}
+              onChange={(event) => setResolutionNote(event.target.value)}
+            />
           </div>
-        </div>
+          <Actions gap={2.5} mt={4}>
+            <Action onClick={() => setResolving(undefined)}>やめる</Action>
+            <Action variant="primary" onClick={() => void recordResolution()}>
+              記録する
+            </Action>
+          </Actions>
+        </Modal>
       )}
 
       {rescheduling && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="公開予定の変更"
-          className="fixed inset-0 flex items-center justify-center bg-ink/40 p-6"
-        >
-          <div className="flex w-full max-w-xl flex-col gap-3 rounded-ctl border border-line bg-surface p-5">
-            <h3 className="font-display font-semibold text-ink text-xl">公開予定の変更</h3>
-            <Field label="新しい公開日時（JST）" htmlFor="reschedule-input" error={scheduleMessage}>
-              <TextInput
-                id="reschedule-input"
-                value={scheduleInput}
-                placeholder="2026-08-30T18:00"
-                onChange={(event) => {
-                  setScheduleInput(event.target.value)
-                  setScheduleMessage(undefined)
-                }}
-              />
-            </Field>
-            <div className="flex flex-wrap justify-end gap-2">
-              <Button
-                variant="ghost"
-                className="min-h-12"
-                onClick={() => {
-                  setRescheduling(false)
-                }}
-              >
-                やめる
-              </Button>
-              <Button
-                className="min-h-12"
-                onClick={() => {
-                  const message = scheduleError(scheduleInput, today)
-                  if (message !== undefined) {
-                    setScheduleMessage(message)
-                    return
-                  }
-                  void patchPublication({ scheduledForJst: scheduleInput })
-                }}
-              >
-                この日時に変更
-              </Button>
-            </div>
-          </div>
-        </div>
+        <Modal title="公開予定の変更" titleId={rescheduleTitleId}>
+          <TextField
+            id="reschedule-input"
+            label="新しい公開日時（JST）"
+            error={scheduleMessage}
+            value={scheduleInput}
+            placeholder="2026-08-30T18:00"
+            onChange={(event) => {
+              setScheduleInput(event.target.value)
+              setScheduleMessage(undefined)
+            }}
+          />
+          <Actions gap={2.5} mt={4}>
+            <Action onClick={() => setRescheduling(false)}>やめる</Action>
+            <Action
+              variant="primary"
+              onClick={() => {
+                const message = scheduleError(scheduleInput, today)
+                if (message !== undefined) {
+                  setScheduleMessage(message)
+                  return
+                }
+                void patchPublication({ scheduledForJst: scheduleInput })
+              }}
+            >
+              この日時に変更
+            </Action>
+          </Actions>
+        </Modal>
       )}
-    </section>
+    </>
   )
 }

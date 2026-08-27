@@ -1,7 +1,11 @@
 import { SharedTerminalReauthenticationIssue } from '@app/contracts'
 import { stretchPin } from '@app/shared'
-import { Button, Card, Field, Notice, TextInput } from '@app/ui'
 import { type KeyboardEvent, useEffect, useRef, useState } from 'react'
+import { Action } from './design/controls'
+import { Modal } from './design/dialogs'
+import { TextField } from './design/forms'
+import { FailureNotice } from './design/notices'
+import { TitleRow } from './design/surfaces'
 import type { StaffScreenProps } from './staff-screen'
 
 /**
@@ -176,62 +180,66 @@ export function ReauthPrompt({
   }
 
   return (
-    <div
-      ref={dialogRef}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="reauth-title"
+    /*
+     * 承認済みモック `operations-approved.html#reauth` — 見出し・説明・個人PIN・
+     * 左右に割れる 2 ボタン。共有端末のまま個人を名乗り直させる面なので、
+     * 他所へ逃がす操作はここに置かない。
+     */
+    <Modal
+      dialogRef={dialogRef}
       onKeyDown={trapFocus}
-      className="fixed inset-0 flex items-center justify-center bg-ink/40 p-6"
+      titleId="reauth-title"
+      title="管理者として確認してください"
     >
-      <Card className="flex w-full max-w-xl flex-col gap-4">
-        {/* 承認済みモック `operations-approved.html#reauth` — 見出し・説明・
-            個人PIN・左右に割れる 2 ボタン。文言はモックのまま。 */}
-        <h2 id="reauth-title" className="font-display font-semibold text-2xl text-ink">
-          管理者として確認してください
-        </h2>
-        <p className="font-sans text-ink text-sm">
-          {`${actionLabel}は個人認証が必要です。共有端末と認証した個人の両方を監査記録に残します。`}
-        </p>
-        {failure && <Notice tone="danger">{failure}</Notice>}
-        <form
-          className="flex flex-col gap-4"
-          onSubmit={(event) => {
-            event.preventDefault()
-            void submit()
-          }}
-        >
-          <Field label="個人ログインID" htmlFor="reauth-user">
-            <TextInput
-              id="reauth-user"
-              ref={firstFieldRef}
-              className="min-h-12"
-              autoComplete="off"
-              value={userId}
-              onChange={(event) => setUserId(event.target.value)}
-            />
-          </Field>
-          <Field label="個人PIN" htmlFor="reauth-pin">
-            <TextInput
-              id="reauth-pin"
-              className="min-h-12"
-              type="password"
-              inputMode="numeric"
-              autoComplete="off"
-              value={pin}
-              onChange={(event) => setPin(event.target.value)}
-            />
-          </Field>
-          <div className="flex flex-wrap items-center gap-3">
-            <Button type="button" variant="danger" className="min-h-12" onClick={onCancelled}>
-              キャンセル
-            </Button>
-            <Button type="submit" className="ml-auto min-h-12" disabled={submitting}>
+      <p>
+        {`${actionLabel}は個人認証が必要です。共有端末と認証した個人の両方を監査記録に残します。`}
+      </p>
+      {failure && <FailureNotice>{failure}</FailureNotice>}
+      <form
+        className="mt-3 flex flex-col gap-3"
+        onSubmit={(event) => {
+          event.preventDefault()
+          void submit()
+        }}
+      >
+        <TextField
+          id="reauth-user"
+          label="個人ログインID"
+          ref={firstFieldRef}
+          autoComplete="off"
+          value={userId}
+          onChange={(event) => setUserId(event.target.value)}
+        />
+        <TextField
+          id="reauth-pin"
+          label="個人PIN"
+          type="password"
+          inputMode="numeric"
+          autoComplete="off"
+          value={pin}
+          onChange={(event) => setPin(event.target.value)}
+        />
+        {/* モックは見出し行と同じ形で、引き返す側が左・続ける側が右端。 */}
+        <TitleRow
+          gap={0}
+          push={
+            <Action
+              variant="primary"
+              inset="tight"
+              disabled={submitting}
+              onClick={() => {
+                void submit()
+              }}
+            >
               確認して続ける
-            </Button>
-          </div>
-        </form>
-      </Card>
-    </div>
+            </Action>
+          }
+        >
+          <Action inset="tight" onClick={onCancelled}>
+            キャンセル
+          </Action>
+        </TitleRow>
+      </form>
+    </Modal>
   )
 }

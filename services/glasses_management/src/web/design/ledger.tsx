@@ -22,25 +22,45 @@ import type { ReactNode } from 'react'
  * 「1 日が 1 画面に収まる」という台帳の主題が崩れる。
  */
 
-type LedgerCell = {
+export type LedgerCell = {
   /** 何列ぶんを占めるか。予約の長さがそのまま幅になる。 */
   span?: number
   tone?: 'plain' | 'appointment' | 'walkin'
   children?: ReactNode
 }
 
-export type LedgerLane = { name: string; cells: LedgerCell[] }
+export type LedgerLane = {
+  /** レーンの名前。既定ではこれがそのまま行見出しになる。 */
+  name: string
+  /**
+   * 並びの中でこの行を指す鍵。同じ担当者の予約が重なって行が 2 段になるとき、
+   * 名前だけでは 2 行を区別できないので、呼び出し側が段まで含めて渡す。
+   */
+  id?: string
+  /**
+   * 行見出しに描くもの。段が増えた 2 行目は空にする（モックは同じ名前を
+   * 繰り返さない）。省くと `name` を描く。
+   */
+  label?: ReactNode
+  cells: LedgerCell[]
+}
 
 export function LedgerGrid({
   columns,
   lanes,
   now,
+  heading = '担当者',
 }: {
   /** 見出し行の時刻。`担当者` の列はこの左に自動で付く。 */
   columns: string[]
   lanes: LedgerLane[]
   /** 現在時刻の線。`ratio` は時間軸の左端からの割合。 */
   now?: { label: string; ratio: number }
+  /**
+   * レーン列の見出し。モックは `担当者` の一語だが、実アプリはこのセル自身が
+   * 担当者軸と設備軸の切り替えを兼ねる（段を 1 つも増やさないため）。
+   */
+  heading?: ReactNode
 }) {
   return (
     /*
@@ -59,6 +79,8 @@ export function LedgerGrid({
       {now && (
         <div
           aria-hidden="true"
+          // 現在線そのものを指せる印。読み上げにも画素にも影響しない。
+          data-now-line
           className="absolute z-4 border-danger border-l-3"
           style={{
             left: `calc(180px + (100% - 180px) * ${now.ratio})`,
@@ -78,7 +100,7 @@ export function LedgerGrid({
         aria-colindex={1}
         className="min-h-10 border-line border-r border-b bg-grid-head p-2 font-bold"
       >
-        担当者
+        {heading}
       </div>
       {columns.map((column, index) => (
         <div
@@ -94,7 +116,7 @@ export function LedgerGrid({
         </div>
       ))}
       {lanes.map((lane, index) => (
-        <LaneRow key={lane.name} lane={lane} rowIndex={index + 2} />
+        <LaneRow key={lane.id ?? lane.name} lane={lane} rowIndex={index + 2} />
       ))}
     </div>
   )
@@ -112,7 +134,7 @@ function LaneRow({ lane, rowIndex }: { lane: LedgerLane; rowIndex: number }) {
         aria-colindex={1}
         className="min-h-18 border-line border-r border-b bg-surface p-2"
       >
-        {lane.name}
+        {lane.label ?? lane.name}
       </div>
       {lane.cells.map((cell, index) => {
         const span = cell.span && cell.span > 1 ? cell.span : 1
@@ -120,7 +142,7 @@ function LaneRow({ lane, rowIndex }: { lane: LedgerLane; rowIndex: number }) {
         return (
           <div
             // 同じレーンの中では位置が同一性なので、内容ではなく列番号で並べる。
-            key={`${lane.name}-${index}`}
+            key={`${lane.id ?? lane.name}-${index}`}
             role="gridcell"
             tabIndex={-1}
             aria-rowindex={rowIndex}
@@ -236,6 +258,8 @@ function JourneyCellView({
       tabIndex={-1}
       aria-rowindex={rowIndex}
       aria-colindex={colIndex}
+      // 次に手を動かす工程は、色だけでなく印としても取り出せるようにする。
+      data-next={cell.next === true ? 'true' : undefined}
       className={frame}
     >
       {body}

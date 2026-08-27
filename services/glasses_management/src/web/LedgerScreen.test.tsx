@@ -115,7 +115,7 @@ test('shows web, staff-taken and walk-in entries on one time axis with a text so
 
   await screen.findByText('田中 花子')
   expect(api).toHaveBeenCalledWith(`/api/staff/stores/${STORE_ID}/ledger?date=${DATE}`)
-  const ledger = screen.getByRole('table', { name: '予約台帳' })
+  const ledger = screen.getByRole('grid', { name: '予約台帳' })
   // 予約元は色ではなく文字で読める。セルはモックどおり「目的 · 予約元」の 1 行。
   expect(within(ledger).getByText('視力測定 · 店頭・電話')).toBeInTheDocument()
   expect(within(ledger).getByText('ウォークイン 3')).toBeInTheDocument()
@@ -126,7 +126,7 @@ test('heads the time axis with the mock’s 30-minute columns (LEDGER-DAY)', asy
   const api = mockApi(() => json([reservation()]))
   renderLedger(api)
 
-  const ledger = await screen.findByRole('table', { name: '予約台帳' })
+  const ledger = await screen.findByRole('grid', { name: '予約台帳' })
   const headers = within(ledger).getAllByRole('columnheader')
   expect(headers[0]).toHaveTextContent('担当者')
   expect(headers.slice(1, 8).map((cell) => cell.textContent)).toEqual([
@@ -144,7 +144,7 @@ test('labels each lane with the staff member’s name and gives walk-ins their o
   const api = mockApi(() => json([reservation(), walkin()]))
   renderLedger(api)
 
-  const ledger = await screen.findByRole('table', { name: '予約台帳' })
+  const ledger = await screen.findByRole('grid', { name: '予約台帳' })
   expect(within(ledger).getByRole('rowheader', { name: '佐藤 美咲' })).toBeInTheDocument()
   expect(within(ledger).getByRole('rowheader', { name: 'ウォークイン' })).toBeInTheDocument()
   // A raw id is never shown to an operator.
@@ -201,7 +201,7 @@ test('opens an entry detail beside the ledger without hiding it (UC-EYEX-046)', 
 
   const detail = screen.getByRole('region', { name: '選択中の予約' })
   expect(within(detail).getByText('測定機Aへご案内')).toBeInTheDocument()
-  expect(screen.getByRole('table', { name: '予約台帳' })).toBeInTheDocument()
+  expect(screen.getByRole('grid', { name: '予約台帳' })).toBeInTheDocument()
 })
 
 /*
@@ -213,7 +213,7 @@ test('shows a received walk-in with no customer record, waiting (UC-EYEX-047, AC
   const api = mockApi(() => json([walkin()]))
   renderLedger(api)
 
-  const ledger = await screen.findByRole('table', { name: '予約台帳' })
+  const ledger = await screen.findByRole('grid', { name: '予約台帳' })
   expect(within(ledger).getByText('ウォークイン 3')).toBeInTheDocument()
   expect(within(ledger).getByText('顧客未登録')).toBeInTheDocument()
 
@@ -342,7 +342,7 @@ test('keeps a departed, still unlinked walk-in on the ledger (UC-EYEX-050, AC-EY
       }),
     ),
   )
-  const ledger = await screen.findByRole('table', { name: '予約台帳' })
+  const ledger = await screen.findByRole('grid', { name: '予約台帳' })
   expect(within(ledger).getByText('ウォークイン 3')).toBeInTheDocument()
   expect(within(ledger).getByText('顧客未登録')).toBeInTheDocument()
   // 退店したことは、セルではなく選択中の右パネルが名乗る。

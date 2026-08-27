@@ -13,8 +13,11 @@ import type { StaffLocation } from './staff-navigation'
 type BarTab = { label: string; to: StaffLocation }
 
 export type BarSpec = {
-  /** `home` だけが お知らせ / アラート / 設定 の 3 つを出す。 */
-  kind: 'home' | 'business' | 'plain'
+  /**
+   * `home` だけが お知らせ / アラート / 設定 の 3 つを出す。`admin` は設定と
+   * 運用の面で、タブの並びは同じでも読み上げる名前が業務の面と違う。
+   */
+  kind: 'home' | 'business' | 'admin' | 'plain'
   /** ワードマークの 2 行目。 */
   subtitle: string
   tabs: BarTab[]
@@ -54,7 +57,23 @@ export function barFor(
     case 'booking':
       return { kind: 'plain', subtitle: `${name} · 新規予約`, tabs: [] }
     case 'settings':
-      return { kind: 'plain', subtitle: `${name} · 設定ガイド`, tabs: [] }
+      /*
+       * 承認済みモックが 2 つあり、バーの中身が食い違っている。
+       * `settings-complete-approved.html` はワードマークだけ、
+       * `settings-approved.html` は `設定ガイド / 設定一覧 / 変更履歴` の 3 つ。
+       * 操作を 1 つも持たない側を採ると、ガイドに入った利用者が出られなくなる
+       * （2 本目の帯を作らない以上、他の入口はここにしかない）ので、タブを持つ
+       * 側に従う。運用系の 8 つの入口は `設定一覧` の先にある。
+       */
+      return {
+        kind: 'admin',
+        subtitle: `${name} · 設定ガイド`,
+        tabs: [
+          tab('設定ガイド', { screen: 'settings' }),
+          tab('設定一覧', { screen: 'shared-terminals' }),
+          tab('変更履歴', { screen: 'audit' }),
+        ],
+      }
     case 'ledger':
       return {
         kind: 'business',
@@ -109,11 +128,11 @@ export function barFor(
 
   if (OPERATION_SCREENS.has(location.screen))
     return {
-      kind: 'business',
+      kind: 'admin',
       subtitle: `${name} · 設定`,
       tabs: [
         tab('端末とセキュリティ', { screen: 'shared-terminals' }),
-        tab('利用者とロール', { screen: 'settings' }),
+        tab('利用者とロール', { screen: 'attention-settings' }),
         tab('監査ログ', { screen: 'audit' }),
       ],
     }

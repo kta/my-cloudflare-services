@@ -14,6 +14,18 @@ import type {
 } from '@app/contracts'
 import { useEffect, useState } from 'react'
 import {
+  PhoneBody,
+  PhoneButton,
+  PhoneCard,
+  PhoneField,
+  PhoneHead,
+  PhoneInput,
+  PhoneOption,
+  PhonePrimary,
+  PhoneScreen,
+  PhoneSummary,
+} from './design/phone'
+import {
   createPublicBookingDraft,
   type PublicBookingDraft,
   publicBookingReducer,
@@ -78,6 +90,14 @@ function japaneseMonthDay(date: string): string {
   return `${Number(month)}月${Number(day)}日（${weekday}）`
 }
 
+/**
+ * 承認済みモックの「8月28日（金）11:00」。閉じ括弧が既に区切りとして働くので、
+ * 日と時刻のあいだに空白を挟まない。
+ */
+function japaneseSlotLabel(date: string, startTime: string): string {
+  return `${japaneseMonthDay(date)}${startTime}`
+}
+
 function managementCodeErrorMessage(cause: unknown): string {
   if (
     !(cause instanceof PublicBookingRequestError) ||
@@ -98,31 +118,9 @@ function managementCodeErrorMessage(cause: unknown): string {
   return '管理コードを確認できませんでした。メールに記載されたコードをご確認ください。'
 }
 
-/** 顧客フローの緑のヘッダー。工程 1〜5 は同じ帯の中に 5 本の線で出す。 */
-function Head({ title, step }: { title: string; step?: 1 | 2 | 3 | 4 | 5 }) {
-  return (
-    <header className="-mx-5 -mt-5 bg-pine px-5 py-5 text-on-pine">
-      <h1 className="font-display font-semibold text-xl">EYEX予約</h1>
-      <p className="text-sm">{title}</p>
-      {step !== undefined && (
-        <div
-          aria-label={`予約工程 ${step} / 5`}
-          aria-valuemax={5}
-          aria-valuemin={1}
-          aria-valuenow={step}
-          className="mt-3 flex gap-1"
-          role="progressbar"
-        >
-          {[1, 2, 3, 4, 5].map((index) => (
-            <span
-              key={index}
-              className={`h-1 flex-1 ${index <= step ? 'bg-on-pine' : 'bg-on-pine/30'}`}
-            />
-          ))}
-        </div>
-      )}
-    </header>
-  )
+/** 5 工程の帯。実アプリでは工程が動くので、目盛りに読み上げ用の名前を持たせる。 */
+function bookingProgress(step: 1 | 2 | 3 | 4 | 5) {
+  return { current: step, total: 5, label: `予約工程 ${step} / 5` }
 }
 
 export function PublicBooking({
@@ -345,302 +343,263 @@ export function PublicBooking({
       setManagementError('予約を変更できませんでした。別の時間を選ぶか、確認し直してください。')
     }
   }
-
   if (loading)
     return (
-      <main className="min-h-dvh bg-paper p-5 text-ink" aria-busy="true">
-        店舗を読み込んでいます。
-      </main>
+      <PhoneScreen>
+        <PhoneHead store="店舗を探す" />
+        <PhoneBody>
+          <p aria-busy="true">店舗を読み込んでいます。</p>
+        </PhoneBody>
+      </PhoneScreen>
     )
   if (error && draft.step === 'store')
     return (
-      <main className="min-h-dvh bg-paper p-5 text-ink" role="alert">
-        {error}
-      </main>
+      <PhoneScreen>
+        <PhoneHead store="店舗を探す" />
+        <PhoneBody>
+          <h1>予約する店舗を探す</h1>
+          <PhoneCard tone="error">
+            <p role="alert">{error}</p>
+          </PhoneCard>
+        </PhoneBody>
+      </PhoneScreen>
     )
 
   if (managementMode === 'identity') {
     return (
-      <main className="min-h-dvh bg-paper p-5 text-ink">
-        <Head title={'予約の変更・取消'} />
-        <section className="mx-auto max-w-md py-7">
-          <h2 className="font-display text-3xl font-semibold">本人確認コードを入力</h2>
-          <p className="mt-3 text-sm text-ink-muted">
-            予約完了メールに記載された、会社発行の管理コードを入力してください。
-          </p>
-          <label
-            className="mt-5 block font-semibold"
-            htmlFor="public-management-reservation-number"
-          >
-            予約番号
-            <input
-              id="public-management-reservation-number"
-              value={reservationNumber}
-              className="mt-2 min-h-12 w-full rounded-ctl border border-line bg-surface px-3 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber"
-              onChange={(event) => setReservationNumber(event.target.value)}
-            />
-          </label>
-          <label className="mt-4 block font-semibold" htmlFor="public-management-code">
-            会社発行の管理コード
-            <input
-              id="public-management-code"
-              value={managementCode}
-              className="mt-2 min-h-12 w-full rounded-ctl border border-line bg-surface px-3 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber"
-              onChange={(event) => setManagementCode(event.target.value)}
-            />
-          </label>
+      <PhoneScreen>
+        <PhoneHead store="予約の変更・取消" />
+        <PhoneBody>
+          <h1>本人確認コードを入力</h1>
+          <p>予約完了メールに記載された、会社発行の管理コードを入力してください。</p>
+          <PhoneField label="予約番号" value={reservationNumber} onChange={setReservationNumber} />
+          <PhoneField
+            label="会社発行の管理コード"
+            value={managementCode}
+            onChange={setManagementCode}
+          />
           {managementError && (
-            <p className="mt-4 text-danger" role="alert">
-              {managementError}
-            </p>
+            <PhoneCard tone="error">
+              <p role="alert">{managementError}</p>
+            </PhoneCard>
           )}
-          <button
-            type="button"
-            className="mt-6 min-h-12 w-full rounded-ctl bg-pine px-4 font-semibold text-surface focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber"
-            onClick={() => void verifyManagementCode()}
-          >
-            予約を表示する
-          </button>
-        </section>
-      </main>
+        </PhoneBody>
+        <PhonePrimary onClick={() => void verifyManagementCode()}>予約を表示する</PhonePrimary>
+      </PhoneScreen>
     )
   }
 
   if (managementMode === 'verified' && verifiedReservation) {
     return (
-      <main className="min-h-dvh bg-paper p-5 text-ink">
-        <Head title={'予約の変更・取消'} />
-        <section className="mx-auto max-w-md py-7">
-          <h2 className="font-display text-3xl font-semibold">予約内容を確認しました</h2>
-          <p className="mt-5 rounded-ctl bg-surface p-4">
+      <PhoneScreen>
+        <PhoneHead store="予約の変更・取消" />
+        <PhoneBody>
+          <h1>予約内容を確認しました</h1>
+          <PhoneSummary>
             予約番号 {reservationNumber}
             <br />
             予約日時 {verifiedReservation.startAt}
+          </PhoneSummary>
+          <p>
+            <small>
+              この確認は
+              {new Date(verifiedReservation.expiresAt).toLocaleTimeString('ja-JP', {
+                hour: '2-digit',
+                minute: '2-digit',
+              })}
+              まで有効です。
+            </small>
           </p>
-          <p className="mt-4 text-sm text-ink-muted">
-            この確認は
-            {new Date(verifiedReservation.expiresAt).toLocaleTimeString('ja-JP', {
-              hour: '2-digit',
-              minute: '2-digit',
-            })}
-            まで有効です。
-          </p>
-          {managementSuccess && (
-            <p className="mt-4 text-ink-muted" role="status">
-              {managementSuccess}
-            </p>
-          )}
+          {managementSuccess && <p role="status">{managementSuccess}</p>}
           {managementError && (
-            <p className="mt-4 text-danger" role="alert">
-              {managementError}
-            </p>
+            <PhoneCard tone="error">
+              <p role="alert">{managementError}</p>
+            </PhoneCard>
           )}
-          <button
-            type="button"
-            className="mt-6 min-h-12 w-full rounded-ctl border border-line bg-surface px-4 font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber"
-            onClick={() => {
-              setManagementError(undefined)
-              setManagementSuccess(undefined)
-              setChangeSlots([])
-              setManagementMode('change')
-            }}
-          >
-            予約日時を変更する
-          </button>
-          <button
-            type="button"
-            className="mt-4 min-h-12 w-full rounded-ctl border border-danger bg-surface px-4 font-semibold text-danger focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber"
-            onClick={() => void cancelVerifiedReservation()}
-          >
-            予約を取り消す
-          </button>
-        </section>
-      </main>
+          {/* 取り消しは取り返しがつかないので、下端の主操作には置かない。 */}
+          <PhoneButton onClick={() => void cancelVerifiedReservation()}>予約を取り消す</PhoneButton>
+        </PhoneBody>
+        <PhonePrimary
+          onClick={() => {
+            setManagementError(undefined)
+            setManagementSuccess(undefined)
+            setChangeSlots([])
+            setManagementMode('change')
+          }}
+        >
+          予約日時を変更する
+        </PhonePrimary>
+      </PhoneScreen>
     )
   }
 
   if (managementMode === 'change' && verifiedReservation)
     return (
-      <main className="min-h-dvh bg-paper p-5 text-ink">
-        <Head title={'予約日時の変更'} />
-        <section className="mx-auto max-w-md py-7">
-          <h2 className="font-display text-3xl font-semibold">変更後の日時を選ぶ</h2>
-          <label className="mt-5 block font-semibold" htmlFor="public-change-date">
-            変更後の日
-            <input
-              id="public-change-date"
-              type="date"
-              value={changeDate}
-              className="mt-2 min-h-12 w-full rounded-ctl border border-line bg-surface px-3 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber"
-              onChange={(event) => void loadChangeSlots(event.target.value)}
-            />
-          </label>
+      <PhoneScreen>
+        <PhoneHead store="予約日時の変更" />
+        <PhoneBody>
+          <h1>変更後の日時を選ぶ</h1>
+          <PhoneField
+            label="変更後の日"
+            type="date"
+            value={changeDate}
+            onChange={(next) => void loadChangeSlots(next)}
+          />
           {managementError && (
-            <p className="mt-4 text-danger" role="alert">
-              {managementError}
-            </p>
+            <PhoneCard tone="error">
+              <p role="alert">{managementError}</p>
+            </PhoneCard>
           )}
-          <ul className="mt-5 space-y-3">
-            {changeSlots.map((slot) => (
-              <li key={slot.startAt}>
-                <button
-                  type="button"
-                  className="min-h-12 w-full rounded-ctl border border-line bg-surface p-4 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber"
-                  onClick={() => void changeVerifiedReservation(slot.date, slot.startTime)}
-                >
-                  {japaneseMonthDay(slot.date)} {slot.startTime}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </section>
-      </main>
+          {changeSlots.map((slot) => (
+            <PhoneOption
+              key={slot.startAt}
+              onClick={() => void changeVerifiedReservation(slot.date, slot.startTime)}
+            >
+              {japaneseSlotLabel(slot.date, slot.startTime)}
+            </PhoneOption>
+          ))}
+        </PhoneBody>
+      </PhoneScreen>
     )
 
   if (managementMode === 'cancelled')
     return (
-      <main className="min-h-dvh bg-paper p-5 text-ink">
-        <section className="mx-auto max-w-md py-20 text-center">
-          <h2 className="font-display text-3xl font-semibold">予約を取り消しました</h2>
-          <p className="mt-5 text-ink-muted">取消内容はメールでもお知らせします。</p>
-        </section>
-      </main>
+      <PhoneScreen>
+        <PhoneHead store="予約の変更・取消" />
+        <PhoneBody centered>
+          <h1>予約を取り消しました</h1>
+          <p>取消内容はメールでもお知らせします。</p>
+        </PhoneBody>
+      </PhoneScreen>
     )
 
   if (draft.step === 'unknown') {
     return (
-      <main className="min-h-dvh bg-paper p-5 text-ink">
-        <Head title={'予約状況の確認'} />
-        <section className="mx-auto max-w-md py-7">
-          <h2 className="font-display text-3xl font-semibold">予約結果を確認しています</h2>
-          <div className="mt-5 rounded-ctl border border-amber bg-amber-soft p-4">
-            <p className="font-semibold">通信が途中で切れました</p>
-            <p>もう一度予約ボタンを押さず、この画面で成立状況を確認してください。</p>
-          </div>
-          {draft.confirmationKey && (
-            <p className="mt-4 rounded-ctl bg-surface p-4 text-sm">
-              照会番号 {draft.confirmationKey}
-            </p>
-          )}
-          {unknownMessage && (
-            <p className="mt-4 text-ink-muted" role="status">
-              {unknownMessage}
-            </p>
-          )}
-          <button
-            type="button"
-            className="mt-6 min-h-12 w-full rounded-ctl bg-pine px-4 font-semibold text-surface focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber"
-            onClick={() => void resolveUnknownResult()}
-          >
-            成立状況を再確認する
-          </button>
-        </section>
-      </main>
+      <PhoneScreen>
+        <PhoneHead store="予約状況の確認" />
+        <PhoneBody>
+          <h1>予約結果を確認しています</h1>
+          {/* 読み上げでは見出しだけでは「今どうなっているか」が伝わらない。 */}
+          <p role="status" aria-live="polite" className="sr-only">
+            予約結果を確認しています
+          </p>
+          <PhoneCard tone="error">
+            <b>通信が途中で切れました</b>
+            <br />
+            もう一度予約ボタンを押さず、この画面で成立状況を確認してください。
+          </PhoneCard>
+          {/*
+           * 照会番号（＝送信に使った冪等キー）はここに出さない。顧客が控える意味が
+           * 無いうえ、他人に読み上げられると同じ鍵で成立状況を引かれてしまう。
+           */}
+          {unknownMessage && <p role="status">{unknownMessage}</p>}
+        </PhoneBody>
+        <PhonePrimary onClick={() => void resolveUnknownResult()}>
+          成立状況を再確認する
+        </PhonePrimary>
+      </PhoneScreen>
     )
   }
 
   if (draft.step === 'complete' && detail) {
     const recovered = !booking
     return (
-      <main className="min-h-dvh bg-paper p-5 text-ink">
-        <Head title={detail.name} step={5} />
-        <section className="mx-auto max-w-md py-20 text-center">
-          <p aria-hidden="true" className="font-display text-6xl text-pine">
+      <PhoneScreen>
+        <PhoneHead store={detail.name} progress={bookingProgress(5)} />
+        <PhoneBody centered>
+          {/* ✓ は和文書体が持たない記号なので、モックと同じ代替書体へ落とす。 */}
+          <strong aria-hidden="true" className="font-glyph text-glyph text-pine">
             ✓
-          </p>
-          <h2 className="mt-4 font-display text-3xl font-semibold">
-            {recovered ? '予約の成立を確認しました' : '予約を承りました'}
-          </h2>
-          <p className="mt-5 rounded-ctl bg-surface p-4">
+          </strong>
+          <h1>{recovered ? '予約の成立を確認しました' : '予約を承りました'}</h1>
+          <PhoneSummary>
             {booking ? (
               <>
                 予約番号 {booking.reservationNumber}
                 <br />
               </>
             ) : (
-              '予約の詳細はメールをご確認ください。'
+              <>
+                予約の詳細はメールをご確認ください。
+                <br />
+              </>
             )}
-            {draft.date && japaneseMonthDay(draft.date)} {draft.startTime}
+            {draft.date && draft.startTime && japaneseSlotLabel(draft.date, draft.startTime)}
             <br />
             {detail.name}
             <br />
             お問い合わせ {detail.contactPhone}
+          </PhoneSummary>
+          <PhoneButton onClick={openManagement}>予約を変更・取り消す</PhoneButton>
+          <p>
+            <small>変更・取消は、会社発行の管理コードで行えます。</small>
           </p>
-          <button
-            type="button"
-            className="mt-6 min-h-12 rounded-ctl border border-line bg-surface px-4 font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber"
-            onClick={openManagement}
-          >
-            予約を変更・取り消す
-          </button>
-          <p className="mt-4 text-sm text-ink-muted">
-            変更・取消は、会社発行の管理コードで行えます。
-          </p>
-        </section>
-      </main>
+        </PhoneBody>
+      </PhoneScreen>
     )
   }
 
   if (draft.step === 'store') {
     return (
-      <main className="min-h-dvh bg-paper p-5 text-ink">
-        <Head title={'店舗を探す'} />
-        <section className="mx-auto max-w-md py-7">
-          <h2 className="font-display text-3xl font-semibold">予約する店舗を探す</h2>
-          <p className="mt-2 text-sm text-ink-muted">
-            地域、駅名、店舗名から予約店舗を選択してください。
-          </p>
-          <label className="mt-5 block font-semibold" htmlFor="public-store-query">
-            店舗を検索
-            <input
-              id="public-store-query"
-              value={storeQuery}
-              className="mt-2 min-h-12 w-full rounded-ctl border border-line bg-surface px-3 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber"
-              placeholder="現在地・駅名・店舗名・地域"
-              onChange={(event) => setStoreQuery(event.target.value)}
-            />
-          </label>
+      <PhoneScreen>
+        <PhoneHead store="店舗を探す" />
+        <PhoneBody>
+          <h1>予約する店舗を探す</h1>
+          <PhoneInput
+            label="店舗を検索"
+            placeholder="現在地・駅名・店舗名・地域"
+            value={storeQuery}
+            onChange={setStoreQuery}
+          />
           {stores.length === 0 ? (
-            <p className="mt-5 rounded-ctl bg-surface p-4" role="status">
-              現在、Web予約を受け付けている店舗はありません。
-            </p>
+            <PhoneCard>
+              <p role="status">現在、Web予約を受け付けている店舗はありません。</p>
+            </PhoneCard>
           ) : matchingStores.length === 0 ? (
-            <p className="mt-5 rounded-ctl bg-surface p-4" role="status">
-              該当する店舗が見つかりません。駅名・店舗名・地域を変えてお試しください。
-            </p>
+            <PhoneCard>
+              <p role="status">
+                該当する店舗が見つかりません。駅名・店舗名・地域を変えてお試しください。
+              </p>
+            </PhoneCard>
           ) : (
-            <ul className="mt-5 space-y-3">
-              {matchingStores.map((store) => (
-                <li key={store.slug}>
-                  <button
-                    type="button"
-                    className="min-h-12 w-full rounded-ctl border border-line bg-surface p-4 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber"
-                    onClick={() => void selectStore(store)}
-                  >
-                    <span className="block font-semibold">{store.name}</span>
-                    <span className="mt-1 block text-sm text-ink-muted">
-                      {store.nearestStation} · {store.region}
-                    </span>
-                    <span className="mt-3 block font-semibold text-pine text-sm">
-                      店舗情報を見る
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
+            matchingStores.map((store) => (
+              <PhoneCard key={store.slug}>
+                <b>{store.name}</b>
+                <br />
+                {store.accessText === ''
+                  ? `${store.nearestStation} · ${store.region}`
+                  : store.accessText}
+                <br />
+                {store.todayBusinessHours !== null && (
+                  <>
+                    本日営業 {store.todayBusinessHours}
+                    <br />
+                  </>
+                )}
+                {/* 同じ文言の操作が店の数だけ並ぶので、読み上げ名に店名を含める。 */}
+                <PhoneButton
+                  label={`${store.name}の店舗情報を見る`}
+                  onClick={() => void selectStore(store)}
+                >
+                  店舗情報を見る
+                </PhoneButton>
+              </PhoneCard>
+            ))
           )}
-        </section>
-      </main>
+        </PhoneBody>
+      </PhoneScreen>
     )
   }
 
   if (draft.step === 'store_detail' && detail) {
+    const services =
+      detail.services.length > 0 ? detail.services : detail.purposes.map((purpose) => purpose.label)
     return (
-      <main className="min-h-dvh bg-paper p-5 text-ink">
-        <Head title={detail.name} />
-        <section className="mx-auto max-w-md py-7">
-          <h2 className="font-display text-3xl font-semibold">{detail.name}</h2>
-          <p className="mt-4 rounded-ctl bg-surface p-4 text-sm">
+      <PhoneScreen>
+        <PhoneHead store={detail.name} />
+        <PhoneBody>
+          <h1>{detail.name}</h1>
+          <PhoneSummary>
             営業時間 {businessHoursLabel(detail)}
             <br />
             {detail.accessText}
@@ -648,224 +607,174 @@ export function PublicBooking({
             {detail.contactPhone}
             <br />
             {detail.notice}
-          </p>
-          <h3 className="mt-5 font-display font-semibold text-lg">対応サービス</h3>
-          <p className="mt-2 text-sm">
-            {detail.purposes.map((purpose) => purpose.label).join('、')}
-          </p>
-          <button
-            type="button"
-            className="mt-6 min-h-12 w-full rounded-ctl bg-pine px-4 font-semibold text-surface focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber"
-            onClick={() =>
-              setDraft((current) => publicBookingReducer(current, { type: 'booking_started' }))
-            }
-          >
-            {detail.name}で予約を始める
-          </button>
-        </section>
-      </main>
+          </PhoneSummary>
+          <h2>対応サービス</h2>
+          <p>{services.join('、')}</p>
+        </PhoneBody>
+        <PhonePrimary
+          onClick={() =>
+            setDraft((current) => publicBookingReducer(current, { type: 'booking_started' }))
+          }
+        >
+          {detail.name}で予約を始める
+        </PhonePrimary>
+      </PhoneScreen>
     )
   }
 
   if (draft.step === 'purpose' && detail) {
     return (
-      <main className="min-h-dvh bg-paper p-5 text-ink">
-        <Head title={detail.name} step={1} />
-        <section className="mx-auto max-w-md py-7">
-          <p className="text-sm text-ink-muted">1 / 5　来店目的</p>
-          <h2 className="mt-2 font-display text-3xl font-semibold">
-            今回はどのようなご相談ですか？
-          </h2>
-          <ul className="mt-5 space-y-3">
-            {detail.purposes.map((purpose) => (
-              <li key={purpose.id}>
-                <button
-                  type="button"
-                  aria-pressed={pendingPurposeId === purpose.id}
-                  className={`min-h-12 w-full rounded-ctl p-4 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus ${
-                    pendingPurposeId === purpose.id
-                      ? 'border-2 border-pine bg-pine-soft'
-                      : 'border border-line bg-surface'
-                  }`}
-                  onClick={() => setPendingPurposeId(purpose.id)}
-                >
-                  <span className="block font-semibold">{purpose.label}</span>
-                  <span className="mt-1 block text-ink-muted text-sm">
-                    約{purpose.durationMinutes}分
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-          <button
-            type="button"
-            disabled={pendingPurposeId === undefined}
-            className="mt-6 min-h-12 w-full rounded-ctl bg-pine px-4 font-semibold text-on-pine focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus disabled:opacity-50"
-            onClick={() => {
-              if (pendingPurposeId === undefined) return
-              setDraft((current) =>
-                publicBookingReducer(current, {
-                  type: 'purposes_selected',
-                  purposeIds: [pendingPurposeId],
-                }),
-              )
-            }}
-          >
-            日時へ進む
-          </button>
-        </section>
-      </main>
+      <PhoneScreen>
+        <PhoneHead store={detail.name} progress={bookingProgress(1)} />
+        <PhoneBody>
+          <small>1 / 5　来店目的</small>
+          <h1>今回はどのようなご相談ですか？</h1>
+          {detail.purposes.map((purpose) => (
+            <PhoneOption
+              key={purpose.id}
+              selected={pendingPurposeId === purpose.id}
+              onClick={() => setPendingPurposeId(purpose.id)}
+            >
+              <b>{purpose.label}</b>
+              <br />約{purpose.durationMinutes}分
+            </PhoneOption>
+          ))}
+        </PhoneBody>
+        <PhonePrimary
+          disabled={pendingPurposeId === undefined}
+          onClick={() => {
+            if (pendingPurposeId === undefined) return
+            setDraft((current) =>
+              publicBookingReducer(current, {
+                type: 'purposes_selected',
+                purposeIds: [pendingPurposeId],
+              }),
+            )
+          }}
+        >
+          日時へ進む
+        </PhonePrimary>
+      </PhoneScreen>
     )
   }
 
   if (draft.step === 'datetime' && detail) {
     return (
-      <main className="min-h-dvh bg-paper p-5 text-ink">
-        <Head title={detail.name} step={2} />
-        <section className="mx-auto max-w-md py-7">
-          <p className="text-sm text-ink-muted">2 / 5　日時</p>
-          <h2 className="mt-2 font-display text-3xl font-semibold">ご希望の日時を選んでください</h2>
+      <PhoneScreen>
+        <PhoneHead store={detail.name} progress={bookingProgress(2)} />
+        <PhoneBody>
+          <small>2 / 5　日時</small>
+          <h1>ご希望の日時を選んでください</h1>
           {selectedPurpose && (
-            <p className="mt-4 rounded-ctl bg-surface p-4 text-sm">
+            <PhoneSummary>
               {selectedPurpose.label} · 約{selectedPurpose.durationMinutes}分
-            </p>
+            </PhoneSummary>
           )}
-          <label className="mt-5 block font-semibold" htmlFor="public-booking-date">
-            ご希望の日
-            <input
-              id="public-booking-date"
-              type="date"
-              value={slotDate}
-              className="mt-2 min-h-12 w-full rounded-ctl border border-line bg-surface px-3 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber"
-              onChange={(event) => void loadSlots(event.target.value)}
-            />
-          </label>
+          <PhoneField
+            label="ご希望の日"
+            type="date"
+            value={slotDate}
+            onChange={(next) => void loadSlots(next)}
+          />
           {draft.error === 'slot_unavailable' && (
-            <p role="alert" className="mt-4 text-danger">
-              選択した時間は他のお客様の予約で埋まりました。別の時間を選んでください。
-            </p>
+            <PhoneCard tone="error">
+              <p role="alert">
+                選択した時間は他のお客様の予約で埋まりました。別の時間を選んでください。
+              </p>
+            </PhoneCard>
           )}
           {error && (
-            <p role="alert" className="mt-4 text-danger">
-              {error}
-            </p>
+            <PhoneCard tone="error">
+              <p role="alert">{error}</p>
+            </PhoneCard>
           )}
-          <ul className="mt-5 space-y-3">
-            {slots.map((slot) => (
-              <li key={slot.startAt}>
-                <button
-                  type="button"
-                  aria-pressed={pendingSlot?.startAt === slot.startAt}
-                  className={`min-h-12 w-full rounded-ctl p-4 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus ${
-                    pendingSlot?.startAt === slot.startAt
-                      ? 'border-2 border-pine bg-pine-soft'
-                      : 'border border-line bg-surface'
-                  }`}
-                  onClick={() =>
-                    setPendingSlot({
-                      startAt: slot.startAt,
-                      date: slot.date,
-                      startTime: slot.startTime,
-                    })
-                  }
-                >
-                  {japaneseMonthDay(slot.date)} {slot.startTime}
-                </button>
-              </li>
-            ))}
-          </ul>
-          <button
-            type="button"
-            disabled={pendingSlot === undefined}
-            className="mt-6 min-h-12 w-full rounded-ctl bg-pine px-4 font-semibold text-on-pine focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus disabled:opacity-50"
-            onClick={() => {
-              if (pendingSlot === undefined) return
-              setDraft((current) =>
-                publicBookingReducer(current, {
-                  type: 'slot_selected',
-                  date: pendingSlot.date,
-                  startTime: pendingSlot.startTime,
-                }),
-              )
-            }}
-          >
-            お客様情報へ進む
-          </button>
-        </section>
-      </main>
+          {slotDate !== '' && slots.length === 0 && error === undefined && (
+            <PhoneCard>
+              <p role="status">この日に空きはありません。別の日をお選びください。</p>
+            </PhoneCard>
+          )}
+          {slots.map((slot) => (
+            <PhoneOption
+              key={slot.startAt}
+              selected={pendingSlot?.startAt === slot.startAt}
+              onClick={() =>
+                setPendingSlot({
+                  startAt: slot.startAt,
+                  date: slot.date,
+                  startTime: slot.startTime,
+                })
+              }
+            >
+              {japaneseSlotLabel(slot.date, slot.startTime)}
+            </PhoneOption>
+          ))}
+        </PhoneBody>
+        <PhonePrimary
+          disabled={pendingSlot === undefined}
+          onClick={() => {
+            if (pendingSlot === undefined) return
+            setDraft((current) =>
+              publicBookingReducer(current, {
+                type: 'slot_selected',
+                date: pendingSlot.date,
+                startTime: pendingSlot.startTime,
+              }),
+            )
+          }}
+        >
+          お客様情報へ進む
+        </PhonePrimary>
+      </PhoneScreen>
     )
   }
 
   if (draft.step === 'customer' && detail) {
     return (
-      <main className="min-h-dvh bg-paper p-5 text-ink">
-        <Head title={detail.name} step={3} />
-        <section className="mx-auto max-w-md py-7">
-          <p className="text-sm text-ink-muted">3 / 5　お客様情報</p>
-          <h2 className="mt-2 font-display text-3xl font-semibold">ご連絡先を入力してください</h2>
-          <div className="mt-5 space-y-4">
-            <label className="block font-semibold" htmlFor="public-customer-name">
-              お名前
-              <input
-                id="public-customer-name"
-                value={customer.name}
-                className="mt-2 min-h-12 w-full rounded-ctl border border-line bg-surface px-3"
-                onChange={(event) => setCustomer({ ...customer, name: event.target.value })}
-              />
-            </label>
-            <label className="block font-semibold" htmlFor="public-customer-kana">
-              お名前（かな）
-              <input
-                id="public-customer-kana"
-                value={customer.kana}
-                className="mt-2 min-h-12 w-full rounded-ctl border border-line bg-surface px-3"
-                onChange={(event) => setCustomer({ ...customer, kana: event.target.value })}
-              />
-            </label>
-            <label className="block font-semibold" htmlFor="public-customer-phone">
-              電話番号
-              <input
-                id="public-customer-phone"
-                inputMode="tel"
-                value={customer.phone}
-                className="mt-2 min-h-12 w-full rounded-ctl border border-line bg-surface px-3"
-                onChange={(event) => setCustomer({ ...customer, phone: event.target.value })}
-              />
-            </label>
-            <label className="block font-semibold" htmlFor="public-customer-email">
-              メールアドレス
-              <input
-                id="public-customer-email"
-                type="email"
-                value={customer.email ?? ''}
-                className="mt-2 min-h-12 w-full rounded-ctl border border-line bg-surface px-3"
-                onChange={(event) => setCustomer({ ...customer, email: event.target.value })}
-              />
-            </label>
-          </div>
-          <button
-            type="button"
-            className="mt-6 min-h-12 w-full rounded-ctl bg-pine px-4 font-semibold text-on-pine"
-            onClick={confirmCustomer}
-          >
-            確認へ進む
-          </button>
-        </section>
-      </main>
+      <PhoneScreen>
+        <PhoneHead store={detail.name} progress={bookingProgress(3)} />
+        <PhoneBody>
+          <small>3 / 5　お客様情報</small>
+          <h1>ご連絡先を入力してください</h1>
+          <PhoneField
+            label="お名前"
+            value={customer.name}
+            onChange={(name) => setCustomer({ ...customer, name })}
+          />
+          <PhoneField
+            label="お名前（かな）"
+            value={customer.kana}
+            onChange={(kana) => setCustomer({ ...customer, kana })}
+          />
+          <PhoneField
+            label="電話番号"
+            inputMode="tel"
+            value={customer.phone}
+            onChange={(phone) => setCustomer({ ...customer, phone })}
+          />
+          <PhoneField
+            label="メールアドレス"
+            type="email"
+            inputMode="email"
+            value={customer.email ?? ''}
+            onChange={(email) => setCustomer({ ...customer, email })}
+          />
+        </PhoneBody>
+        <PhonePrimary onClick={confirmCustomer}>確認へ進む</PhonePrimary>
+      </PhoneScreen>
     )
   }
 
   if (draft.step === 'confirm' && detail && draft.customer) {
     return (
-      <main className="min-h-dvh bg-paper p-5 text-ink">
-        <Head title={detail.name} step={4} />
-        <section className="mx-auto max-w-md py-7">
-          <p className="text-sm text-ink-muted">4 / 5　確認</p>
-          <h2 className="mt-2 font-display text-3xl font-semibold">予約内容をご確認ください</h2>
-          <p className="mt-5 rounded-ctl bg-surface p-4">
+      <PhoneScreen>
+        <PhoneHead store={detail.name} progress={bookingProgress(4)} />
+        <PhoneBody>
+          <small>4 / 5　確認</small>
+          <h1>予約内容をご確認ください</h1>
+          <PhoneSummary>
             {detail.name}
             <br />
-            {draft.date && japaneseMonthDay(draft.date)} {draft.startTime}
+            {draft.date && draft.startTime && japaneseSlotLabel(draft.date, draft.startTime)}
             <br />
             {selectedPurpose?.label} · 約{selectedPurpose?.durationMinutes}分<br />
             {draft.customer.name}
@@ -873,30 +782,25 @@ export function PublicBooking({
             {draft.customer.phone}
             <br />
             {detail.notice}
-          </p>
-          <p className="mt-4 rounded-ctl border border-line bg-surface p-4 text-sm">
-            変更・取消期限と店舗からのご案内を確認しました。
-          </p>
+          </PhoneSummary>
+          <PhoneCard>変更・取消期限と店舗からのご案内を確認しました。</PhoneCard>
           {error && (
-            <p role="alert" className="mt-4 text-danger">
-              {error}
-            </p>
+            <PhoneCard tone="error">
+              <p role="alert">{error}</p>
+            </PhoneCard>
           )}
-          <button
-            type="button"
-            className="mt-6 min-h-12 w-full rounded-ctl bg-pine px-4 font-semibold text-surface"
-            onClick={() => void submitBooking()}
-          >
-            この内容で予約する
-          </button>
-        </section>
-      </main>
+        </PhoneBody>
+        <PhonePrimary onClick={() => void submitBooking()}>この内容で予約する</PhonePrimary>
+      </PhoneScreen>
     )
   }
 
   return (
-    <main className="min-h-dvh bg-paper p-5 text-ink">
-      <p>予約情報を準備しています。</p>
-    </main>
+    <PhoneScreen>
+      <PhoneHead store="店舗を探す" />
+      <PhoneBody>
+        <p>予約情報を準備しています。</p>
+      </PhoneBody>
+    </PhoneScreen>
   )
 }

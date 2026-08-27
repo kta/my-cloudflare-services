@@ -1,5 +1,6 @@
 import type { RecordingState } from '@app/contracts'
 import { Button, cn, focusRing } from '@app/ui'
+import { RecordIndicator } from './design/booking'
 import { RECORDING_STATE_LABEL } from './recording'
 
 export type MicrophonePermissionResult = 'granted' | 'denied'
@@ -37,18 +38,8 @@ function mmss(seconds: number): string {
 export function RecordingIndicator({ state, elapsedSeconds }: RecordingIndicatorProps) {
   const label = state === null ? '録音なし' : RECORDING_STATE_LABEL[state]
   const ticking = state === 'recording' && elapsedSeconds !== null
-  return (
-    <p
-      role="status"
-      aria-label="iPad録音"
-      data-testid="recording-state"
-      className="flex items-center justify-end gap-2 text-right font-bold font-mono text-base text-danger"
-    >
-      <span aria-hidden="true">●</span>
-      <span className="sr-only">{label}</span>
-      <span aria-hidden={ticking ? undefined : true}>{ticking ? mmss(elapsedSeconds) : label}</span>
-    </p>
-  )
+  // 見た目はモックの `.record` そのもの。ここは「何を出すか」だけを決める。
+  return <RecordIndicator label={label} elapsed={ticking ? mmss(elapsedSeconds) : undefined} />
 }
 
 /* ------------------------------------------------------------------ *

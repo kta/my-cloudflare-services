@@ -1,6 +1,5 @@
 import { type AnalyticsGranularity, AnalyticsReport, type StorePermission } from '@app/contracts'
-import { Button, Chip, Notice, Select, TextInput } from '@app/ui'
-import { type CSSProperties, useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { PermissionDenied } from './admin-chrome'
 import {
   breakdownView,
@@ -12,6 +11,27 @@ import {
   reportContext,
   statusGuidance,
 } from './analytics-view'
+import {
+  VizBar,
+  VizBody,
+  VizCard,
+  VizColumnChart,
+  VizDefinition,
+  VizFigure,
+  VizFinding,
+  VizFlag,
+  VizInspector,
+  VizMetricItem,
+  VizMetricList,
+  VizNote,
+  VizPill,
+  VizReport,
+  VizSurface,
+  VizTitleBar,
+} from './design/analytics'
+import { Action, Actions } from './design/controls'
+import { SelectField, TextField } from './design/forms'
+import { FailureNotice, StatusNotice } from './design/notices'
 import type { StaffScreenProps } from './staff-screen'
 
 type Props = StaffScreenProps & {
@@ -27,9 +47,6 @@ const GRANULARITIES: AnalyticsGranularity[] = ['day', 'week', 'month']
 const LOAD_FAILURE =
   '集計を読み込めませんでした。通信を確認してもう一度お試しください。数値は表示していません。'
 
-/** 承認済みモック `analytics-approved.html` の 3 列: 220px / 1fr / 275px。 */
-const DIAGNOSIS_COLUMNS: CSSProperties = { gridTemplateColumns: '220px 1fr 275px' }
-
 async function readJson(response: Response): Promise<unknown> {
   try {
     return await response.json()
@@ -38,99 +55,44 @@ async function readJson(response: Response): Promise<unknown> {
   }
 }
 
-/**
- * A bar is decoration only. Every bar in this screen sits next to its own label
- * and its own number, so the chart never carries meaning by colour or length
- * alone, and a suppressed row is drawn at zero width — a residual width would
- * leak the magnitude the server decided to hide (AC-EYEX-119).
- */
-function Bar({ percent }: { percent: number }) {
-  return (
-    <div aria-hidden="true" className="h-2 w-full rounded-full bg-line">
-      <div data-bar className="h-2 rounded-full bg-pine" style={{ width: `${percent}%` }} />
-    </div>
-  )
-}
-
-/**
- * モックの `.bars` — 縦の柱。突出した 1 本を danger、その次を amber で染めるが、
- * 色はあくまで補強で、どの柱にもラベルと件数が文字で付く。抑制された柱は幅も
- * 高さも 0 にする（どちらか一方でも残ると隠した大きさが読めてしまう）。
- */
-function ColumnChart({ rows }: { rows: { label: string; valueText: string; percent: number }[] }) {
-  const sorted = [...rows].map((row) => row.percent).sort((left, right) => right - left)
+/** 突出した 1 本を critical、その次を warn に染める（`analytics-approved.html`）。 */
+function columnTones(
+  rows: { label: string; valueText: string; percent: number }[],
+): { label: string; valueText: string; percent: number; tone: 'plain' | 'warn' | 'critical' }[] {
+  const sorted = rows.map((row) => row.percent).sort((left, right) => right - left)
   const highest = sorted[0] ?? 0
   const second = sorted[1] ?? 0
-  return (
-    <ul className="flex h-48 items-end gap-3.5 border-line border-b px-5 pt-3">
-      {rows.map((row) => {
-        const tone =
-          row.percent > 0 && row.percent === highest
-            ? 'bg-danger'
-            : row.percent > 0 && row.percent === second
-              ? 'bg-amber'
-              : 'bg-pine'
-        return (
-          <li key={row.label} className="flex h-full flex-1 flex-col justify-end gap-1">
-            <span className="text-center font-sans text-ink text-xs tabular-nums">
-              {row.valueText}
-            </span>
-            <div className="flex h-full items-end">
-              <div
-                data-bar
-                aria-hidden="true"
-                className={`w-full rounded-t-ctl ${tone}`}
-                style={{
-                  height: `${row.percent}%`,
-                  width: row.percent === 0 ? '0%' : '100%',
-                }}
-              />
-            </div>
-            <span className="text-center font-sans text-ink text-xs">{row.label}</span>
-          </li>
-        )
-      })}
-    </ul>
-  )
+  return rows.map((row) => ({
+    ...row,
+    tone:
+      row.percent > 0 && row.percent === highest
+        ? 'critical'
+        : row.percent > 0 && row.percent === second
+          ? 'warn'
+          : 'plain',
+  }))
 }
 
+/** 横棒の並び。長さは補強で、どの行にもラベルと数値が文字で並ぶ。 */
 function BarRows({
   rows,
 }: {
   rows: { key: string; label: string; valueText: string; percent: number }[]
 }) {
   return (
-    <ul className="flex flex-col gap-3">
+    <ul className="mt-2.5 flex flex-col gap-2.5">
       {rows.map((row) => (
-        <li key={row.key} className="flex flex-col gap-1">
-          <div className="flex items-baseline justify-between gap-3">
-            <span className="font-sans text-ink text-sm">{row.label}</span>
-            <span className="font-sans text-ink text-sm tabular-nums">{row.valueText}</span>
+        <li key={row.key}>
+          <div className="flex items-baseline justify-between gap-3 text-viz-body">
+            <span>{row.label}</span>
+            <span>{row.valueText}</span>
           </div>
-          <Bar percent={row.percent} />
+          <VizBar percent={row.percent} />
         </li>
       ))}
     </ul>
   )
 }
-
-function SectionTitle({ children }: { children: string }) {
-  return <h2 className="font-display font-semibold text-ink text-lg">{children}</h2>
-}
-
-/** モックの `.card` — インスペクタ側の小カード。 */
-function InspectorCard({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section
-      aria-label={title}
-      className="mb-2.5 rounded-card border border-line bg-surface p-3 font-sans text-ink text-sm"
-    >
-      <p className="font-bold">{title}</p>
-      {children}
-    </section>
-  )
-}
-
 /**
  * 店舗運用の分析 (UC-EYEX-099〜108, 180 / AC-EYEX-49〜55, 119).
  *
@@ -195,117 +157,106 @@ export function AnalyticsScreen({ storeId, api, permissions, today, navigate }: 
   )
 
   return (
-    <section aria-label="店舗運用の分析" className="flex min-h-full flex-col bg-paper">
-      {/* モックの `.titlebar` — 見出しと、右端の期間ピル。 */}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-line border-b bg-surface px-4.5 py-3">
-        <h1 className="font-display font-semibold text-ink text-xl">店舗運用の分析</h1>
+    /*
+     * 骨格は承認済みモック `analytics-approved.html` の「運用診断」:
+     * 左に指標、中央に一つの指標を掘り下げたレポート、右に確認すべき原因候補。
+     */
+    <VizSurface label="店舗運用の分析">
+      <VizTitleBar title="店舗運用の分析">
         {/* モックの titlebar には期間ピルしかないが、期間を選ぶ手段はどこかに
             要る。レポート列を数字から始めたいので、ここへ小さく置く。 */}
-        <div className="ml-auto flex items-center gap-3">
-          <div className="w-20">
-            <Select
-              id="analytics-granularity"
-              aria-label="集計粒度"
-              className="min-h-11"
-              value={granularity}
-              onChange={(event) => {
-                setGranularity(event.target.value as AnalyticsGranularity)
-              }}
-            >
-              {GRANULARITIES.map((value) => (
-                <option key={value} value={value}>
-                  {granularityLabel(value)}
-                </option>
-              ))}
-            </Select>
-          </div>
-          <div className="w-40">
-            <TextInput
-              id="analytics-date"
-              aria-label="対象日"
-              type="date"
-              className="min-h-11"
-              value={date}
-              onChange={(event) => {
-                setDate(event.target.value)
-              }}
-            />
-          </div>
+        <div className="flex items-center gap-3">
+          <SelectField
+            hideLabel
+            id="analytics-granularity"
+            label="集計粒度"
+            className="w-24"
+            value={granularity}
+            onChange={(event) => {
+              setGranularity(event.target.value as AnalyticsGranularity)
+            }}
+          >
+            {GRANULARITIES.map((value) => (
+              <option key={value} value={value}>
+                {granularityLabel(value)}
+              </option>
+            ))}
+          </SelectField>
+          <TextField
+            hideLabel
+            id="analytics-date"
+            label="対象日"
+            type="date"
+            className="w-44"
+            value={date}
+            onChange={(event) => {
+              setDate(event.target.value)
+            }}
+          />
         </div>
         {context && (
-          <p className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-pill bg-pine-soft px-3 py-1.5 font-sans text-pine text-xs">
+          <VizPill>
             <span>{context.periodText}</span>
             <span>{context.timezoneText}</span>
             <span>{`最終更新 ${context.lastUpdatedText}`}</span>
             <span>{context.totalCountText}</span>
             <span>{`比較対象 ${context.previousPeriodText}`}</span>
-          </p>
+          </VizPill>
         )}
-      </div>
+      </VizTitleBar>
 
-      <div style={DIAGNOSIS_COLUMNS} className="grid min-h-0 flex-1">
-        {/* モックの `.metriclist` */}
-        <nav aria-label="指標" className="flex flex-col gap-1 bg-panel p-3.5">
-          {report?.metrics.map((raw) => {
-            const on = raw.metric === activeMetric
-            return (
-              <button
-                key={raw.metric}
-                type="button"
-                aria-current={on ? 'page' : undefined}
-                className={`min-h-11 rounded-ctl p-2.5 text-left font-sans text-ink text-sm ${
-                  on ? 'bg-surface font-bold text-pine' : ''
-                }`}
-                onClick={() => setSelectedMetric(raw.metric)}
-              >
-                {raw.label}
-              </button>
-            )
-          })}
-        </nav>
+      <VizBody>
+        <VizMetricList>
+          {report?.metrics.map((raw) => (
+            <VizMetricItem
+              key={raw.metric}
+              on={raw.metric === activeMetric}
+              onClick={() => setSelectedMetric(raw.metric)}
+            >
+              {raw.label}
+            </VizMetricItem>
+          ))}
+        </VizMetricList>
 
-        {/* モックの `.report` */}
-        <div className="flex min-w-0 flex-col gap-4.5 overflow-auto p-4.5">
+        <VizReport label="レポート">
           {failed && (
             <>
-              <Notice tone="danger">{LOAD_FAILURE}</Notice>
-              <div>
-                <Button type="button" className="min-h-12" onClick={reload}>
+              <FailureNotice>{LOAD_FAILURE}</FailureNotice>
+              <Actions>
+                <Action inset="tight" onClick={reload}>
                   再試行する
-                </Button>
-              </div>
+                </Action>
+              </Actions>
             </>
           )}
 
-          {guidance && (
-            <Notice tone={report?.status === 'failed' ? 'danger' : 'info'}>
-              <span className="block">{guidance.reason}</span>
-              <span className="block">{guidance.nextAction}</span>
-            </Notice>
-          )}
+          {guidance &&
+            /* 失敗は割り込ませ、まだ集計中なだけの案内は割り込ませない。 */
+            (report?.status === 'failed' ? (
+              <FailureNotice>
+                <span className="block">{guidance.reason}</span>
+                <span className="block">{guidance.nextAction}</span>
+              </FailureNotice>
+            ) : (
+              <StatusNotice>
+                <span className="block">{guidance.reason}</span>
+                <span className="block">{guidance.nextAction}</span>
+              </StatusNotice>
+            ))}
 
           {orderedMetrics.map((raw) => {
             const metric = metricView(raw)
             return (
-              <section
-                key={metric.metric}
-                aria-label={metric.label}
-                className="flex flex-col gap-1"
-              >
-                <div className="flex flex-wrap items-baseline gap-3">
-                  <h2 className="font-display font-semibold text-ink text-lg">{metric.label}</h2>
-                  {metric.exceedsTarget && <Chip tone="warning">目標超過</Chip>}
+              <section key={metric.metric} aria-label={metric.label} className="mt-4.5">
+                <div className="flex flex-wrap items-baseline gap-2.5">
+                  <h2 className="my-0 text-h3">{metric.label}</h2>
+                  {metric.exceedsTarget && <VizFlag>目標超過</VizFlag>}
                 </div>
-                <p className="font-sans text-ink-muted text-xs">{metric.definition}</p>
-                {/* モックの `.big` — 見出しより大きい等幅の数字ひとつ。 */}
-                <p className="font-display font-semibold text-3xl text-pine tabular-nums">
-                  {metric.valueText}
-                </p>
-                <p className="font-sans text-ink-muted text-sm">{metric.comparisonText}</p>
-                <p className="font-sans text-ink-muted text-sm">{metric.targetText}</p>
-                {metric.suppressionNote && (
-                  <p className="font-sans text-amber text-sm">{metric.suppressionNote}</p>
-                )}
+                <VizNote>{metric.definition}</VizNote>
+                <VizFigure>{metric.valueText}</VizFigure>
+                <VizNote>{metric.comparisonText}</VizNote>
+                <VizNote>{metric.targetText}</VizNote>
+                {metric.suppressionNote && <VizNote>{metric.suppressionNote}</VizNote>}
               </section>
             )
           })}
@@ -316,18 +267,14 @@ export function AnalyticsScreen({ storeId, api, permissions, today, navigate }: 
               <section
                 key={distribution.stage}
                 aria-label={`${distribution.label} の分布`}
-                className="flex flex-col gap-3"
+                className="mt-4.5"
               >
-                <SectionTitle>{distribution.label}</SectionTitle>
-                <p className="font-sans text-ink-muted text-xs">{distribution.definition}</p>
-                <p className="font-sans text-ink text-sm tabular-nums">
-                  {distribution.summaryText}
-                </p>
-                <p className="font-sans text-ink-muted text-sm">{distribution.sampleCountText}</p>
-                {distribution.suppressionNote && (
-                  <p className="font-sans text-amber text-sm">{distribution.suppressionNote}</p>
-                )}
-                <ColumnChart rows={distribution.rows} />
+                <h2 className="my-0 text-h3">{distribution.label}</h2>
+                <VizNote>{distribution.definition}</VizNote>
+                <p className="my-0 text-viz-body">{distribution.summaryText}</p>
+                <VizNote>{distribution.sampleCountText}</VizNote>
+                {distribution.suppressionNote && <VizNote>{distribution.suppressionNote}</VizNote>}
+                <VizColumnChart rows={columnTones(distribution.rows)} />
               </section>
             )
           })}
@@ -338,48 +285,40 @@ export function AnalyticsScreen({ storeId, api, permissions, today, navigate }: 
               <section
                 key={`${breakdown.dimension}-${raw.metric}`}
                 aria-label={`${breakdown.label}の内訳`}
-                className="flex flex-col gap-3"
+                className="mt-4.5"
               >
-                <div className="flex flex-wrap items-center gap-3">
-                  <SectionTitle>{breakdown.label}</SectionTitle>
-                  {breakdown.suppressed && <Chip tone="warning">非表示</Chip>}
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <h2 className="my-0 text-h3">{breakdown.label}</h2>
+                  {breakdown.suppressed && <VizFlag>非表示</VizFlag>}
                 </div>
-                {breakdown.suppressionNote && (
-                  <p className="font-sans text-amber text-sm">{breakdown.suppressionNote}</p>
-                )}
+                {breakdown.suppressionNote && <VizNote>{breakdown.suppressionNote}</VizNote>}
                 <BarRows rows={breakdown.rows} />
               </section>
             )
           })}
 
           {report && (
-            <section aria-label="Web予約の離脱" className="flex flex-col gap-3">
-              <SectionTitle>Web予約の離脱</SectionTitle>
+            <section aria-label="Web予約の離脱" className="mt-4.5">
+              <h2 className="my-0 text-h3">Web予約の離脱</h2>
               {(() => {
                 const funnel = funnelView(report.funnel)
                 return (
                   <>
-                    <p className="font-sans text-ink-muted text-sm">{funnel.sessionCountText}</p>
-                    {/* モックの `.finding` — 一番大きい離脱を文章で言い切る。 */}
-                    <p className="rounded-card border border-line bg-surface p-3 font-sans font-bold text-ink text-sm">
-                      {funnel.largestDropText}
-                    </p>
-                    {funnel.suppressionNote && (
-                      <p className="font-sans text-amber text-sm">{funnel.suppressionNote}</p>
-                    )}
-                    <ul className="flex flex-col gap-3">
+                    <VizNote>{funnel.sessionCountText}</VizNote>
+                    {/* `.finding` — 一番大きい離脱を文章で言い切る。 */}
+                    <VizFinding>
+                      <b>{funnel.largestDropText}</b>
+                    </VizFinding>
+                    {funnel.suppressionNote && <VizNote>{funnel.suppressionNote}</VizNote>}
+                    <ul className="mt-2.5 flex flex-col gap-2.5">
                       {funnel.steps.map((step) => (
-                        <li key={step.stage} className="flex flex-col gap-1">
-                          <div className="flex items-baseline justify-between gap-3">
-                            <span className="font-sans text-ink text-sm">{step.label}</span>
-                            <span className="font-sans text-ink text-sm tabular-nums">
-                              {step.countText}
-                            </span>
-                            <span className="font-sans text-ink-muted text-sm tabular-nums">
-                              {step.dropText}
-                            </span>
+                        <li key={step.stage}>
+                          <div className="flex items-baseline justify-between gap-3 text-viz-body">
+                            <span>{step.label}</span>
+                            <span>{step.countText}</span>
+                            <span className="text-viz-ink-muted">{step.dropText}</span>
                           </div>
-                          <Bar percent={step.percent} />
+                          <VizBar percent={step.percent} />
                         </li>
                       ))}
                     </ul>
@@ -388,56 +327,50 @@ export function AnalyticsScreen({ storeId, api, permissions, today, navigate }: 
               })()}
             </section>
           )}
-        </div>
+        </VizReport>
 
-        {/* モックの `.inspector` — 断定しない原因候補と、対象データの定義。 */}
-        <aside
-          aria-label="確認すること"
-          className="overflow-auto border-line border-l bg-panel p-3.75"
-        >
-          <h2 className="mb-2.5 font-display font-semibold text-ink text-base">確認すること</h2>
+        <VizInspector>
           {report?.metrics.map((raw) => {
             const candidates = causeCandidatesForMetric(report, raw.metric)
             if (candidates.length === 0) return null
             return (
               <section key={raw.metric} aria-label={`${raw.label}の原因候補`}>
-                <p className="mb-2 font-sans text-ink-muted text-xs">
+                <p className="mb-2 text-viz-fine text-viz-ink-muted">
                   原因を断定するものではありません。根拠件数とあわせて確認してください。
                 </p>
                 {candidates.map((candidate) => (
-                  <InspectorCard key={candidate.code} title={candidate.hypothesis}>
-                    <span className="block font-sans tabular-nums">{`根拠件数 ${candidate.evidenceCount}件`}</span>
+                  <VizCard key={candidate.code} title={candidate.hypothesis}>
+                    {/* 件数は数字だが、和文と続けて読む 1 行なので等幅にしない。 */}
+                    <span className="block">{`根拠件数 ${candidate.evidenceCount}件`}</span>
                     <span className="block">{`確認対象: ${candidate.inspectionTarget}`}</span>
-                  </InspectorCard>
+                  </VizCard>
                 ))}
               </section>
             )
           })}
 
           {context && (
-            <InspectorCard title="対象データ">
+            <VizCard title="対象データ">
               <span className="block">
                 {`来店${report?.totalCount ?? 0}件 / 除外${
                   report?.exclusions.reduce((total, item) => total + item.count, 0) ?? 0
                 }件`}
               </span>
-              {/* モックの `.definition` は指標定義。ここに重ねると同じ文が 2 度
-                  出るので、定義は指標ごとの数字の隣に置いたままにする。 */}
-              <span className="mt-2 block border-line border-t pt-2 text-ink-muted text-xs">
+              {/* `.definition` は指標定義。ここに重ねると同じ文が 2 度出るので、
+                  定義は指標ごとの数字の隣に置いたままにする。 */}
+              <VizDefinition>
                 {`${report?.timezone ?? 'Asia/Tokyo'} · 抑制された値は「非表示」とだけ表示します。`}
-              </span>
-            </InspectorCard>
+              </VizDefinition>
+            </VizCard>
           )}
 
           {report && report.exclusions.length > 0 && (
             <section aria-label="除外したデータ">
               {report.exclusions.map((exclusion) => (
-                <InspectorCard key={exclusion.reason} title={`${exclusion.count}件`}>
+                <VizCard key={exclusion.reason} title={`${exclusion.count}件`}>
                   <span className="block">{exclusion.description}</span>
-                  <span className="mt-2 block border-line border-t pt-2 text-ink-muted text-xs">
-                    {exclusion.caveat}
-                  </span>
-                </InspectorCard>
+                  <VizDefinition>{exclusion.caveat}</VizDefinition>
+                </VizCard>
               ))}
             </section>
           )}
@@ -445,17 +378,15 @@ export function AnalyticsScreen({ storeId, api, permissions, today, navigate }: 
           {report && report.qualityWarnings.length > 0 && (
             <section aria-label="運用品質の警告">
               {report.qualityWarnings.map((warning) => (
-                <InspectorCard key={warning.code} title={`${warning.count}件`}>
+                <VizCard key={warning.code} title={`${warning.count}件`}>
                   <span className="block">{warning.message}</span>
-                  <span className="mt-2 block border-line border-t pt-2 text-ink-muted text-xs">
-                    {warning.nextAction}
-                  </span>
-                </InspectorCard>
+                  <VizDefinition>{warning.nextAction}</VizDefinition>
+                </VizCard>
               ))}
             </section>
           )}
-        </aside>
-      </div>
-    </section>
+        </VizInspector>
+      </VizBody>
+    </VizSurface>
   )
 }

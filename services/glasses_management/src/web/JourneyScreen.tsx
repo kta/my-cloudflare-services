@@ -1,6 +1,9 @@
 import { AvailabilityStoreSettings, LedgerEntry, type ReceptionProgress } from '@app/contracts'
-import { Button, Card, Chip, Field, Notice, Select, Textarea, TextInput } from '@app/ui'
-import { useCallback, useEffect, useState } from 'react'
+import { Field, Select, Textarea, TextInput } from '@app/ui'
+import { type ReactNode, useCallback, useEffect, useState } from 'react'
+import { Action } from './design/controls'
+import { JourneyBoard, type JourneyCell } from './design/ledger'
+import { Card, StatePill, TitleRow } from './design/surfaces'
 import { ConflictPanel } from './LedgerScreen'
 import type { StaffScreenProps } from './staff-screen'
 
@@ -196,120 +199,75 @@ export function JourneyScreen({
     return staffNames.get(entry.assignedStaffId) ?? UNKNOWN_NAME
   }
 
-  /** One stage cell. `.stage`, and `.next` on the one to act on. */
-  const stageCell = (key: string, next: boolean, children: React.ReactNode) => (
-    <td
-      key={key}
-      data-next={next ? 'true' : undefined}
-      className={`min-h-20 rounded-ctl p-2.5 text-left align-top ${
-        next ? 'border-2 border-pine bg-pine-soft' : 'border border-line bg-surface'
-      }`}
-    >
-      {children}
-    </td>
-  )
-
-  const row = (entry: LedgerEntry) => {
+  /*
+   * 盤の 1 行。1 列目はお客様の名乗り（工程盤の行見出し）、続く 4 つが工程。
+   * 見た目は `design/ledger` の `JourneyBoard` が持つので、ここは「どの工程に
+   * 何と書くか」だけを決める。
+   */
+  const row = (entry: LedgerEntry): JourneyCell[] => {
     const current = stageIndexOf(entry)
     const started = entry.progress !== null && entry.progress !== 'waiting'
     const minutes = waitMinutes(entry, now)
     const staffName = staffNameOf(entry)
-    return (
-      <tr key={entry.id} className="contents">
-        <th
-          scope="row"
-          className="min-h-20 rounded-ctl border border-line bg-surface p-2.5 text-left align-top font-normal"
+    const identity: JourneyCell = {
+      children: (
+        <button
+          type="button"
+          aria-pressed={entry.id === selectedId}
+          onClick={() => select(entry)}
+          className="flex min-h-11 w-full flex-col items-start gap-0.5 text-left focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-focus"
         >
-          <button
-            type="button"
-            aria-pressed={entry.id === selectedId}
-            onClick={() => select(entry)}
-            className="flex min-h-11 w-full flex-col items-start gap-0.5 text-left focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-focus"
-          >
-            <span className="font-bold text-ink">{entry.customerName}</span>
-            {minutes !== undefined && <span className="text-ink-muted">{`待ち${minutes}分`}</span>}
-            {entry.entryType === 'walkin' && entry.customerId === null && (
-              <span className="text-ink-muted">顧客未登録</span>
-            )}
-          </button>
-        </th>
-        {STAGE_COLUMNS.map((column, index) => {
-          const key = `${entry.id}-${column.key}`
-          if (index < current) {
-            return stageCell(
-              key,
-              false,
-              <>
-                <span className="block text-ink">{column.done}</span>
-                {index === 0 && staffName && <span className="block text-ink">{staffName}</span>}
-              </>,
-            )
-          }
-          if (index === current) {
-            return stageCell(
-              key,
-              !started,
-              <>
-                <span className="block text-ink">{column.current}</span>
-                {started && staffName && <span className="block text-ink">{staffName}</span>}
-                {!started && <span className="block text-ink">このまま開始可能</span>}
-              </>,
-            )
-          }
-          if (index === current + 1 && started && entry.nextGuidance !== null) {
-            return stageCell(
-              key,
-              true,
-              <>
-                <span className="block text-ink">次にご案内</span>
-                <span className="block text-ink">{entry.nextGuidance}</span>
-              </>,
-            )
-          }
-          return stageCell(key, false, null)
-        })}
-      </tr>
-    )
+          <b>{entry.customerName}</b>
+          {minutes !== undefined && <span>{`待ち${minutes}分`}</span>}
+          {entry.entryType === 'walkin' && entry.customerId === null && <span>顧客未登録</span>}
+        </button>
+      ),
+    }
+    const stage = (next: boolean, children?: ReactNode): JourneyCell => ({ next, children })
+    return [
+      identity,
+      ...STAGE_COLUMNS.map((column, index) => {
+        if (index < current)
+          return stage(
+            false,
+            <>
+              <span className="block">{column.done}</span>
+              {index === 0 && staffName && <span className="block">{staffName}</span>}
+            </>,
+          )
+        if (index === current)
+          return stage(
+            !started,
+            <>
+              <span className="block">{column.current}</span>
+              {started && staffName && <span className="block">{staffName}</span>}
+              {/* 「次にご案内」と同じ強さで、まだ始めていないことを言葉で名乗る。 */}
+              {!started && <span className="block">このまま開始可能</span>}
+            </>,
+          )
+        if (index === current + 1 && started && entry.nextGuidance !== null)
+          return stage(
+            true,
+            <>
+              <span className="block">次にご案内</span>
+              <span className="block">{entry.nextGuidance}</span>
+            </>,
+          )
+        return stage(false)
+      }),
+    ]
   }
 
   return (
-    <main className="min-h-dvh bg-paper p-5">
+    /* モックの `main.detail{padding:22px}`。盤はこの内側にそのまま置く。 */
+    <main className="min-h-0 flex-1 overflow-auto bg-paper p-5.5 font-sans text-ink">
       <h1 className="sr-only">{`${storeName}の来店受付`}</h1>
 
-      <div className="flex flex-wrap items-center gap-2 pb-3">
-        <p className="font-mono text-ink-muted text-sm">{date}</p>
-        <div className="ml-auto flex flex-wrap gap-2">
-          <Button
-            variant="ghost"
-            className="min-h-11"
-            onClick={() => navigate({ screen: 'ledger', date })}
-          >
-            予約台帳へ
-          </Button>
-          <Button
-            className="min-h-11"
-            onClick={() => {
-              void (async () => {
-                const response = await api(`/api/staff/stores/${storeId}/walkins`, {
-                  method: 'POST',
-                  headers: { 'content-type': 'application/json' },
-                  body: '{}',
-                })
-                if (response.ok) await load()
-                else setLoadFailed(true)
-              })()
-            }}
-          >
-            ＋ 店頭のお客様を受付
-          </Button>
-        </div>
-      </div>
-
       {loadFailed && (
-        <div className="pb-3">
-          <Notice tone="danger">
+        <div role="alert" className="pb-3">
+          <Card tone="error">
             来店状況を読み込めませんでした。通信を確認してもう一度お試しください。
-          </Notice>
+          </Card>
         </div>
       )}
 
@@ -325,15 +283,16 @@ export function JourneyScreen({
       )}
 
       {warned.length > 0 && (
-        <section aria-label="注意が必要なお客様" className="space-y-2 pb-3">
+        <section aria-label="注意が必要なお客様" className="pb-3">
           {warned.map((entry) => (
-            <Card key={entry.id} className="space-y-2">
-              <p className="font-medium text-ink text-sm">{entry.customerName}</p>
-              <ul className="space-y-1">
+            /* 警告は淡い赤地の面。理由は必ず文で添える（色だけでは伝えない）。 */
+            <Card key={entry.id} tone="attention" className="mt-2.5">
+              <b className="block">{entry.customerName}</b>
+              <ul>
                 {entry.warnings.map((warning) => (
-                  <li key={warning.code} className="flex flex-wrap items-center gap-2">
-                    <Chip tone="warning">{WARNING_LABELS[warning.code]}</Chip>
-                    <span className="text-ink text-sm">{warning.message}</span>
+                  <li key={warning.code} className="mt-1.5 flex flex-wrap items-center gap-2.5">
+                    <StatePill tone="danger">{WARNING_LABELS[warning.code]}</StatePill>
+                    <span>{warning.message}</span>
                   </li>
                 ))}
               </ul>
@@ -344,49 +303,62 @@ export function JourneyScreen({
 
       <div className="flex flex-wrap items-start gap-4">
         <section className="min-w-0 flex-1">
-          <h2 className="pb-3 font-display font-bold text-2xl text-ink">接客の進み具合</h2>
-          <table
-            aria-label="接客の進み具合"
-            className="grid gap-2 text-sm"
-            style={{ gridTemplateColumns: '190px repeat(4, 1fr)' }}
+          {/*
+           * モックの本文は見出し 1 行で始まる。日付と受付の操作はこの行の右端へ
+           * 寄せ、段を増やさない（帯を 2 本にすると盤が 1 画面に収まらなくなる）。
+           */}
+          <TitleRow
+            push={
+              <>
+                {/* 日付は数字なので等幅。和文はここに混ぜない。 */}
+                <p className="font-mono text-grid text-ink-muted">{date}</p>
+                <Action inset="tight" onClick={() => navigate({ screen: 'ledger', date })}>
+                  予約台帳へ
+                </Action>
+                <Action
+                  variant="primary"
+                  inset="tight"
+                  onClick={() => {
+                    void (async () => {
+                      const response = await api(`/api/staff/stores/${storeId}/walkins`, {
+                        method: 'POST',
+                        headers: { 'content-type': 'application/json' },
+                        body: '{}',
+                      })
+                      if (response.ok) await load()
+                      else setLoadFailed(true)
+                    })()
+                  }}
+                >
+                  ＋ 店頭のお客様を受付
+                </Action>
+              </>
+            }
           >
-            <thead className="contents">
-              <tr className="contents">
-                {['お客様', ...STAGE_COLUMNS.map((column) => column.label)].map((label) => (
-                  <th
-                    scope="col"
-                    key={label}
-                    className="min-h-20 rounded-ctl border border-line bg-surface p-2.5 text-left align-top font-bold text-ink"
-                  >
-                    {label}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="contents">{entries.map((entry) => row(entry))}</tbody>
-          </table>
+            <h1>接客の進み具合</h1>
+          </TitleRow>
+          <JourneyBoard
+            stages={['お客様', ...STAGE_COLUMNS.map((column) => column.label)]}
+            rows={entries.map((entry) => row(entry))}
+          />
           {handover && (
-            <section
-              aria-label="次の引き継ぎ"
-              className="mt-2 rounded-card border border-line bg-surface p-3.5 text-sm"
-            >
-              <span className="font-bold text-ink">次の引き継ぎ</span>
-              <span className="text-ink">{`　${handover.customerName}様 ${handover.nextGuidance}`}</span>
-            </section>
+            <Card label="次の引き継ぎ" className="mt-2.5">
+              <b>次の引き継ぎ</b>
+              {`　${handover.customerName}様 ${handover.nextGuidance}`}
+            </Card>
           )}
         </section>
 
         {selected && (
           <section aria-label="選択中のお客様" className="w-80 shrink-0">
-            <Card className="space-y-3">
-              <h2 className="font-display font-semibold text-ink text-xl">
-                {selected.customerName}
-              </h2>
+            <Card>
+              <b className="block text-lead">{selected.customerName}</b>
 
               {selected.entryType === 'reservation' && (
-                <div className="space-y-2 border-line border-b pb-3">
-                  <Button
-                    className="min-h-11 w-full"
+                <div className="mt-2.5 space-y-2.5 border-line border-b pb-3.5">
+                  <Action
+                    variant="primary"
+                    className="w-full"
                     onClick={() => {
                       void run(
                         {
@@ -403,10 +375,9 @@ export function JourneyScreen({
                     }}
                   >
                     来店済みとして記録する
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    className="min-h-11 w-full"
+                  </Action>
+                  <Action
+                    className="w-full"
                     onClick={() => {
                       void run(
                         {
@@ -423,7 +394,7 @@ export function JourneyScreen({
                     }}
                   >
                     無断キャンセルとして記録する
-                  </Button>
+                  </Action>
                   <Field label="取消の理由" htmlFor="journey-cancel-reason">
                     <TextInput
                       id="journey-cancel-reason"
@@ -431,9 +402,9 @@ export function JourneyScreen({
                       onChange={(event) => setCancelReason(event.target.value)}
                     />
                   </Field>
-                  <Button
+                  <Action
                     variant="danger"
-                    className="min-h-11 w-full"
+                    className="w-full"
                     disabled={cancelReason.trim() === ''}
                     onClick={() => {
                       void run(
@@ -455,7 +426,7 @@ export function JourneyScreen({
                     }}
                   >
                     予約を取り消す
-                  </Button>
+                  </Action>
                 </div>
               )}
 
@@ -500,9 +471,13 @@ export function JourneyScreen({
                 </>
               )}
 
-              <Button className="min-h-11 w-full" onClick={() => saveStage(selected)}>
+              <Action
+                variant="primary"
+                className="mt-2.5 w-full"
+                onClick={() => saveStage(selected)}
+              >
                 接客の状況を保存する
-              </Button>
+              </Action>
             </Card>
           </section>
         )}

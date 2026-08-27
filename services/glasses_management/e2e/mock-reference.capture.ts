@@ -39,6 +39,15 @@ const FONTS = [
  * `font:inherit` の有無がばらついていて（`.hero button` などで書き漏れ）、その
  * ボタンだけシステム書体・黒文字に落ちる。これは設計ではなく書き漏れなので、
  * 宣言どおり本文の書体と文字色を継がせてから撮る。
+ *
+ * ここは「モックそのまま」ではない唯一の点なので、何が変わるかを明記しておく。
+ * `font:inherit` は書体だけでなく**文字寸法も**継がせる。ブラウザ既定のボタンは
+ * 13.33px なので、寸法を書いていないボタン（`approved.html` の日付ストリップ、
+ * `staff-approved.html` の絞り込み、`analytics-approved.html` と
+ * `reception-history-approved.html` のナビタブ全部）は 13.33px → 16px になる。
+ * 文字色も `#000` → 本文の `#17251f` になる。同じ役割のボタンが他のモックでは
+ * `font:inherit` を持っていること、`.on` のタブは白ピル＋太字と明確に意匠が
+ * 付いているのに寸法だけ既定であることから、書き漏れと判断した。
  */
 const NORMALIZE = `
 button,input,optgroup,select,textarea{font:inherit;color:inherit}
@@ -143,6 +152,14 @@ const SCREENS: [string, string, string, number][] = [
 
 /** 端末 1 台だけを描く単独モック。`.screen` / `.phone` が中身そのもの。 */
 const SINGLE: [string, string, string][] = [
+  /*
+   * 設定ガイドと Web 予約は、承認済みモックが 2 つの方言で描かれている。
+   * `-complete-` の側は全工程を 76px バーの寸法で、こちらは 67px バー +
+   * ステータスバーの寸法で描く。どちらも却下されていないので両方を持つ。
+   */
+  ['SETTINGS-GUIDE', 'settings-approved.html', '.screen'],
+  ['WEB-PURPOSE-COMPACT', 'web-booking-approved.html', '.phone:nth-of-type(1)'],
+  ['WEB-DATETIME-COMPACT', 'web-booking-approved.html', '.phone:nth-of-type(2)'],
   ['ANALYTICS', 'analytics-approved.html', '.screen'],
   ['RECEPTION-HISTORY', 'reception-history-approved.html', '.screen'],
   ['STORE-SWITCH', 'store-switch-approved.html', '.screen'],
@@ -164,7 +181,12 @@ const SINGLE_SIZE: Record<string, { width: number; height: number }> = {
   ANALYTICS: { width: 1176, height: 814 },
   'RECEPTION-HISTORY': { width: 1176, height: 814 },
   'STORE-SWITCH': { width: 1176, height: 814 },
-  'SETTINGS-SP': { width: 375, height: 790 },
+  // `.phone` は外枠 9px 込みで 375×790。中身はその内側。
+  'SETTINGS-SP': { width: 357, height: 772 },
+  'SETTINGS-GUIDE': { width: 1176, height: 814 },
+  // `.phone` は外枠 10px 込みで 342×680。中身はその内側。
+  'WEB-PURPOSE-COMPACT': { width: 322, height: 660 },
+  'WEB-DATETIME-COMPACT': { width: 322, height: 660 },
 }
 
 /**
@@ -183,20 +205,33 @@ async function shoot(
 ) {
   await page.setViewportSize(size)
   await page.goto(`http://127.0.0.1:4176/${MOCKS}/${source}`, { waitUntil: 'networkidle' })
-  await page.addStyleTag({
-    content: `
-      body>*{display:none!important}
-      ${selector}{display:block!important;position:absolute!important;inset:0!important;
-        margin:0!important;border:0!important;border-radius:0!important;
-        width:${size.width}px!important;height:${size.height}px!important}
-      ${selector.startsWith('#') ? '' : 'body>main,body>section{display:block!important}'}
-    `,
-  })
-  await page.evaluate((sel) => {
-    const target = document.querySelector(sel)
-    if (!target) throw new Error('対象が見つからない')
-    document.body.append(target)
-  }, selector)
+  /*
+   * 対象を先に body 直下へ移し、そのうえで**その要素自身**へ寸法を書く。
+   *
+   * セレクタで指定してから移すと、`.phone:nth-of-type(1)` のような位置に依る
+   * 指定が移動後の並びに当たり、別の面が撮れてしまう（実際に小型 Web 予約の
+   * 2 面が同じ画像になっていた）。要素を掴んでから書けば、その取り違えは起きない。
+   */
+  await page.evaluate(
+    ({ sel, width, height }) => {
+      const target = document.querySelector<HTMLElement>(sel)
+      if (!target) throw new Error(`対象が見つからない: ${sel}`)
+      document.body.append(target)
+      for (const sibling of Array.from(document.body.children))
+        if (sibling !== target) (sibling as HTMLElement).style.display = 'none'
+      Object.assign(target.style, {
+        display: 'block',
+        position: 'absolute',
+        inset: '0',
+        margin: '0',
+        border: '0',
+        borderRadius: '0',
+        width: `${width}px`,
+        height: `${height}px`,
+      })
+    },
+    { sel: selector, width: size.width, height: size.height },
+  )
   await withFonts(page)
   await page.screenshot({ path: `${OUT}/ref--${id}.png` })
   console.log(`  ref--${id}.png  ${size.width}x${size.height}`)

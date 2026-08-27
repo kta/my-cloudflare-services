@@ -162,6 +162,15 @@
   --color-terminal-veil: #17382b66; /* シートの背後を伏せる幕 */
   --color-terminal-shadow: #10271e66;
 
+  /* 同じ方言で描かれた「ガイド付き設定」（settings-approved）が足す段。
+     工程レールの地は台帳の見出し行と同じ hex だが、出どころも役割も別なので
+     寄せない（片方を直すともう片方が動く）。 */
+  --text-terminal-title: 1.4375rem; /* 23px ガイド付き設定の見出し */
+  --color-terminal-steps: #e9eeeb; /* 工程レールの地 */
+  --color-terminal-step-line: #b9c8c0; /* これからの工程の左罫 */
+  --color-terminal-impact: #fff3e8; /* 公開前の影響確認の地 */
+  --color-terminal-impact-line: #e9c49e; /* 同上の罫線 */
+
   /* --- 形。モックは 8px（操作）と 9px（カード）が基本で、
      全画面のパネルだけ 12px、シート状のものが 14px。 --- */
   --radius-ctl: 0.5rem; /* 8px */
@@ -226,4 +235,30 @@
   --text-sp-body: 0.625rem; /* 10px 欄の中身 */
   --text-sp-fine: 0.5625rem; /* 9px 進捗の見出し・丸の数字・ステータスバー */
   --text-sp-step: 0.4375rem; /* 7px 工程名 */
+
+  /* --- 顧客向け Web 予約の「小さい端末」版（web-booking-approved）。
+     `-complete-` 版（幅 359px・本文 16px）とは別に組まれていて、端末幅も
+     文字寸法も罫線の太さも違う。緑や罫線の hex は他の方言と重なるものが
+     あるが、出どころが別のモックで今後も別々に動くので寄せない。 --- */
+  --font-compact-mono: "IBM Plex Mono"; /* 日付・時刻の枠（予備を並べない） */
+
+  --color-compact-pine: #286b55; /* モック --g */
+  --color-compact-line: #d7ded9; /* モック --l */
+  --color-compact-ink: #1a2923; /* モック --i */
+  --color-compact-ink-muted: #68776f; /* モック --m */
+  --color-compact-tick: #ffffff48; /* 進捗の未通過（28.24%。近似色に置き換えない） */
+  --color-compact-selected: #f1f8f4; /* 選択中の選択肢・時間枠の地 */
+  --color-compact-summary: #eef5f1; /* 持ち越した目的の要約帯 */
+
+  --text-compact-title: 1.3125rem; /* 21px 問いかけの見出し */
+  --text-compact-title--line-height: 1.45;
+  --text-compact-head: 1.0625rem; /* 17px ワードマーク */
+  --text-compact-option: 0.875rem; /* 14px 選択肢の見出し */
+  --text-compact-body: 0.75rem; /* 12px 選択肢の本文・時間枠 */
+  --text-compact-note: 0.6875rem; /* 11px 補足 */
+  --text-compact-note--line-height: 1.6;
+  --text-compact-fine: 0.625rem; /* 10px 要約帯・日付 */
+  --text-compact-micro: 0.5625rem; /* 9px しおり帯 */
+
+  --radius-compact: 0.625rem; /* 10px 選択肢と要約帯（この方言だけ） */
 }

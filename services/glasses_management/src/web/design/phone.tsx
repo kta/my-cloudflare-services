@@ -41,8 +41,14 @@ export function PhoneHead({
   progress,
 }: {
   store: string
-  /** 何工程目か（1 起算）。工程を持たない面では省く。 */
-  progress?: { current: number; total: number }
+  /**
+   * 何工程目か（1 起算）。工程を持たない面では省く。
+   *
+   * `label` を渡すと目盛りが読み上げ上の進捗計になる。突き合わせ台は静止画で
+   * 工程が動かないので渡さず、実アプリだけが「今どこにいるか」を名前で持つ。
+   * どちらも画素は変わらない（aria 属性しか増えない）。
+   */
+  progress?: { current: number; total: number; label?: string }
 }) {
   return (
     <header className="shrink-0 bg-pine p-5 text-on-pine">
@@ -50,7 +56,18 @@ export function PhoneHead({
       {/* モックは `<b>EYEX予約</b><small>銀座店</small>` で、改行せず同じ行に並ぶ。 */}
       <small>{store}</small>
       {progress && (
-        <div className="mt-3 flex gap-1.25" aria-hidden="true">
+        <div
+          className="mt-3 flex gap-1.25"
+          {...(progress.label
+            ? {
+                role: 'progressbar',
+                'aria-label': progress.label,
+                'aria-valuemin': 1,
+                'aria-valuemax': progress.total,
+                'aria-valuenow': progress.current,
+              }
+            : { 'aria-hidden': true })}
+        >
           {Array.from({ length: progress.total }, (_, index) => (
             <i
               // 進捗の目盛りは位置そのものが意味なので添字で並べる。
@@ -81,13 +98,23 @@ export function PhoneBody({
 }
 
 /** 下端に貼り付く主操作。 */
-export function PhonePrimary({ children, onClick }: { children: ReactNode; onClick?: () => void }) {
+export function PhonePrimary({
+  children,
+  onClick,
+  disabled = false,
+}: {
+  children: ReactNode
+  onClick?: () => void
+  /** まだ選び終えていない段。モックは常に押せる状態しか描いていない。 */
+  disabled?: boolean
+}) {
   return (
     <div className="absolute right-5 bottom-5 left-5">
       <button
         type="button"
         onClick={onClick}
-        className="min-h-12 w-full rounded-card bg-pine px-3.5 py-0 font-bold font-sans text-body text-on-pine"
+        disabled={disabled}
+        className="min-h-12 w-full rounded-card bg-pine px-3.5 py-0 font-bold font-sans text-body text-on-pine disabled:opacity-50"
       >
         {children}
       </button>
@@ -159,11 +186,14 @@ export function PhoneField({
   label,
   value,
   inputMode,
+  type,
   onChange,
 }: {
   label: string
   value: string
   inputMode?: 'tel' | 'email' | 'numeric'
+  /** 日付は打たせるより選ばせる。モックに無い段だが、欄の寸法は変えない。 */
+  type?: 'date' | 'email'
   onChange?: (next: string) => void
 }) {
   return (
@@ -171,6 +201,7 @@ export function PhoneField({
       {label}
       <input
         value={value}
+        type={type}
         inputMode={inputMode}
         onChange={(event) => onChange?.(event.target.value)}
         className={FIELD}
@@ -194,11 +225,18 @@ export function PhoneInput({
   value,
   label,
   inputMode,
+  placeholder,
   onChange,
 }: {
   value: string
   label: string
   inputMode?: 'tel' | 'email' | 'numeric'
+  /**
+   * 何も打っていないときの下書き。`PhoneSearch`（板）が文字として描いていた
+   * 文言を、実際に打てる欄でも同じ濃さで見せるため、既定の薄い灰ではなく
+   * 本文と同じ色に揃える。
+   */
+  placeholder?: string
   onChange?: (next: string) => void
 }) {
   return (
@@ -206,8 +244,9 @@ export function PhoneInput({
       aria-label={label}
       value={value}
       inputMode={inputMode}
+      placeholder={placeholder}
       onChange={(event) => onChange?.(event.target.value)}
-      className={FIELD}
+      className={cn(FIELD, 'placeholder:text-ink')}
     />
   )
 }
@@ -236,10 +275,23 @@ export function PhoneSearch({ children, label }: { children: ReactNode; label: s
  * 副操作（モック素の `button`）。下端に貼り付く主操作と違い、文字幅ぶんだけの
  * 幅で本文の流れの中に置かれる。
  */
-export function PhoneButton({ children, onClick }: { children: ReactNode; onClick?: () => void }) {
+export function PhoneButton({
+  children,
+  onClick,
+  label,
+}: {
+  children: ReactNode
+  onClick?: () => void
+  /**
+   * 読み上げ上の名前。同じ文言の副操作が並ぶ面（店舗一覧の「店舗情報を見る」）で
+   * どの店のものか分けるために使う。見える文字を含んだ名前にすること。
+   */
+  label?: string
+}) {
   return (
     <button
       type="button"
+      aria-label={label}
       onClick={onClick}
       className="min-h-12 rounded-card border border-line bg-surface px-3.5 py-0 font-sans text-body text-ink"
     >
@@ -434,5 +486,273 @@ export function GuidePhoneBottom({
         {children}
       </button>
     </footer>
+  )
+}
+
+/*
+ * ここから下は顧客向け Web 予約の「小さい端末」版の語彙。承認済みモック
+ * `web-booking-approved.html` の実測で、上の `PhoneScreen`（幅 359px・本文
+ * 16px）とは別に組まれている。どちらも却下されていないので両方を持つ。
+ *
+ *   .phone{width:342px;height:680px}（外枠 10px を除いた中身は 322×660）
+ *   .status{height:25px;padding:6px 16px;font:600 9px 'IBM Plex Mono'}
+ *   .head{background:var(--g);color:#fff;padding:16px 18px}
+ *   .head b{font-size:17px}.head small{display:block}
+ *   .progress{display:flex;gap:5px;margin-top:14px}
+ *   .progress i{flex:1;height:3px;background:#ffffff48}.progress i.on{background:#fff}
+ *   .body{padding:19px}.body h3{font-size:21px;line-height:1.45;margin:5px 0}
+ *   .muted{color:var(--m);font-size:11px;line-height:1.6}
+ *   .option{border:1px solid var(--l);border-radius:10px;padding:14px;
+ *           margin-top:9px;font-size:12px}.option b{display:block;font-size:14px}
+ *   .option.on{border:2px solid var(--g);background:#f1f8f4}
+ *   .summary{background:#eef5f1;border-radius:10px;padding:11px;margin:13px 0;
+ *            font-size:10px}
+ *   .next{width:calc(100% - 38px);height:48px;position:absolute;left:19px;
+ *         bottom:20px;border:0;border-radius:9px;background:var(--g);color:#fff;
+ *         font-weight:700}
+ *   .dates{grid-template-columns:repeat(3,1fr);gap:7px;margin:14px 0}
+ *   .date,.slot{border:1px solid var(--l);border-radius:8px;text-align:center;
+ *               padding:9px 3px;font:500 10px 'IBM Plex Mono'}
+ *   .date.on{background:var(--g);color:#fff}
+ *   .slots{grid-template-columns:repeat(2,1fr);gap:8px}
+ *   .slot{font-size:12px}.slot.on{border:2px solid var(--g);background:#f1f8f4}
+ *   .bookmark{position:absolute;top:126px;right:0;background:var(--gd);
+ *             color:#fff;padding:9px 7px;border-radius:8px 0 0 8px;
+ *             font-size:9px;writing-mode:vertical-rl}
+ *
+ * 狭い画面なので、1 画面で決めることを 1 つに絞る（一問一答）。日付と時刻を
+ * 別々の格子に分けているのも、日を決めてから時刻を選ぶ順序を崩さないため。
+ */
+
+/** 端末いっぱいの枠。下端の主操作としおり帯は、ここを基準に置かれる。 */
+export function CompactPhoneScreen({ children }: { children: ReactNode }) {
+  return (
+    <div
+      className="relative h-dvh overflow-hidden bg-surface font-sans text-compact-ink"
+      // モックの body は line-height を持たない。1.5 を敷くと 9〜12px の段が
+      // 1 行ずつ伸び、日付の格子から下が丸ごとずれる。
+      style={{ lineHeight: 'normal' }}
+    >
+      {children}
+    </div>
+  )
+}
+
+/** 上端の緑帯と進捗。5 工程のうち何本目までかだけを示す。 */
+export function CompactPhoneHead({
+  store,
+  progress,
+}: {
+  store: string
+  /** 何工程目か（1 起算）。 */
+  progress: { current: number; total: number }
+}) {
+  return (
+    <header className="bg-compact-pine px-4.5 py-4 text-on-pine">
+      <b className="font-bold text-compact-head">EYEX予約</b>
+      <small className="block">{store}</small>
+      <div className="mt-3.5 flex gap-1.25" aria-hidden="true">
+        {Array.from({ length: progress.total }, (_, index) => (
+          <i
+            // 目盛りは位置そのものが意味なので添字で並べる。
+            key={index}
+            className={cn(
+              'h-0.75 flex-1',
+              index < progress.current ? 'bg-on-pine' : 'bg-compact-tick',
+            )}
+          />
+        ))}
+      </div>
+    </header>
+  )
+}
+
+/** 本文。主操作は絶対配置なので、ここは高さを譲らない。 */
+export function CompactPhoneBody({ children }: { children: ReactNode }) {
+  return <main className="p-4.75">{children}</main>
+}
+
+/**
+ * 補足（`.muted`）。工程ラベルと但し書きの両方がこの段だが、要素が違う。
+ * モックは工程ラベルを `<small>`、但し書きを `<p>` で書いていて、`<p>` の側は
+ * ブラウザ既定の 1em（＝11px）の上下余白を間隔として使っている。
+ */
+export function CompactPhoneMuted({
+  children,
+  as = 'small',
+}: {
+  children: ReactNode
+  as?: 'small' | 'p'
+}) {
+  const Tag = as
+  return <Tag className="text-compact-ink-muted text-compact-note">{children}</Tag>
+}
+
+/** 問いかけの見出し（`.body h3`）。 */
+export function CompactPhoneQuestion({ children }: { children: ReactNode }) {
+  return (
+    <h1 className="text-compact-title" style={{ margin: '5px 0' }}>
+      {children}
+    </h1>
+  )
+}
+
+/** 選択肢（`.option`）。選択中は 2px の緑枠。 */
+export function CompactPhoneOption({
+  title,
+  children,
+  selected = false,
+  onClick,
+}: {
+  title: string
+  /** 所要時間や中身の説明。見出しの下に続けて置く。 */
+  children?: ReactNode
+  selected?: boolean
+  onClick?: () => void
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={selected}
+      onClick={onClick}
+      className={cn(
+        // block・w-full にしないと、button 既定の inline-block で幅が字面ぶんに
+        // 縮み、上の見出しとの間隔も margin の相殺で変わる。
+        'mt-2.25 block w-full rounded-compact p-3.5 text-left text-compact-body',
+        selected
+          ? 'border-2 border-compact-pine bg-compact-selected'
+          : 'border border-compact-line bg-surface',
+      )}
+    >
+      <b className="block font-bold text-compact-option">{title}</b>
+      {children}
+    </button>
+  )
+}
+
+/** 直前の工程で決めたことを持ち越す帯（`.summary`）。 */
+export function CompactPhoneSummary({ children }: { children: ReactNode }) {
+  return (
+    <div className="my-3.25 rounded-compact bg-compact-summary p-2.75 text-compact-fine">
+      {children}
+    </div>
+  )
+}
+
+/** 日付の格子（`.dates`）。3 日ぶんだけを出す。 */
+export function CompactPhoneDates({ children }: { children: ReactNode }) {
+  return (
+    <fieldset aria-label="日付" className="my-3.5 grid grid-cols-3 gap-1.75">
+      {children}
+    </fieldset>
+  )
+}
+
+/** 時刻の格子（`.slots`）。日付を決めたあとの空き枠。 */
+export function CompactPhoneSlots({ children }: { children: ReactNode }) {
+  return (
+    <fieldset aria-label="時刻" className="grid grid-cols-2 gap-2">
+      {children}
+    </fieldset>
+  )
+}
+
+/** 日付 1 つ（`.date`）。選択中は緑で塗り潰す（枠は太らない）。 */
+export function CompactPhoneDate({
+  children,
+  selected = false,
+  onClick,
+}: {
+  children: ReactNode
+  selected?: boolean
+  onClick?: () => void
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={selected}
+      onClick={onClick}
+      className={cn(
+        'rounded-ctl border border-compact-line text-center font-medium font-compact-mono text-compact-fine',
+        selected ? 'bg-compact-pine text-on-pine' : 'bg-surface',
+      )}
+      style={{ padding: '9px 3px' }}
+    >
+      {children}
+    </button>
+  )
+}
+
+/** 時刻 1 つ（`.slot`）。日付と違い、選択中は塗らずに緑の 2px 枠で示す。 */
+export function CompactPhoneSlot({
+  children,
+  selected = false,
+  onClick,
+}: {
+  children: ReactNode
+  selected?: boolean
+  onClick?: () => void
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={selected}
+      onClick={onClick}
+      className={cn(
+        /*
+         * 行の高さは選択中の枠（罫 2px）で決まるので、選ばれていない枠には
+         * 1px ぶんの余りが出る。button の中身はブラウザが縦中央へ寄せるため、
+         * その 1px で数字だけが下がってしまう。モックは素の div で上端から
+         * 並ぶので、こちらも列にして上端から積む（display を替えないと
+         * ブラウザ既定の寄せは外れない）。
+         */
+        'flex flex-col justify-start rounded-ctl text-center font-medium font-compact-mono text-compact-body',
+        selected
+          ? 'border-2 border-compact-pine bg-compact-selected'
+          : 'border border-compact-line bg-surface',
+      )}
+      style={{ padding: '9px 3px' }}
+    >
+      {children}
+    </button>
+  )
+}
+
+/** 下端に貼り付く主操作（`.next`）。 */
+export function CompactPhoneNext({
+  children,
+  onClick,
+}: {
+  children: ReactNode
+  onClick?: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="absolute right-4.75 bottom-5 left-4.75 h-12 rounded-card border-0 bg-compact-pine px-0 py-0 font-bold text-on-pine"
+    >
+      {children}
+    </button>
+  )
+}
+
+/**
+ * 右端の縦書きのしおり帯（`.bookmark`）。どの店舗で予約しているのかを、
+ * 工程が進んでも画面から消えない位置に出しておくためのもの。
+ */
+export function CompactPhoneBookmark({ children }: { children: ReactNode }) {
+  return (
+    <span
+      className="absolute right-0 bg-pine-deep text-compact-micro text-on-pine"
+      style={{
+        top: '126px',
+        padding: '9px 7px',
+        borderRadius: '8px 0 0 8px',
+        writingMode: 'vertical-rl',
+      }}
+    >
+      {children}
+    </span>
   )
 }

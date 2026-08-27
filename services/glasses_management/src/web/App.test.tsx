@@ -360,9 +360,13 @@ test('keeps the home bar free of business tabs and of the admin destinations', (
   expect(screen.queryByRole('button', { name: '監査ログ' })).not.toBeInTheDocument()
 })
 
-test('reaches every admin destination from inside 設定, not from the top-level bar', () => {
-  // operations-approved.html: 端末とセキュリティ / 利用者とロール / 監査ログ are
-  // sub-tabs of 設定. Nothing may become unreachable when they leave the bar.
+test('設定の面はバーの 3 つのタブから互いへ行き来できる', () => {
+  /*
+   * operations-approved.html のバーは 端末とセキュリティ / 利用者とロール /
+   * 監査ログ、settings-approved.html は 設定ガイド / 設定一覧 / 変更履歴。
+   * どちらも 2 本目の帯を持たないので、面から面への行き来はバーが担う。
+   * 各面の中の節（共有iPad・無操作ロック…）は、その面の左サイドが持つ。
+   */
   const navigation = createStaffNavigation()
   navigation.navigate({ screen: 'settings' })
   render(
@@ -378,20 +382,14 @@ test('reaches every admin destination from inside 設定, not from the top-level
     />,
   )
 
-  for (const [label, screen_] of [
-    ['店舗設定', 'settings'],
-    ['共有端末', 'shared-terminals'],
-    ['録音運用', 'recording-ops'],
-    ['注意事項権限', 'attention-settings'],
-    ['監査ログ', 'audit'],
-    ['顧客の統合・訂正', 'customer-merge'],
-    ['分析', 'analytics'],
-    ['お知らせ', 'alerts'],
+  for (const [label, expected] of [
+    ['設定一覧', 'shared-terminals'],
+    ['変更履歴', 'audit'],
+    ['設定ガイド', 'settings'],
   ] as const) {
-    // 遷移のたびに再マウントされるので、毎回引き直す。
-    const admin = screen.getByRole('navigation', { name: '管理メニュー' })
-    fireEvent.click(within(admin).getByRole('button', { name: label }))
-    expect(navigation.snapshot()).toEqual({ screen: screen_ })
+    const menu = screen.getByRole('navigation', { name: '設定メニュー' })
+    fireEvent.click(within(menu).getByRole('button', { name: label }))
+    expect(navigation.snapshot()).toEqual({ screen: expected })
     act(() => {
       navigation.navigate({ screen: 'settings' })
     })
@@ -466,11 +464,14 @@ test('予約台帳のタブは 4 つで、主操作は予約を取る', () => {
   expect(bar.getByRole('button', { name: '＋ 予約を取る' })).toBeVisible()
 })
 
-test('設定ガイドのバーは操作をひとつも持たず、副題でそう名乗る', () => {
+test('設定ガイドのバーは、そこから出られるタブを持つ', () => {
+  // 操作を 1 つも持たないと、ガイドに入った利用者が出られなくなる。
   const bar = renderChrome('settings')
-  expect(bar.queryByRole('navigation')).toBeNull()
-  // 残るのはワードマーク（店舗切替の入口）だけ。
-  expect(bar.getAllByRole('button')).toHaveLength(1)
+  expect(
+    within(bar.getByRole('navigation', { name: '設定メニュー' }))
+      .getAllByRole('button')
+      .map((button) => button.textContent),
+  ).toEqual(['設定ガイド', '設定一覧', '変更履歴'])
   expect(bar.getByRole('button', { name: /銀座店 · 設定ガイド/ })).toBeVisible()
 })
 

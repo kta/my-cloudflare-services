@@ -1,6 +1,10 @@
 import { AvailabilityStoreSettings, CustomerCandidate, LedgerEntry } from '@app/contracts'
-import { Button, Card, Chip, Field, Notice, TextInput } from '@app/ui'
-import { useCallback, useEffect, useState } from 'react'
+import { Field, TextInput } from '@app/ui'
+import { type ReactNode, useCallback, useEffect, useState } from 'react'
+import { Action, Actions } from './design/controls'
+import { Compare, Panel } from './design/layouts'
+import { type LedgerCell, LedgerGrid, type LedgerLane } from './design/ledger'
+import { Card, StatePill } from './design/surfaces'
 import {
   entryPlacement,
   formatJstMinutes,
@@ -54,9 +58,6 @@ const RESERVATION_STATUS_LABELS = {
 const WALKIN_LANE = 'ウォークイン'
 const UNASSIGNED_STAFF_LANE = '担当者未定'
 const UNASSIGNED_EQUIPMENT_LANE = '設備未定'
-/** The lane column, in CSS pixels; the now line is measured from its right edge. */
-const LANE_COLUMN_PX = 180
-
 /** Shown only when the name join has not answered; never a raw id. */
 const UNKNOWN_NAME = '名称未取得'
 
@@ -93,7 +94,8 @@ function packLane(placed: Placed[]): Placed[][] {
   return rows.length > 0 ? rows : [[]]
 }
 
-export function LedgerScreen({ storeId, storeName, api, navigate, date, now }: LedgerScreenProps) {
+/* 遷移は緑バーが持つので、台帳そのものは `navigate` を使わない。 */
+export function LedgerScreen({ storeId, storeName, api, date, now }: LedgerScreenProps) {
   const [entries, setEntries] = useState<LedgerEntry[]>([])
   const [names, setNames] = useState<{
     staff: Map<string, string>
@@ -222,86 +224,74 @@ export function LedgerScreen({ storeId, storeName, api, navigate, date, now }: L
     setCandidates(undefined)
   }
 
-  /** One occupied cell. `.appt` / `.walk` in the approved mock. */
-  const entryCell = (item: Placed) => {
+  /** 1 コマの中身。モックの `.appt` / `.walk` はここでは `tone` が持つ。 */
+  const entryContent = (item: Placed): ReactNode => {
     const { entry } = item
     const walkin = entry.entryType === 'walkin'
     return (
-      <td
-        key={entry.id}
-        className={`min-h-18 border-line border-r border-b p-2 text-left align-top ${
-          walkin ? 'bg-walkin-soft' : 'bg-pine-soft font-bold'
-        }`}
-        style={{ gridColumn: `span ${item.spanColumns}` }}
+      <button
+        type="button"
+        onClick={() => select(entry)}
+        aria-pressed={entry.id === selectedId}
+        className="flex min-h-11 w-full flex-col items-start gap-0.5 text-left text-ink focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-focus"
       >
-        <button
-          type="button"
-          onClick={() => select(entry)}
-          aria-pressed={entry.id === selectedId}
-          className="flex min-h-11 w-full flex-col items-start gap-0.5 text-left text-ink focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-focus"
-        >
-          <span className={walkin ? undefined : 'font-bold'}>{entry.customerName}</span>
-          {/*
-           * モックのセルは 2 行だけである。工程や警告を足すとセルが伸び、1 画面に
-           * 1 日が収まらなくなる。それらは選択したときの右パネルが受け持つ。
-           */}
-          {!walkin && (
-            <span>{[...entry.purposeNames, SOURCE_LABELS[entry.source]].join(' · ')}</span>
-          )}
-          {entry.customerId === null && walkin && <span>顧客未登録</span>}
-        </button>
-      </td>
+        <span>{entry.customerName}</span>
+        {/*
+         * モックのセルは 2 行だけである。工程や警告を足すとセルが伸び、1 画面に
+         * 1 日が収まらなくなる。それらは選択したときの右パネルが受け持つ。
+         */}
+        {!walkin && <span>{[...entry.purposeNames, SOURCE_LABELS[entry.source]].join(' · ')}</span>}
+        {entry.customerId === null && walkin && <span>顧客未登録</span>}
+      </button>
     )
   }
 
-  /** A lane row, laid out column by column so gaps stay real empty cells. */
-  const laneRow = (label: string, row: Placed[], showLabel: boolean, key: string) => {
-    const cells: React.ReactNode[] = []
+  /** 1 段ぶんのコマ。予約の無いところは空きコマとして残す（詰めない）。 */
+  const laneCells = (row: Placed[]): LedgerCell[] => {
+    const cells: LedgerCell[] = []
     let column = 1
     for (const item of row) {
       while (column < item.startColumn) {
-        cells.push(
-          <td
-            key={`gap-${column}`}
-            className="min-h-18 border-line border-r border-b bg-surface p-2"
-          />,
-        )
+        cells.push({})
         column += 1
       }
-      cells.push(entryCell(item))
+      cells.push({
+        span: item.spanColumns,
+        tone: item.entry.entryType === 'walkin' ? 'walkin' : 'appointment',
+        children: entryContent(item),
+      })
       column += item.spanColumns
     }
     while (column <= columns.length) {
-      cells.push(
-        <td
-          key={`tail-${column}`}
-          className="min-h-18 border-line border-r border-b bg-surface p-2"
-        />,
-      )
+      cells.push({})
       column += 1
     }
-    return (
-      <tr key={key} className="contents">
-        <th
-          scope="row"
-          className="sticky left-0 z-20 min-h-18 border-line border-r border-b bg-surface p-2 text-left align-top font-normal font-sans"
-        >
-          {showLabel ? label : ''}
-        </th>
-        {cells}
-      </tr>
-    )
+    return cells
   }
 
+  /*
+   * 同じ担当者の予約が重なると行が 2 段になる。2 段目の見出しは空にする——
+   * モックは同じ名前を繰り返さないし、繰り返すと「別の担当者」に見える。
+   */
+  const grid: LedgerLane[] = orderedLanes.flatMap(([lane, placed]) =>
+    packLane(placed).map((row, index) => ({
+      id: `${lane}-${index}`,
+      name: lane,
+      label: index === 0 ? lane : '',
+      cells: laneCells(row),
+    })),
+  )
+
   return (
-    <main className="min-h-dvh bg-paper p-4">
+    <main className="flex min-h-0 flex-1 flex-col bg-paper font-sans text-ink">
       <h1 className="sr-only">{`${storeName}の予約台帳`}</h1>
 
       {loadFailed && (
-        <div className="pb-3">
-          <Notice tone="danger">
+        /* 読み込み失敗はモックに無い状態。面の語彙のまま、役割だけ足す。 */
+        <div role="alert" className="px-4 pt-4">
+          <Card tone="error">
             台帳を読み込めませんでした。通信を確認してもう一度お試しください。
-          </Notice>
+          </Card>
         </div>
       )}
 
@@ -316,87 +306,40 @@ export function LedgerScreen({ storeId, storeName, api, navigate, date, now }: L
         />
       )}
 
-      <div className="flex flex-wrap items-start gap-4">
+      <div className="flex min-h-0 flex-1 flex-wrap items-start">
         <section className="min-w-0 flex-1">
           {/*
            * 軸は 7 列しかないので iPad の幅に収まる。横スクロールは置かない——
            * スクロールさせた時点で「1 日が 1 画面」という主題が失われる。
            */}
-          <div>
-            <div className="relative w-full">
-              <table
-                aria-label="予約台帳"
-                className="grid w-full border-line border-t border-l text-sm"
-                style={{
-                  gridTemplateColumns: `${LANE_COLUMN_PX}px repeat(${columns.length}, minmax(138px, 1fr))`,
-                }}
+          <LedgerGrid
+            columns={columns}
+            lanes={grid}
+            now={line ? { label: `現在 ${line.time}`, ratio: line.ratio } : undefined}
+            heading={
+              /*
+               * モックの見出しセルは「担当者」の一語だけである。設備軸へ切り替える
+               * 口をツールバーとして 1 段足すのではなく、このセル自身を切り替え
+               * ボタンにして段を増やさない。
+               */
+              <button
+                type="button"
+                aria-label={
+                  view === 'staff'
+                    ? '担当者で見る（設備に切り替え）'
+                    : '設備で見る（担当者に切り替え）'
+                }
+                aria-pressed={view === 'staff'}
+                onClick={() => setView(view === 'staff' ? 'equipment' : 'staff')}
+                className="text-left text-ink focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-focus"
               >
-                <thead className="contents">
-                  <tr className="contents">
-                    {/*
-                     * モックの見出しセルは「担当者」の一語だけである。設備軸へ
-                     * 切り替える口をツールバーとして 1 段足すのではなく、この
-                     * セル自身を切り替えボタンにして段を増やさない。
-                     */}
-                    <th
-                      scope="col"
-                      className="sticky left-0 z-20 min-h-10 border-line border-r border-b bg-grid-head p-2 text-left font-bold font-sans"
-                    >
-                      <button
-                        type="button"
-                        aria-label={
-                          view === 'staff'
-                            ? '担当者で見る（設備に切り替え）'
-                            : '設備で見る（担当者に切り替え）'
-                        }
-                        aria-pressed={view === 'staff'}
-                        onClick={() => setView(view === 'staff' ? 'equipment' : 'staff')}
-                        className="text-left text-ink focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-focus"
-                      >
-                        {view === 'staff' ? '担当者' : '設備'}
-                      </button>
-                    </th>
-                    {columns.map((label) => (
-                      <th
-                        scope="col"
-                        key={label}
-                        className="min-h-10 border-line border-r border-b bg-grid-head p-2 text-left font-mono font-bold"
-                      >
-                        {label}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="contents">
-                  {orderedLanes.flatMap(([lane, placed]) =>
-                    packLane(placed).map((row, index) =>
-                      laneRow(lane, row, index === 0, `${lane}-${index}`),
-                    ),
-                  )}
-                </tbody>
-              </table>
-              {line && (
-                <div
-                  data-now-line
-                  className="pointer-events-none absolute top-10 bottom-0 z-10 border-danger"
-                  style={{
-                    left: `calc(${LANE_COLUMN_PX}px + (100% - ${LANE_COLUMN_PX}px) * ${line.ratio})`,
-                    borderLeftWidth: '3px',
-                  }}
-                >
-                  {/* Filled chip, below the header row so neither obscures the other. */}
-                  {/* 「現在」は和文なので sans、時刻だけ mono。IBM Plex Mono に
-                      和文グリフは無く、mono にすると別書体へ落ちる。 */}
-                  <span className="absolute top-2 left-0 whitespace-nowrap bg-danger px-2 py-1 font-bold font-sans text-on-danger text-xs">
-                    現在 <span className="font-mono">{line.time}</span>
-                  </span>
-                </div>
-              )}
-            </div>
-          </div>
+                {view === 'staff' ? '担当者' : '設備'}
+              </button>
+            }
+          />
           {offGrid.length > 0 && (
-            <div className="pt-3">
-              <h2 className="text-ink-muted text-sm">営業時間外の受付</h2>
+            <div className="px-4 pb-4">
+              <h2 className="text-grid text-ink-muted">営業時間外の受付</h2>
               <div className="flex flex-wrap gap-2">
                 {offGrid.map((entry) => (
                   <button
@@ -404,7 +347,7 @@ export function LedgerScreen({ storeId, storeName, api, navigate, date, now }: L
                     key={entry.id}
                     aria-pressed={entry.id === selectedId}
                     onClick={() => select(entry)}
-                    className="flex min-h-11 flex-col items-start gap-0.5 rounded-ctl border border-line bg-surface p-2 text-left text-ink text-sm focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-focus"
+                    className="flex min-h-11 flex-col items-start gap-0.5 rounded-ctl border border-line bg-surface p-2 text-left text-grid text-ink focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-focus"
                   >
                     <span>{entry.customerName}</span>
                     <span>{SOURCE_LABELS[entry.source]}</span>
@@ -420,37 +363,36 @@ export function LedgerScreen({ storeId, storeName, api, navigate, date, now }: L
         </section>
 
         {selected && (
-          <section aria-label="選択中の予約" className="w-80 shrink-0">
-            <Card className="space-y-3">
-              <div>
-                <h2 className="font-display font-semibold text-ink text-xl">
-                  {selected.customerName}
-                </h2>
-                <p className="font-mono text-ink-muted text-sm">{timeRange(selected)}</p>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Chip>{SOURCE_LABELS[selected.source]}</Chip>
-                <Chip>
+          /* 選択中の 1 件。モックの `.detail`（22px の内側）と同じ持ち方。 */
+          <section aria-label="選択中の予約" className="w-97.5 shrink-0 p-5.5">
+            <Card>
+              <b className="block text-lead">{selected.customerName}</b>
+              <p className="font-mono text-grid text-ink-muted">{timeRange(selected)}</p>
+              <div className="mt-2.5 flex flex-wrap gap-2 text-grid">
+                <StatePill>{SOURCE_LABELS[selected.source]}</StatePill>
+                <StatePill>
                   {selected.entryType === 'reservation'
                     ? RESERVATION_STATUS_LABELS[selected.status]
                     : selected.status === 'active'
                       ? '来店中'
                       : '退店'}
-                </Chip>
-                {selected.progress !== null && <Chip>{PROGRESS_LABELS[selected.progress]}</Chip>}
+                </StatePill>
+                {selected.progress !== null && (
+                  <StatePill>{PROGRESS_LABELS[selected.progress]}</StatePill>
+                )}
               </div>
-              {selected.nextGuidance && <p className="text-ink text-sm">{selected.nextGuidance}</p>}
+              {selected.nextGuidance && <p className="mt-2.5">{selected.nextGuidance}</p>}
               {selected.warnings.map((warning) => (
-                <Notice key={warning.code} tone="danger">
-                  {warning.message}
-                </Notice>
+                /* 警告は色ではなく文で伝える。淡い赤地は文に添えるだけ。 */
+                <div key={warning.code} className="mt-2.5">
+                  <Card tone="attention">{warning.message}</Card>
+                </div>
               ))}
 
               {selected.entryType === 'walkin' && (
-                <div className="space-y-3 border-line border-t pt-3">
-                  <Button
-                    variant="ghost"
-                    className="min-h-11 w-full"
+                <div className="mt-3.5 space-y-3 border-line border-t pt-3.5">
+                  <Action
+                    className="w-full"
                     onClick={() => {
                       void run(
                         {
@@ -466,7 +408,7 @@ export function LedgerScreen({ storeId, storeName, api, navigate, date, now }: L
                     }}
                   >
                     退店として記録する
-                  </Button>
+                  </Action>
 
                   {selected.customerId === null && (
                     <div className="space-y-3">
@@ -477,9 +419,8 @@ export function LedgerScreen({ storeId, storeName, api, navigate, date, now }: L
                           onChange={(event) => setSearchName(event.target.value)}
                         />
                       </Field>
-                      <Button
-                        variant="ghost"
-                        className="min-h-11 w-full"
+                      <Action
+                        className="w-full"
                         onClick={() => {
                           void (async () => {
                             const response = await api(
@@ -497,17 +438,16 @@ export function LedgerScreen({ storeId, storeName, api, navigate, date, now }: L
                         }}
                       >
                         顧客を検索する
-                      </Button>
+                      </Action>
                       {candidates?.length === 0 && (
-                        <p className="text-ink-muted text-sm">
+                        <p className="text-grid text-ink-muted">
                           該当する顧客が見つかりません。新規顧客として登録してください。
                         </p>
                       )}
                       {candidates?.map((candidate) => (
-                        <Button
+                        <Action
                           key={candidate.id}
-                          variant="ghost"
-                          className="min-h-11 w-full"
+                          className="w-full"
                           onClick={() => {
                             void run(
                               {
@@ -523,7 +463,7 @@ export function LedgerScreen({ storeId, storeName, api, navigate, date, now }: L
                           }}
                         >
                           {`${candidate.name} · ${candidate.phone}`}
-                        </Button>
+                        </Action>
                       ))}
                       <Field label="お名前" htmlFor="walkin-new-name">
                         <TextInput
@@ -552,8 +492,9 @@ export function LedgerScreen({ storeId, storeName, api, navigate, date, now }: L
                           }
                         />
                       </Field>
-                      <Button
-                        className="min-h-11 w-full"
+                      <Action
+                        variant="primary"
+                        className="w-full"
                         onClick={() => {
                           const customer = {
                             name: newCustomer.name,
@@ -574,7 +515,7 @@ export function LedgerScreen({ storeId, storeName, api, navigate, date, now }: L
                         }}
                       >
                         新規顧客として登録して関連付ける
-                      </Button>
+                      </Action>
                     </div>
                   )}
                 </div>
@@ -604,31 +545,27 @@ export function ConflictPanel({
   onReapply: () => void
 }) {
   return (
-    <section
-      aria-label="別の端末で先に更新されています"
-      className="mb-3 rounded-card border border-line bg-surface p-3.5"
-    >
-      <h2 className="font-display font-semibold text-ink text-xl">
-        別の端末で先に更新されています
-      </h2>
-      <div className="mt-3 grid gap-3 md:grid-cols-2">
-        <div className="rounded-ctl border border-line bg-surface p-3.5">
-          <p className="font-bold text-ink">最新の内容</p>
-          <p className="text-ink text-sm">{`この画面は最新の状態に更新済みです（版 ${currentVersion}）。`}</p>
-        </div>
-        <div className="rounded-ctl border border-danger-line bg-danger-soft p-3.5">
-          <p className="font-bold text-ink">この端末の入力</p>
-          <p className="text-ink text-sm">{input}</p>
-        </div>
-      </div>
-      <div className="mt-3 flex flex-wrap gap-2">
-        <Button variant="danger" className="min-h-11" onClick={onDiscard}>
+    <section aria-label="別の端末で先に更新されています" className="px-4 pt-4 font-sans">
+      <h2>別の端末で先に更新されています</h2>
+      <Compare>
+        <Panel>
+          <b className="block">最新の内容</b>
+          <p>{`この画面は最新の状態に更新済みです（版 ${currentVersion}）。`}</p>
+        </Panel>
+        {/* この端末の入力だけが淡い赤地。失われうるのはこちらだから。 */}
+        <Panel tone="error">
+          <b className="block">この端末の入力</b>
+          <p>{input}</p>
+        </Panel>
+      </Compare>
+      <Actions>
+        <Action variant="danger" onClick={onDiscard}>
           この入力を破棄
-        </Button>
-        <Button className="min-h-11" onClick={onReapply}>
+        </Action>
+        <Action variant="primary" onClick={onReapply}>
           最新内容へ再適用
-        </Button>
-      </div>
+        </Action>
+      </Actions>
     </section>
   )
 }

@@ -304,9 +304,10 @@ test('lays the reception history out as the approved two-pane 390px + 1fr grid',
   expect(pane.className).toContain('border-line')
   expect(pane.className).toContain('border-r')
   expect(pane.className).toContain('overflow-auto')
+  // 列幅 390px は 4 の倍数でない実測値なので、配置としてインラインで持つ。
   const workspace = pane.parentElement as HTMLElement
-  expect(workspace.className).toContain('grid-cols-[390px_1fr]')
-  expect(workspace.className).toContain('h-full')
+  expect(workspace.style.gridTemplateColumns).toBe('390px 1fr')
+  expect(workspace.className).toContain('flex-1')
 })
 
 // `.tools`: 2px pine の検索欄と、その隣に並ぶ `.filter` チップ。
@@ -314,7 +315,8 @@ test('renders the approved tools row: a 2px pine search box beside filter chips'
   renderScreen(allEntries)
   await screen.findByRole('region', { name: '受付履歴' })
   const field = screen.getByLabelText('氏名・電話番号・予約番号')
-  expect(field.className).toContain('min-h-11')
+  // `.search{min-height:48px}` — 絞り込みの 44px より 1 段高い。
+  expect(field.className).toContain('min-h-12')
   expect(field.className).toContain('border-2')
   expect(field.className).toContain('border-pine')
   expect(field.className).toContain('bg-surface')
@@ -363,7 +365,7 @@ test('renders the detail head and the approved 1.15fr / .85fr card grid', async 
   expect(within(detail).getByText('予約内容')).toBeInTheDocument()
   expect(within(detail).getByText('お客様')).toBeInTheDocument()
   const grid = within(detail).getByText('予約内容').closest('div')?.parentElement as HTMLElement
-  expect(grid.className).toContain('grid-cols-[1.15fr_0.85fr]')
+  expect(grid.style.gridTemplateColumns).toBe('1.15fr .85fr')
 })
 
 // exception-states-approved.html `#empty`: 空表示は回復操作を必ず連れてくる。

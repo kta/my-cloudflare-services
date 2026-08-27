@@ -127,6 +127,14 @@ async function openStep(name: RegExp) {
   fireEvent.click(await screen.findByRole('button', { name }))
 }
 
+/**
+ * 本文は読み取りカードが既定で、入力欄は「編集」の先にある（承認済みモック
+ * settings-complete-approved.html）。編集を伴うテストはここを通す。
+ */
+async function openEditor() {
+  fireEvent.click(await screen.findByRole('button', { name: '編集' }))
+}
+
 afterEach(() => {
   vi.restoreAllMocks()
 })
@@ -134,7 +142,7 @@ afterEach(() => {
 test('六工程が定められた順に表示され、Web予約は略されない (AC-EYEX-40, 74)', async () => {
   renderScreen(settingsApi())
 
-  const nav = await screen.findByRole('navigation', { name: '設定工程' })
+  const nav = await screen.findByRole('navigation', { name: '設定の工程' })
   const steps = within(nav).getAllByRole('button')
   expect(steps).toHaveLength(6)
   expect(steps.map((step) => step.getAttribute('aria-label'))).toEqual([
@@ -147,20 +155,23 @@ test('六工程が定められた順に表示され、Web予約は略されな�
   ])
   // 略語 `Web` 単体はどの幅でも出さない。
   expect(within(nav).queryByText('Web')).not.toBeInTheDocument()
-  const webStep = within(nav).getByRole('button', { name: /工程5 Web予約/ })
-  expect(within(webStep).getAllByText('Web予約').length).toBeGreaterThan(0)
+  // レールに出るのは番号か ✓ と工程名だけ。承認済みモックに状態語は無い。
+  expect(steps[0]?.textContent).toBe('1\u3000店舗と営業時間')
+  expect(steps[1]?.textContent).toBe('✓\u3000来店目的')
+  expect(steps[4]?.textContent).toBe('5\u3000Web予約')
 })
 
 test('工程の状態は色ではなく語で読み取れる (AC-EYEX-41)', async () => {
   renderScreen(settingsApi())
 
-  const nav = await screen.findByRole('navigation', { name: '設定工程' })
-  const purposes = within(nav).getByRole('button', { name: /工程2 来店目的/ })
-  expect(within(purposes).getByText('完了')).toBeInTheDocument()
-  const web = within(nav).getByRole('button', { name: /工程5 Web予約/ })
-  expect(within(web).getByText('未完了')).toBeInTheDocument()
-  const current = within(nav).getByRole('button', { name: /工程1 店舗と営業時間/ })
-  expect(within(current).getByText('編集中')).toBeInTheDocument()
+  // 状態は色ではなく語で読める。ただしレールの見た目はモックどおり番号と ✓
+  // だけなので、語は読み上げの名前が持つ。
+  const nav = await screen.findByRole('navigation', { name: '設定の工程' })
+  expect(within(nav).getByRole('button', { name: '工程2 来店目的 完了' })).toBeInTheDocument()
+  expect(within(nav).getByRole('button', { name: '工程5 Web予約 未完了' })).toBeInTheDocument()
+  expect(
+    within(nav).getByRole('button', { name: '工程1 店舗と営業時間 編集中' }),
+  ).toBeInTheDocument()
 })
 
 test('日常の修正はガイドを最初から進めずに対象工程へ直接移動できる (AC-EYEX-47)', async () => {
@@ -168,8 +179,8 @@ test('日常の修正はガイドを最初から進めずに対象工程へ直�
 
   await openStep(/工程4 設備と点検/)
 
-  expect(screen.getByRole('heading', { level: 2, name: '設備と点検' })).toBeInTheDocument()
-  const nav = screen.getByRole('navigation', { name: '設定工程' })
+  expect(screen.getByRole('heading', { level: 1, name: '設備と点検' })).toBeInTheDocument()
+  const nav = screen.getByRole('navigation', { name: '設定の工程' })
   expect(within(nav).getByRole('button', { name: '工程4 設備と点検 編集中' })).toBeInTheDocument()
 })
 
@@ -178,7 +189,7 @@ test('SP幅の固定ステッパーは番号・全6工程・残り工程数・�
 
   await openStep(/工程5 Web予約/)
 
-  const stepper = screen.getByRole('navigation', { name: '設定工程' })
+  const stepper = screen.getByRole('navigation', { name: '設定の工程' })
   expect(within(stepper).getByText('5 / 6 Web予約')).toBeInTheDocument()
   expect(within(stepper).getByText('残り1工程')).toBeInTheDocument()
   expect(within(stepper).getByText('現在の状態: 編集中')).toBeInTheDocument()
@@ -189,6 +200,13 @@ test('SP幅の固定ステッパーは番号・全6工程・残り工程数・�
 test('営業時間・休業日・臨時営業・受付停止を編集できる (UC-EYEX-087, AC-EYEX-65)', async () => {
   renderScreen(settingsApi())
 
+  // 読み取りカードが先に出る（モックの `.field`）。
+  expect(await screen.findByText(/月–土 10:00–19:00/)).toBeInTheDocument()
+  expect(screen.getByText(/日 10:00–18:00/)).toBeInTheDocument()
+  expect(screen.getByText('毎週火曜日')).toBeInTheDocument()
+  expect(screen.getByText('9月23日 10:00–17:00')).toBeInTheDocument()
+
+  await openEditor()
   const start = await screen.findByLabelText('月曜の営業開始')
   expect(start).toHaveValue('10:00')
   fireEvent.change(start, { target: { value: '09:30' } })
@@ -218,16 +236,17 @@ test('顧客向け表示名をスタッフ向け名称と別に編集し、そ�
 
   fireEvent.click(screen.getByRole('button', { name: '視力測定・新調相談' }))
   const preview = screen.getByRole('region', { name: 'Web予約プレビュー' })
-  expect(within(preview).getByText('メガネを新しく作りたい')).toBeInTheDocument()
-  expect(within(preview).getByText('約60分')).toBeInTheDocument()
+  expect(within(preview).getByText(/メガネを新しく作りたい/)).toBeInTheDocument()
+  expect(within(preview).getByText(/約60分/)).toBeInTheDocument()
 
+  await openEditor()
   fireEvent.change(screen.getByLabelText('顧客向け表示名'), {
     target: { value: '新しいメガネを相談したい' },
   })
   fireEvent.change(screen.getByLabelText('標準所要時間（分）'), { target: { value: '75' } })
 
-  expect(within(preview).getByText('新しいメガネを相談したい')).toBeInTheDocument()
-  expect(within(preview).getByText('約75分')).toBeInTheDocument()
+  expect(within(preview).getByText(/新しいメガネを相談したい/)).toBeInTheDocument()
+  expect(within(preview).getByText(/約75分/)).toBeInTheDocument()
   // スタッフ向け名称は連動して書き換わらない。
   expect(screen.getByLabelText('スタッフ向け名称')).toHaveValue('視力測定・新調相談')
 })
@@ -237,6 +256,7 @@ test('来店目的を非公開にしても既存予約と履歴は削除され�
   renderScreen(api)
   await openStep(/工程2 来店目的/)
   fireEvent.click(screen.getByRole('button', { name: '視力測定・新調相談' }))
+  await openEditor()
 
   fireEvent.click(screen.getByLabelText('Web予約に公開する'))
   expect(
@@ -278,6 +298,11 @@ test('スタッフの技能・勤務・休憩・受付可否を編集できる (
   renderScreen(settingsApi())
   await openStep(/工程3 スタッフと技能/)
 
+  // 読み取りカードは 1 人 1 枚。技能は名前と同じ行に続く。
+  expect(screen.getByText(/眼鏡作製技能・調整/)).toBeInTheDocument()
+  expect(screen.getByText(/勤務 10:00–18:00 · 休憩 13:00–14:00 · 予約受付可/)).toBeInTheDocument()
+
+  await openEditor()
   const skills = screen.getByLabelText('佐藤 美咲の技能')
   expect(skills).toHaveValue('眼鏡作製技能, 調整')
   fireEvent.change(skills, { target: { value: '眼鏡作製技能' } })
@@ -293,14 +318,16 @@ test('設備の台数・利用可能時間・点検停止を編集できる (UC-
   renderScreen(settingsApi())
   await openStep(/工程4 設備と点検/)
 
+  // 点検停止も設備と同じ 1 枚のカードに並ぶ（モック `測定機B · 9/10 13:00–17:00`）。
+  expect(await screen.findByText('2台 · 10:00–19:00')).toBeInTheDocument()
+  expect(screen.getByText(/視力測定機 · 9\/10 13:00–17:00/)).toBeInTheDocument()
+  expect(screen.getByText(/定期点検/)).toBeInTheDocument()
+
+  await openEditor()
   const capacity = screen.getByLabelText('視力測定機の台数')
   expect(capacity).toHaveValue(2)
   fireEvent.change(capacity, { target: { value: '3' } })
   expect(screen.getByLabelText('視力測定機の利用可能開始')).toHaveValue('10:00')
-
-  const maintenance = screen.getByRole('list', { name: '点検停止' })
-  expect(within(maintenance).getByText(/2026-09-10/)).toBeInTheDocument()
-  expect(within(maintenance).getByText(/定期点検/)).toBeInTheDocument()
 })
 
 test('Web予約設定の公開状態・公開期間・目的・受付条件が表示される (AC-EYEX-63, UC-EYEX-109〜113)', async () => {
@@ -389,26 +416,27 @@ test('Web予約の公開状態・公開期間・公開する来店目的はそ�
   })
   await openStep(/工程5 Web予約/)
 
+  await openEditor()
   const web = screen.getByRole('region', { name: 'Web予約設定' })
   const status = within(web).getByLabelText('公開状態')
   expect(status).toHaveValue('hidden')
   fireEvent.change(status, { target: { value: 'published' } })
   expect(within(web).getByText('公開中')).toBeInTheDocument()
 
-  fireEvent.change(within(web).getByLabelText('受付終了日時（JST）'), {
+  fireEvent.change(screen.getByLabelText('受付終了日時（JST）'), {
     target: { value: '2026-10-01T18:00' },
   })
   expect(within(web).getByText('2026年10月1日 18:00')).toBeInTheDocument()
 
   // 公開する来店目的は目的ごとに切り替えられる。
-  const publish = within(web).getByLabelText('フィッティング調整をWeb予約に公開する')
+  const publish = screen.getByLabelText('フィッティング調整をWeb予約に公開する')
   expect(publish).not.toBeChecked()
   fireEvent.click(publish)
   expect(within(web).getByText('視力測定・新調相談、フィッティング調整')).toBeInTheDocument()
 
   // 保存先の API がまだ無いことを黙らない。
   expect(
-    within(web).getByText(
+    screen.getByText(
       'Web予約の公開設定を保存するAPIはまだありません。ここでの変更は保存されません。',
     ),
   ).toBeInTheDocument()
@@ -452,7 +480,7 @@ test('settings.read がなければ設定を表示も取得もせず、承認済
     ),
   ).toBeInTheDocument()
   expect(api).not.toHaveBeenCalled()
-  expect(screen.queryByRole('navigation', { name: '設定工程' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('navigation', { name: '設定の工程' })).not.toBeInTheDocument()
 
   fireEvent.click(screen.getByRole('button', { name: '業務開始画面へ戻る' }))
   expect(navigate).toHaveBeenCalledWith({ screen: 'home' })
@@ -462,7 +490,8 @@ test('settings.manage がなければ編集操作を提供しない (UC-EYEX-098
   renderScreen(settingsApi(), { permissions: VIEWER })
 
   expect(await screen.findByText('設定を変更する権限がありません。')).toBeInTheDocument()
-  expect(screen.getAllByText('10:00–19:00').length).toBeGreaterThan(0)
+  expect(screen.getAllByText(/10:00–19:00/).length).toBeGreaterThan(0)
+  expect(screen.queryByRole('button', { name: '編集' })).not.toBeInTheDocument()
   expect(screen.queryByLabelText('月曜の営業開始')).not.toBeInTheDocument()
   expect(screen.queryByRole('button', { name: '設定を保存' })).not.toBeInTheDocument()
 })
@@ -470,7 +499,7 @@ test('settings.manage がなければ編集操作を提供しない (UC-EYEX-098
 test('保存が版競合したら失敗を伝える (UC-EYEX-095)', async () => {
   const api = settingsApi()
   renderScreen(api)
-  await screen.findByLabelText('月曜の営業開始')
+  await screen.findByRole('button', { name: '設定を保存' })
 
   api.mockResolvedValueOnce(jsonResponse({ error: 'stale settings version' }, 409))
   fireEvent.click(screen.getByRole('button', { name: '設定を保存' }))
@@ -483,7 +512,7 @@ test('保存が版競合したら失敗を伝える (UC-EYEX-095)', async () => 
 test('参照エラーは保存できなかった理由として表示する (UC-EYEX-097)', async () => {
   const api = settingsApi()
   renderScreen(api)
-  await screen.findByLabelText('月曜の営業開始')
+  await screen.findByRole('button', { name: '設定を保存' })
 
   api.mockResolvedValueOnce(
     jsonResponse({ error: 'purpose requires an equipment the store does not have' }, 400),

@@ -116,21 +116,31 @@ export function Candidate({
   )
 }
 
-/** レールの要約カード（`.summary`）。カードより内側が広い。 */
-export function RailSummary({ children }: { children: ReactNode }) {
+/**
+ * レールの要約カード（`.summary`）。カードより内側が広い。
+ *
+ * `label` を渡すと region として名乗る。モックは静止画なので名前を持たないが、
+ * 実アプリのレールは中身が工程ごとに入れ替わるので、読み上げが「今どの要約を
+ * 読んでいるか」を言えなければならない。名前は画素を持たない。
+ */
+export function RailSummary({ children, label }: { children: ReactNode; label?: string }) {
+  const classes = 'mb-3.5 rounded-card border border-line bg-surface p-4.5 font-sans'
+  if (label === undefined) return <div className={classes}>{children}</div>
   return (
-    <div className="mb-3.5 rounded-card border border-line bg-surface p-4.5 font-sans">
+    <section aria-label={label} className={classes}>
       {children}
-    </div>
+    </section>
   )
 }
 
 /** 顧客の「対応時に確認」。淡い赤地で、他の要約と見分けがつく。 */
-export function AttentionCard({ children }: { children: ReactNode }) {
+export function AttentionCard({ children, label }: { children: ReactNode; label?: string }) {
+  const classes = 'rounded-ctl border border-attention-line bg-danger-panel p-3.5 font-sans'
+  if (label === undefined) return <div className={classes}>{children}</div>
   return (
-    <div className="rounded-ctl border border-attention-line bg-danger-panel p-3.5 font-sans">
+    <section aria-label={label} className={classes}>
       {children}
-    </div>
+    </section>
   )
 }
 
@@ -151,14 +161,26 @@ export type FlowStep = { label: string; state: 'todo' | 'done' | 'current' }
  * 下端の進捗バー。左に戻る、中央に 5 工程、右に録音状態。
  * 高さ 88px は固定で、主列の下余白 112px はこの帯に隠れないための余白。
  */
+const STEP_STATE_WORD: Record<FlowStep['state'], string> = {
+  todo: '未完了',
+  done: '完了',
+  current: '現在',
+}
+
 export function ProgressFooter({
   steps,
   back,
   record,
+  announceState = false,
 }: {
   steps: FlowStep[]
   back?: ReactNode
   record?: ReactNode
+  /**
+   * 工程の状態を読み上げ用の語でも添える（AC-EYEX-02: 色だけに頼らない）。
+   * 突き合わせ台は静止画なので既定では添えない。実アプリだけが渡す。
+   */
+  announceState?: boolean
 }) {
   return (
     <footer
@@ -179,6 +201,7 @@ export function ProgressFooter({
             )}
           >
             {step.label}
+            {announceState && <span className="sr-only">（{STEP_STATE_WORD[step.state]}）</span>}
           </li>
         ))}
       </ol>
@@ -221,17 +244,25 @@ export function RecordIndicator({ elapsed, label }: { elapsed?: string; label: s
 export function FlowButton({
   children,
   primary = false,
+  disabled = false,
   onClick,
 }: {
   children: ReactNode
   /** モック `#repeat` の確定操作。緑地に白文字になる。 */
   primary?: boolean
+  /**
+   * 押せない状態。`Action` と同じ理由でネイティブの `disabled` は使わない
+   * （タブ順から外れると、押せないことにも理由にも辿り着けなくなる）。
+   * 淡さでも示さない — モックは無効な操作も同じ濃さで描く。
+   */
+  disabled?: boolean
   onClick?: () => void
 }) {
   return (
     <button
       type="button"
-      onClick={onClick}
+      aria-disabled={disabled || undefined}
+      onClick={disabled ? undefined : onClick}
       className={cn(
         'block min-h-11 w-full min-w-11 rounded-ctl border px-4 py-0 text-center font-bold font-sans text-body',
         /*

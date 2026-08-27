@@ -7,17 +7,25 @@ import {
   type StorePermission,
   type WebBookingPublication,
 } from '@app/contracts'
-import { Button, Chip, Field, Notice, Select, TextInput } from '@app/ui'
-import { type ReactNode, useEffect, useState } from 'react'
+import { Fragment, type ReactNode, useEffect, useState } from 'react'
+import { Action, Actions, FilterLine } from './design/controls'
+import { SelectField, TextField, ToggleFilter } from './design/forms'
+import { FullScreenState, GuideLayout, GuideStep } from './design/layouts'
+import { FailureNotice, StatusNotice } from './design/notices'
+import { Card, CardGrid, FieldCard, Preview, TitleRow } from './design/surfaces'
 import { SettingsPublication } from './SettingsPublication'
 import {
   DEFAULT_PURPOSE_TEMPLATE,
   deriveStepStates,
+  formatJapaneseDate,
+  formatSlashDate,
   SETTINGS_STEP_BY_ID,
   SETTINGS_STEPS,
   type SettingsStepId,
   STEP_STATE_LABEL,
+  type StepState,
   stepperSummary,
+  summariseBusinessHours,
   WEEKDAY_LABEL,
 } from './settings-guide'
 import type { StaffScreenProps } from './staff-screen'
@@ -98,6 +106,13 @@ const EXCEPTION_MODE_LABEL: Record<AvailabilityExceptionMode, string> = {
   paused: '受付停止',
 }
 
+/** 工程の状態を、承認済みモックの工程レールの見た目へ移す。 */
+const RAIL_STATE: Record<StepState, 'todo' | 'done' | 'current'> = {
+  complete: 'done',
+  editing: 'current',
+  incomplete: 'todo',
+}
+
 function newId(): string {
   return crypto.randomUUID()
 }
@@ -119,61 +134,50 @@ function formatRange(period?: { startTime: string; endTime: string }): string {
   return period ? `${period.startTime}–${period.endTime}` : '休業日'
 }
 
-/** A labelled panel. `Card` takes no aria-label and these panels need a name. */
-function Panel({
-  label,
-  className,
-  plain = false,
-  children,
-}: {
-  label: string
-  className?: string
-  /** カードが直接キャンバスに並ぶ区画（モックの Web予約工程）。枠を重ねない。 */
-  plain?: boolean
-  children: ReactNode
-}) {
+/**
+ * 読み取りカードの中の複数行。`<br>` で区切るのはモックの `.field` がそう
+ * 組まれているため（段落にすると既定の上下余白が入り、76px の中で位置がずれる）。
+ */
+function Lines({ lines }: { lines: readonly string[] }) {
   return (
-    <section
-      aria-label={label}
-      className={`${plain ? '' : 'rounded-ctl border border-line bg-surface p-5'} ${className ?? ''}`}
-    >
-      {children}
-    </section>
+    <>
+      {lines.map((line, index) => (
+        <Fragment key={line}>
+          {index > 0 && <br />}
+          {line}
+        </Fragment>
+      ))}
+    </>
   )
 }
+
+/*
+ * 入力欄の型について。
+ *
+ * `type="time"` / `type="date"` / `type="datetime-local"` は、値こそ 24 時間の
+ * `HH:mm` と ISO の日付だが、**描かれる字はブラウザの地域設定で決まる**
+ * （`10:00 AM` / `mm/dd/yyyy`）。この画面は読み取りカードも承認済みモックも
+ * 24 時間表記と日本語の日付で統一されているので、編集欄だけが英語の 12 時間
+ * 表記になると、同じ値が 2 通りの姿で並ぶ。
+ *
+ * 値の形は変わらないので、素の text にして表記をこちらで決める。刻みの
+ * ピッカーは失うが、営業時間は 15 分単位の決め打ちで、時計の絵より
+ * 「今なんと書いてあるか」が一致していることの方が効く。
+ */
+const TIME_HINT = { inputMode: 'numeric' as const, placeholder: '10:00' }
+const DATE_HINT = { inputMode: 'numeric' as const, placeholder: '2026-09-23' }
+const DATE_TIME_HINT = { inputMode: 'numeric' as const, placeholder: '2026-09-15T10:00' }
 
 /**
- * モックの `.field` — 白地・1px 罫・角丸 9px・見出しは太字で 1 行目。
- * Web予約工程はこのカードだけで組む（settings-complete-approved.html #web-settings）。
+ * 入力欄をまとめて開く面。モックは読み取りカードしか持たないので、編集は
+ * 「編集」を押した先に置く（`Preview` の枠に入れて、読み取りカードとの
+ * 境目を面で示す）。
  */
-function FieldCard({
-  term,
-  value,
-  children,
-  wide = false,
-}: {
-  term: string
-  value?: string
-  children?: ReactNode
-  wide?: boolean
-}) {
+function Editor({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div
-      className={`min-h-19 rounded-card border border-line bg-surface p-4 ${wide ? 'sm:col-span-2' : ''}`}
-    >
-      <p className="font-sans font-semibold text-ink text-sm">{term}</p>
-      {value !== undefined && <p className="font-sans text-ink text-sm">{value}</p>}
-      {children}
-    </div>
-  )
-}
-
-function Row({ term, children }: { term: string; children: ReactNode }) {
-  return (
-    <div className="flex items-baseline justify-between gap-3 border-b border-line py-2 last:border-b-0">
-      <dt className="font-sans text-sm text-ink-muted">{term}</dt>
-      <dd className="font-sans text-sm font-medium text-ink">{children}</dd>
-    </div>
+    <Preview label={label}>
+      <div className="flex flex-col gap-3">{children}</div>
+    </Preview>
   )
 }
 
@@ -181,6 +185,11 @@ type Draft = AvailabilityStoreSettings
 
 /**
  * 設定ガイド 6 工程（AC-EYEX-40）とその編集画面。
+ *
+ * 見た目は承認済みモック `settings-complete-approved.html` の語彙
+ * （`design/layouts` の `GuideLayout` / `GuideStep`、`design/surfaces` の
+ * `FieldCard` / `Preview`）で組む。本文は読み取りカードが既定で、入力欄は
+ * 明示的な「編集」の先にある。
  *
  * 下書き・影響確認・Web予約公開の API はまだ無い。無いものは推測せず、
  * 未取得 / 準備中 として画面に出す。
@@ -204,6 +213,11 @@ export function SettingsScreen({
   const [selectedPurposeId, setSelectedPurposeId] = useState<string>()
   const [error, setError] = useState<string>()
   const [saved, setSaved] = useState(false)
+  /**
+   * 入力欄を開いているか。工程を移ると閉じる — 別の工程の欄がいきなり開いて
+   * いると、いま何を直しているのかが読めなくなる。
+   */
+  const [editing, setEditing] = useState(false)
   const [exceptionDate, setExceptionDate] = useState('')
   const [exceptionMode, setExceptionMode] = useState<AvailabilityExceptionMode>('closed')
   const [exceptionReason, setExceptionReason] = useState('')
@@ -243,22 +257,17 @@ export function SettingsScreen({
     // 承認済みモック exception-states-approved.html #permission-denied の文言と
     // 回復手段。設定の存在や中身はここから先を一切描かない。
     return (
-      <section aria-label="店舗設定" className="mx-auto max-w-3xl space-y-4 p-8 text-center">
-        <p aria-hidden="true" className="font-display text-5xl text-pine">
-          —
-        </p>
-        <h2 className="font-display font-semibold text-2xl text-ink">
-          この設定を表示する権限がありません
-        </h2>
-        <p className="font-sans text-ink-muted text-sm">
-          権限のある管理者に確認してください。設定の存在や内容はこれ以上表示しません。
-        </p>
-        <div className="flex justify-center">
-          <Button className="min-h-12" onClick={() => navigate({ screen: 'home' })}>
+      <FullScreenState
+        glyph="—"
+        title="この設定を表示する権限がありません"
+        actions={
+          <Action size="roomy" variant="primary" onClick={() => navigate({ screen: 'home' })}>
             業務開始画面へ戻る
-          </Button>
-        </div>
-      </section>
+          </Action>
+        }
+      >
+        <p>権限のある管理者に確認してください。設定の存在や内容はこれ以上表示しません。</p>
+      </FullScreenState>
     )
   }
 
@@ -269,6 +278,12 @@ export function SettingsScreen({
   })
   const summary = stepperSummary(states, current)
   const activeStep = SETTINGS_STEP_BY_ID[current]
+  const nextStep = SETTINGS_STEPS[activeStep.number]
+
+  const goToStep = (id: SettingsStepId) => {
+    setCurrent(id)
+    setEditing(false)
+  }
 
   const update = (change: (previous: Draft) => Draft) => {
     setSaved(false)
@@ -379,850 +394,721 @@ export function SettingsScreen({
     setSaved(true)
   }
 
-  return (
-    <section
-      aria-label="店舗設定"
-      className="flex min-h-full flex-col gap-4 p-4 md:flex-row md:p-6"
-    >
-      <nav
-        aria-label="設定工程"
-        className="sticky top-0 z-10 shrink-0 rounded-ctl border border-line bg-surface p-3 md:static md:w-64 md:p-4"
-      >
-        <div className="flex items-baseline justify-between gap-2 font-sans text-xs text-ink-muted md:hidden">
-          <span className="font-semibold text-pine">{summary.headline}</span>
+  /* ---------------- 工程レール（モックの `.steps`） ---------------- */
+
+  const rail = (
+    <>
+      {/*
+       * SP 幅だけに出す固定ステッパーの要約（AC-EYEX-72, 73）。iPad 幅の
+       * モックには無い段なので、そこでは出さない。
+       */}
+      <div className="md:hidden">
+        <p className="my-0 flex items-baseline justify-between gap-2 text-note">
+          <span className="font-bold text-pine">{summary.headline}</span>
           <span>{summary.remainingLabel}</span>
-        </div>
-        <p className="font-sans text-xs text-ink-muted md:hidden">
-          現在の状態: {summary.stateLabel}
         </p>
-        <ol className="mt-2 grid grid-cols-6 gap-1 md:mt-0 md:flex md:flex-col md:gap-1">
-          {SETTINGS_STEPS.map((candidate, index) => {
-            const state = states[candidate.id]
+        <p className="my-0 text-note">{`現在の状態: ${summary.stateLabel}`}</p>
+      </div>
+      {SETTINGS_STEPS.map((candidate) => (
+        <GuideStep
+          key={candidate.id}
+          index={candidate.number}
+          label={candidate.label}
+          state={RAIL_STATE[states[candidate.id]]}
+          // レールに出る字は番号か ✓ と工程名だけ。状態の語は読み上げの名前が持つ。
+          name={`工程${candidate.number} ${candidate.label} ${STEP_STATE_LABEL[states[candidate.id]]}`}
+          onClick={() => goToStep(candidate.id)}
+        />
+      ))}
+    </>
+  )
+
+  /* ---------------- 工程 1: 店舗と営業時間 ---------------- */
+
+  const hours = draft ? summariseBusinessHours(draft.businessHours) : undefined
+  const closedDates = (draft?.exceptions ?? [])
+    .filter((exception) => exception.mode === 'closed')
+    .map((exception) => formatJapaneseDate(exception.date))
+  const openExceptions = (draft?.exceptions ?? [])
+    .filter((exception) => exception.mode === 'open')
+    .map(
+      (exception) =>
+        `${formatJapaneseDate(exception.date)} ${exception.periods.map((period) => formatRange(period)).join('・')}`,
+    )
+  const pausedExceptions = (draft?.exceptions ?? [])
+    .filter((exception) => exception.mode === 'paused')
+    .map((exception) => formatJapaneseDate(exception.date))
+
+  const storeHours = draft && hours && (
+    <>
+      <CardGrid columns={2} mt={4}>
+        <FieldCard title="通常営業時間">
+          <Lines lines={hours.openLines.length > 0 ? hours.openLines : ['設定なし']} />
+        </FieldCard>
+        <FieldCard title="休業日">{[hours.closedLabel, ...closedDates].join('・')}</FieldCard>
+        <FieldCard title="臨時営業">
+          <Lines lines={openExceptions.length > 0 ? openExceptions : ['設定なし']} />
+        </FieldCard>
+        <FieldCard title="受付停止">
+          <Lines
+            lines={
+              draft.receptionStatus === 'paused'
+                ? ['受付停止', ...pausedExceptions]
+                : pausedExceptions.length > 0
+                  ? pausedExceptions
+                  : ['設定なし']
+            }
+          />
+        </FieldCard>
+      </CardGrid>
+      {editing && canManage && (
+        <Editor label="営業時間の編集">
+          {WEEKDAY_LABEL.map((name, dayOfWeek) => {
+            const period = periodOf(dayOfWeek)
             return (
-              <li key={candidate.id} className="relative">
-                {index > 0 && (
-                  <span
-                    aria-hidden="true"
-                    className="-left-1/2 absolute top-4 right-1/2 h-px bg-line md:hidden"
+              <div key={name} className="flex flex-wrap items-end gap-3">
+                <span className="min-h-12 w-12 leading-12">{name}曜</span>
+                <label className="flex min-h-12 items-center gap-2">
+                  <input
+                    type="checkbox"
+                    aria-label={`${name}曜を営業日にする`}
+                    checked={period !== undefined}
+                    onChange={(event) =>
+                      setDayPeriod(
+                        dayOfWeek,
+                        event.target.checked ? { startTime: '10:00', endTime: '19:00' } : undefined,
+                      )
+                    }
                   />
-                )}
-                <button
-                  type="button"
-                  aria-label={`工程${candidate.number} ${candidate.label} ${STEP_STATE_LABEL[state]}`}
-                  aria-current={state === 'editing' ? 'step' : undefined}
-                  onClick={() => setCurrent(candidate.id)}
-                  className="relative flex min-h-12 w-full flex-col items-center gap-1 rounded-ctl px-1 py-2 text-center font-sans focus-visible:ring-2 focus-visible:ring-pine focus-visible:outline-none md:flex-row md:items-baseline md:gap-2 md:px-3 md:text-left"
-                >
-                  <span
-                    aria-hidden="true"
-                    className={`grid size-8 shrink-0 place-items-center rounded-full border font-mono text-xs ${
-                      state === 'complete'
-                        ? 'border-pine bg-pine/10 text-pine'
-                        : state === 'editing'
-                          ? 'border-pine bg-pine text-on-pine'
-                          : 'border-line bg-surface text-ink-muted'
-                    }`}
-                  >
-                    {state === 'complete' ? '✓' : candidate.number}
-                  </span>
-                  <span className="text-xs leading-tight text-ink md:hidden">
-                    {candidate.shortLabel}
-                  </span>
-                  <span className="hidden text-sm text-ink md:inline md:flex-1">
-                    {candidate.label}
-                  </span>
-                  <span className="hidden font-sans text-xs text-ink-muted md:inline">
-                    {STEP_STATE_LABEL[state]}
-                  </span>
-                </button>
-              </li>
+                  営業
+                </label>
+                <TextField
+                  id={`business-start-${dayOfWeek}`}
+                  hideLabel
+                  label={`${name}曜の営業開始`}
+                  {...TIME_HINT}
+                  className="max-w-32"
+                  value={period?.startTime ?? ''}
+                  disabled={!period}
+                  onChange={(event) =>
+                    period && setDayPeriod(dayOfWeek, { ...period, startTime: event.target.value })
+                  }
+                />
+                <TextField
+                  id={`business-end-${dayOfWeek}`}
+                  hideLabel
+                  label={`${name}曜の営業終了`}
+                  {...TIME_HINT}
+                  className="max-w-32"
+                  value={period?.endTime ?? ''}
+                  disabled={!period}
+                  onChange={(event) =>
+                    period && setDayPeriod(dayOfWeek, { ...period, endTime: event.target.value })
+                  }
+                />
+              </div>
             )
           })}
-        </ol>
-      </nav>
 
-      <div className="min-w-0 flex-1 space-y-4">
-        <header className="space-y-1">
-          <h1 className="font-display text-xl font-semibold text-ink">{storeName} · 設定ガイド</h1>
-          <p className="font-sans text-sm text-ink-muted">
-            適用元:{' '}
-            {chainDefaults ? (chainDefaults.source === 'chain' ? '全店共通' : '店舗設定') : UNKNOWN}
-          </p>
-          {chainDefaults && chainDefaults.overriddenFields.length > 0 && (
-            <p className="font-sans text-sm text-ink-muted">
-              店舗上書き: {chainDefaults.overriddenFields.join('、')}
-            </p>
-          )}
-          {!canManage && <Notice tone="info">設定を変更する権限がありません。</Notice>}
-          {error && <Notice>{error}</Notice>}
-          {saved && <Notice tone="success">設定を保存しました。</Notice>}
-        </header>
-
-        {/* 第6工程は公開画面が自分の見出しを持つ（モックどおり見出しを重ねない）。 */}
-        {current !== 'impact' && (
-          <div className="space-y-2">
-            <h2 className="font-display text-lg font-semibold text-ink">{activeStep.label}</h2>
-            <p className="font-sans text-sm text-ink-muted">{activeStep.description}</p>
+          <ul aria-label="臨時営業・休業日" className="flex flex-col gap-2">
+            {draft.exceptions.length === 0 && <li>設定なし</li>}
+            {draft.exceptions.map((exception) => (
+              <li
+                key={`${exception.date}-${exception.mode}`}
+                className="flex flex-wrap items-center gap-3"
+              >
+                <span>{exception.date}</span>
+                <span>{EXCEPTION_MODE_LABEL[exception.mode]}</span>
+                <span>{exception.periods.map((period) => formatRange(period)).join('・')}</span>
+                <span>{exception.reason ?? ''}</span>
+              </li>
+            ))}
+          </ul>
+          <div className="flex flex-wrap items-end gap-3">
+            <TextField
+              id="exception-date"
+              label="日付"
+              {...DATE_HINT}
+              value={exceptionDate}
+              onChange={(event) => setExceptionDate(event.target.value)}
+            />
+            <SelectField
+              id="exception-mode"
+              label="区分"
+              value={exceptionMode}
+              onChange={(event) =>
+                setExceptionMode(event.target.value as AvailabilityExceptionMode)
+              }
+            >
+              <option value="closed">休業</option>
+              <option value="open">臨時営業</option>
+              <option value="paused">受付停止</option>
+            </SelectField>
+            <TextField
+              id="exception-reason"
+              label="理由"
+              value={exceptionReason}
+              onChange={(event) => setExceptionReason(event.target.value)}
+            />
+            <Action
+              onClick={() => {
+                if (exceptionDate === '') return
+                const exception: AvailabilityException = {
+                  date: exceptionDate,
+                  mode: exceptionMode,
+                  periods:
+                    exceptionMode === 'open' ? [{ startTime: '10:00', endTime: '17:00' }] : [],
+                  ...(exceptionReason === '' ? {} : { reason: exceptionReason }),
+                }
+                update((previous) => ({
+                  ...previous,
+                  exceptions: [...previous.exceptions, exception],
+                }))
+                setExceptionDate('')
+                setExceptionReason('')
+              }}
+            >
+              臨時設定を追加
+            </Action>
           </div>
-        )}
 
-        {!draft && !error && <p className="font-sans text-sm text-ink-muted">読み込み中です。</p>}
+          <SelectField
+            id="reception-status"
+            label="受付状態"
+            value={draft.receptionStatus}
+            onChange={(event) =>
+              update((previous) => ({
+                ...previous,
+                receptionStatus: event.target.value === 'paused' ? 'paused' : 'open',
+              }))
+            }
+          >
+            <option value="open">受付中</option>
+            <option value="paused">受付停止</option>
+          </SelectField>
+          <p className="my-0">
+            受付停止は新しいWeb予約だけを止めます。既存予約は取り消されません。
+          </p>
+        </Editor>
+      )}
+    </>
+  )
 
-        {draft && current === 'store-hours' && (
-          <div className="space-y-4">
-            <Panel label="営業時間" className="space-y-3">
-              {WEEKDAY_LABEL.map((name, dayOfWeek) => {
-                const period = periodOf(dayOfWeek)
-                return (
-                  <div key={name} className="flex flex-wrap items-center gap-3">
-                    <span className="w-12 font-sans text-sm text-ink">{name}曜</span>
-                    {canManage ? (
-                      <>
-                        <label className="flex min-h-12 items-center gap-2 font-sans text-sm text-ink">
-                          <input
-                            type="checkbox"
-                            aria-label={`${name}曜を営業日にする`}
-                            checked={period !== undefined}
-                            onChange={(event) =>
-                              setDayPeriod(
-                                dayOfWeek,
-                                event.target.checked
-                                  ? { startTime: '10:00', endTime: '19:00' }
-                                  : undefined,
-                              )
-                            }
-                          />
-                          営業
-                        </label>
-                        <TextInput
-                          type="time"
-                          aria-label={`${name}曜の営業開始`}
-                          className="min-h-12 w-32"
-                          value={period?.startTime ?? ''}
-                          disabled={!period}
-                          onChange={(event) =>
-                            period &&
-                            setDayPeriod(dayOfWeek, { ...period, startTime: event.target.value })
-                          }
-                        />
-                        <TextInput
-                          type="time"
-                          aria-label={`${name}曜の営業終了`}
-                          className="min-h-12 w-32"
-                          value={period?.endTime ?? ''}
-                          disabled={!period}
-                          onChange={(event) =>
-                            period &&
-                            setDayPeriod(dayOfWeek, { ...period, endTime: event.target.value })
-                          }
-                        />
-                      </>
-                    ) : (
-                      <span className="font-sans text-sm text-ink">{formatRange(period)}</span>
-                    )}
-                  </div>
-                )
-              })}
-            </Panel>
+  /* ---------------- 工程 2: 来店目的 ---------------- */
 
-            <Panel label="臨時営業・休業日" className="space-y-3">
-              <h3 className="font-display text-base font-semibold text-ink">臨時営業・休業日</h3>
-              <ul aria-label="臨時営業・休業日" className="space-y-2">
-                {draft.exceptions.length === 0 && (
-                  <li className="font-sans text-sm text-ink-muted">設定なし</li>
-                )}
-                {draft.exceptions.map((exception) => (
-                  <li
-                    key={`${exception.date}-${exception.mode}`}
-                    className="flex flex-wrap items-center gap-3 font-sans text-sm text-ink"
-                  >
-                    <span>{exception.date}</span>
-                    <Chip>{EXCEPTION_MODE_LABEL[exception.mode]}</Chip>
-                    <span>{exception.periods.map((period) => formatRange(period)).join('・')}</span>
-                    <span className="text-ink-muted">{exception.reason ?? ''}</span>
-                  </li>
-                ))}
-              </ul>
-              {canManage && (
-                <div className="flex flex-wrap items-end gap-3">
-                  <Field label="日付" htmlFor="exception-date">
-                    <TextInput
-                      id="exception-date"
-                      type="date"
-                      className="min-h-12"
-                      value={exceptionDate}
-                      onChange={(event) => setExceptionDate(event.target.value)}
-                    />
-                  </Field>
-                  <Field label="区分" htmlFor="exception-mode">
-                    <Select
-                      id="exception-mode"
-                      className="min-h-12"
-                      value={exceptionMode}
-                      onChange={(event) =>
-                        setExceptionMode(event.target.value as AvailabilityExceptionMode)
-                      }
-                    >
-                      <option value="closed">休業</option>
-                      <option value="open">臨時営業</option>
-                      <option value="paused">受付停止</option>
-                    </Select>
-                  </Field>
-                  <Field label="理由" htmlFor="exception-reason">
-                    <TextInput
-                      id="exception-reason"
-                      className="min-h-12"
-                      value={exceptionReason}
-                      onChange={(event) => setExceptionReason(event.target.value)}
-                    />
-                  </Field>
-                  <Button
-                    className="min-h-12"
-                    onClick={() => {
-                      if (exceptionDate === '') return
-                      const exception: AvailabilityException = {
-                        date: exceptionDate,
-                        mode: exceptionMode,
-                        periods:
-                          exceptionMode === 'open'
-                            ? [{ startTime: '10:00', endTime: '17:00' }]
-                            : [],
-                        ...(exceptionReason === '' ? {} : { reason: exceptionReason }),
-                      }
-                      update((previous) => ({
-                        ...previous,
-                        exceptions: [...previous.exceptions, exception],
-                      }))
-                      setExceptionDate('')
-                      setExceptionReason('')
-                    }}
-                  >
-                    臨時設定を追加
-                  </Button>
-                </div>
-              )}
-            </Panel>
+  const purposes = draft && (
+    <div>
+      {draft.purposes.length === 0 ? (
+        <Preview label="標準テンプレート">
+          <b>標準テンプレート</b>
+          <span className="block">
+            新規店舗向けの初期値です。読み込んだあとで店舗ごとに変更できます。
+          </span>
+          {DEFAULT_PURPOSE_TEMPLATE.map((template) => (
+            <span key={template.staffName} className="mt-2.5 block">
+              <b>{template.staffName}</b>
+              <span className="block">{template.customerLabel}</span>
+              <span className="block">
+                {`${template.durationMinutes}分 · ${template.slotIntervalMinutes}分単位 · 同時${template.maxConcurrent}件`}
+              </span>
+              <span className="block">{`技能: ${template.requiredSkills.join('、')}`}</span>
+              <span className="block">{`設備: ${template.requiredEquipment.join('、')}`}</span>
+              <span className="block">{template.isPublic ? 'Web公開' : 'Web非公開'}</span>
+            </span>
+          ))}
+          {canManage && (
+            <Actions gap={2.5} mt={4}>
+              <Action
+                onClick={() =>
+                  update((previous) => {
+                    const loaded = DEFAULT_PURPOSE_TEMPLATE.map((template) => ({
+                      id: newId(),
+                      ...template,
+                    }))
+                    setSelectedPurposeId(loaded[0]?.id)
+                    return { ...previous, purposes: loaded }
+                  })
+                }
+              >
+                標準テンプレートを読み込む
+              </Action>
+            </Actions>
+          )}
+        </Preview>
+      ) : (
+        selectedPurpose && (
+          <>
+            <CardGrid columns={2} mt={4}>
+              <FieldCard title="スタッフ向け名称">{selectedPurpose.staffName}</FieldCard>
+              <FieldCard title="お客様への質問">{selectedPurpose.customerLabel}</FieldCard>
+              <FieldCard title="標準所要時間">
+                {`${selectedPurpose.durationMinutes}分 · ${selectedPurpose.slotIntervalMinutes}分単位`}
+              </FieldCard>
+              <FieldCard title="同時受付数">{`${selectedPurpose.maxConcurrent}件`}</FieldCard>
+              <FieldCard title="必要技能">{selectedPurpose.requiredSkills.join('・')}</FieldCard>
+              <FieldCard title="必要設備">{selectedPurpose.requiredEquipment.join('・')}</FieldCard>
+            </CardGrid>
+            {/* 店員向けの名称ではなく、お客様に見える言い回しで確認させる。 */}
+            <Preview label="Web予約プレビュー">
+              <b>Web予約プレビュー</b>
+              <br />
+              {`${selectedPurpose.customerLabel} · 約${selectedPurpose.durationMinutes}分`}
+              <span className="block">
+                {selectedPurpose.isPublic
+                  ? 'この目的はWeb予約の選択肢に表示されます。'
+                  : 'この目的はWeb予約の選択肢に表示されません。'}
+              </span>
+            </Preview>
+            {editing && canManage && (
+              <Editor label="来店目的の編集">
+                <TextField
+                  id="purpose-staff-name"
+                  label="スタッフ向け名称"
+                  value={selectedPurpose.staffName}
+                  onChange={(event) => updatePurpose({ staffName: event.target.value })}
+                />
+                <TextField
+                  id="purpose-customer-label"
+                  label="顧客向け表示名"
+                  value={selectedPurpose.customerLabel}
+                  onChange={(event) => updatePurpose({ customerLabel: event.target.value })}
+                />
+                <TextField
+                  id="purpose-duration"
+                  label="標準所要時間（分）"
+                  type="number"
+                  value={selectedPurpose.durationMinutes}
+                  onChange={(event) =>
+                    updatePurpose({ durationMinutes: Number(event.target.value) })
+                  }
+                />
+                <TextField
+                  id="purpose-interval"
+                  label="時間調整単位（分）"
+                  type="number"
+                  value={selectedPurpose.slotIntervalMinutes}
+                  onChange={(event) =>
+                    updatePurpose({ slotIntervalMinutes: Number(event.target.value) })
+                  }
+                />
+                <TextField
+                  id="purpose-concurrent"
+                  label="同時受付数"
+                  type="number"
+                  value={selectedPurpose.maxConcurrent}
+                  onChange={(event) => updatePurpose({ maxConcurrent: Number(event.target.value) })}
+                />
+                <TextField
+                  id="purpose-skills"
+                  label="必要技能"
+                  value={selectedPurpose.requiredSkills.join(', ')}
+                  onChange={(event) =>
+                    updatePurpose({ requiredSkills: splitList(event.target.value) })
+                  }
+                />
+                <TextField
+                  id="purpose-equipment"
+                  label="必要設備"
+                  value={selectedPurpose.requiredEquipment.join(', ')}
+                  onChange={(event) =>
+                    updatePurpose({ requiredEquipment: splitList(event.target.value) })
+                  }
+                />
+                <label className="flex min-h-12 items-center gap-2">
+                  <input
+                    type="checkbox"
+                    aria-label="Web予約に公開する"
+                    checked={selectedPurpose.isPublic}
+                    onChange={(event) => updatePurpose({ isPublic: event.target.checked })}
+                  />
+                  Web予約に公開する
+                </label>
+                <p className="my-0">
+                  非公開にすると新規の選択肢から外れます。既存予約と履歴は削除されません。
+                </p>
+              </Editor>
+            )}
+          </>
+        )
+      )}
+    </div>
+  )
 
-            <Panel label="受付停止" className="space-y-3">
-              <h3 className="font-display text-base font-semibold text-ink">受付状態</h3>
-              {canManage ? (
-                <Field label="受付状態" htmlFor="reception-status">
-                  <Select
-                    id="reception-status"
-                    className="min-h-12"
-                    value={draft.receptionStatus}
+  /* ---------------- 工程 3: スタッフと技能 ---------------- */
+
+  const staffSkills = draft && (
+    <>
+      {draft.staff.length === 0 && (
+        <Card className="mt-4 min-h-19">スタッフが登録されていません。</Card>
+      )}
+      {draft.staff.map((member) => {
+        const shift = shiftOf(member.id)
+        const line = [
+          `勤務 ${formatRange(shift)}`,
+          ...(shift?.breaks[0] ? [`休憩 ${formatRange(shift.breaks[0])}`] : []),
+          member.canBook ? '予約受付可' : '予約受付不可',
+        ].join(' · ')
+        return (
+          // カードは隙間なく縦に接する。空けると「1 人 1 枚」ではなく
+          // 「別々の設定」に読めてしまう（モックの `.card` に margin が無い）。
+          <Card key={member.id} className="min-h-19">
+            <b>{member.name}</b>
+            {'　'}
+            {member.skills.join('・')}
+            <br />
+            {line}
+          </Card>
+        )
+      })}
+      {editing && canManage && (
+        <Editor label="スタッフと技能の編集">
+          {draft.staff.map((member) => {
+            const shift = shiftOf(member.id)
+            return (
+              <div key={member.id} className="flex flex-wrap items-end gap-3">
+                <TextField
+                  id={`skills-${member.id}`}
+                  label={`${member.name}の技能`}
+                  value={member.skills.join(', ')}
+                  onChange={(event) =>
+                    update((previous) => ({
+                      ...previous,
+                      staff: previous.staff.map((row) =>
+                        row.id === member.id
+                          ? { ...row, skills: splitList(event.target.value) }
+                          : row,
+                      ),
+                    }))
+                  }
+                />
+                <TextField
+                  id={`shift-start-${member.id}`}
+                  label={`${member.name}の勤務開始`}
+                  {...TIME_HINT}
+                  value={shift?.startTime ?? ''}
+                  onChange={(event) => updateShift(member.id, { startTime: event.target.value })}
+                />
+                <TextField
+                  id={`shift-end-${member.id}`}
+                  label={`${member.name}の勤務終了`}
+                  {...TIME_HINT}
+                  value={shift?.endTime ?? ''}
+                  onChange={(event) => updateShift(member.id, { endTime: event.target.value })}
+                />
+                <TextField
+                  id={`break-start-${member.id}`}
+                  label={`${member.name}の休憩開始`}
+                  {...TIME_HINT}
+                  value={shift?.breaks[0]?.startTime ?? ''}
+                  onChange={(event) =>
+                    updateShift(member.id, {
+                      breaks: [
+                        {
+                          startTime: event.target.value,
+                          endTime: shift?.breaks[0]?.endTime ?? event.target.value,
+                        },
+                      ],
+                    })
+                  }
+                />
+                <TextField
+                  id={`break-end-${member.id}`}
+                  label={`${member.name}の休憩終了`}
+                  {...TIME_HINT}
+                  value={shift?.breaks[0]?.endTime ?? ''}
+                  onChange={(event) =>
+                    updateShift(member.id, {
+                      breaks: [
+                        {
+                          startTime: shift?.breaks[0]?.startTime ?? event.target.value,
+                          endTime: event.target.value,
+                        },
+                      ],
+                    })
+                  }
+                />
+                <label className="flex min-h-12 items-center gap-2">
+                  <input
+                    type="checkbox"
+                    aria-label={`${member.name}は予約を受け付ける`}
+                    checked={member.canBook}
                     onChange={(event) =>
                       update((previous) => ({
                         ...previous,
-                        receptionStatus: event.target.value === 'paused' ? 'paused' : 'open',
+                        staff: previous.staff.map((row) =>
+                          row.id === member.id ? { ...row, canBook: event.target.checked } : row,
+                        ),
                       }))
                     }
-                  >
-                    <option value="open">受付中</option>
-                    <option value="paused">受付停止</option>
-                  </Select>
-                </Field>
-              ) : (
-                <p className="font-sans text-sm text-ink">
-                  {draft.receptionStatus === 'paused' ? '受付停止' : '受付中'}
-                </p>
-              )}
-              <p className="font-sans text-sm text-ink-muted">
-                受付停止は新しいWeb予約だけを止めます。既存予約は取り消されません。
-              </p>
-            </Panel>
-          </div>
-        )}
-
-        {draft && current === 'purposes' && (
-          <div className="space-y-4">
-            {draft.purposes.length === 0 ? (
-              <Panel label="標準テンプレート" className="space-y-3">
-                <h3 className="font-display text-base font-semibold text-ink">標準テンプレート</h3>
-                <p className="font-sans text-sm text-ink-muted">
-                  新規店舗向けの初期値です。読み込んだあとで店舗ごとに変更できます。
-                </p>
-                <ul className="space-y-2">
-                  {DEFAULT_PURPOSE_TEMPLATE.map((template) => (
-                    <li
-                      key={template.staffName}
-                      className="space-y-1 rounded-ctl border border-line p-3 font-sans text-sm text-ink"
-                    >
-                      <span className="block font-medium">{template.staffName}</span>
-                      <span className="block text-ink-muted">{template.customerLabel}</span>
-                      <span className="block text-ink-muted">
-                        {template.durationMinutes}分 · {template.slotIntervalMinutes}分単位 · 同時
-                        {template.maxConcurrent}件
-                      </span>
-                      <span className="block text-ink-muted">
-                        技能: {template.requiredSkills.join('、')}
-                      </span>
-                      <span className="block text-ink-muted">
-                        設備: {template.requiredEquipment.join('、')}
-                      </span>
-                      <Chip tone={template.isPublic ? 'success' : 'neutral'}>
-                        {template.isPublic ? 'Web公開' : 'Web非公開'}
-                      </Chip>
-                    </li>
-                  ))}
-                </ul>
-                {canManage && (
-                  <Button
-                    className="min-h-12"
-                    onClick={() =>
-                      update((previous) => {
-                        const purposes = DEFAULT_PURPOSE_TEMPLATE.map((template) => ({
-                          id: newId(),
-                          ...template,
-                        }))
-                        setSelectedPurposeId(purposes[0]?.id)
-                        return { ...previous, purposes }
-                      })
-                    }
-                  >
-                    標準テンプレートを読み込む
-                  </Button>
-                )}
-              </Panel>
-            ) : (
-              <div className="grid gap-4 md:grid-cols-[16rem_1fr]">
-                <Panel label="来店目的" className="space-y-2">
-                  <ul className="space-y-1">
-                    {draft.purposes.map((purpose) => (
-                      <li key={purpose.id}>
-                        <button
-                          type="button"
-                          onClick={() => setSelectedPurposeId(purpose.id)}
-                          aria-current={purpose.id === selectedPurposeId ? 'true' : undefined}
-                          className="min-h-12 w-full rounded-ctl px-3 py-2 text-left font-sans text-sm text-ink focus-visible:ring-2 focus-visible:ring-pine focus-visible:outline-none"
-                        >
-                          {purpose.staffName}
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                </Panel>
-
-                {selectedPurpose && (
-                  <div className="space-y-4">
-                    <Panel label="来店目的の設定" className="space-y-3">
-                      {canManage ? (
-                        <>
-                          <Field label="スタッフ向け名称" htmlFor="purpose-staff-name">
-                            <TextInput
-                              id="purpose-staff-name"
-                              className="min-h-12"
-                              value={selectedPurpose.staffName}
-                              onChange={(event) => updatePurpose({ staffName: event.target.value })}
-                            />
-                          </Field>
-                          <Field label="顧客向け表示名" htmlFor="purpose-customer-label">
-                            <TextInput
-                              id="purpose-customer-label"
-                              className="min-h-12"
-                              value={selectedPurpose.customerLabel}
-                              onChange={(event) =>
-                                updatePurpose({ customerLabel: event.target.value })
-                              }
-                            />
-                          </Field>
-                          <Field label="標準所要時間（分）" htmlFor="purpose-duration">
-                            <TextInput
-                              id="purpose-duration"
-                              type="number"
-                              className="min-h-12"
-                              value={selectedPurpose.durationMinutes}
-                              onChange={(event) =>
-                                updatePurpose({ durationMinutes: Number(event.target.value) })
-                              }
-                            />
-                          </Field>
-                          <Field label="時間調整単位（分）" htmlFor="purpose-interval">
-                            <TextInput
-                              id="purpose-interval"
-                              type="number"
-                              className="min-h-12"
-                              value={selectedPurpose.slotIntervalMinutes}
-                              onChange={(event) =>
-                                updatePurpose({ slotIntervalMinutes: Number(event.target.value) })
-                              }
-                            />
-                          </Field>
-                          <Field label="同時受付数" htmlFor="purpose-concurrent">
-                            <TextInput
-                              id="purpose-concurrent"
-                              type="number"
-                              className="min-h-12"
-                              value={selectedPurpose.maxConcurrent}
-                              onChange={(event) =>
-                                updatePurpose({ maxConcurrent: Number(event.target.value) })
-                              }
-                            />
-                          </Field>
-                          <Field label="必要技能" htmlFor="purpose-skills">
-                            <TextInput
-                              id="purpose-skills"
-                              className="min-h-12"
-                              value={selectedPurpose.requiredSkills.join(', ')}
-                              onChange={(event) =>
-                                updatePurpose({
-                                  requiredSkills: splitList(event.target.value),
-                                })
-                              }
-                            />
-                          </Field>
-                          <Field label="必要設備" htmlFor="purpose-equipment">
-                            <TextInput
-                              id="purpose-equipment"
-                              className="min-h-12"
-                              value={selectedPurpose.requiredEquipment.join(', ')}
-                              onChange={(event) =>
-                                updatePurpose({
-                                  requiredEquipment: splitList(event.target.value),
-                                })
-                              }
-                            />
-                          </Field>
-                          <label className="flex min-h-12 items-center gap-2 font-sans text-sm text-ink">
-                            <input
-                              type="checkbox"
-                              aria-label="Web予約に公開する"
-                              checked={selectedPurpose.isPublic}
-                              onChange={(event) =>
-                                updatePurpose({ isPublic: event.target.checked })
-                              }
-                            />
-                            Web予約に公開する
-                          </label>
-                        </>
-                      ) : (
-                        <dl>
-                          <Row term="スタッフ向け名称">{selectedPurpose.staffName}</Row>
-                          <Row term="顧客向け表示名">{selectedPurpose.customerLabel}</Row>
-                          <Row term="標準所要時間">{selectedPurpose.durationMinutes}分</Row>
-                          <Row term="必要技能">{selectedPurpose.requiredSkills.join('、')}</Row>
-                          <Row term="必要設備">{selectedPurpose.requiredEquipment.join('、')}</Row>
-                        </dl>
-                      )}
-                      <p className="font-sans text-sm text-ink-muted">
-                        非公開にすると新規の選択肢から外れます。既存予約と履歴は削除されません。
-                      </p>
-                    </Panel>
-
-                    <Panel label="Web予約プレビュー" className="space-y-2">
-                      <h3 className="font-display text-base font-semibold text-ink">
-                        Web予約プレビュー
-                      </h3>
-                      <p className="font-sans text-base text-ink">
-                        {selectedPurpose.customerLabel}
-                      </p>
-                      <p className="font-sans text-sm text-ink-muted">
-                        約{selectedPurpose.durationMinutes}分
-                      </p>
-                      <p className="font-sans text-sm text-ink-muted">
-                        {selectedPurpose.isPublic
-                          ? 'この目的はWeb予約の選択肢に表示されます。'
-                          : 'この目的はWeb予約の選択肢に表示されません。'}
-                      </p>
-                    </Panel>
-                  </div>
-                )}
+                  />
+                  予約受付可
+                </label>
               </div>
+            )
+          })}
+        </Editor>
+      )}
+    </>
+  )
+
+  /* ---------------- 工程 4: 設備と点検 ---------------- */
+
+  const maintenanceLines = (draft?.maintenance ?? []).flatMap((item) => {
+    const equipment = draft?.equipment.find((row) => row.id === item.equipmentId)
+    return [
+      `${equipment?.name ?? UNKNOWN} · ${formatSlashDate(item.date)} ${item.startTime}–${item.endTime}`,
+      item.reason,
+    ]
+  })
+
+  const equipment = draft && (
+    <>
+      <CardGrid columns={2} mt={4}>
+        {draft.equipment.map((item) => (
+          <FieldCard key={item.id} title={item.name}>
+            {`${item.capacity}台 · ${formatRange(item.availablePeriods[0])}`}
+          </FieldCard>
+        ))}
+        {/* 点検停止も設備と同じ 1 枚のカードで並ぶ。停止だけ別扱いにすると、
+            「今日この店で使えるもの」を数えるのに 2 か所を見ることになる。 */}
+        <FieldCard title="点検停止">
+          <Lines lines={maintenanceLines.length > 0 ? maintenanceLines : ['設定なし']} />
+        </FieldCard>
+      </CardGrid>
+      {editing && canManage && (
+        <Editor label="設備の編集">
+          {draft.equipment.map((item) => (
+            <div key={item.id} className="flex flex-wrap items-end gap-3">
+              <TextField
+                id={`capacity-${item.id}`}
+                label={`${item.name}の台数`}
+                type="number"
+                value={item.capacity}
+                onChange={(event) =>
+                  update((previous) => ({
+                    ...previous,
+                    equipment: previous.equipment.map((row) =>
+                      row.id === item.id ? { ...row, capacity: Number(event.target.value) } : row,
+                    ),
+                  }))
+                }
+              />
+              <TextField
+                id={`equipment-start-${item.id}`}
+                label={`${item.name}の利用可能開始`}
+                {...TIME_HINT}
+                value={item.availablePeriods[0]?.startTime ?? ''}
+                onChange={(event) =>
+                  update((previous) => ({
+                    ...previous,
+                    equipment: previous.equipment.map((row) =>
+                      row.id === item.id
+                        ? {
+                            ...row,
+                            availablePeriods: [
+                              {
+                                startTime: event.target.value,
+                                endTime: row.availablePeriods[0]?.endTime ?? '19:00',
+                              },
+                            ],
+                          }
+                        : row,
+                    ),
+                  }))
+                }
+              />
+              <TextField
+                id={`equipment-end-${item.id}`}
+                label={`${item.name}の利用可能終了`}
+                {...TIME_HINT}
+                value={item.availablePeriods[0]?.endTime ?? ''}
+                onChange={(event) =>
+                  update((previous) => ({
+                    ...previous,
+                    equipment: previous.equipment.map((row) =>
+                      row.id === item.id
+                        ? {
+                            ...row,
+                            availablePeriods: [
+                              {
+                                startTime: row.availablePeriods[0]?.startTime ?? '10:00',
+                                endTime: event.target.value,
+                              },
+                            ],
+                          }
+                        : row,
+                    ),
+                  }))
+                }
+              />
+            </div>
+          ))}
+        </Editor>
+      )}
+    </>
+  )
+
+  /* ---------------- 工程 5: Web予約 ---------------- */
+
+  const webBookingStep = draft && (
+    <>
+      <section aria-label="Web予約設定">
+        {/*
+         * モックの 6 枚に加えて「公開する来店目的」「受付時間」を同じ形で並べる。
+         * モックは 1 店舗ぶんの例なので出てこないが、この 2 つを落とすと
+         * 「何がWebに出ているのか」が画面のどこにも残らない。
+         */}
+        <CardGrid columns={2} mt={4}>
+          <FieldCard title="公開状態">{publishStateLabel}</FieldCard>
+          <FieldCard title="受付終了">{receptionEndLabel}</FieldCard>
+          <FieldCard title="予約可能期間">
+            {webBookingRules ? `${webBookingRules.bookableDays}日先まで` : UNKNOWN}
+          </FieldCard>
+          <FieldCard title="直前受付期限">
+            {webBookingRules ? formatCutoff(webBookingRules.cutoffMinutes) : UNKNOWN}
+          </FieldCard>
+          <FieldCard title="変更・取消期限">
+            {webBookingRules ? webBookingRules.changeDeadline : UNKNOWN}
+          </FieldCard>
+          <FieldCard title="期限後の案内">
+            {webBookingRules ? webBookingRules.afterDeadlineGuidance : UNKNOWN}
+          </FieldCard>
+          <FieldCard title="公開する来店目的">{publicPurposeLabel}</FieldCard>
+          {/* 曜日を 7 行並べるとカードだけが縦に伸びる。工程1と同じ要約で読ませる。 */}
+          <FieldCard title="受付時間">
+            <Lines lines={hours ? hours.openLines : [UNKNOWN]} />
+          </FieldCard>
+        </CardGrid>
+        {!webDraft && (
+          <Preview tone="caution" label="Web予約の取得状態">
+            Web予約の公開設定はまだ取得できていません。
+          </Preview>
+        )}
+        {editing && canManage && webDraft && (
+          <Editor label="Web予約の編集">
+            <SelectField
+              id="web-publish-status"
+              hideLabel
+              label="公開状態"
+              value={webDraft.status}
+              onChange={(event) =>
+                setWebDraft({
+                  ...webDraft,
+                  status: event.target.value === 'published' ? 'published' : 'hidden',
+                })
+              }
+            >
+              <option value="published">公開</option>
+              <option value="hidden">非公開</option>
+            </SelectField>
+            <TextField
+              id="web-starts-at"
+              hideLabel
+              label="公開開始日時（JST）"
+              {...DATE_TIME_HINT}
+              value={webDraft.startsAt ? toJstWallClock(webDraft.startsAt) : ''}
+              onChange={(event) =>
+                setWebDraft({ ...webDraft, startsAt: fromJstWallClock(event.target.value) })
+              }
+            />
+            <TextField
+              id="web-ends-at"
+              hideLabel
+              label="受付終了日時（JST）"
+              {...DATE_TIME_HINT}
+              value={webDraft.endsAt ? toJstWallClock(webDraft.endsAt) : ''}
+              onChange={(event) =>
+                setWebDraft({ ...webDraft, endsAt: fromJstWallClock(event.target.value) })
+              }
+            />
+            {draft.purposes.map((purpose) => (
+              <label key={purpose.id} className="flex min-h-12 items-center gap-2">
+                <input
+                  type="checkbox"
+                  aria-label={`${purpose.staffName}をWeb予約に公開する`}
+                  checked={webDraft.publicPurposeIds.includes(purpose.id)}
+                  onChange={(event) =>
+                    setWebDraft({
+                      ...webDraft,
+                      publicPurposeIds: event.target.checked
+                        ? [...webDraft.publicPurposeIds, purpose.id]
+                        : webDraft.publicPurposeIds.filter((id) => id !== purpose.id),
+                    })
+                  }
+                />
+                {purpose.staffName}
+              </label>
+            ))}
+            {/* 保存先の API がまだ無いことを黙らない。 */}
+            <p className="my-0">
+              Web予約の公開設定を保存するAPIはまだありません。ここでの変更は保存されません。
+            </p>
+            <p className="my-0">
+              受付停止は新しいWeb予約だけを止めます。既存予約は取り消されません。
+            </p>
+          </Editor>
+        )}
+      </section>
+      <Preview label="店舗ページプレビュー">
+        <b>店舗ページ</b>
+        {'　'}店舗名、アクセス、電話番号、注意事項をプレビュー
+        <span className="mt-2.5 block">{storeName}</span>
+        <span className="block">{webDraft ? webDraft.accessText : UNKNOWN}</span>
+        <span className="block">{webDraft ? webDraft.contactPhone : UNKNOWN}</span>
+        <span className="block">{webDraft ? webDraft.notice : UNKNOWN}</span>
+      </Preview>
+    </>
+  )
+
+  /* ---------------- 面 ---------------- */
+
+  const heading =
+    current === 'purposes' && selectedPurpose ? selectedPurpose.staffName : activeStep.label
+  const originLabel = chainDefaults
+    ? chainDefaults.source === 'chain'
+      ? '全店共通'
+      : '店舗設定'
+    : UNKNOWN
+
+  return (
+    <section aria-label="店舗設定" className="flex min-h-full flex-col font-sans">
+      <GuideLayout steps={rail}>
+        {/* 第6工程は公開画面が自分の見出しを持つ（モックどおり見出しを重ねない）。 */}
+        {current !== 'impact' && (
+          <>
+            <TitleRow push={<span>{`適用元: ${originLabel}`}</span>}>
+              <h1>{heading}</h1>
+            </TitleRow>
+            {chainDefaults && chainDefaults.overriddenFields.length > 0 && (
+              <p className="my-0">{`店舗上書き: ${chainDefaults.overriddenFields.join('、')}`}</p>
             )}
-          </div>
-        )}
-
-        {draft && current === 'staff-skills' && (
-          <Panel label="スタッフ" className="space-y-4">
-            <ul aria-label="スタッフ" className="space-y-4">
-              {draft.staff.length === 0 && (
-                <li className="font-sans text-sm text-ink-muted">スタッフが登録されていません。</li>
-              )}
-              {draft.staff.map((member) => {
-                const shift = shiftOf(member.id)
-                return (
-                  <li key={member.id} className="space-y-2 rounded-ctl border border-line p-3">
-                    <p className="font-sans text-sm font-medium text-ink">{member.name}</p>
-                    {canManage ? (
-                      <div className="flex flex-wrap items-end gap-3">
-                        <Field label={`${member.name}の技能`} htmlFor={`skills-${member.id}`}>
-                          <TextInput
-                            id={`skills-${member.id}`}
-                            className="min-h-12"
-                            value={member.skills.join(', ')}
-                            onChange={(event) =>
-                              update((previous) => ({
-                                ...previous,
-                                staff: previous.staff.map((row) =>
-                                  row.id === member.id
-                                    ? { ...row, skills: splitList(event.target.value) }
-                                    : row,
-                                ),
-                              }))
-                            }
-                          />
-                        </Field>
-                        <Field
-                          label={`${member.name}の勤務開始`}
-                          htmlFor={`shift-start-${member.id}`}
-                        >
-                          <TextInput
-                            id={`shift-start-${member.id}`}
-                            type="time"
-                            className="min-h-12"
-                            value={shift?.startTime ?? ''}
-                            onChange={(event) =>
-                              updateShift(member.id, { startTime: event.target.value })
-                            }
-                          />
-                        </Field>
-                        <Field
-                          label={`${member.name}の勤務終了`}
-                          htmlFor={`shift-end-${member.id}`}
-                        >
-                          <TextInput
-                            id={`shift-end-${member.id}`}
-                            type="time"
-                            className="min-h-12"
-                            value={shift?.endTime ?? ''}
-                            onChange={(event) =>
-                              updateShift(member.id, { endTime: event.target.value })
-                            }
-                          />
-                        </Field>
-                        <Field
-                          label={`${member.name}の休憩開始`}
-                          htmlFor={`break-start-${member.id}`}
-                        >
-                          <TextInput
-                            id={`break-start-${member.id}`}
-                            type="time"
-                            className="min-h-12"
-                            value={shift?.breaks[0]?.startTime ?? ''}
-                            onChange={(event) =>
-                              updateShift(member.id, {
-                                breaks: [
-                                  {
-                                    startTime: event.target.value,
-                                    endTime: shift?.breaks[0]?.endTime ?? event.target.value,
-                                  },
-                                ],
-                              })
-                            }
-                          />
-                        </Field>
-                        <Field
-                          label={`${member.name}の休憩終了`}
-                          htmlFor={`break-end-${member.id}`}
-                        >
-                          <TextInput
-                            id={`break-end-${member.id}`}
-                            type="time"
-                            className="min-h-12"
-                            value={shift?.breaks[0]?.endTime ?? ''}
-                            onChange={(event) =>
-                              updateShift(member.id, {
-                                breaks: [
-                                  {
-                                    startTime: shift?.breaks[0]?.startTime ?? event.target.value,
-                                    endTime: event.target.value,
-                                  },
-                                ],
-                              })
-                            }
-                          />
-                        </Field>
-                        <label className="flex min-h-12 items-center gap-2 font-sans text-sm text-ink">
-                          <input
-                            type="checkbox"
-                            aria-label={`${member.name}は予約を受け付ける`}
-                            checked={member.canBook}
-                            onChange={(event) =>
-                              update((previous) => ({
-                                ...previous,
-                                staff: previous.staff.map((row) =>
-                                  row.id === member.id
-                                    ? { ...row, canBook: event.target.checked }
-                                    : row,
-                                ),
-                              }))
-                            }
-                          />
-                          予約受付可
-                        </label>
-                      </div>
-                    ) : (
-                      <dl>
-                        <Row term="技能">{member.skills.join('、')}</Row>
-                        <Row term="勤務">{formatRange(shift)}</Row>
-                        <Row term="休憩">{formatRange(shift?.breaks[0])}</Row>
-                        <Row term="予約受付">{member.canBook ? '受付可' : '受付不可'}</Row>
-                      </dl>
-                    )}
-                  </li>
-                )
-              })}
-            </ul>
-          </Panel>
-        )}
-
-        {draft && current === 'equipment' && (
-          <div className="space-y-4">
-            <Panel label="設備" className="space-y-4">
-              <ul aria-label="設備" className="space-y-4">
-                {draft.equipment.map((item) => (
-                  <li key={item.id} className="space-y-2 rounded-ctl border border-line p-3">
-                    <p className="font-sans text-sm font-medium text-ink">{item.name}</p>
-                    {canManage ? (
-                      <div className="flex flex-wrap items-end gap-3">
-                        <Field label={`${item.name}の台数`} htmlFor={`capacity-${item.id}`}>
-                          <TextInput
-                            id={`capacity-${item.id}`}
-                            type="number"
-                            className="min-h-12"
-                            value={item.capacity}
-                            onChange={(event) =>
-                              update((previous) => ({
-                                ...previous,
-                                equipment: previous.equipment.map((row) =>
-                                  row.id === item.id
-                                    ? { ...row, capacity: Number(event.target.value) }
-                                    : row,
-                                ),
-                              }))
-                            }
-                          />
-                        </Field>
-                        <Field
-                          label={`${item.name}の利用可能開始`}
-                          htmlFor={`equipment-start-${item.id}`}
-                        >
-                          <TextInput
-                            id={`equipment-start-${item.id}`}
-                            type="time"
-                            className="min-h-12"
-                            value={item.availablePeriods[0]?.startTime ?? ''}
-                            onChange={(event) =>
-                              update((previous) => ({
-                                ...previous,
-                                equipment: previous.equipment.map((row) =>
-                                  row.id === item.id
-                                    ? {
-                                        ...row,
-                                        availablePeriods: [
-                                          {
-                                            startTime: event.target.value,
-                                            endTime: row.availablePeriods[0]?.endTime ?? '19:00',
-                                          },
-                                        ],
-                                      }
-                                    : row,
-                                ),
-                              }))
-                            }
-                          />
-                        </Field>
-                        <Field
-                          label={`${item.name}の利用可能終了`}
-                          htmlFor={`equipment-end-${item.id}`}
-                        >
-                          <TextInput
-                            id={`equipment-end-${item.id}`}
-                            type="time"
-                            className="min-h-12"
-                            value={item.availablePeriods[0]?.endTime ?? ''}
-                            onChange={(event) =>
-                              update((previous) => ({
-                                ...previous,
-                                equipment: previous.equipment.map((row) =>
-                                  row.id === item.id
-                                    ? {
-                                        ...row,
-                                        availablePeriods: [
-                                          {
-                                            startTime:
-                                              row.availablePeriods[0]?.startTime ?? '10:00',
-                                            endTime: event.target.value,
-                                          },
-                                        ],
-                                      }
-                                    : row,
-                                ),
-                              }))
-                            }
-                          />
-                        </Field>
-                      </div>
-                    ) : (
-                      <dl>
-                        <Row term="台数">{item.capacity}台</Row>
-                        <Row term="利用可能時間">{formatRange(item.availablePeriods[0])}</Row>
-                      </dl>
-                    )}
-                  </li>
+            {/* 目的は複数あり、どれを見ているのかは工程名からは分からない。 */}
+            {current === 'purposes' && draft && draft.purposes.length > 1 && (
+              <FilterLine>
+                {draft.purposes.map((purpose) => (
+                  <ToggleFilter
+                    key={purpose.id}
+                    on={purpose.id === selectedPurposeId}
+                    onClick={() => setSelectedPurposeId(purpose.id)}
+                  >
+                    {purpose.staffName}
+                  </ToggleFilter>
                 ))}
-              </ul>
-            </Panel>
-
-            <Panel label="点検停止" className="space-y-2">
-              <h3 className="font-display text-base font-semibold text-ink">点検停止</h3>
-              <ul aria-label="点検停止" className="space-y-2">
-                {draft.maintenance.length === 0 && (
-                  <li className="font-sans text-sm text-ink-muted">設定なし</li>
-                )}
-                {draft.maintenance.map((item) => {
-                  const equipment = draft.equipment.find((row) => row.id === item.equipmentId)
-                  return (
-                    <li
-                      key={item.id}
-                      className="flex flex-wrap items-center gap-3 font-sans text-sm text-ink"
-                    >
-                      <span>{equipment?.name ?? UNKNOWN}</span>
-                      <span>{item.date}</span>
-                      <span>
-                        {item.startTime}–{item.endTime}
-                      </span>
-                      <span className="text-ink-muted">{item.reason}</span>
-                    </li>
-                  )
-                })}
-              </ul>
-            </Panel>
-          </div>
+              </FilterLine>
+            )}
+          </>
         )}
 
-        {draft && current === 'web-booking' && (
-          <div className="space-y-4">
-            <Panel label="Web予約設定" plain className="space-y-3">
-              <div className="grid gap-3 sm:grid-cols-2">
-                <FieldCard term="公開状態" value={publishStateLabel}>
-                  {canManage && webDraft && (
-                    <div className="mt-2 space-y-2">
-                      <Select
-                        aria-label="公開状態"
-                        className="min-h-12"
-                        value={webDraft.status}
-                        onChange={(event) =>
-                          setWebDraft({
-                            ...webDraft,
-                            status: event.target.value === 'published' ? 'published' : 'hidden',
-                          })
-                        }
-                      >
-                        <option value="published">公開</option>
-                        <option value="hidden">非公開</option>
-                      </Select>
-                      <TextInput
-                        aria-label="公開開始日時（JST）"
-                        type="datetime-local"
-                        className="min-h-12 w-full"
-                        value={webDraft.startsAt ? toJstWallClock(webDraft.startsAt) : ''}
-                        onChange={(event) =>
-                          setWebDraft({
-                            ...webDraft,
-                            startsAt: fromJstWallClock(event.target.value),
-                          })
-                        }
-                      />
-                    </div>
-                  )}
-                </FieldCard>
+        {!canManage && <StatusNotice>設定を変更する権限がありません。</StatusNotice>}
+        {error && <FailureNotice>{error}</FailureNotice>}
+        {saved && <StatusNotice>設定を保存しました。</StatusNotice>}
+        {!draft && !error && <StatusNotice>読み込み中です。</StatusNotice>}
 
-                <FieldCard term="受付終了" value={receptionEndLabel}>
-                  {canManage && webDraft && (
-                    <TextInput
-                      aria-label="受付終了日時（JST）"
-                      type="datetime-local"
-                      className="mt-2 min-h-12 w-full"
-                      value={webDraft.endsAt ? toJstWallClock(webDraft.endsAt) : ''}
-                      onChange={(event) =>
-                        setWebDraft({ ...webDraft, endsAt: fromJstWallClock(event.target.value) })
-                      }
-                    />
-                  )}
-                </FieldCard>
-
-                <FieldCard
-                  term="予約可能期間"
-                  value={webBookingRules ? `${webBookingRules.bookableDays}日先まで` : UNKNOWN}
-                />
-                <FieldCard
-                  term="直前受付期限"
-                  value={webBookingRules ? formatCutoff(webBookingRules.cutoffMinutes) : UNKNOWN}
-                />
-                <FieldCard
-                  term="変更・取消期限"
-                  value={webBookingRules ? webBookingRules.changeDeadline : UNKNOWN}
-                />
-                <FieldCard
-                  term="期限後の案内"
-                  value={webBookingRules ? webBookingRules.afterDeadlineGuidance : UNKNOWN}
-                />
-
-                <FieldCard term="公開する来店目的" value={publicPurposeLabel} wide>
-                  {canManage && webDraft && (
-                    <ul className="mt-2 space-y-1">
-                      {draft.purposes.map((purpose) => (
-                        <li key={purpose.id}>
-                          <label className="flex min-h-12 items-center gap-2 font-sans text-ink text-sm">
-                            <input
-                              type="checkbox"
-                              aria-label={`${purpose.staffName}をWeb予約に公開する`}
-                              checked={webDraft.publicPurposeIds.includes(purpose.id)}
-                              onChange={(event) =>
-                                setWebDraft({
-                                  ...webDraft,
-                                  publicPurposeIds: event.target.checked
-                                    ? [...webDraft.publicPurposeIds, purpose.id]
-                                    : webDraft.publicPurposeIds.filter((id) => id !== purpose.id),
-                                })
-                              }
-                            />
-                            {purpose.staffName}
-                          </label>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </FieldCard>
-
-                <FieldCard
-                  term="受付時間"
-                  value={WEEKDAY_LABEL.map(
-                    (name, dayOfWeek) => `${name} ${formatRange(periodOf(dayOfWeek))}`,
-                  ).join(' / ')}
-                  wide
-                />
-              </div>
-
-              {!webDraft && (
-                <Notice tone="info">Web予約の公開設定はまだ取得できていません。</Notice>
-              )}
-              {canManage && webDraft && (
-                <Notice tone="info">
-                  Web予約の公開設定を保存するAPIはまだありません。ここでの変更は保存されません。
-                </Notice>
-              )}
-              <p className="font-sans text-ink-muted text-sm">
-                受付停止は新しいWeb予約だけを止めます。既存予約は取り消されません。
-              </p>
-            </Panel>
-
-            <Panel label="店舗ページプレビュー" className="space-y-2">
-              <h3 className="font-display font-semibold text-base text-ink">店舗ページ</h3>
-              <p className="font-sans text-ink-muted text-sm">
-                店舗名、アクセス、電話番号、注意事項をプレビュー
-              </p>
-              <dl>
-                <Row term="店舗名">{storeName}</Row>
-                <Row term="アクセス">{webDraft ? webDraft.accessText : UNKNOWN}</Row>
-                <Row term="電話番号">{webDraft ? webDraft.contactPhone : UNKNOWN}</Row>
-                <Row term="注意事項">{webDraft ? webDraft.notice : UNKNOWN}</Row>
-              </dl>
-            </Panel>
-          </div>
-        )}
-
+        {current === 'store-hours' && storeHours}
+        {current === 'purposes' && purposes}
+        {current === 'staff-skills' && staffSkills}
+        {current === 'equipment' && equipment}
+        {current === 'web-booking' && webBookingStep}
         {draft && current === 'impact' && (
           <SettingsPublication
             storeId={storeId}
@@ -1235,14 +1121,23 @@ export function SettingsScreen({
           />
         )}
 
-        {draft && canManage && (
-          <div className="flex justify-end">
-            <Button className="min-h-12" onClick={() => void save()}>
-              設定を保存
-            </Button>
-          </div>
+        {draft && current !== 'impact' && (
+          <Actions gap={2.5} mt={4}>
+            {canManage &&
+              (editing ? (
+                <Action onClick={() => setEditing(false)}>編集を終える</Action>
+              ) : (
+                <Action onClick={() => setEditing(true)}>編集</Action>
+              ))}
+            {canManage && <Action onClick={() => void save()}>設定を保存</Action>}
+            {nextStep && (
+              <Action variant="primary" onClick={() => goToStep(nextStep.id)}>
+                {`${nextStep.label}へ`}
+              </Action>
+            )}
+          </Actions>
         )}
-      </div>
+      </GuideLayout>
     </section>
   )
 }

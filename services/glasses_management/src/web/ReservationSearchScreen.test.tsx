@@ -604,8 +604,12 @@ test('lays the workspace out as the approved two-pane 390px + 1fr grid', async (
   expect(pane.className).toContain('border-r')
   expect(pane.className).toContain('overflow-auto')
   const workspace = pane.parentElement as HTMLElement
-  expect(workspace.className).toContain('grid-cols-[390px_1fr]')
-  expect(workspace.className).toContain('h-full')
+  // 390px は 4 の倍数でない実測値なので、design/layouts の `Workspace` は
+  // 純粋な配置としてインライン style で持つ（`docs/frontend/REBUILD.md`）。
+  expect(workspace.style.gridTemplateColumns).toBe('390px 1fr')
+  expect(workspace.className).toContain('grid')
+  // バーの下いっぱいに伸ばすのは面の側の責務（`Workspace` は flex-1 で伸びる）。
+  expect((workspace.parentElement as HTMLElement).className).toContain('h-full')
   const detail = workspace.lastElementChild as HTMLElement
   expect(detail.className).toContain('overflow-auto')
 })
@@ -637,21 +641,28 @@ test('renders the filters as the approved chip line', () => {
 test('renders result rows and the selected row exactly as the mock does', async () => {
   renderScreen(listResponse([tanaka, tanakaIchiro]))
   searchFor('田中')
-  const row = await screen.findByRole('button', { name: /田中 花子/ })
+  const trigger = await screen.findByRole('button', { name: /田中 花子/ })
+  // 行そのものは `article`（1 件のまとまり）で、押せるのはその内側。
+  const row = trigger.closest('article') as HTMLElement
   expect(row.className).toContain('rounded-card')
   expect(row.className).toContain('border-line')
   expect(row.className).toContain('bg-surface')
   expect(row.className).not.toContain('bg-pine-soft')
 
-  fireEvent.click(row)
+  fireEvent.click(trigger)
   await screen.findByRole('region', { name: '予約詳細' })
-  const selected = screen.getByRole('button', { name: /田中 花子/ })
-  expect(selected.className).toContain('border-[3px]')
+  const selected = screen
+    .getByRole('button', { name: /田中 花子/ })
+    .closest('article') as HTMLElement
+  expect(selected.className).toContain('border-3')
   expect(selected.className).toContain('border-pine')
   expect(selected.className).toContain('bg-pine-soft')
-  // 色だけで伝えない: 選択中であることは語でも出す。
+  // 色だけで伝えない: 選択中であることは語でも、読み上げの状態でも出す。
   expect(within(selected).getByText('選択中')).toBeInTheDocument()
-  expect(screen.getByRole('button', { name: /田中 一郎/ }).className).toContain('border-line')
+  expect(selected).toHaveAttribute('aria-current', 'true')
+  expect(
+    (screen.getByRole('button', { name: /田中 一郎/ }).closest('article') as HTMLElement).className,
+  ).toContain('border-line')
 })
 
 // 承認済みモックの詳細ペイン: `8月27日（木）11:00` + `.card` 3 枚 + `.danger`。
@@ -673,19 +684,32 @@ test('renders the detail pane as the approved heading, card grid and danger acti
 
 // exception-states-approved.html `#empty`: 空表示は回復操作を必ず連れてくる。
 test('offers the approved recovery action when nothing matches', async () => {
-  const { calls } = renderScreen(listResponse([]))
+  // 空は面ごと EX-EMPTY の全画面状態になる。1 回目の検索は 0 件、解除したあとは
+  // 見つかる、という筋にして「解除で条件が本当に消えた」ことを両方から確かめる。
+  let searches = 0
+  const { calls } = renderScreen((route) => {
+    if (route.url.includes('/reservations?')) {
+      searches += 1
+      return jsonResponse(searches === 1 ? [] : [tanaka])
+    }
+    if (route.url.endsWith('/history')) return jsonResponse([])
+    return jsonResponse({ error: 'unexpected' }, 500)
+  })
   fireEvent.change(screen.getByLabelText('予約元'), { target: { value: 'web' } })
   searchFor('田中')
-  expect(await screen.findByText('条件に一致する予約はありません。')).toBeInTheDocument()
+
+  expect(await screen.findByText('条件に一致する予約はありません')).toBeInTheDocument()
   expect(
     screen.getByText('検索語またはフィルターを変更してください。履歴自体は削除されていません。'),
   ).toBeInTheDocument()
+  // 空は「何も見えない workspace」ではなく、全画面の状態そのものに入れ替わる。
+  expect(screen.queryByRole('region', { name: '検索結果' })).not.toBeInTheDocument()
 
   fireEvent.click(screen.getByRole('button', { name: 'フィルターをすべて解除' }))
   await waitFor(() => {
     expect(calls.at(-1)?.url).not.toContain('source=web')
   })
-  expect(screen.getByLabelText('氏名・電話番号・予約番号')).toHaveValue('')
+  expect(await screen.findByLabelText('氏名・電話番号・予約番号')).toHaveValue('')
   expect(screen.getByLabelText('予約元')).toHaveValue('')
 })
 
@@ -699,6 +723,11 @@ test('shows the approved permission-denied state with a way back', async () => {
       '権限のある管理者に確認してください。設定の存在や内容はこれ以上表示しません。',
     ),
   ).toBeInTheDocument()
+  // モック `#permission-denied` の 54px の記号。名前も件数も出さない面なので、
+  // これが「何かがある」ことを言う唯一の印になっている。
+  expect(screen.getByText('—')).toBeInTheDocument()
+  // 一覧は残さない。権限が無い面は業務のクロムごと入れ替わる。
+  expect(screen.queryByRole('region', { name: '検索結果' })).not.toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: '業務開始画面へ戻る' }))
   expect(navigate).toHaveBeenCalledWith({ screen: 'home' })
 })

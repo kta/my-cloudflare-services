@@ -4,8 +4,19 @@ import {
   Reservation,
   ReservationChangeHistoryEntry,
 } from '@app/contracts'
-import { Button, Field, Notice, Textarea, TextInput } from '@app/ui'
+import { Field, Notice, Textarea, TextInput } from '@app/ui'
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
+import {
+  Action,
+  Actions,
+  FilterButton,
+  FilterInput,
+  FilterLine,
+  FilterSelect,
+  SearchField,
+} from './design/controls'
+import { FullScreenState, Panel, Workspace } from './design/layouts'
+import { Card, ListRow } from './design/surfaces'
 import type { StaffApi, StaffScreenProps } from './staff-screen'
 
 /**
@@ -203,22 +214,21 @@ export const WORKSPACE = 'grid h-full grid-cols-[390px_1fr]'
 export const LIST_PANE = 'overflow-auto border-line border-r bg-panel p-4'
 /** `.detail{padding:22px;overflow:auto}` */
 export const DETAIL_PANE = 'overflow-auto p-5.5'
-/** `.search{min-height:48px;border:2px solid var(--g);background:#fff;border-radius:8px;padding:12px}` */
-const SEARCH_FIELD = `min-h-12 w-full rounded-ctl border-2 border-pine bg-surface px-3 py-3 font-sans text-ink placeholder:text-ink-muted ${FOCUS_RING}`
 /** `.filterline{display:flex;gap:8px;margin:10px 0}` */
 export const FILTER_LINE = 'mt-2.5 flex flex-wrap items-center gap-2'
 /** `.filter{min-height:44px;border:1px solid var(--l);background:#fff;border-radius:8px;padding:0 12px}` */
 export const FILTER = `min-h-11 rounded-ctl border border-line bg-surface px-3 font-sans text-ink text-sm ${FOCUS_RING}`
-/** `.filter.danger{color:var(--warn);border:1px solid var(--warn);background:#fff}` */
-const FILTER_DANGER = `min-h-11 rounded-ctl border border-danger bg-surface px-3 font-sans text-danger text-sm ${FOCUS_RING}`
 /** `.row{background:#fff;border:1px solid var(--l);border-radius:9px;padding:14px;margin-top:10px}` */
 export const ROW = `mt-2.5 block w-full rounded-card border border-line bg-surface p-3.5 text-left font-sans ${FOCUS_RING}`
 /** `.row.selected{border:3px solid var(--g);background:var(--gs)}` */
 export const ROW_SELECTED = `mt-2.5 block w-full rounded-card border-[3px] border-pine bg-pine-soft p-3.5 text-left font-sans ${FOCUS_RING}`
 /** `.card{background:#fff;border:1px solid var(--l);border-radius:9px;padding:14px}` */
 export const CARD = 'rounded-card border border-line bg-surface p-3.5 font-sans text-ink'
-/** `.audio{border:1px solid var(--l);padding:14px;border-radius:9px;margin-top:14px}` */
-const AUDIO = 'mt-3.5 rounded-card border border-line bg-surface p-3.5'
+/**
+ * `.audio{border:1px solid var(--l);padding:14px;border-radius:9px;margin-top:14px}`
+ * モックの `.audio` は地色を持たない。台紙の色をそのまま透かす。
+ */
+const AUDIO = 'mt-3.5 rounded-card border border-line p-3.5'
 /** `.audio button{width:44px;height:44px;border-radius:50%;background:var(--g);color:#fff}` */
 const AUDIO_PLAY = `size-11 shrink-0 rounded-circle bg-pine text-on-pine ${FOCUS_RING}`
 
@@ -241,23 +251,38 @@ export function EmptyState({ heading, onClear }: { heading: string; onClear: () 
   )
 }
 
+/**
+ * `exception-states-approved.html#permission-denied`（突き合わせ台の複製は
+ * `gallery/screens/EX-403.screen.tsx`）。
+ *
+ * 記号も文言もモックのまま。設定の名前も件数も出さないので、54px の「—」だけが
+ * 「ここに何かがある」ことを言う。業務のクロムごと入れ替わる全画面の状態である。
+ */
 export function PermissionDenied({ onBack }: { onBack: () => void }) {
   return (
-    <section aria-label="権限がありません" className="mx-auto max-w-2xl px-5 py-9 text-center">
-      <h2 className="font-display font-semibold text-2xl text-ink">
-        この設定を表示する権限がありません
-      </h2>
-      <p className="mt-3 font-sans text-ink-muted">
-        権限のある管理者に確認してください。設定の存在や内容はこれ以上表示しません。
-      </p>
-      <button
-        type="button"
-        className={`mt-5 min-h-12 rounded-ctl bg-pine px-4 font-sans text-on-pine ${FOCUS_RING}`}
-        onClick={onBack}
-      >
+    <FullScreenState glyph="—" title="この設定を表示する権限がありません">
+      <p>権限のある管理者に確認してください。設定の存在や内容はこれ以上表示しません。</p>
+      <Action size="roomy" variant="primary" onClick={onBack}>
         業務開始画面へ戻る
-      </button>
-    </section>
+      </Action>
+    </FullScreenState>
+  )
+}
+
+/**
+ * `exception-states-approved.html#empty`（複製は `EX-EMPTY.screen.tsx`）。
+ *
+ * 空は異常ではないので記号を置かない。ただし「消えたのではない」と言い切り、
+ * 戻る道を必ず 1 つ添える。
+ */
+export function EmptyReservations({ onClear }: { onClear: () => void }) {
+  return (
+    <FullScreenState title="条件に一致する予約はありません">
+      <p>検索語またはフィルターを変更してください。履歴自体は削除されていません。</p>
+      <Action size="roomy" variant="primary" onClick={onClear}>
+        フィルターをすべて解除
+      </Action>
+    </FullScreenState>
   )
 }
 
@@ -320,6 +345,10 @@ export function RecordingPanel({
 
   return (
     <section aria-label="iPad録音" className={AUDIO}>
+      {/*
+       * モックの `.audio` は再生ボタンと 1 行の説明が並ぶだけ。実アプリは
+       * 一時停止も要るので同じ行に足すが、行そのものは増やさない。
+       */}
       <div className="flex items-center gap-3">
         {available && (
           <>
@@ -333,19 +362,17 @@ export function RecordingPanel({
             >
               ▶
             </button>
-            <button
-              type="button"
-              className={FILTER}
+            <FilterButton
               onClick={() => {
                 audioRef.current?.pause?.()
               }}
             >
               一時停止
-            </button>
+            </FilterButton>
           </>
         )}
-        <p className="font-sans text-ink">
-          <span>予約受付時の録音</span>
+        <span>
+          予約受付時の録音
           {available && (
             <>
               <span aria-hidden="true"> · </span>
@@ -353,10 +380,11 @@ export function RecordingPanel({
             </>
           )}
           <span aria-hidden="true"> · </span>
+          {/* 保存できていないことだけは色でも言う。他の状態は語だけで足りる。 */}
           <span className={recording?.state === 'failed' ? 'text-danger' : undefined}>
             {stateLabel}
           </span>
-        </p>
+        </span>
       </div>
       {available && (
         <>
@@ -375,45 +403,30 @@ export function RecordingPanel({
               if (audioRef.current) audioRef.current.currentTime = next
             }}
           />
-          <p className="mt-1 font-sans text-ink-muted text-sm">
-            <span className="text-ink-muted">録音日時</span>{' '}
-            <span className="text-ink">{formatJstDateTime(available.recordedAt)}</span>
+          <small className="mt-1 block">
+            録音日時 <span>{formatJstDateTime(available.recordedAt)}</span>
             <span aria-hidden="true"> · </span>
-            <span className="text-ink-muted">録音者</span>{' '}
-            <span className="text-ink">{available.recordedBy}</span>
+            録音者 <span>{available.recordedBy}</span>
             <span aria-hidden="true"> · </span>
-            <span className="text-ink-muted">長さ</span>{' '}
-            <span className="text-ink">{formatDuration(available.durationSeconds)}</span>
-          </p>
+            長さ <span>{formatDuration(available.durationSeconds)}</span>
+          </small>
         </>
       )}
-      <p className="mt-1 font-sans text-ink-muted text-sm">{note}</p>
+      {/* モックの `.audio small` — 持ち出せないことをどの状態でも言い続ける。 */}
+      <small className="block">{note}</small>
     </section>
   )
 }
 
-/** A labelled card. `Card` takes no aria-label, and these panels need a name. */
-function Panel({
-  label,
-  className,
-  children,
-}: {
-  label: string
-  className?: string
-  children: ReactNode
-}) {
-  return (
-    <section aria-label={label} className={`${CARD} ${className ?? ''}`}>
-      {children}
-    </section>
-  )
-}
-
+/**
+ * カードの中の 1 行。モックの `.card` は `<b>` のあと `<br>` で行を継ぐだけで、
+ * 段落は使っていない（`<p>` は上下 1em の余白を持つので高さが変わる）。
+ */
 function CardRow({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <p className="mt-1 text-sm">
-      <span className="text-ink-muted">{label}</span> <span className="text-ink">{children}</span>
-    </p>
+    <span className="mt-1 block">
+      <span className="text-ink-muted">{label}</span> {children}
+    </span>
   )
 }
 
@@ -644,318 +657,303 @@ export function ReservationSearchScreen({
 
   if (forbidden) return <PermissionDenied onBack={() => navigate({ screen: 'home' })} />
 
+  const clearFilters = () => {
+    setFilters(NO_FILTERS)
+    void search(NO_FILTERS)
+  }
+
+  // 0 件は「空の一覧」ではなく面ごと入れ替わる（承認済みモック `#empty`）。
+  if (results?.length === 0) return <EmptyReservations onClear={clearFilters} />
+
   return (
-    <div className={WORKSPACE}>
+    /*
+     * `Workspace` はバーの下の残りいっぱいに伸びる（flex-1）。実アプリでは
+     * App のクロムがこの面をブロックとして置くので、伸びる先をここで作る。
+     */
+    <div className="flex h-full min-h-0 flex-col">
       {/* 画面名はモックでは上部バーのタブが担う。支援技術と自動テストのために
           見出し自体は残し、描画からだけ外す。 */}
       <h2 className="sr-only">予約を検索する</h2>
       <span className="sr-only">{`${storeName} · 検索対象店舗`}</span>
-      <aside className={LIST_PANE}>
-        <form
-          onSubmit={(event) => {
-            event.preventDefault()
-            void search(filters)
-          }}
-        >
-          <input
-            id="reservation-term"
-            aria-label="氏名・電話番号・予約番号"
-            className={SEARCH_FIELD}
-            placeholder="氏名・電話番号・予約番号"
-            value={filters.term}
-            onChange={(event) =>
-              setFilters((current) => ({ ...current, term: event.target.value }))
-            }
-          />
-          <div className={FILTER_LINE}>
-            <select
-              id="reservation-source"
-              aria-label="予約元"
-              className={FILTER}
-              value={filters.source}
-              onChange={(event) =>
-                setFilters((current) => ({ ...current, source: event.target.value }))
-              }
-            >
-              <option value="">電話・店頭・Web予約</option>
-              <option value="staff">電話・店頭</option>
-              <option value="web">Web予約</option>
-              <option value="walkin">ウォークイン</option>
-            </select>
-            <select
-              id="reservation-status"
-              aria-label="状態"
-              className={FILTER}
-              value={filters.status}
-              onChange={(event) =>
-                setFilters((current) => ({ ...current, status: event.target.value }))
-              }
-            >
-              <option value="">今後の予約</option>
-              <option value="confirmed">予約済み</option>
-              <option value="checked_in">来店済み</option>
-              <option value="cancelled">取消済み</option>
-              <option value="no_show">無断キャンセル</option>
-            </select>
-          </div>
-          <div className={FILTER_LINE}>
-            <input
-              id="reservation-date-from"
-              type="date"
-              aria-label="開始日"
-              className={`w-32 ${FILTER}`}
-              value={filters.dateFrom}
-              onChange={(event) =>
-                setFilters((current) => ({ ...current, dateFrom: event.target.value }))
-              }
-            />
-            <input
-              id="reservation-date-to"
-              type="date"
-              aria-label="終了日"
-              className={`w-32 ${FILTER}`}
-              value={filters.dateTo}
-              onChange={(event) =>
-                setFilters((current) => ({ ...current, dateTo: event.target.value }))
-              }
-            />
-            <button
-              type="submit"
-              className={`min-h-11 rounded-ctl bg-pine px-3 font-sans text-on-pine text-sm ${FOCUS_RING}`}
-            >
-              検索する
-            </button>
-          </div>
-        </form>
-        <p className="mt-2.5 font-sans text-ink">
-          <strong>{storeName}の予約だけを表示</strong>
-          <br />
-          <small className="text-ink-muted">他店舗はヘッダーから切り替えてください。</small>
-        </p>
-        {searchError && (
-          <p role="alert" className="mt-2.5 font-sans text-danger text-sm">
-            {searchError}
-          </p>
-        )}
-        <section aria-label="検索結果">
-          {results?.length === 0 && (
-            <EmptyState
-              heading="条件に一致する予約はありません。"
-              onClear={() => {
-                setFilters(NO_FILTERS)
-                void search(NO_FILTERS)
-              }}
-            />
-          )}
-          {results?.map((reservation) => (
-            <button
-              key={reservation.id}
-              type="button"
-              onClick={() => openReservation(reservation)}
-              className={selected?.id === reservation.id ? ROW_SELECTED : ROW}
-            >
-              <b className="block text-ink">{reservation.customer.name} 様</b>
-              <span className="block text-ink-muted text-sm">
-                {formatJstRowDateTime(reservation.startAt)} · {SOURCE_LABEL[reservation.source]} ·{' '}
-                {STATUS_LABEL[reservation.status]}
-              </span>
-              {selected?.id === reservation.id && (
-                <span className="block text-ink-muted text-xs">選択中</span>
-              )}
-            </button>
-          ))}
-        </section>
-      </aside>
-      <section className={DETAIL_PANE}>
-        {!selected ? (
-          <p className="font-sans text-ink-muted text-sm">候補から予約を選択してください。</p>
-        ) : (
+      <Workspace
+        list={
           <>
-            <section aria-label="予約詳細">
-              <h3 className="font-display font-semibold text-2xl text-ink">
-                {formatJstHeading(selected.startAt)}
-              </h3>
-              <div className="mt-3.5 grid grid-cols-3 gap-3">
-                <div className={CARD}>
-                  <b>予約内容</b>
-                  <CardRow label="来店日時">{formatJstDateTime(selected.startAt)}</CardRow>
-                  <CardRow label="来店目的">{selected.purposeIds.length}件</CardRow>
-                  <CardRow label="予約番号">{selected.reservationNumber}</CardRow>
-                  <CardRow label="店舗">{storeName}</CardRow>
-                </div>
-                <div className={CARD}>
-                  <b>お客様</b>
-                  <CardRow label="お名前">{selected.customer.name} 様</CardRow>
-                  <CardRow label="お客様かな">{selected.customer.kana}</CardRow>
-                  <CardRow label="電話番号">{selected.customer.phone}</CardRow>
-                </div>
-                <div className={CARD}>
-                  <b>状態</b>
-                  <p className="mt-1 text-ink text-sm">{STATUS_LABEL[selected.status]}</p>
-                  <p className="mt-1 text-ink text-sm">{SOURCE_LABEL[selected.source]}</p>
-                </div>
-              </div>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault()
+                void search(filters)
+              }}
+            >
+              <SearchField
+                id="reservation-term"
+                label="氏名・電話番号・予約番号"
+                placeholder="氏名・電話番号・予約番号"
+                value={filters.term}
+                onChange={(term) => setFilters((current) => ({ ...current, term }))}
+              />
+              <FilterLine>
+                {/* 並びはモックのまま（状態が先、予約元が後）。 */}
+                <FilterSelect
+                  id="reservation-status"
+                  label="状態"
+                  value={filters.status}
+                  onChange={(status) => setFilters((current) => ({ ...current, status }))}
+                >
+                  <option value="">今後の予約</option>
+                  <option value="confirmed">予約済み</option>
+                  <option value="checked_in">来店済み</option>
+                  <option value="cancelled">取消済み</option>
+                  <option value="no_show">無断キャンセル</option>
+                </FilterSelect>
+                <FilterSelect
+                  id="reservation-source"
+                  label="予約元"
+                  value={filters.source}
+                  onChange={(source) => setFilters((current) => ({ ...current, source }))}
+                >
+                  <option value="">電話・店頭・Web予約</option>
+                  <option value="staff">電話・店頭</option>
+                  <option value="web">Web予約</option>
+                  <option value="walkin">ウォークイン</option>
+                </FilterSelect>
+              </FilterLine>
+              <FilterLine>
+                <FilterInput
+                  id="reservation-date-from"
+                  type="date"
+                  label="開始日"
+                  className="w-32"
+                  value={filters.dateFrom}
+                  onChange={(dateFrom) => setFilters((current) => ({ ...current, dateFrom }))}
+                />
+                <FilterInput
+                  id="reservation-date-to"
+                  type="date"
+                  label="終了日"
+                  className="w-32"
+                  value={filters.dateTo}
+                  onChange={(dateTo) => setFilters((current) => ({ ...current, dateTo }))}
+                />
+                <FilterButton type="submit" variant="primary">
+                  検索する
+                </FilterButton>
+              </FilterLine>
+            </form>
+            {/*
+             * 検索対象は 1 店舗に固定されている。他店舗が漏れて見えていないことを
+             * 画面自身に言わせる（モックの一覧上部の 2 行）。
+             */}
+            <p>
+              <strong>{`${storeName}の予約だけを表示`}</strong>
+              <br />
+              <small>他店舗はヘッダーから切り替えてください。</small>
+            </p>
+            {searchError && (
+              <p role="alert" className="text-danger">
+                {searchError}
+              </p>
+            )}
+            <section aria-label="検索結果">
+              {results?.map((reservation) => {
+                const open = selected?.id === reservation.id
+                return (
+                  <ListRow
+                    key={reservation.id}
+                    selected={open}
+                    onSelect={() => openReservation(reservation)}
+                  >
+                    <b>{`${reservation.customer.name} 様`}</b>
+                    <br />
+                    {formatJstRowDateTime(reservation.startAt)}
+                    {` · ${SOURCE_LABEL[reservation.source]} · ${STATUS_LABEL[reservation.status]}`}
+                    {/* 選択は 3px の緑枠で分かるが、色だけに頼らず語でも出す。 */}
+                    {open && (
+                      <>
+                        <br />
+                        <small>選択中</small>
+                      </>
+                    )}
+                  </ListRow>
+                )
+              })}
             </section>
-            <RecordingPanel recording={recording} permissions={permissions} />
-            <div className={FILTER_LINE}>
-              <button
-                type="button"
-                className={FILTER_DANGER}
-                onClick={() => {
-                  setPanel('cancel')
-                  setCancelError(undefined)
-                }}
-              >
-                予約を取り消す
-              </button>
-              <button
-                type="button"
-                className={FILTER}
-                onClick={() => {
-                  setPanel('change')
-                  setChangeError(undefined)
-                }}
-              >
-                日時・内容を変更する
-              </button>
-            </div>
-            {panel === 'change' && (
-              <Panel className="mt-3.5 space-y-3" label="予約変更">
-                <h3 className="font-display font-semibold text-lg text-ink">変更先の枠を探す</h3>
-                <p className="text-ink-muted text-sm">
-                  元の予約は保持したままです。切り替えは変更先を確保できたときだけ行います。
-                </p>
-                <div className="flex flex-wrap items-end gap-2">
-                  <Field label="変更先の日" htmlFor="change-date">
-                    <TextInput
+          </>
+        }
+        detail={
+          !selected ? (
+            <p>候補から予約を選択してください。</p>
+          ) : (
+            <>
+              <section aria-label="予約詳細">
+                <h1>{formatJstHeading(selected.startAt)}</h1>
+                {/* `.card` 自身が margin-top:10px を持つので、格子側は間隔を足さない。 */}
+                <div className="grid grid-cols-3 gap-3">
+                  <Card className="mt-2.5">
+                    <b>予約内容</b>
+                    <CardRow label="来店日時">{formatJstDateTime(selected.startAt)}</CardRow>
+                    <CardRow label="来店目的">{`${selected.purposeIds.length}件`}</CardRow>
+                    <CardRow label="予約番号">{selected.reservationNumber}</CardRow>
+                    <CardRow label="店舗">{storeName}</CardRow>
+                  </Card>
+                  <Card className="mt-2.5">
+                    <b>お客様</b>
+                    <CardRow label="お名前">{`${selected.customer.name} 様`}</CardRow>
+                    <CardRow label="お客様かな">{selected.customer.kana}</CardRow>
+                    <CardRow label="電話番号">{selected.customer.phone}</CardRow>
+                  </Card>
+                  <Card className="mt-2.5">
+                    <b>状態</b>
+                    <span className="mt-1 block">{STATUS_LABEL[selected.status]}</span>
+                    <span className="block">{SOURCE_LABEL[selected.source]}</span>
+                  </Card>
+                </div>
+              </section>
+              <RecordingPanel recording={recording} permissions={permissions} />
+              <FilterLine>
+                {/* 取消は取り返しがつかない。既定の見た目にしない。 */}
+                <FilterButton
+                  variant="danger"
+                  onClick={() => {
+                    setPanel('cancel')
+                    setCancelError(undefined)
+                  }}
+                >
+                  予約を取り消す
+                </FilterButton>
+                <FilterButton
+                  onClick={() => {
+                    setPanel('change')
+                    setChangeError(undefined)
+                  }}
+                >
+                  日時・内容を変更する
+                </FilterButton>
+              </FilterLine>
+              {panel === 'change' && (
+                <Panel label="予約変更">
+                  <h2>変更先の枠を探す</h2>
+                  <p>元の予約は保持したままです。切り替えは変更先を確保できたときだけ行います。</p>
+                  <FilterLine>
+                    <FilterInput
                       id="change-date"
                       type="date"
-                      className="min-h-11"
+                      label="変更先の日"
                       value={changeDate}
-                      onChange={(event) => setChangeDate(event.target.value)}
+                      onChange={setChangeDate}
+                    />
+                    <FilterButton
+                      onClick={() => {
+                        void findSlots(changeDate)
+                      }}
+                    >
+                      空き枠を探す
+                    </FilterButton>
+                  </FilterLine>
+                  {slots?.length === 0 && (
+                    <p>この日に空き枠はありません。別の日を選んでください。</p>
+                  )}
+                  {slots && slots.length > 0 && (
+                    <FilterLine>
+                      {slots.map((slot) => (
+                        <FilterButton
+                          key={slot.startAt}
+                          variant={slotStartTime === slot.startTime ? 'primary' : 'default'}
+                          onClick={() => setSlotStartTime(slot.startTime)}
+                        >
+                          {`${slot.startTime}〜${slot.endTime}`}
+                        </FilterButton>
+                      ))}
+                    </FilterLine>
+                  )}
+                  <Field label="変更理由" htmlFor="change-reason">
+                    <Textarea
+                      id="change-reason"
+                      className="min-h-11"
+                      value={changeReason}
+                      onChange={(event) => setChangeReason(event.target.value)}
                     />
                   </Field>
-                  <button
-                    type="button"
-                    className={FILTER}
-                    onClick={() => {
-                      void findSlots(changeDate)
-                    }}
-                  >
-                    空き枠を探す
-                  </button>
-                </div>
-                {slots?.length === 0 && (
-                  <p className="text-ink-muted text-sm">
-                    この日に空き枠はありません。別の日を選んでください。
-                  </p>
-                )}
-                {slots && slots.length > 0 && (
-                  <div className="flex flex-wrap gap-2">
-                    {slots.map((slot) => (
-                      <button
-                        key={slot.startAt}
-                        type="button"
-                        onClick={() => setSlotStartTime(slot.startTime)}
-                        className={
-                          slotStartTime === slot.startTime
-                            ? `min-h-11 rounded-ctl border border-pine bg-pine px-3 font-sans text-on-pine text-sm ${FOCUS_RING}`
-                            : FILTER
-                        }
-                      >
-                        {slot.startTime}〜{slot.endTime}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                <Field label="変更理由" htmlFor="change-reason">
-                  <Textarea
-                    id="change-reason"
-                    className="min-h-11"
-                    value={changeReason}
-                    onChange={(event) => setChangeReason(event.target.value)}
-                  />
-                </Field>
-                {changeError && <Notice tone="danger">{changeError}</Notice>}
-                <Button
-                  className="min-h-11"
-                  disabled={!slotStartTime}
-                  onClick={() => {
-                    void applyChange()
-                  }}
-                >
-                  この枠に切り替える
-                </Button>
-              </Panel>
-            )}
-            {panel === 'cancel' && (
-              <Panel className="mt-3.5 space-y-3" label="予約取消">
-                <h3 className="font-display font-semibold text-lg text-ink">予約を取り消す</h3>
-                <Field label="取消理由" htmlFor="cancel-reason">
-                  <Textarea
-                    id="cancel-reason"
-                    className="min-h-11"
-                    value={cancelReason}
-                    onChange={(event) => setCancelReason(event.target.value)}
-                  />
-                </Field>
-                <Field label="確認入力" htmlFor="cancel-confirmation">
-                  <TextInput
-                    id="cancel-confirmation"
-                    className="min-h-11"
-                    placeholder="取消"
-                    value={cancelConfirmation}
-                    onChange={(event) => setCancelConfirmation(event.target.value)}
-                  />
-                </Field>
-                <p className="text-ink-muted text-sm">
-                  確認のため「取消」と入力してください。実行者・日時・変更前内容を履歴に残します。
-                </p>
-                {cancelError && <Notice tone="danger">{cancelError}</Notice>}
-                <Button
-                  variant="danger"
-                  className="min-h-11"
-                  onClick={() => {
-                    void applyCancel()
-                  }}
-                >
-                  取消を実行する
-                </Button>
-              </Panel>
-            )}
-            <Panel className="mt-3.5" label="変更履歴">
-              <b>変更履歴</b>
-              {history.length === 0 ? (
-                <p className="mt-1 text-ink-muted text-sm">変更履歴はありません。</p>
-              ) : (
-                <ul className="mt-1">
-                  {history.map((entry) => (
-                    <li key={entry.id} className="border-line border-b py-2 last:border-b-0">
-                      <p className="font-semibold text-ink text-sm">
-                        {HISTORY_ACTION_LABEL[entry.action]}
-                      </p>
-                      <p className="text-ink-muted text-sm">
-                        {formatJstDateTime(entry.occurredAt)} · 実行者 {entry.actorId}
-                      </p>
-                      <p className="text-ink text-sm">
-                        変更前 {STATUS_LABEL[entry.before.status]} ·{' '}
-                        {formatJstDateTime(entry.before.startAt)}
-                      </p>
-                      <p className="text-ink text-sm">
-                        変更後 {STATUS_LABEL[entry.after.status]} ·{' '}
-                        {formatJstTime(entry.after.startAt)}
-                      </p>
-                      {entry.reason && (
-                        <p className="text-ink-muted text-sm">理由 {entry.reason}</p>
-                      )}
-                    </li>
-                  ))}
-                </ul>
+                  {changeError && <Notice tone="danger">{changeError}</Notice>}
+                  <Actions>
+                    <Action
+                      variant="primary"
+                      disabled={!slotStartTime}
+                      onClick={() => {
+                        void applyChange()
+                      }}
+                    >
+                      この枠に切り替える
+                    </Action>
+                  </Actions>
+                </Panel>
               )}
-            </Panel>
-          </>
-        )}
-      </section>
+              {panel === 'cancel' && (
+                <Panel label="予約取消">
+                  <h2>予約を取り消す</h2>
+                  <Field label="取消理由" htmlFor="cancel-reason">
+                    <Textarea
+                      id="cancel-reason"
+                      className="min-h-11"
+                      value={cancelReason}
+                      onChange={(event) => setCancelReason(event.target.value)}
+                    />
+                  </Field>
+                  <Field label="確認入力" htmlFor="cancel-confirmation">
+                    <TextInput
+                      id="cancel-confirmation"
+                      className="min-h-11"
+                      placeholder="取消"
+                      value={cancelConfirmation}
+                      onChange={(event) => setCancelConfirmation(event.target.value)}
+                    />
+                  </Field>
+                  <p>
+                    確認のため「取消」と入力してください。実行者・日時・変更前内容を履歴に残します。
+                  </p>
+                  {cancelError && <Notice tone="danger">{cancelError}</Notice>}
+                  <Actions>
+                    <Action
+                      variant="danger"
+                      onClick={() => {
+                        void applyCancel()
+                      }}
+                    >
+                      取消を実行する
+                    </Action>
+                  </Actions>
+                </Panel>
+              )}
+              <Card label="変更履歴" className="mt-3.5">
+                <b>変更履歴</b>
+                {history.length === 0 ? (
+                  <span className="mt-1 block">変更履歴はありません。</span>
+                ) : (
+                  <ul className="mt-1">
+                    {history.map((entry) => (
+                      <li key={entry.id} className="border-line border-b py-2 last:border-b-0">
+                        <b className="block">{HISTORY_ACTION_LABEL[entry.action]}</b>
+                        <small className="block">
+                          <span>{formatJstDateTime(entry.occurredAt)}</span>
+                          {` · 実行者 ${entry.actorId}`}
+                        </small>
+                        <span className="block">
+                          {`変更前 ${STATUS_LABEL[entry.before.status]} · `}
+                          <span>{formatJstDateTime(entry.before.startAt)}</span>
+                        </span>
+                        <span className="block">
+                          {`変更後 ${STATUS_LABEL[entry.after.status]} · `}
+                          <span>{formatJstTime(entry.after.startAt)}</span>
+                        </span>
+                        {entry.reason && <small className="block">{`理由 ${entry.reason}`}</small>}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </Card>
+            </>
+          )
+        }
+      />
     </div>
   )
 }

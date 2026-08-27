@@ -49,13 +49,17 @@ function surroundingDays(
 /* `.bar button` 相当の可視フォーカス。色だけに頼らない状態表現の一部。 */
 const FOCUS = 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus'
 
-/* モックの `.hero button`: min-height 108px / 左寄せ / 24px。塗りだけが 2 種類。 */
-const HERO = `flex min-h-27 flex-col justify-center rounded-card border px-7 py-5.5 text-left text-2xl ${FOCUS}`
-const HERO_PRIMARY = `${HERO} border-pine bg-pine text-on-pine`
-const HERO_PLAIN = `${HERO} border-line bg-surface text-ink`
+/*
+ * モックの `.hero button`: min-height 108px / 左寄せ / 24px / 角丸 12px。
+ * 塗りだけが 2 種類で、罫線はどちらも `--line`（緑タイルにも同じ 1 本が入る）。
+ * 突き合わせ台の複製（`gallery/screens/HOME-DEFAULT.screen.tsx`）と同じ組み。
+ */
+const HERO = `min-h-27 rounded-panel border border-line px-7 py-5.5 text-left text-title ${FOCUS}`
+const HERO_PRIMARY = `${HERO} bg-pine text-on-pine`
+const HERO_PLAIN = `${HERO} bg-surface text-ink`
 
 /* モックの `.quick button`: 下線のみ・背景なし・18px・min-height 76px。 */
-const QUICK = `min-h-19 border-line border-b text-left text-lg text-ink ${FOCUS}`
+const QUICK = `min-h-19 border-line border-b bg-transparent text-left text-ink text-lead ${FOCUS}`
 
 /* モックの `.days button`: min-height 64px / 白 / 8px 角丸。 */
 const DAY = `min-h-16 rounded-ctl border text-ink ${FOCUS}`
@@ -75,16 +79,22 @@ export function HomeScreen({ navigate, today }: HomeScreenProps) {
 
   return (
     <main className="flex h-full flex-col px-25 pt-23 pb-12.5 text-ink">
-      {/* `.home` — 1fr / .8fr の 2 段組。5:4 の col-span で同じ比率を作る。 */}
-      <div className="grid grid-cols-9 gap-18">
-        <nav aria-label="主操作" className="col-span-5 grid gap-4.5">
+      {/*
+       * `.home{grid-template-columns:1fr .8fr;gap:70px}`。列比は 4 の倍数でない
+       * 実測値なので、純粋な配置としてインラインで持つ（`col-span` の近似だと
+       * 主タイルの幅が数 px ずれ、右の副導線の下線がモックと揃わない）。
+       */}
+      <div className="grid gap-17.5" style={{ gridTemplateColumns: '1fr .8fr' }}>
+        <nav aria-label="主操作" className="grid gap-4.5">
           <button
             type="button"
             onClick={() => navigate({ screen: 'booking' })}
             className={HERO_PRIMARY}
           >
             新しい予約を取る
-            <small className="block text-lg">電話・店頭のお客様</small>
+            {/* モックの `<small>` は寸法を持たず、ブラウザ既定の smaller で描く。 */}
+            <br />
+            <small>電話・店頭のお客様</small>
           </button>
           <button
             type="button"
@@ -95,7 +105,7 @@ export function HomeScreen({ navigate, today }: HomeScreenProps) {
           </button>
         </nav>
 
-        <nav aria-label="副操作" className="col-span-4 grid content-start">
+        <nav aria-label="副操作" className="grid content-start">
           {quickActions.map((action) => (
             <button
               key={action.label}

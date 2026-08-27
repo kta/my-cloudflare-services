@@ -98,36 +98,78 @@ export function GuideStep({
   index,
   label,
   state,
+  onClick,
+  name,
 }: {
   index: number
   label: string
   state: 'todo' | 'done' | 'current'
+  /**
+   * 工程を選び直せる面で渡す。突き合わせ台は状態を持たないので渡さず、div の
+   * ままにする（button にすると既定の内側余白と字姿が乗り、モックとずれる）。
+   */
+  onClick?: () => void
+  /**
+   * 読み上げ上の名前。レールに出る字はモックどおり番号と工程名だけなので、
+   * 「完了 / 編集中」のような状態語はここへ持たせる（色に頼らず語で伝える）。
+   */
+  name?: string
 }) {
+  /*
+   * モックは 1 行のテキスト（`1　店舗と営業時間`）で、番号と名前の間は
+   * 全角スペース 1 つ。flex で並べて gap を与えると字送りが変わり、
+   * 58px の中で文字が縦中央へ寄ってしまう（モックは上端から 10px）。
+   * span で包むのも避ける。要素の境目で字形の並びが切れて、記号と名前の
+   * 間が数 px 詰まる。
+   */
+  const text = `${state === 'done' ? '✓' : index}　${label}`
+  const tone = cn(
+    'border-l-3 p-2.5 font-sans text-body',
+    state === 'todo' && 'border-line text-ink',
+    state === 'done' && 'border-pine text-ink',
+    state === 'current' && 'border-pine bg-surface font-bold text-pine',
+  )
+  if (onClick === undefined)
+    return (
+      <div
+        aria-current={state === 'current' ? 'step' : undefined}
+        className={tone}
+        style={{ minHeight: '58px' }}
+      >
+        {text}
+      </div>
+    )
   return (
-    <div
+    <button
+      type="button"
       aria-current={state === 'current' ? 'step' : undefined}
-      className={cn(
-        'border-l-3 p-2.5 font-sans text-body',
-        state === 'todo' && 'border-line text-ink',
-        state === 'done' && 'border-pine text-ink',
-        state === 'current' && 'border-pine bg-surface font-bold text-pine',
-      )}
+      aria-label={name}
+      onClick={onClick}
+      // ブラウザ既定のボタン余白（app.css の 1px/6px）を打ち消して、行の姿を
+      // div のときと同じ 10px に戻す。
+      className={cn(tone, 'block w-full py-2.5 text-left')}
       style={{ minHeight: '58px' }}
     >
-      {/*
-       * モックは 1 行のテキスト（`1　店舗と営業時間`）で、番号と名前の間は
-       * 全角スペース 1 つ。flex で並べて gap を与えると字送りが変わり、
-       * 58px の中で文字が縦中央へ寄ってしまう（モックは上端から 10px）。
-       * span で包むのも避ける。要素の境目で字形の並びが切れて、記号と名前の
-       * 間が数 px 詰まる。
-       */}
-      {`${state === 'done' ? '✓' : index}　${label}`}
-    </div>
+      {text}
+    </button>
   )
 }
 
 /** 予約フロー: 主列 + 390px のレール。 */
-export function BookingLayout({ main, rail }: { main: ReactNode; rail?: ReactNode }) {
+export function BookingLayout({
+  main,
+  rail,
+  railLabel,
+}: {
+  main: ReactNode
+  rail?: ReactNode
+  /**
+   * レールが何の列なのか（「ここまでの内容」「代替時刻」「選択中のお客様」）。
+   * 中身が工程ごとに丸ごと入れ替わるので、読み上げは見出しだけでなく列自体の
+   * 名前で今どこにいるかを言えなければならない。名前は画素を持たない。
+   */
+  railLabel?: string
+}) {
   return (
     <div
       className="grid min-h-0 flex-1"
@@ -135,7 +177,12 @@ export function BookingLayout({ main, rail }: { main: ReactNode; rail?: ReactNod
     >
       <section className="min-h-0 overflow-auto px-12 pt-9.5 pb-28">{main}</section>
       {rail !== undefined && (
-        <aside className="min-h-0 overflow-auto border-line border-l bg-rail p-7.5">{rail}</aside>
+        <aside
+          aria-label={railLabel}
+          className="min-h-0 overflow-auto border-line border-l bg-rail p-7.5"
+        >
+          {rail}
+        </aside>
       )}
     </div>
   )
@@ -311,5 +358,112 @@ export function ConsentAction({
     >
       {children}
     </button>
+  )
+}
+
+/*
+ * ここから下は「ガイド付き設定」の端末方言（承認済みモック
+ * `settings-approved.html`）。上の `GuideLayout`（260px レール・本文 16px）とは
+ * 別に組まれていて、レールは 255px、本文は 10〜11px、工程は丸バッジで名乗る。
+ *
+ *   .guided{height:calc(100% - 92px);grid-template-columns:255px 1fr}
+ *   .steps{padding:20px;background:#e9eeeb}
+ *   .step{display:flex;gap:10px;padding:13px 8px;
+ *         border-left:2px solid #b9c8c0;font-size:11px}
+ *   .step i{width:23px;height:23px;border-radius:50%;background:#fff;
+ *           display:grid;place-items:center;font-style:normal}
+ *   .step.on{border-left-color:var(--g);color:var(--g);font-weight:700}
+ *   .step.on i{background:var(--g);color:#fff}
+ *   .form{padding:24px 34px}
+ *
+ * 工程名の下の「設定済み」「編集中」は、済んだ工程と今の工程にしか付かない。
+ * これから先の工程に何も書かないのは、まだ何も決まっていないからである。
+ */
+
+/** ガイド付き設定（端末方言）: 255px の工程レール + 本文。 */
+export function TerminalGuideLayout({
+  steps,
+  children,
+}: {
+  steps: ReactNode
+  children: ReactNode
+}) {
+  return (
+    <div className="grid min-h-0 flex-1" style={{ gridTemplateColumns: '255px 1fr' }}>
+      <nav
+        aria-label="設定の工程"
+        className="min-h-0 overflow-auto bg-terminal-steps"
+        style={{ padding: '20px' }}
+      >
+        {steps}
+      </nav>
+      <section className="min-h-0 overflow-auto px-8.5 py-6">{children}</section>
+    </div>
+  )
+}
+
+/** 工程レールの 1 行。丸バッジは済んだ工程だけ `✓`、あとは番号。 */
+export function TerminalGuideStep({
+  badge,
+  label,
+  note,
+  state = 'todo',
+}: {
+  /** 丸の中身。済んだ工程は `✓`、これからの工程は番号。 */
+  badge: string
+  label: string
+  /** 「設定済み」「編集中」。決まっていない工程では省く。 */
+  note?: string
+  state?: 'todo' | 'current'
+}) {
+  return (
+    <div
+      aria-current={state === 'current' ? 'step' : undefined}
+      className={cn(
+        'flex border-l-2 text-terminal-body',
+        state === 'current'
+          ? 'border-terminal-pine font-bold text-terminal-pine'
+          : 'border-terminal-step-line',
+      )}
+      style={{ gap: '10px', padding: '13px 8px' }}
+    >
+      {/* モックは `<i>`。斜体にしないと番号だけ傾くので、字姿を素に戻す。 */}
+      <i
+        aria-hidden="true"
+        className={cn(
+          'grid shrink-0 place-items-center rounded-circle not-italic',
+          state === 'current' ? 'bg-terminal-pine text-on-pine' : 'bg-surface',
+        )}
+        style={{ width: '23px', height: '23px' }}
+      >
+        {badge}
+      </i>
+      <span>
+        {label}
+        {note !== undefined && (
+          <>
+            <br />
+            <small>{note}</small>
+          </>
+        )}
+      </span>
+    </div>
+  )
+}
+
+/**
+ * 実アプリでバーの下に運用面を置くための土台。
+ *
+ * 突き合わせ台は `Screen` が画面いっぱいの flex 列を作ってから `AdminLayout` を
+ * 置くが、実アプリの面は既にバーを持つ枠の中へ差し込まれる。そこでは `flex-1`
+ * が効かず節ナビの地色が本文の高さで切れてしまうので、ここで高さいっぱいの列を
+ * 作り直す。読み上げの landmark 名もここが持つ（節ナビと本文をまたいで
+ * 「今どの面にいるか」を名乗れるのはこの外枠だけ）。
+ */
+export function AdminSurface({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <section aria-label={label} className="flex min-h-full flex-col bg-paper">
+      {children}
+    </section>
   )
 }

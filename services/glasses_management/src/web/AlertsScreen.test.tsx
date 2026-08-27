@@ -242,7 +242,8 @@ test('an administrator configures the conditions and their notification targets'
 test('without reservation.read nothing is loaded and nothing is shown', async () => {
   const { api, calls } = defaultApi()
   renderScreen(api, ['analytics.read'])
-  const denied = await screen.findByRole('region', { name: '権限がありません' })
+  // 権限が無い面は EX-403 の全画面状態そのもの。名乗るのはモックの見出し。
+  const denied = await screen.findByRole('region', { name: 'この設定を表示する権限がありません' })
   expect(denied).toHaveTextContent(
     '権限のある管理者に確認してください。設定の存在や内容はこれ以上表示しません。',
   )
@@ -282,20 +283,29 @@ test('nothing is written to browser storage', async () => {
 
 test('該当が無ければ理由と回復操作を出す (UC-EYEX-178)', async () => {
   // `exception-states-approved.html#empty` — 消えたのではなく、条件に合わないだけ。
-  const { api } = createApi(() => jsonResponse([]))
+  // 絞り込んだ結果として 0 件になり、解除すると戻ってくる筋。条件が本当に
+  // 消えたことを「一覧が戻る」と「絞り込みが初期値へ戻る」の両方から確かめる。
+  const { api } = createApi((route) => {
+    if (route.url.includes('/alert-settings')) return jsonResponse(settings)
+    return jsonResponse(route.url.includes('status=unread') ? [] : [alert()])
+  })
   renderScreen(api)
 
-  const empty = await screen.findByRole('region', { name: '該当なし' })
-  expect(empty).toHaveTextContent('条件に一致するお知らせ・アラートはありません')
+  fireEvent.change(await screen.findByLabelText('状態'), { target: { value: 'unread' } })
+  const empty = await screen.findByRole('region', {
+    name: '条件に一致するお知らせ・アラートはありません',
+  })
   expect(empty).toHaveTextContent(
     '検索語またはフィルターを変更してください。履歴自体は削除されていません。',
   )
+  // 空は「空の一覧」ではなく、面ごと入れ替わる全画面の状態。
+  expect(screen.queryByLabelText('状態')).toBeNull()
 
-  fireEvent.change(screen.getByLabelText('状態'), { target: { value: 'unread' } })
-  fireEvent.click(await screen.findByRole('button', { name: 'フィルターをすべて解除' }))
+  fireEvent.click(screen.getByRole('button', { name: 'フィルターをすべて解除' }))
   await waitFor(() => {
     expect(screen.getByLabelText('状態')).toHaveValue('all')
   })
+  expect(screen.getByText('待ち時間が閾値を超えています')).toBeTruthy()
 })
 
 /** 和文グリフを持たない `--font-mono` で本文の書式を作らない。 */

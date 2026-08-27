@@ -8,10 +8,26 @@ import {
   Reservation,
   type StorePermission,
 } from '@app/contracts'
-import { Button, Card, cn, Field, focusRing, Notice, Textarea, TextInput } from '@app/ui'
 import { type ReactNode, useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import { barOverlay } from './app-chrome'
 import { BookingCustomerStepContext } from './CustomerPanel'
+import {
+  FieldButton,
+  FlowButton,
+  type FlowStep,
+  Option,
+  OptionGrid,
+  ProgressFooter,
+  RailSummary,
+  Readout,
+  Script,
+} from './design/booking'
+import { Action, Actions } from './design/controls'
+import { Modal } from './design/dialogs'
+import { TextAreaField, TextField } from './design/forms'
+import { BookingLayout } from './design/layouts'
+import { FailureNotice } from './design/notices'
+import { Card, Notice } from './design/surfaces'
 import { createMicrophoneRecorder } from './microphone'
 import {
   type MicrophonePermissionResult,
@@ -68,8 +84,6 @@ export type BookingFlowProps = StaffScreenProps & {
   clock?: () => string
   /** 選択中店舗でこの操作者に許されていること。 */
   permissions?: StorePermission[]
-  /** 店舗運用: 録音できない受付を続けてよいか。 */
-  allowBookingWithoutRecording?: boolean
   /** ブラウザのマイク権限。注入なので `navigator` に触れない（AC-EYEX-113）。 */
   requestMicrophonePermission?: () => Promise<MicrophonePermissionResult>
   captureRecordingAudio?: () => Promise<Blob | null>
@@ -92,104 +106,23 @@ const defaultMicrophone = createMicrophoneRecorder(
 )
 
 /* ------------------------------------------------------------------ *
- * モックの部品（`.options` / `.summary` / `.notice` / `.attention` / `.step`）
+ * 工程バーの読み替え
  * ------------------------------------------------------------------ */
 
 /**
- * モックの `.options button`: 64px 以上・ヘアライン・選択は pine の太枠。
+ * 下書きの工程を、下部バーが読む 5 つの状態へ均す。
  *
- * 枠の太さ（選択 3px / 未選択 1px）はモックの `.options .selected` の値そのもの。
- * 太さは色でも角丸でもない純粋な寸法なのでトークンではなくインライン style で
- * 持つ（2px にすると隣の未選択枠との差が遠目に読めない）。
+ * 予約が成立した後（`complete`）は 5 つとも済んでいる。工程番号を持たない
+ * 状態なので、位置の比較ではなくここで明示的に振り分ける。
  */
-const optionProps = (selected: boolean) => ({
-  className: cn(
-    'flex min-h-16 flex-col justify-center rounded-card p-4 text-left font-sans text-base text-ink',
-    'transition-colors border-solid',
-    focusRing,
-    selected ? 'border-pine bg-pine-soft' : 'border-line bg-surface hover:bg-paper',
-  ),
-  style: { borderWidth: selected ? 3 : 1 },
-})
-
-/** 脇の列の白い箱（モックの `.summary`）。 */
-function RailCard({ label, children }: { label?: string; children: ReactNode }) {
-  return (
-    <section
-      aria-label={label}
-      className="mb-3 rounded-card border border-line bg-surface p-4 font-sans text-ink text-sm"
-    >
-      {label && <b className="font-semibold">{label}</b>}
-      {label ? <div className="mt-1">{children}</div> : children}
-    </section>
-  )
-}
-
-/** 注意を引くが失敗ではない箱（モックの `.notice`）。 */
-function NoticePanel({ children }: { children: ReactNode }) {
-  return (
-    <div className="rounded-ctl border border-amber bg-amber-soft p-4 font-sans text-ink text-sm">
-      {children}
-    </div>
-  )
-}
-
-function ScriptHeading({
-  position,
-  label,
-  prompt,
-  note,
-}: {
-  position: number
-  label: string
-  prompt: string
-  note?: string
-}) {
-  return (
-    <div>
-      <p className="font-sans text-ink-muted text-sm">{`${position} / 5　${label}`}</p>
-      <h2 className="mt-1 font-display font-semibold text-3xl text-ink leading-snug">{prompt}</h2>
-      {note && <p className="mt-2 font-sans text-base text-ink">{note}</p>}
-    </div>
-  )
-}
-
-/**
- * 下部の 5 工程バー（モックの `.steps`）。
- *
- * 状態は位置とラベルと下線で示す。色だけに頼らないよう、読み上げ用に
- * 「完了 / 現在 / 未完了」を必ず持たせる（AC-EYEX-02）。
- */
-function Progress({ step }: { step: StaffBookingDraft['step'] }) {
+function flowSteps(step: StaffBookingDraft['step']): FlowStep[] {
   const current = stepPosition(step)
-  return (
-    <ol aria-label="予約入力の工程" className="grid flex-1 list-none grid-cols-5 gap-2">
-      {STAFF_BOOKING_STEPS.map((entry, index) => {
-        const position = index + 1
-        const state =
-          step === 'complete' || position < current
-            ? '完了'
-            : position === current
-              ? '現在'
-              : '未完了'
-        return (
-          <li
-            key={entry.step}
-            aria-current={state === '現在' ? 'step' : undefined}
-            className={cn(
-              'flex min-h-11 items-center justify-center border-b-4 px-3 pb-2 text-center font-sans text-sm',
-              state === '完了' && 'border-pine font-bold text-ink',
-              state === '現在' && 'border-accent font-bold text-ink',
-              state === '未完了' && 'border-line text-ink-muted',
-            )}
-          >
-            {entry.label}
-            <span className="sr-only">（{state}）</span>
-          </li>
-        )
-      })}
-    </ol>
-  )
+  return STAFF_BOOKING_STEPS.map((entry, index) => {
+    const position = index + 1
+    const state: FlowStep['state'] =
+      step === 'complete' || position < current ? 'done' : position === current ? 'current' : 'todo'
+    return { label: entry.label, state }
+  })
 }
 
 /* ------------------------------------------------------------------ *
@@ -208,7 +141,6 @@ export function BookingFlow({
   now = `${today}T00:00:00.000+09:00`,
   clock = () => now,
   permissions = [],
-  allowBookingWithoutRecording = true,
   requestMicrophonePermission = () => defaultMicrophone.requestPermission(),
   captureRecordingAudio = () => defaultMicrophone.capture(),
   recorder = { type: 'personal', id: 'unknown' },
@@ -591,33 +523,18 @@ export function BookingFlow({
 
   /** 破棄の確認はどの面の上にも出る（全画面の録音状態も含む）。 */
   const discardDialog = draft.confirmingDiscard && (
-    <div
-      role="alertdialog"
-      aria-modal="true"
-      aria-labelledby="booking-discard-title"
-      className="fixed inset-0 flex items-center justify-center bg-ink/30 p-6"
-    >
-      <Card className="flex w-full max-w-md flex-col gap-3">
-        <h2 id="booking-discard-title" className="font-display text-ink text-xl">
-          入力を破棄しますか？
-        </h2>
-        <p className="font-sans text-ink-muted text-sm">
-          日、時間、来店目的、お客様情報がすべて失われます。
-        </p>
-        <div className="flex flex-wrap gap-3">
-          <Button
-            variant="ghost"
-            className="min-h-12"
-            onClick={() => dispatch({ type: 'discard_cancelled' })}
-          >
-            入力に戻る
-          </Button>
-          <Button variant="danger" className="min-h-12" onClick={discard}>
-            破棄する
-          </Button>
-        </div>
-      </Card>
-    </div>
+    <Modal urgent title="入力を破棄しますか？" titleId="booking-discard-title">
+      <p>日、時間、来店目的、お客様情報がすべて失われます。</p>
+      <Actions>
+        {/* 危険な方を既定にしない: 主操作は入力を守る側に置く。 */}
+        <Action size="roomy" onClick={() => dispatch({ type: 'discard_cancelled' })}>
+          入力に戻る
+        </Action>
+        <Action size="roomy" variant="danger" onClick={discard}>
+          破棄する
+        </Action>
+      </Actions>
+    </Modal>
   )
 
   /*
@@ -663,70 +580,61 @@ export function BookingFlow({
   const showRail = step !== 'complete' && (contextChip !== '' || step === 'recital')
 
   const main = (
-    /* モックの `.main` は下 112px。下部の工程バーに最終行が隠れないための余白。 */
-    <section className="flex-1 overflow-auto px-12 pt-9 pb-28">
-      {loadError && <Notice>{loadError}</Notice>}
+    <>
+      {loadError && <FailureNotice>{loadError}</FailureNotice>}
 
       {entry && step !== 'complete' && (
-        <ScriptHeading
-          position={stepPosition(step)}
-          label={entry.label}
-          prompt={
+        <Script
+          step={`${stepPosition(step)} / 5　${entry.label}`}
+          question={
             step === 'customer' && customerStage === 'details'
               ? 'お客様のお名前を伺えますか？'
               : entry.prompt
           }
-          note={
-            step === 'time'
-              ? 'ここでは希望時刻を伺います。来店目的を選んだ後に受付可能か確認します。'
-              : undefined
-          }
-        />
+        >
+          {step === 'time' && (
+            <p>ここでは希望時刻を伺います。来店目的を選んだ後に受付可能か確認します。</p>
+          )}
+        </Script>
       )}
 
       {step === 'date' && settings && (
-        <fieldset aria-label="来店予定日" className="mt-6 grid grid-cols-3 gap-3">
+        <OptionGrid label="来店予定日">
           {receivableDates(settings, today).map((date) => (
-            <button
+            <Option
               key={date}
-              type="button"
-              aria-pressed={draft.date === date}
-              {...optionProps(draft.date === date)}
+              selected={draft.date === date}
               onClick={() => dispatch({ type: 'date_selected', date })}
             >
               {japaneseDayLabel(date)}
-            </button>
+            </Option>
           ))}
-        </fieldset>
+        </OptionGrid>
       )}
 
       {step === 'time' && settings && draft.date && (
-        <fieldset aria-label="来店予定時刻" className="mt-6 grid grid-cols-3 gap-3">
+        <OptionGrid label="来店予定時刻">
           {desiredTimes(settings, draft.date).map((time) => (
-            <button
+            <Option
               key={time}
-              type="button"
-              aria-pressed={draft.startTime === time}
-              {...optionProps(draft.startTime === time)}
+              selected={draft.startTime === time}
               onClick={() => dispatch({ type: 'time_selected', startTime: time })}
             >
               {time}
-            </button>
+            </Option>
           ))}
-        </fieldset>
+        </OptionGrid>
       )}
 
       {step === 'purpose' && (
         <>
-          <fieldset aria-label="来店目的" className="mt-6 grid grid-cols-3 gap-3">
+          <OptionGrid label="来店目的">
             {purposes.map((purpose) => {
               const pressed = draft.purposeIds.includes(purpose.id)
               return (
-                <button
+                <Option
                   key={purpose.id}
-                  type="button"
-                  aria-pressed={pressed}
-                  {...optionProps(pressed)}
+                  selected={pressed}
                   onClick={() =>
                     dispatch({
                       type: 'purposes_changed',
@@ -736,176 +644,163 @@ export function BookingFlow({
                     })
                   }
                 >
-                  <span className="block">{purpose.customerLabel}</span>
-                  <span className="mt-1 block text-ink-muted text-sm">
-                    約{purpose.durationMinutes}分
-                  </span>
-                </button>
+                  {purpose.customerLabel}
+                  <br />
+                  <small>約{purpose.durationMinutes}分</small>
+                </Option>
               )
             })}
-          </fieldset>
+          </OptionGrid>
+          {/*
+           * 受付できないことは、選んだ選択肢を消さずに伝える。案内が選択肢に
+           * 密着しているのは「今押したもの」への返答だと読ませるためで、
+           * モック BOOK-PURPOSE-CONFLICT はここに余白を置いていない。
+           */}
           {draft.error === 'slot_unavailable' ? (
-            <div className="mt-3">
-              <NoticePanel>
-                <b className="font-semibold">
-                  {`${draft.startTime}は${durationMinutes}分の受付ができません`}
-                </b>
-                <br />
-                {draft.alternatives.length > 0
-                  ? `入力内容は保持しています。${draft.alternatives
-                      .map((slot) => slot.startTime)
-                      .join('、')}から代替時刻を選べます。`
-                  : '入力内容は保持しています。日を選び直してください。'}
-              </NoticePanel>
-            </div>
+            <Notice>
+              <strong>{`${draft.startTime}は${durationMinutes}分の受付ができません`}</strong>
+              <br />
+              {draft.alternatives.length > 0
+                ? `入力内容は保持しています。${draft.alternatives
+                    .map((slot) => slot.startTime)
+                    .join('、')}から代替時刻を選べます。`
+                : '入力内容は保持しています。日を選び直してください。'}
+            </Notice>
           ) : (
             draft.purposeIds.length > 0 && (
-              <p className="mt-3 font-sans text-ink text-sm">{`合計 約${durationMinutes}分`}</p>
+              <p className="font-sans text-body text-ink">{`合計 約${durationMinutes}分`}</p>
             )
           )}
         </>
       )}
 
       {step === 'customer' && customerStage === 'details' && (
+        /*
+         * この面はモックに無い（モックが描く 4 工程目は「特定」の面だけ）。
+         * 新しい見た目を作らず、運用面と同じ入力の語彙で 1 列に積む。
+         */
         <div className="mt-6 flex max-w-2xl flex-col gap-4">
-          <Field label="お名前" htmlFor="booking-name">
-            <TextInput
-              id="booking-name"
-              className="min-h-12"
-              value={draft.customer.name}
-              onChange={(event) =>
-                dispatch({ type: 'customer_changed', customer: { name: event.target.value } })
-              }
-            />
-          </Field>
-          <Field label="フリガナ" htmlFor="booking-kana">
-            <TextInput
-              id="booking-kana"
-              className="min-h-12"
-              value={draft.customer.kana}
-              onChange={(event) =>
-                dispatch({ type: 'customer_changed', customer: { kana: event.target.value } })
-              }
-            />
-          </Field>
-          <Field label="お電話番号" htmlFor="booking-phone">
-            <TextInput
-              id="booking-phone"
-              className="min-h-12"
-              inputMode="tel"
-              value={draft.customer.phone}
-              onChange={(event) =>
-                dispatch({ type: 'customer_changed', customer: { phone: event.target.value } })
-              }
-            />
-          </Field>
-          <Field label="メールアドレス（任意）" htmlFor="booking-email">
-            <TextInput
-              id="booking-email"
-              className="min-h-12"
-              type="email"
-              value={draft.customer.email ?? ''}
-              onChange={(event) =>
-                dispatch({ type: 'customer_changed', customer: { email: event.target.value } })
-              }
-            />
-          </Field>
+          <TextField
+            id="booking-name"
+            label="お名前"
+            value={draft.customer.name}
+            onChange={(event) =>
+              dispatch({ type: 'customer_changed', customer: { name: event.target.value } })
+            }
+          />
+          <TextField
+            id="booking-kana"
+            label="フリガナ"
+            value={draft.customer.kana}
+            onChange={(event) =>
+              dispatch({ type: 'customer_changed', customer: { kana: event.target.value } })
+            }
+          />
+          <TextField
+            id="booking-phone"
+            label="お電話番号"
+            inputMode="tel"
+            value={draft.customer.phone}
+            onChange={(event) =>
+              dispatch({ type: 'customer_changed', customer: { phone: event.target.value } })
+            }
+          />
+          <TextField
+            id="booking-email"
+            label="メールアドレス（任意）"
+            type="email"
+            value={draft.customer.email ?? ''}
+            onChange={(event) =>
+              dispatch({ type: 'customer_changed', customer: { email: event.target.value } })
+            }
+          />
           {/* 予約メモ はこの予約のこと、店内引き継ぎ事項 は引き継ぐスタッフのこと。 */}
-          <Field label="予約メモ" htmlFor="booking-memo">
-            <Textarea
-              id="booking-memo"
-              rows={3}
-              value={draft.reservationMemo}
-              onChange={(event) =>
-                dispatch({ type: 'notes_changed', notes: { reservationMemo: event.target.value } })
-              }
-            />
-          </Field>
-          <Field label="店内引き継ぎ事項" htmlFor="booking-handoff">
-            <Textarea
-              id="booking-handoff"
-              rows={3}
-              value={draft.handoffNote}
-              onChange={(event) =>
-                dispatch({ type: 'notes_changed', notes: { handoffNote: event.target.value } })
-              }
-            />
-          </Field>
+          <TextAreaField
+            id="booking-memo"
+            label="予約メモ"
+            rows={3}
+            value={draft.reservationMemo}
+            onChange={(event) =>
+              dispatch({ type: 'notes_changed', notes: { reservationMemo: event.target.value } })
+            }
+          />
+          <TextAreaField
+            id="booking-handoff"
+            label="店内引き継ぎ事項"
+            rows={3}
+            value={draft.handoffNote}
+            onChange={(event) =>
+              dispatch({ type: 'notes_changed', notes: { handoffNote: event.target.value } })
+            }
+          />
         </div>
       )}
 
       {step === 'recital' && (
         <>
-          <p className="mt-6 rounded-card border border-line bg-surface px-7 py-6 font-sans text-2xl text-ink leading-loose">
-            {`「${recital}」`}
-          </p>
+          <Readout>{`「${recital}」`}</Readout>
           {draft.error === 'network' && (
-            <div className="mt-4">
-              <Notice>
-                送信できませんでした。入力内容はそのまま残っています。もう一度お試しください。
-              </Notice>
-            </div>
+            <FailureNotice>
+              送信できませんでした。入力内容はそのまま残っています。もう一度お試しください。
+            </FailureNotice>
           )}
           {draft.error === 'idempotency_key_required' && (
-            <div className="mt-4">
-              <Notice>
-                送信キーが受け付けられませんでした。入力内容はそのまま残っています。もう一度お試しください。
-              </Notice>
-            </div>
+            <FailureNotice>
+              送信キーが受け付けられませんでした。入力内容はそのまま残っています。もう一度お試しください。
+            </FailureNotice>
           )}
         </>
       )}
 
       {step === 'complete' && (
-        <Card className="flex flex-col gap-3 bg-surface">
-          <h2 className="font-display text-2xl text-ink">予約を確定しました</h2>
-          <p className="font-sans text-ink-muted text-sm">予約番号</p>
-          <p className="font-mono text-ink text-xl">{draft.reservationNumber}</p>
-          <p className="font-sans text-ink-muted text-sm">
-            録音の保存状態は予約詳細と受付履歴で確認できます。
-          </p>
-          <div className="flex flex-wrap gap-3">
-            <Button className="min-h-12" onClick={() => navigate({ screen: 'reception-history' })}>
-              受付履歴を開く
-            </Button>
-            <Button variant="ghost" className="min-h-12" onClick={discard}>
+        <Card label="予約を確定しました">
+          {/* カードの内側 14px がそのまま見出しの上になる。 */}
+          <h1 className="mt-0">予約を確定しました</h1>
+          <p>予約番号</p>
+          {/* 予約番号は桁で読み合わせるので等幅で置く（和文は含まない）。 */}
+          <p className="font-figure text-lead">{draft.reservationNumber}</p>
+          <p>録音の保存状態は予約詳細と受付履歴で確認できます。</p>
+          <Actions>
+            <Action size="roomy" onClick={discard}>
               続けて予約を取る
-            </Button>
-          </div>
+            </Action>
+            <Action
+              size="roomy"
+              variant="primary"
+              onClick={() => navigate({ screen: 'reception-history' })}
+            >
+              受付履歴を開く
+            </Action>
+          </Actions>
         </Card>
       )}
-    </section>
+    </>
   )
 
   const rail = (
-    <aside
-      aria-label={railTitle}
-      className="w-96 shrink-0 overflow-auto border-line border-l bg-rail px-8 pt-9 pb-10"
-    >
-      <h3 className="mb-4 font-sans font-semibold text-base text-ink">{railTitle}</h3>
+    <>
+      <h2>{railTitle}</h2>
 
       {step === 'purpose' && draft.alternatives.length > 0 && (
-        <fieldset aria-label="代替時刻" className="flex flex-wrap gap-2">
+        /*
+         * 候補どうしの間に空白を置かない。モックは inline-block を隙間なく
+         * 並べており、間に改行が入ると 4px の空白で 2 つ目が折り返す。
+         */
+        <fieldset aria-label="代替時刻">
           {draft.alternatives.map((slot) => (
-            <button
+            <FieldButton
               key={slot.startTime}
-              type="button"
-              className={cn(
-                'min-h-16 rounded-card border border-line bg-surface px-4 font-sans text-base text-ink',
-                focusRing,
-                'hover:bg-pine-soft',
-              )}
               onClick={() => dispatch({ type: 'alternative_selected', startTime: slot.startTime })}
             >
               {slot.startTime}　受付可能
-            </button>
+            </FieldButton>
           ))}
         </fieldset>
       )}
 
       {step === 'recital' && (
         <>
-          <RailCard>
+          <RailSummary>
             {/*
              * 確保するのは「接客資源」であって来店目的ではない（モック BOOK-REPEAT は
              * 担当者・設備・カウンターを並べる）。担当者の確定割り当ては予約成立時に
@@ -923,54 +818,50 @@ export function BookingFlow({
               </span>
             ))}
             <span className="block">所要時間 約{durationMinutes}分</span>
-          </RailCard>
-          <Button
-            className="min-h-12 w-full"
-            disabled={draft.submitting}
-            onClick={() => void confirmBooking()}
-          >
+          </RailSummary>
+          <FlowButton primary disabled={draft.submitting} onClick={() => void confirmBooking()}>
             復唱を終えて予約を確定する
-          </Button>
+          </FlowButton>
         </>
       )}
 
       {railTitle === 'ここまでの内容' && (
         <>
-          {draft.date && <RailCard>{japaneseDayLabel(draft.date)}</RailCard>}
-          {draft.startTime && step !== 'time' && <RailCard>{draft.startTime}</RailCard>}
+          {draft.date && <RailSummary>{japaneseDayLabel(draft.date)}</RailSummary>}
+          {draft.startTime && step !== 'time' && <RailSummary>{draft.startTime}</RailSummary>}
           {selectedPurposes.length > 0 && (
-            <RailCard>
+            <RailSummary>
               {selectedPurposes.map((purpose) => (
                 <span key={purpose.id} className="block">
                   {purpose.staffName}
                 </span>
               ))}
-            </RailCard>
+            </RailSummary>
           )}
           {step === 'time' && (
-            <NoticePanel>来店目的の選択後、所要時間・スタッフ・設備を確認します。</NoticePanel>
+            <Notice>来店目的の選択後、所要時間・スタッフ・設備を確認します。</Notice>
           )}
           {step === 'purpose' && (
-            <Button
-              className="min-h-12 w-full"
+            <FlowButton
+              primary
               disabled={draft.purposeIds.length === 0 || checking}
               onClick={() => void confirmAvailability()}
             >
               お客様情報へ進む
-            </Button>
+            </FlowButton>
           )}
           {step === 'customer' && customerStage === 'details' && (
-            <Button
-              className="min-h-12 w-full"
+            <FlowButton
+              primary
               disabled={!customerReady}
               onClick={() => dispatch({ type: 'customer_confirmed' })}
             >
               復唱へ進む
-            </Button>
+            </FlowButton>
           )}
         </>
       )}
-    </aside>
+    </>
   )
 
   const identifying = step === 'customer' && customerStage === 'identify'
@@ -988,10 +879,9 @@ export function BookingFlow({
             <BookingCustomerStepContext.Provider
               value={{
                 header: entry && (
-                  <ScriptHeading
-                    position={stepPosition(step)}
-                    label={entry.label}
-                    prompt={entry.prompt}
+                  <Script
+                    step={`${stepPosition(step)} / 5　${entry.label}`}
+                    question={entry.prompt}
                   />
                 ),
                 onConfirm: onCustomerConfirmed,
@@ -1002,33 +892,25 @@ export function BookingFlow({
           </div>
         )}
         {!identifying && (
-          <>
-            {main}
-            {showRail && rail}
-          </>
+          <BookingLayout
+            main={main}
+            rail={showRail ? rail : undefined}
+            railLabel={showRail ? railTitle : undefined}
+          />
         )}
       </div>
 
-      <footer className="flex min-h-22 items-center gap-6 border-line border-t bg-surface px-6">
-        <div className="w-24 shrink-0">
-          {step !== 'complete' && (
-            <button
-              type="button"
-              onClick={back}
-              className={cn('min-h-11 px-2 font-bold font-sans text-base text-ink', focusRing)}
-            >
-              戻る
-            </button>
-          )}
-        </div>
-        <Progress step={step} />
-        <div className="w-28 shrink-0">
+      <ProgressFooter
+        announceState
+        steps={flowSteps(step)}
+        back={step !== 'complete' ? <FlowButton onClick={back}>戻る</FlowButton> : undefined}
+        record={
           <RecordingIndicator
             state={recordingOffered && mayRecord ? recordingState : null}
             elapsedSeconds={elapsedSeconds}
           />
-        </div>
-      </footer>
+        }
+      />
     </>,
   )
 }

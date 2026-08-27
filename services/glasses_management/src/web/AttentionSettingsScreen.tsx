@@ -10,9 +10,8 @@ import {
   AttentionSharingScopeImpact,
   type StorePermission,
 } from '@app/contracts'
-import { Button, Card, Notice, Select } from '@app/ui'
 import { useEffect, useState } from 'react'
-import { AdminCard, AdminCardGrid, AdminScreen, AdminTitle, PermissionDenied } from './admin-chrome'
+import { PermissionDenied } from './admin-chrome'
 import {
   attentionCapabilityRows,
   attentionMatrixRows,
@@ -22,7 +21,25 @@ import {
   sharingScopeImpactSummary,
   sharingScopeLabel,
 } from './attention-view'
+import { Action, Actions } from './design/controls'
+import { Modal } from './design/dialogs'
+import { SelectField } from './design/forms'
+import { AdminLayout, AdminSurface, SideNavItem } from './design/layouts'
+import { MatrixCell, MatrixRow, MatrixTable } from './design/matrix'
+import { FailureNotice, StatusNotice } from './design/notices'
+import { Card, CardGrid, StatePill, TitleRow } from './design/surfaces'
+import type { StaffLocation } from './staff-navigation'
 import type { StaffScreenProps } from './staff-screen'
+
+/** 節ナビ。モック `operations-approved.html#attention-settings` の 4 つと、その順序。 */
+const SECTIONS: { label: string; to?: StaffLocation }[] = [
+  { label: '権限', to: { screen: 'attention-settings' } },
+  { label: '確認待ち' },
+  { label: '共有範囲' },
+  { label: '入力ルール' },
+  /* 同じタブの下の兄弟の面。ここからしか行けないので並びの末尾に置く。 */
+  { label: '顧客の統合・訂正', to: { screen: 'customer-merge' } },
+]
 
 type Props = StaffScreenProps & {
   permissions: StorePermission[]
@@ -238,139 +255,96 @@ export function AttentionSettingsScreen({ storeId, api, permissions, navigate }:
   return (
     /* 承認済みモック `operations-approved.html#attention-settings` /
        `ATTENTION-PERMISSIONS--default--ipad-landscape.png`。 */
-    <AdminScreen
-      label="注意事項の権限"
-      navigate={navigate}
-      sectionsLabel="注意事項の節"
-      activeSection="権限"
-      sections={[
-        { label: '権限', to: { screen: 'attention-settings' } },
-        { label: '確認待ち' },
-        { label: '共有範囲' },
-        { label: '入力ルール' },
-      ]}
-    >
-      <AdminTitle>
-        <h2 className="font-display font-semibold text-2xl text-ink">注意事項の権限</h2>
-        <div className="ml-auto">
-          {settings && draft && mayManage ? (
-            /* モックの `.state` と同じ位置（見出しと同じ行の右端）に置くので、
-               可視ラベルは重ねず名前は控えめに持たせる。 */
-            <Select
-              id="attention-scope"
-              aria-label="設定範囲"
-              className="min-h-12"
-              value={draft.scope}
-              onChange={(event) =>
-                setDraft({ ...draft, scope: event.target.value as AttentionSettingsOrigin })
-              }
-            >
-              <option value="organization">組織共通値</option>
-              <option value="store">店舗上書き</option>
-            </Select>
-          ) : (
-            settings && (
-              <span className="inline-block rounded-pill bg-pine-soft px-2.25 py-1 font-sans font-bold text-pine text-sm">
-                {`${originLabel(settings.origin)}値`}
-              </span>
+    <AdminSurface label="注意事項の権限">
+      <AdminLayout
+        navLabel="注意事項の節"
+        nav={SECTIONS.map((section) => (
+          <SideNavItem
+            key={section.label}
+            on={section.label === '権限'}
+            onClick={
+              section.to === undefined ? undefined : () => navigate(section.to as StaffLocation)
+            }
+          >
+            {section.label}
+          </SideNavItem>
+        ))}
+      >
+        <TitleRow
+          gap={0}
+          push={
+            settings && draft && mayManage ? (
+              /* モックの `.state` と同じ位置（見出しと同じ行の右端）に置くので、
+                 可視ラベルは重ねず名前は入力自身に持たせる。 */
+              <SelectField
+                hideLabel
+                id="attention-scope"
+                label="設定範囲"
+                value={draft.scope}
+                onChange={(event) =>
+                  setDraft({ ...draft, scope: event.target.value as AttentionSettingsOrigin })
+                }
+              >
+                <option value="organization">組織共通値</option>
+                <option value="store">店舗上書き</option>
+              </SelectField>
+            ) : (
+              settings && <StatePill>{`${originLabel(settings.origin)}値`}</StatePill>
             )
-          )}
-        </div>
-      </AdminTitle>
+          }
+        >
+          {/* `.title h2{margin:0}` — 表がすぐ下に続くので既定の余白を落とす。 */}
+          <h1 className="my-0">注意事項の権限</h1>
+        </TitleRow>
 
-      <div className="mt-3 flex flex-col gap-3">
-        {loadFailed && <Notice tone="danger">設定を読み込めませんでした。</Notice>}
-        {saved && <Notice tone="success">設定を保存しました。</Notice>}
-        {failure && <Notice tone="danger">{failure}</Notice>}
+        {loadFailed && <FailureNotice>設定を読み込めませんでした。</FailureNotice>}
+        {saved && <StatusNotice>設定を保存しました。</StatusNotice>}
+        {failure && <FailureNotice>{failure}</FailureNotice>}
         {failure && retryable && (
-          <div>
-            <Button type="button" className="min-h-12" onClick={retry}>
+          <Actions>
+            <Action inset="tight" onClick={retry}>
               再試行する
-            </Button>
-          </div>
+            </Action>
+          </Actions>
         )}
-        {!mayManage && <Notice tone="info">この店舗の設定を変更する権限がありません。</Notice>}
-      </div>
+        {!mayManage && <StatusNotice>この店舗の設定を変更する権限がありません。</StatusNotice>}
 
-      {settings && draft && (
-        <>
-          {/* 列が増えるとロールの Select が「店舗管理者以.」まで潰れる。表は
-              縮めず、必要なら横スクロールで逃がす。 */}
-          <div className="mt-4 overflow-x-auto">
-            <table
-              aria-label="注意事項の権限"
-              className="w-full min-w-4xl border-collapse bg-surface text-center"
-            >
-              <thead>
-                <tr>
-                  <th
-                    scope="col"
-                    className="border border-line p-2.5 text-left font-sans font-semibold text-ink text-sm"
-                  >
-                    ロール
-                  </th>
-                  {capabilityRows.map((row) => (
-                    <th
-                      key={row.capability}
-                      scope="col"
-                      className="border border-line p-2.5 font-sans font-semibold text-ink text-sm"
-                    >
-                      {capabilityColumnLabel(row.capability)}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
+        {settings && draft && (
+          <>
+            {/* 列が増えるとロールの選択が「店舗管理者以.」まで潰れる。表は
+                縮めず、必要なら横スクロールで逃がす。 */}
+            <div className="overflow-x-auto">
+              <MatrixTable
+                className="min-w-4xl"
+                label="注意事項の権限"
+                columns={[
+                  'ロール',
+                  ...capabilityRows.map((row) => capabilityColumnLabel(row.capability)),
+                ]}
+              >
                 {attentionMatrixRows(settings).map((row) => (
-                  <tr key={row.role}>
-                    <th
-                      scope="row"
-                      className="border border-line p-2.5 text-left font-sans font-medium text-ink text-sm"
-                    >
-                      {row.label}
-                    </th>
+                  <MatrixRow key={row.role} header={row.label}>
                     {row.cells.map((cell) => (
-                      <td
-                        key={cell.capability}
-                        className={`border border-line p-2.5 font-sans text-sm ${
-                          cell.allowed ? 'font-bold text-pine' : 'text-ink'
-                        }`}
-                      >
+                      <MatrixCell key={cell.capability} granted={cell.allowed}>
                         {cell.label}
-                      </td>
+                      </MatrixCell>
                     ))}
-                  </tr>
+                  </MatrixRow>
                 ))}
-                {/* いま効いている値の適用元と、それを動かすコントロールは表の中に
-                  置く。別の場所へ離すと「どの列の話か」が読み取れない。 */}
-                <tr>
-                  <th
-                    scope="row"
-                    className="border border-line p-2.5 text-left font-sans font-medium text-ink text-sm"
-                  >
-                    適用元
-                  </th>
+                {/* いま効いている値の適用元と、それを動かす操作は表の中に置く。
+                    別の場所へ離すと「どの列の話か」が読み取れない。 */}
+                <MatrixRow header="適用元">
                   {capabilityRows.map((row) => (
-                    <td
-                      key={row.capability}
-                      className="border border-line p-2.5 font-sans text-ink-muted text-sm"
-                    >
-                      {row.originLabel}
-                    </td>
+                    <MatrixCell key={row.capability}>{row.originLabel}</MatrixCell>
                   ))}
-                </tr>
-                <tr>
-                  <th
-                    scope="row"
-                    className="border border-line p-2.5 text-left font-sans font-medium text-ink text-sm"
-                  >
-                    必要なロール
-                  </th>
+                </MatrixRow>
+                <MatrixRow header="必要なロール">
                   {capabilityRows.map((row) => (
-                    <td key={row.capability} className="border border-line p-2.5">
-                      <Select
-                        aria-label={`${row.label}に必要なロール`}
-                        className="min-h-12"
+                    <MatrixCell key={row.capability}>
+                      <SelectField
+                        hideLabel
+                        id={`attention-role-${row.capability}`}
+                        label={`${row.label}に必要なロール`}
                         disabled={!mayManage}
                         value={draft.capabilities[row.capability]}
                         onChange={(event) => {
@@ -386,155 +360,150 @@ export function AttentionSettingsScreen({ storeId, api, permissions, navigate }:
                             {roleLabel(role)}以上
                           </option>
                         ))}
-                      </Select>
-                    </td>
+                      </SelectField>
+                    </MatrixCell>
                   ))}
-                </tr>
-              </tbody>
-            </table>
-          </div>
-
-          <AdminCardGrid>
-            <AdminCard title="登録方式">
-              {mayManage ? (
-                <Select
-                  id="attention-review-mode"
-                  aria-label="公開方式"
-                  className="min-h-12"
-                  value={draft.reviewMode}
-                  onChange={(event) =>
-                    setDraft({ ...draft, reviewMode: event.target.value as AttentionReviewMode })
-                  }
-                >
-                  {REVIEW_MODES.map((mode) => (
-                    <option key={mode} value={mode}>
-                      {REVIEW_MODE_LABEL[mode]}
-                    </option>
-                  ))}
-                </Select>
-              ) : (
-                REVIEW_MODE_LABEL[settings.reviewMode]
-              )}
-            </AdminCard>
-            <AdminCard title="共有範囲" label="共有範囲の設定">
-              {mayManage ? (
-                <Select
-                  id="attention-sharing-scope"
-                  aria-label="共有範囲"
-                  className="min-h-12"
-                  value={draft.sharingScope}
-                  onChange={(event) =>
-                    setDraft({
-                      ...draft,
-                      sharingScope: event.target.value as AttentionSharingScope,
-                    })
-                  }
-                >
-                  {SCOPES.map((scope) => (
-                    <option key={scope} value={scope}>
-                      {sharingScopeLabel(scope)}
-                    </option>
-                  ))}
-                </Select>
-              ) : (
-                sharingScopeLabel(settings.sharingScope)
-              )}
-            </AdminCard>
-            <AdminCard title="店舗上書き">
-              <label className="flex min-h-12 items-center gap-3 font-sans text-ink text-sm">
-                <input
-                  type="checkbox"
-                  className="size-6"
-                  disabled={!mayManage}
-                  checked={draft.storeOverrideAllowed}
-                  onChange={(event) =>
-                    setDraft({ ...draft, storeOverrideAllowed: event.target.checked })
-                  }
-                />
-                店舗ごとの上書きを許可する
-              </label>
-            </AdminCard>
-          </AdminCardGrid>
-
-          <Card className="mt-4 flex flex-col gap-2">
-            <h3 className="font-sans font-semibold text-ink text-sm">入力時の案内</h3>
-            <p className="font-sans text-ink-muted text-sm">
-              記録する: {settings.guidance.record.join('・')}
-            </p>
-            <p className="font-sans text-ink-muted text-sm">
-              記録しない: {settings.guidance.avoid.join('・')}
-            </p>
-          </Card>
-
-          {mayManage && (
-            <div className="mt-4 flex justify-end">
-              <Button
-                type="button"
-                className="min-h-12"
-                disabled={submitting}
-                onClick={() => {
-                  void save()
-                }}
-              >
-                設定を保存する
-              </Button>
+                </MatrixRow>
+              </MatrixTable>
             </div>
-          )}
-        </>
-      )}
+
+            <CardGrid>
+              <Card label="登録方式">
+                <b>登録方式</b>
+                <br />
+                {mayManage ? (
+                  <SelectField
+                    hideLabel
+                    id="attention-review-mode"
+                    label="公開方式"
+                    value={draft.reviewMode}
+                    onChange={(event) =>
+                      setDraft({ ...draft, reviewMode: event.target.value as AttentionReviewMode })
+                    }
+                  >
+                    {REVIEW_MODES.map((mode) => (
+                      <option key={mode} value={mode}>
+                        {REVIEW_MODE_LABEL[mode]}
+                      </option>
+                    ))}
+                  </SelectField>
+                ) : (
+                  REVIEW_MODE_LABEL[settings.reviewMode]
+                )}
+              </Card>
+              <Card label="共有範囲の設定">
+                <b>共有範囲</b>
+                <br />
+                {mayManage ? (
+                  <SelectField
+                    hideLabel
+                    id="attention-sharing-scope"
+                    label="共有範囲"
+                    value={draft.sharingScope}
+                    onChange={(event) =>
+                      setDraft({
+                        ...draft,
+                        sharingScope: event.target.value as AttentionSharingScope,
+                      })
+                    }
+                  >
+                    {SCOPES.map((scope) => (
+                      <option key={scope} value={scope}>
+                        {sharingScopeLabel(scope)}
+                      </option>
+                    ))}
+                  </SelectField>
+                ) : (
+                  sharingScopeLabel(settings.sharingScope)
+                )}
+              </Card>
+              <Card label="店舗上書き">
+                <b>店舗上書き</b>
+                <br />
+                <label className="flex min-h-12 items-center gap-3">
+                  <input
+                    type="checkbox"
+                    className="size-6"
+                    disabled={!mayManage}
+                    checked={draft.storeOverrideAllowed}
+                    onChange={(event) =>
+                      setDraft({ ...draft, storeOverrideAllowed: event.target.checked })
+                    }
+                  />
+                  店舗ごとの上書きを許可する
+                </label>
+              </Card>
+            </CardGrid>
+
+            <div className="mt-4">
+              <Card label="入力時の案内">
+                <b>入力時の案内</b>
+                <br />
+                記録する: {settings.guidance.record.join('・')}
+                <br />
+                記録しない: {settings.guidance.avoid.join('・')}
+              </Card>
+            </div>
+
+            {mayManage && (
+              <Actions>
+                <Action
+                  variant="primary"
+                  inset="tight"
+                  disabled={submitting}
+                  onClick={() => {
+                    void save()
+                  }}
+                >
+                  設定を保存する
+                </Action>
+              </Actions>
+            )}
+          </>
+        )}
+      </AdminLayout>
 
       {pending && draft && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="attention-scope-title"
-          className="fixed inset-0 flex items-center justify-center bg-ink/40 p-6"
-        >
-          <Card className="flex w-full max-w-xl flex-col gap-4">
-            <h2 id="attention-scope-title" className="font-display font-semibold text-ink text-xl">
-              共有範囲の変更を確認
-            </h2>
-            <p className="font-sans text-ink text-sm">{sharingScopeImpactSummary(pending)}</p>
-            <dl className="grid grid-cols-3 gap-3">
-              <div>
-                <dt className="font-sans text-ink-muted text-xs">注意事項</dt>
-                <dd className="font-sans text-ink text-lg">{pending.affectedNoteCount}件</dd>
-              </div>
-              <div>
-                <dt className="font-sans text-ink-muted text-xs">顧客</dt>
-                <dd className="font-sans text-ink text-lg">{pending.affectedCustomerCount}人</dd>
-              </div>
-              <div>
-                <dt className="font-sans text-ink-muted text-xs">店舗</dt>
-                <dd className="font-sans text-ink text-lg">{pending.affectedStoreCount}店舗</dd>
-              </div>
-            </dl>
-            <div className="flex flex-wrap justify-end gap-3">
-              <Button
-                type="button"
-                variant="ghost"
-                className="min-h-12"
-                onClick={() => {
-                  setPending(undefined)
-                  setDraft(draftFrom(settings as AttentionSettings))
-                }}
-              >
-                キャンセル
-              </Button>
-              <Button
-                type="button"
-                className="min-h-12"
-                disabled={submitting}
-                onClick={() => {
-                  void put(inputFrom(draft, pending.affectedNoteCount))
-                }}
-              >
-                影響を確認して変更する
-              </Button>
+        <Modal titleId="attention-scope-title" title="共有範囲の変更を確認">
+          <p>{sharingScopeImpactSummary(pending)}</p>
+          <dl className="mt-3 grid grid-cols-3 gap-3">
+            <div>
+              <dt>注意事項</dt>
+              {/* 件数は桁で読む。等幅は数字にだけ使う。 */}
+              <dd className="font-record text-grid">{pending.affectedNoteCount}件</dd>
             </div>
-          </Card>
-        </div>
+            <div>
+              <dt>顧客</dt>
+              <dd className="font-record text-grid">{pending.affectedCustomerCount}人</dd>
+            </div>
+            <div>
+              <dt>店舗</dt>
+              <dd className="font-record text-grid">{pending.affectedStoreCount}店舗</dd>
+            </div>
+          </dl>
+          <Actions>
+            <Action
+              inset="tight"
+              onClick={() => {
+                setPending(undefined)
+                setDraft(draftFrom(settings as AttentionSettings))
+              }}
+            >
+              キャンセル
+            </Action>
+            <Action
+              variant="primary"
+              inset="tight"
+              disabled={submitting}
+              onClick={() => {
+                void put(inputFrom(draft, pending.affectedNoteCount))
+              }}
+            >
+              影響を確認して変更する
+            </Action>
+          </Actions>
+        </Modal>
       )}
-    </AdminScreen>
+    </AdminSurface>
   )
 }

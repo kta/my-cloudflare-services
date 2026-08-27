@@ -1,24 +1,19 @@
 import { ReceptionHistoryEntry } from '@app/contracts'
 import { useCallback, useEffect, useState } from 'react'
+import { FilterButton, FilterLine, FilterSelect, SearchField } from './design/controls'
+import { Workspace } from './design/layouts'
+import { Card, StatePill, TitleRow } from './design/surfaces'
 import {
-  CARD,
   classifySearchTerm,
-  DETAIL_PANE,
   EmptyState,
-  FILTER,
-  FILTER_LINE,
   FOCUS_RING,
   formatJstDateTime,
   formatJstDayHeading,
   formatJstTime,
-  LIST_PANE,
   PermissionDenied,
   RecordingPanel,
   type RecordingPermissions,
   type RecordingView,
-  ROW,
-  ROW_SELECTED,
-  WORKSPACE,
 } from './ReservationSearchScreen'
 import type { StaffScreenProps } from './staff-screen'
 
@@ -143,199 +138,196 @@ export function ReceptionHistoryScreen({
 
   if (forbidden) return <PermissionDenied onBack={() => navigate({ screen: 'home' })} />
 
-  return (
-    <div className={WORKSPACE}>
+  const list = (
+    <>
       {/* 画面名はモックでは上部バーのタブが担う。支援技術と自動テストのために
           見出し自体は残し、描画からだけ外す。 */}
       <h2 className="sr-only">受付履歴</h2>
       <span className="sr-only">{`${storeName} · 当日の受付記録`}</span>
-      <aside className={LIST_PANE}>
-        <form
-          onSubmit={(event) => {
-            event.preventDefault()
-            void load(filters)
-          }}
-        >
-          {/* `.tools{display:flex;gap:7px}` — 検索欄が伸び、その隣にチップが並ぶ。 */}
-          <div className="flex flex-wrap items-center gap-2">
-            <input
+      <form
+        onSubmit={(event) => {
+          event.preventDefault()
+          void load(filters)
+        }}
+      >
+        {/* `.tools{display:flex;gap:7px}` — 検索欄が伸び、その隣にチップが並ぶ。 */}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="min-w-0 flex-1">
+            <SearchField
               id="history-term"
-              aria-label="氏名・電話番号・予約番号"
+              label="氏名・電話番号・予約番号"
               placeholder="氏名・電話番号・予約番号"
-              className={`min-h-11 flex-1 rounded-ctl border-2 border-pine bg-surface px-3 font-sans text-ink placeholder:text-ink-muted ${FOCUS_RING}`}
               value={filters.term}
-              onChange={(event) =>
-                setFilters((current) => ({ ...current, term: event.target.value }))
-              }
+              onChange={(term) => setFilters((current) => ({ ...current, term }))}
             />
-            <button
-              type="button"
-              aria-pressed={filters.attentionOnly}
-              className={
-                filters.attentionOnly
-                  ? `min-h-11 rounded-ctl border border-pine bg-pine px-3 font-sans text-on-pine text-sm ${FOCUS_RING}`
-                  : FILTER
-              }
-              onClick={() =>
-                setFilters((current) => ({ ...current, attentionOnly: !current.attentionOnly }))
-              }
-            >
-              要確認
-            </button>
           </div>
-          <div className={FILTER_LINE}>
-            <select
-              id="history-source"
-              aria-label="受付経路"
-              className={`w-32 ${FILTER}`}
-              value={filters.source}
-              onChange={(event) =>
-                setFilters((current) => ({ ...current, source: event.target.value }))
-              }
-            >
-              <option value="">すべての経路</option>
-              <option value="staff">電話・店頭</option>
-              <option value="web">Web予約</option>
-              <option value="walkin">ウォークイン</option>
-            </select>
-            <select
-              id="history-action"
-              aria-label="操作種別"
-              className={`w-32 ${FILTER}`}
-              value={filters.action}
-              onChange={(event) =>
-                setFilters((current) => ({ ...current, action: event.target.value }))
-              }
-            >
-              <option value="">すべての操作</option>
-              <option value="created">予約受付</option>
-              <option value="changed">変更</option>
-              <option value="cancelled">取消</option>
-              <option value="no_show">無断キャンセル</option>
-              <option value="walkin_created">ウォークイン受付</option>
-            </select>
-            <button
-              type="submit"
-              className={`min-h-11 rounded-ctl bg-pine px-3 font-sans text-on-pine text-sm ${FOCUS_RING}`}
-            >
-              絞り込む
-            </button>
-          </div>
-        </form>
-        {loadError && (
-          <p role="alert" className="mt-2.5 font-sans text-danger text-sm">
-            {loadError}
-          </p>
-        )}
-        {/* `.day` — 発生順の記録は日付見出しの下にまとまる。 */}
-        <p className="mt-3 font-sans font-bold text-ink text-sm">
-          {formatJstDayHeading(`${today}T00:00:00+09:00`)}
+          {/* 押している間だけ緑地。押されていることを色以外に aria-pressed が持つ。 */}
+          <FilterButton
+            variant={filters.attentionOnly ? 'primary' : 'default'}
+            onClick={() =>
+              setFilters((current) => ({ ...current, attentionOnly: !current.attentionOnly }))
+            }
+          >
+            <span aria-hidden="true">要確認</span>
+            <span className="sr-only">要確認</span>
+          </FilterButton>
+        </div>
+        <FilterLine>
+          <FilterSelect
+            id="history-source"
+            label="受付経路"
+            value={filters.source}
+            onChange={(source) => setFilters((current) => ({ ...current, source }))}
+          >
+            <option value="">すべての経路</option>
+            <option value="staff">電話・店頭</option>
+            <option value="web">Web予約</option>
+            <option value="walkin">ウォークイン</option>
+          </FilterSelect>
+          <FilterSelect
+            id="history-action"
+            label="操作種別"
+            value={filters.action}
+            onChange={(action) => setFilters((current) => ({ ...current, action }))}
+          >
+            <option value="">すべての操作</option>
+            <option value="created">予約受付</option>
+            <option value="changed">変更</option>
+            <option value="cancelled">取消</option>
+            <option value="no_show">無断キャンセル</option>
+            <option value="walkin_created">ウォークイン受付</option>
+          </FilterSelect>
+          <button
+            type="submit"
+            className={`min-h-11 rounded-ctl border border-pine bg-pine px-3 font-sans text-body text-on-pine ${FOCUS_RING}`}
+          >
+            絞り込む
+          </button>
+        </FilterLine>
+      </form>
+      {loadError && (
+        <p role="alert" className="mt-2.5 font-sans text-danger text-grid">
+          {loadError}
         </p>
-        <section aria-label="受付履歴">
-          {entries?.length === 0 && (
-            <EmptyState
-              heading="条件に一致する受付履歴はありません。"
-              onClear={() => {
-                setFilters(NO_FILTERS)
-                void load(NO_FILTERS)
-              }}
-            />
-          )}
-          {entries?.map((entry) => (
-            <button
-              key={entry.id}
-              type="button"
-              onClick={() => setSelectedId(entry.id)}
-              className={selectedId === entry.id ? RECEPTION_ROW_SELECTED : ROW}
-            >
-              {/* `.source{float:right}` — 何の記録かを行の右肩に置く。 */}
-              <span className="float-right rounded-pill bg-pine-soft px-2 py-0.5 text-pine text-xs">
-                {ACTION_LABEL[entry.action]}
-              </span>
-              <time className="block font-mono font-semibold text-pine text-sm">
-                {formatJstTime(entry.occurredAt)}
-              </time>
-              <b className="block text-ink">{titleOf(entry)}</b>
-              <span className="block text-ink-muted text-sm">
-                {SOURCE_LABEL[entry.source]} · {entry.actorId}
-              </span>
-              {entry.requiresAttention && (
-                <span className="block font-medium text-danger text-xs">要確認</span>
-              )}
-              {selectedId === entry.id && (
-                <span className="block text-ink-muted text-xs">選択中</span>
-              )}
-            </button>
-          ))}
-        </section>
-      </aside>
-      <section className={DETAIL_PANE}>
-        {!selected ? (
-          <p className="font-sans text-ink-muted text-sm">
-            受付イベントを選ぶと、内容をここに表示します。
-          </p>
-        ) : (
-          <section aria-label="受付イベント詳細">
-            {/* `.detailhead` — 何が起きたか、いつ、誰が。状態は右肩の `.badge`。 */}
-            <div className="flex items-center gap-3">
-              <div>
-                <h3 className="font-display font-semibold text-2xl text-ink">
-                  {titleOf(selected)}
-                </h3>
-                <p className="font-sans text-ink-muted text-sm">
-                  {`${formatJstDateTime(selected.occurredAt)} · 受付者 ${selected.actorId}`}
-                </p>
-              </div>
-              <span
-                className={`ml-auto rounded-pill px-3 py-1 font-sans text-sm ${
-                  selected.requiresAttention
-                    ? 'bg-danger-soft text-danger'
-                    : 'bg-pine-soft text-pine'
-                }`}
-              >
-                {selected.requiresAttention ? '要確認' : '確認不要'}
-              </span>
-            </div>
-            {/* `.detailgrid{grid-template-columns:1.15fr .85fr;gap:12px}` */}
-            <div className="mt-3.5 grid grid-cols-[1.15fr_0.85fr] gap-3">
-              <div className={CARD}>
-                <b>予約内容</b>
-                <DetailLine label="発生日時" value={formatJstDateTime(selected.occurredAt)} />
-                <DetailLine label="操作" value={ACTION_LABEL[selected.action]} />
-                <DetailLine label="予約番号" value={selected.reservationNumber ?? '予約なし'} />
-                <DetailLine label="受付経路" value={SOURCE_LABEL[selected.source]} />
-                <RecordingPanel
-                  recording={resolveRecording?.(selected) ?? recording}
-                  permissions={permissions}
-                />
-              </div>
-              <div className={CARD}>
-                <b>お客様</b>
-                <p className="mt-1 font-semibold text-ink">
-                  {selected.customerName ?? '顧客未登録'}
-                </p>
-                <p className="text-ink text-sm">{selected.customerPhone ?? '未登録'}</p>
-                <DetailLine label="受付者" value={selected.actorId} />
-                <DetailLine
-                  label="顧客照合"
-                  value={selected.customerName ? '既存顧客' : '顧客未登録'}
-                />
-              </div>
-            </div>
-          </section>
+      )}
+      {/* `.day` — 発生順の記録は日付見出しの下にまとまる。 */}
+      <p className="mt-3 font-sans font-bold text-grid text-ink">
+        {formatJstDayHeading(`${today}T00:00:00+09:00`)}
+      </p>
+      <section aria-label="受付履歴">
+        {entries?.length === 0 && (
+          <EmptyState
+            heading="条件に一致する受付履歴はありません。"
+            onClear={() => {
+              setFilters(NO_FILTERS)
+              void load(NO_FILTERS)
+            }}
+          />
         )}
+        {entries?.map((entry) => (
+          /*
+           * 記録 1 件は `.row` そのもの（`ListRow`）だが、押せる必要があるので
+           * 要素はボタンのまま、寸法と罫だけを同じ語彙で持つ。選択中は 2px の
+           * 緑罫（モックの `.event.on`）。
+           */
+          <button
+            key={entry.id}
+            type="button"
+            aria-pressed={selectedId === entry.id}
+            onClick={() => setSelectedId(entry.id)}
+            className={`mt-2.5 block w-full rounded-card p-3.5 text-left font-sans text-ink ${FOCUS_RING} ${
+              selectedId === entry.id
+                ? 'border-2 border-pine bg-pine-soft'
+                : 'border border-line bg-surface'
+            }`}
+          >
+            {/* `.source{float:right}` — 何の記録かを行の右肩に置く。 */}
+            <span className="float-right text-grid">
+              <StatePill>{ACTION_LABEL[entry.action]}</StatePill>
+            </span>
+            {/* 時刻は数字なので等幅。和文はここに混ぜない。 */}
+            <time className="block font-bold font-mono text-grid text-pine">
+              {formatJstTime(entry.occurredAt)}
+            </time>
+            <b className="block">{titleOf(entry)}</b>
+            <span className="block text-grid text-ink-muted">
+              {SOURCE_LABEL[entry.source]} · {entry.actorId}
+            </span>
+            {entry.requiresAttention && (
+              <span className="block font-bold text-danger text-note">要確認</span>
+            )}
+            {selectedId === entry.id && (
+              <span className="block text-ink-muted text-note">選択中</span>
+            )}
+          </button>
+        ))}
       </section>
+    </>
+  )
+
+  const detail = !selected ? (
+    <p className="font-sans text-grid text-ink-muted">
+      受付イベントを選ぶと、内容をここに表示します。
+    </p>
+  ) : (
+    <section aria-label="受付イベント詳細" className="font-sans">
+      {/* `.detailhead` — 何が起きたか、いつ、誰が。状態は右肩の `.badge`。 */}
+      <TitleRow
+        push={
+          <StatePill tone={selected.requiresAttention ? 'danger' : 'plain'}>
+            {selected.requiresAttention ? '要確認' : '確認不要'}
+          </StatePill>
+        }
+      >
+        <div>
+          <h1>{titleOf(selected)}</h1>
+          <small>{`${formatJstDateTime(selected.occurredAt)} · 受付者 ${selected.actorId}`}</small>
+        </div>
+      </TitleRow>
+      {/*
+       * `.detailgrid{grid-template-columns:1.15fr .85fr;gap:12px}`。列比は
+       * 4 の倍数でない実測値なので、純粋な配置としてインラインで持つ。
+       */}
+      <div className="mt-3.5 grid gap-3" style={{ gridTemplateColumns: '1.15fr .85fr' }}>
+        <Card>
+          <b className="block">予約内容</b>
+          <DetailLine label="発生日時" value={formatJstDateTime(selected.occurredAt)} />
+          <DetailLine label="操作" value={ACTION_LABEL[selected.action]} />
+          <DetailLine label="予約番号" value={selected.reservationNumber ?? '予約なし'} />
+          <DetailLine label="受付経路" value={SOURCE_LABEL[selected.source]} />
+          <RecordingPanel
+            recording={resolveRecording?.(selected) ?? recording}
+            permissions={permissions}
+          />
+        </Card>
+        <Card>
+          <b className="block">お客様</b>
+          <p className="mt-1 font-bold">{selected.customerName ?? '顧客未登録'}</p>
+          <p className="text-grid">{selected.customerPhone ?? '未登録'}</p>
+          <DetailLine label="受付者" value={selected.actorId} />
+          <DetailLine label="顧客照合" value={selected.customerName ? '既存顧客' : '顧客未登録'} />
+        </Card>
+      </div>
+    </section>
+  )
+
+  /*
+   * `Workspace` は「バーの下の残り全部」を占める前提で `flex-1` を持つので、
+   * 面の側で 1 枚 flex の器を被せて、その高さを実アプリでも成り立たせる。
+   */
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <Workspace list={list} detail={detail} />
     </div>
   )
 }
 
-/** `.event.on{border:2px solid var(--g);background:#f2f8f4}` */
-const RECEPTION_ROW_SELECTED = ROW_SELECTED.replace('border-[3px]', 'border-2')
-
+/** `.row{display:flex;justify-content:space-between;border-top:1px solid …}` */
 function DetailLine({ label, value }: { label: string; value: string }) {
   return (
-    <p className="mt-1 border-line border-t pt-1 text-sm">
-      <span className="text-ink-muted">{label}</span> <span className="text-ink">{value}</span>
+    <p className="mt-1 flex justify-between gap-3 border-line border-t pt-1 text-grid">
+      <span className="text-ink-muted">{label}</span>
+      <b className="text-ink">{value}</b>
     </p>
   )
 }

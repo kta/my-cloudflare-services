@@ -1,9 +1,26 @@
 import { type AuditActorType, AuditEventView, type StorePermission } from '@app/contracts'
-import { Button, Card, Field, Notice, Select, TextInput } from '@app/ui'
 import { useCallback, useEffect, useState } from 'react'
-import { AdminScreen, EmptyResult, PermissionDenied } from './admin-chrome'
+import { EmptyResult, PermissionDenied } from './admin-chrome'
 import { auditDiffRows, formatJstInstant, jstWallClockToInstant } from './attention-view'
+import { Action, Actions } from './design/controls'
+import { SelectField, TextField } from './design/forms'
+import { AdminLayout, AdminSurface, SideNavItem } from './design/layouts'
+import { MatrixCell, MatrixRow, MatrixTable } from './design/matrix'
+import { FailureNotice, StatusNotice } from './design/notices'
+import { AuditRecord, Card, DiffPair } from './design/surfaces'
+import type { StaffLocation } from './staff-navigation'
 import type { StaffScreenProps } from './staff-screen'
+
+/** 節ナビ。モック `operations-approved.html#audit` の 4 つと、その順序。 */
+const SECTIONS: { label: string; to?: StaffLocation }[] = [
+  { label: '本日の管理操作', to: { screen: 'audit' } },
+  { label: '録音再生' },
+  { label: '店舗切替' },
+  { label: '注意事項' },
+  /* 同じタブの下の兄弟の面。ここからしか行けないので並びの末尾に置く。 */
+  { label: '分析', to: { screen: 'analytics' } },
+  { label: 'お知らせ', to: { screen: 'alerts' } },
+]
 
 type Props = StaffScreenProps & {
   permissions: StorePermission[]
@@ -132,201 +149,169 @@ export function AuditSearchScreen({ storeId, storeName, api, permissions, naviga
   return (
     /* 承認済みモック `operations-approved.html#audit` /
        `AUDIT-DETAIL--default--ipad-landscape.png`。 */
-    <AdminScreen
-      label="監査"
-      navigate={navigate}
-      sectionsLabel="監査の節"
-      activeSection="本日の管理操作"
-      sections={[
-        { label: '本日の管理操作', to: { screen: 'audit' } },
-        { label: '録音再生' },
-        { label: '店舗切替' },
-        { label: '注意事項' },
-      ]}
-    >
-      <div className="mb-3">
-        <p className="font-sans text-ink-muted text-sm">
-          表示中の店舗 {storeName} · 権限のある範囲のみ
-        </p>
-        <h2 className="font-display font-semibold text-2xl text-ink">監査イベント</h2>
-      </div>
-
-      {detail && (
-        /* モックの `.card.audit` — 等幅で 1 行 1 項目。監査は読むだけなので
-           ダイアログにせず、一覧の下に開いたまま置く。 */
-        <section aria-label="監査イベント詳細" className="mt-4.5">
-          <h3 className="font-display font-semibold text-2xl text-ink">監査イベント詳細</h3>
-          <div className="mt-3 rounded-card border border-line bg-surface p-3.5 font-mono text-ink text-sm leading-relaxed">
-            <p>{`event: ${detail.action}`}</p>
-            <p>{`store: ${storeName}`}</p>
-            <p>{`actor_type: ${detail.actorType}`}</p>
-            <p>{`actor: ${detail.actorId}`}</p>
-            <p>{`target: ${detail.entityType} ${detail.entityId}`}</p>
-            <p>{`correlation_id: ${detail.correlationId ?? 'なし'}`}</p>
-            <p>{`occurred_at: ${formatJstInstant(detail.occurredAt)}`}</p>
-          </div>
-          {auditDiffRows(detail).length === 0 ? (
-            <div className="mt-3">
-              <Notice tone="info">変更前後の記録はありません。</Notice>
-            </div>
-          ) : (
-            <div className="mt-3 grid grid-cols-2 gap-3">
-              {(['before', 'after'] as const).map((side) => (
-                <section
-                  key={side}
-                  aria-label={side === 'before' ? '変更前' : '変更後'}
-                  className="rounded-card border border-line bg-surface p-3.5"
-                >
-                  <p className="font-sans font-bold text-ink text-sm">
-                    {side === 'before' ? '変更前' : '変更後'}
-                  </p>
-                  {auditDiffRows(detail).map((row) => (
-                    <p key={row.key} className="font-sans text-ink text-sm">
-                      {`${row.key} ${side === 'before' ? row.before : row.after}`}
-                    </p>
-                  ))}
-                </section>
-              ))}
-            </div>
-          )}
-          <div className="mt-3 flex justify-end">
-            <Button
-              type="button"
-              variant="danger"
-              className="min-h-12"
-              onClick={() => setDetail(undefined)}
-            >
-              閉じる
-            </Button>
-          </div>
-        </section>
-      )}
-      <Card className="grid gap-4 md:grid-cols-3">
-        <Field label="開始日時" htmlFor="audit-from">
-          <TextInput
-            id="audit-from"
-            type="datetime-local"
-            className="min-h-12"
-            value={filters.from}
-            onChange={(event) => setFilters({ ...filters, from: event.target.value })}
-          />
-        </Field>
-        <Field label="終了日時" htmlFor="audit-to">
-          <TextInput
-            id="audit-to"
-            type="datetime-local"
-            className="min-h-12"
-            value={filters.to}
-            onChange={(event) => setFilters({ ...filters, to: event.target.value })}
-          />
-        </Field>
-        <Field label="操作" htmlFor="audit-action">
-          <TextInput
-            id="audit-action"
-            className="min-h-12"
-            value={filters.action}
-            onChange={(event) => setFilters({ ...filters, action: event.target.value })}
-          />
-        </Field>
-        <Field label="主体種別" htmlFor="audit-actor-type">
-          <Select
-            id="audit-actor-type"
-            className="min-h-12"
-            value={filters.actorType}
-            onChange={(event) =>
-              setFilters({ ...filters, actorType: event.target.value as '' | AuditActorType })
+    <AdminSurface label="監査">
+      <AdminLayout
+        navLabel="監査の節"
+        nav={SECTIONS.map((section) => (
+          <SideNavItem
+            key={section.label}
+            on={section.label === '本日の管理操作'}
+            onClick={
+              section.to === undefined ? undefined : () => navigate(section.to as StaffLocation)
             }
           >
-            <option value="">すべて</option>
-            <option value="user">個人</option>
-            <option value="shared_terminal">共有端末</option>
-          </Select>
-        </Field>
-        <Field label="対象種別" htmlFor="audit-entity-type">
-          <TextInput
-            id="audit-entity-type"
-            className="min-h-12"
-            value={filters.entityType}
-            onChange={(event) => setFilters({ ...filters, entityType: event.target.value })}
-          />
-        </Field>
-        <Field label="対象ID" htmlFor="audit-entity-id">
-          <TextInput
-            id="audit-entity-id"
-            className="min-h-12"
-            value={filters.entityId}
-            onChange={(event) => setFilters({ ...filters, entityId: event.target.value })}
-          />
-        </Field>
-        <div className="flex items-end justify-end md:col-span-3">
-          <Button
-            type="button"
-            className="min-h-12"
-            disabled={loading}
-            onClick={() => {
-              void search(filters)
-            }}
-          >
-            監査を検索する
-          </Button>
-        </div>
-      </Card>
+            {section.label}
+          </SideNavItem>
+        ))}
+      >
+        <p>{`表示中の店舗 ${storeName} · 権限のある範囲のみ`}</p>
 
-      {failure && (
-        <div className="mt-3">
-          <Notice tone="danger">{failure}</Notice>
-        </div>
-      )}
-      {events?.length === 0 && (
-        <EmptyResult title="条件に一致する監査イベントはありません" onClearFilters={clearFilters} />
-      )}
+        {detail && (
+          /* 記録は要約せず、保存されている姿のまま等幅で出す。整形して
+             読みやすくすると、後から「本当にこう記録されていたのか」を
+             確かめられなくなる。前後の差分だけは人が読む形に開く。 */
+          <section aria-label="監査イベント詳細">
+            <h1>監査イベント詳細</h1>
+            <AuditRecord
+              label="監査イベントの記録"
+              lines={[
+                `event: ${detail.action}`,
+                `store: ${storeName}`,
+                `actor_type: ${detail.actorType}`,
+                `actor: ${detail.actorId}`,
+                `target: ${detail.entityType} ${detail.entityId}`,
+                `correlation_id: ${detail.correlationId ?? 'なし'}`,
+                `occurred_at: ${formatJstInstant(detail.occurredAt)}`,
+              ]}
+            />
+            {auditDiffRows(detail).length === 0 ? (
+              <StatusNotice>変更前後の記録はありません。</StatusNotice>
+            ) : (
+              <div className="mt-3">
+                <DiffPair>
+                  {(['before', 'after'] as const).map((side) => (
+                    <Card key={side} label={side === 'before' ? '変更前' : '変更後'}>
+                      <b>{side === 'before' ? '変更前' : '変更後'}</b>
+                      {auditDiffRows(detail).map((row) => (
+                        <span key={row.key} className="block">
+                          {`${row.key} ${side === 'before' ? row.before : row.after}`}
+                        </span>
+                      ))}
+                    </Card>
+                  ))}
+                </DiffPair>
+              </div>
+            )}
+            <Actions>
+              <Action inset="tight" onClick={() => setDetail(undefined)}>
+                閉じる
+              </Action>
+            </Actions>
+          </section>
+        )}
 
-      {events !== undefined && events.length > 0 && (
-        <Card className="mt-3 overflow-x-auto">
-          <table aria-label="監査イベント" className="w-full border-collapse text-left">
-            <thead>
-              <tr className="border-line border-b">
-                {['日時', '操作', '主体種別', '主体', '対象', '詳細'].map((heading) => (
-                  <th
-                    key={heading}
-                    scope="col"
-                    className="p-3 font-sans font-semibold text-ink text-sm"
-                  >
-                    {heading}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
+        <div className="mt-4.5">
+          <Card label="監査の絞り込み">
+            <b>監査の絞り込み</b>
+            <div className="mt-2.5 grid gap-3 md:grid-cols-3">
+              <TextField
+                id="audit-from"
+                label="開始日時"
+                type="datetime-local"
+                value={filters.from}
+                onChange={(event) => setFilters({ ...filters, from: event.target.value })}
+              />
+              <TextField
+                id="audit-to"
+                label="終了日時"
+                type="datetime-local"
+                value={filters.to}
+                onChange={(event) => setFilters({ ...filters, to: event.target.value })}
+              />
+              <TextField
+                id="audit-action"
+                label="操作"
+                value={filters.action}
+                onChange={(event) => setFilters({ ...filters, action: event.target.value })}
+              />
+              <SelectField
+                id="audit-actor-type"
+                label="主体種別"
+                value={filters.actorType}
+                onChange={(event) =>
+                  setFilters({ ...filters, actorType: event.target.value as '' | AuditActorType })
+                }
+              >
+                <option value="">すべて</option>
+                <option value="user">個人</option>
+                <option value="shared_terminal">共有端末</option>
+              </SelectField>
+              <TextField
+                id="audit-entity-type"
+                label="対象種別"
+                value={filters.entityType}
+                onChange={(event) => setFilters({ ...filters, entityType: event.target.value })}
+              />
+              <TextField
+                id="audit-entity-id"
+                label="対象ID"
+                value={filters.entityId}
+                onChange={(event) => setFilters({ ...filters, entityId: event.target.value })}
+              />
+            </div>
+            <Actions>
+              <Action
+                variant="primary"
+                inset="tight"
+                disabled={loading}
+                onClick={() => {
+                  void search(filters)
+                }}
+              >
+                監査を検索する
+              </Action>
+            </Actions>
+          </Card>
+        </div>
+
+        {failure && <FailureNotice>{failure}</FailureNotice>}
+        {events?.length === 0 && (
+          <EmptyResult
+            title="条件に一致する監査イベントはありません"
+            onClearFilters={clearFilters}
+          />
+        )}
+
+        {events !== undefined && events.length > 0 && (
+          <div className="mt-3 overflow-x-auto">
+            <MatrixTable
+              label="監査イベント"
+              columns={['日時', '操作', '主体種別', '主体', '対象', '詳細']}
+            >
               {events.map((event) => (
-                <tr key={event.id} className="border-line border-b last:border-b-0">
-                  <td className="p-3 font-sans text-ink text-sm">
-                    {formatJstInstant(event.occurredAt)}
-                  </td>
-                  <td className="p-3 font-mono text-ink text-sm">{event.action}</td>
-                  <td className="p-3 font-sans text-ink text-sm">
-                    {actorTypeLabel(event.actorType)}
-                  </td>
-                  <td className="p-3 font-sans text-ink text-sm">{event.actorId}</td>
-                  <td className="p-3 font-sans text-ink-muted text-sm">
-                    {event.entityType} · {event.entityId}
-                  </td>
-                  <td className="p-3">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      className="min-h-12"
-                      onClick={() => setDetail(event)}
-                    >
+                <MatrixRow key={event.id} header={formatJstInstant(event.occurredAt)}>
+                  {/* 操作名と対象 ID は記録そのもの。桁で読むので等幅のまま出す。 */}
+                  <MatrixCell>
+                    <span className="font-record text-grid">{event.action}</span>
+                  </MatrixCell>
+                  <MatrixCell>{actorTypeLabel(event.actorType)}</MatrixCell>
+                  <MatrixCell>{event.actorId}</MatrixCell>
+                  <MatrixCell>
+                    <span className="font-record text-grid">
+                      {`${event.entityType} · ${event.entityId}`}
+                    </span>
+                  </MatrixCell>
+                  <MatrixCell>
+                    <Action inset="tight" onClick={() => setDetail(event)}>
                       詳細
-                    </Button>
-                  </td>
-                </tr>
+                    </Action>
+                  </MatrixCell>
+                </MatrixRow>
               ))}
-            </tbody>
-          </table>
-        </Card>
-      )}
-    </AdminScreen>
+            </MatrixTable>
+          </div>
+        )}
+      </AdminLayout>
+    </AdminSurface>
   )
 }

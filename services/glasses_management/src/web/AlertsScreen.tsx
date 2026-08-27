@@ -7,9 +7,8 @@ import {
   type AlertSettingsInput,
   type StorePermission,
 } from '@app/contracts'
-import { Button, Card, Chip, Field, Notice, Select, TextInput } from '@app/ui'
+import { Field, TextInput } from '@app/ui'
 import { useEffect, useState } from 'react'
-import { EmptyResult, PermissionDenied } from './admin-chrome'
 import {
   alertConditionLabel,
   alertKindLabel,
@@ -17,6 +16,11 @@ import {
   alertResolutionLabel,
   formatJstDateTime,
 } from './analytics-view'
+import { Action, Actions, FilterLine, FilterSelect } from './design/controls'
+import { Modal } from './design/dialogs'
+import { FullScreenState } from './design/layouts'
+import { FailureNotice, StatusNotice } from './design/notices'
+import { Card, ListRow, StatePill } from './design/surfaces'
 import type { StaffScreenProps } from './staff-screen'
 
 type Props = StaffScreenProps & {
@@ -29,14 +33,18 @@ type Props = StaffScreenProps & {
 
 type StatusFilter = 'all' | 'unread' | 'unresolved'
 
+/*
+ * 既定の選択肢が絞り込みの名前を兼ねる（モックの `.filter` は「今後の予約」の
+ * ように、控えが何の絞り込みかを自分で名乗る）。ラベル行を別に置かない。
+ */
 const KIND_OPTIONS: { value: 'all' | AlertKind; label: string }[] = [
-  { value: 'all', label: 'すべて' },
+  { value: 'all', label: 'すべての種別' },
   { value: 'notice', label: 'お知らせのみ' },
   { value: 'alert', label: 'アラートのみ' },
 ]
 
 const STATUS_OPTIONS: { value: StatusFilter; label: string }[] = [
-  { value: 'all', label: 'すべて' },
+  { value: 'all', label: 'すべての状態' },
   { value: 'unread', label: '未読のみ' },
   { value: 'unresolved', label: '未対応のみ' },
 ]
@@ -204,231 +212,190 @@ export function AlertsScreen({ storeId, api, permissions, navigate }: Props) {
 
   // 権限が無い操作者には、通知の存在も内容もこれ以上見せない
   // (`exception-states-approved.html#permission-denied`)。
-  if (!mayRead) return <PermissionDenied onReturnHome={() => navigate({ screen: 'home' })} />
+  if (!mayRead)
+    return (
+      <FullScreenState glyph="—" title="この設定を表示する権限がありません">
+        <p>権限のある管理者に確認してください。設定の存在や内容はこれ以上表示しません。</p>
+        <Action size="roomy" variant="primary" onClick={() => navigate({ screen: 'home' })}>
+          業務開始画面へ戻る
+        </Action>
+      </FullScreenState>
+    )
 
   const longWait = conditions?.find((condition) => condition.code === 'long_wait')
 
+  const clearFilters = () => {
+    setKind('all')
+    setStatus('all')
+  }
+
+  // 0 件は「空の一覧」ではなく面ごと入れ替わる（承認済みモック `#empty`）。
+  if (alerts && alerts.length === 0)
+    return (
+      <FullScreenState title="条件に一致するお知らせ・アラートはありません">
+        <p>検索語またはフィルターを変更してください。履歴自体は削除されていません。</p>
+        <Action size="roomy" variant="primary" onClick={clearFilters}>
+          フィルターをすべて解除
+        </Action>
+      </FullScreenState>
+    )
+
   return (
-    <main className="mx-auto flex w-full max-w-5xl flex-col gap-5 p-6">
-      <h1 className="font-display font-semibold text-2xl text-ink">お知らせとアラート</h1>
+    /* 運用モックの本文（`.content{padding:24px 30px}`）。 */
+    <main className="px-7.5 py-6 font-sans">
+      <h1>お知らせとアラート</h1>
 
-      <Card className="grid gap-4 md:grid-cols-2">
-        <Field label="種別" htmlFor="alert-kind">
-          <Select
-            id="alert-kind"
-            className="min-h-12"
-            value={kind}
-            onChange={(event) => {
-              setKind(event.target.value as 'all' | AlertKind)
-            }}
-          >
-            {KIND_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <Field label="状態" htmlFor="alert-status">
-          <Select
-            id="alert-status"
-            className="min-h-12"
-            value={status}
-            onChange={(event) => {
-              setStatus(event.target.value as StatusFilter)
-            }}
-          >
-            {STATUS_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </Select>
-        </Field>
-      </Card>
+      <FilterLine>
+        <FilterSelect
+          id="alert-kind"
+          label="種別"
+          value={kind}
+          onChange={(next) => setKind(next as 'all' | AlertKind)}
+        >
+          {KIND_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </FilterSelect>
+        <FilterSelect
+          id="alert-status"
+          label="状態"
+          value={status}
+          onChange={(next) => setStatus(next as StatusFilter)}
+        >
+          {STATUS_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </FilterSelect>
+      </FilterLine>
 
-      {listFailed && <Notice tone="danger">{LIST_FAILURE}</Notice>}
-
-      {alerts && alerts.length === 0 && (
-        <EmptyResult
-          title="条件に一致するお知らせ・アラートはありません"
-          onClearFilters={() => {
-            setKind('all')
-            setStatus('all')
-          }}
-        />
-      )}
+      {listFailed && <FailureNotice>{LIST_FAILURE}</FailureNotice>}
 
       {alerts && alerts.length > 0 && (
-        <Card>
-          <ul className="flex flex-col gap-2">
-            {alerts.map((record) => (
-              <li key={record.id}>
-                <button
-                  type="button"
-                  className="flex min-h-12 w-full flex-col gap-1 rounded-ctl border border-line bg-surface p-3 text-left hover:bg-pine/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-pine focus-visible:outline-offset-2"
-                  onClick={() => {
-                    void open(record)
-                  }}
-                >
-                  <span className="flex flex-wrap items-center gap-2">
-                    <Chip tone={record.kind === 'alert' ? 'warning' : 'neutral'}>
-                      {alertKindLabel(record.kind)}
-                    </Chip>
-                    <span className="font-sans font-medium text-ink text-sm">{record.title}</span>
-                  </span>
-                  <span className="flex flex-wrap items-center gap-3 font-sans text-ink-muted text-sm">
-                    <span>{formatJstDateTime(record.occurredAt)}</span>
-                    <span>{alertReadLabel(record)}</span>
-                    <span>{alertResolutionLabel(record)}</span>
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </Card>
+        <section aria-label="お知らせとアラートの一覧">
+          {alerts.map((record) => (
+            <ListRow
+              key={record.id}
+              onSelect={() => {
+                void open(record)
+              }}
+            >
+              {/* 種別は色ではなく語で運ぶ。ピルの色はその補強にしか使わない。 */}
+              <StatePill tone={record.kind === 'alert' ? 'danger' : 'plain'}>
+                {alertKindLabel(record.kind)}
+              </StatePill>{' '}
+              <b>{record.title}</b>
+              <br />
+              <small>
+                {`${formatJstDateTime(record.occurredAt)} · ${alertReadLabel(record)} · ${alertResolutionLabel(record)}`}
+              </small>
+            </ListRow>
+          ))}
+        </section>
       )}
 
       {selected && (
-        // `@app/ui` の Dialog はネイティブ <dialog> を使うため jsdom で開けない。
-        // 他画面と同じく role="dialog" のインラインオーバーレイで組む。
-        <div className="fixed inset-0 z-10 flex items-center justify-center bg-ink/40 p-6">
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-label={selected.title}
-            className="flex max-h-full w-full max-w-2xl flex-col gap-3 overflow-y-auto rounded-ctl border border-line bg-surface p-6"
-          >
-            <div className="flex flex-wrap items-center gap-2">
-              <Chip tone={selected.kind === 'alert' ? 'warning' : 'neutral'}>
-                {alertKindLabel(selected.kind)}
-              </Chip>
-              <h2 className="font-display font-semibold text-ink text-xl">{selected.title}</h2>
-            </div>
+        <Modal titleId="alert-detail-title" title={selected.title}>
+          <StatePill tone={selected.kind === 'alert' ? 'danger' : 'plain'}>
+            {alertKindLabel(selected.kind)}
+          </StatePill>
 
-            <dl className="flex flex-col gap-3">
-              <div className="flex flex-col gap-1">
-                <dt className="font-sans font-medium text-ink-muted text-sm">発生理由</dt>
-                <dd className="font-sans text-ink text-sm">{selected.reason}</dd>
-              </div>
-              <div className="flex flex-col gap-1">
-                <dt className="font-sans font-medium text-ink-muted text-sm">対象</dt>
-                <dd className="font-sans text-ink text-sm">{selected.subject}</dd>
-              </div>
-              <div className="flex flex-col gap-1">
-                <dt className="font-sans font-medium text-ink-muted text-sm">発生時刻</dt>
-                <dd className="font-sans text-ink text-sm tabular-nums">
-                  {formatJstDateTime(selected.occurredAt)}
-                </dd>
-              </div>
-              <div className="flex flex-col gap-1">
-                <dt className="font-sans font-medium text-ink-muted text-sm">次の操作</dt>
-                <dd className="font-sans text-ink text-sm">{selected.nextAction}</dd>
-              </div>
-            </dl>
+          <dl className="mt-3.5">
+            <dt className="text-ink-muted">発生理由</dt>
+            <dd>{selected.reason}</dd>
+            <dt className="mt-2.5 text-ink-muted">対象</dt>
+            <dd>{selected.subject}</dd>
+            <dt className="mt-2.5 text-ink-muted">発生時刻</dt>
+            {/* 和文グリフを持たない等幅にしない。ここは本文書体のまま読ませる。 */}
+            <dd>{formatJstDateTime(selected.occurredAt)}</dd>
+            <dt className="mt-2.5 text-ink-muted">次の操作</dt>
+            <dd>{selected.nextAction}</dd>
+          </dl>
 
-            {/* 既読と対応済みは並べて出す。片方から他方を推測させない。 */}
-            <div className="flex flex-wrap items-center gap-4">
-              <span className="flex items-center gap-2 font-sans text-ink text-sm">
-                閲覧状況
-                <Chip tone={selected.readAt === null ? 'neutral' : 'success'}>
-                  {alertReadLabel(selected)}
-                </Chip>
-              </span>
-              <span className="flex items-center gap-2 font-sans text-ink text-sm">
-                対応状況
-                <Chip tone={selected.resolvedAt === null ? 'warning' : 'success'}>
-                  {alertResolutionLabel(selected)}
-                </Chip>
-              </span>
-            </div>
+          {/* 既読と対応済みは並べて出す。片方から他方を推測させない。 */}
+          <p>
+            閲覧状況 <StatePill tone="plain">{alertReadLabel(selected)}</StatePill>
+            {'　'}
+            対応状況{' '}
+            <StatePill tone={selected.resolvedAt === null ? 'danger' : 'plain'}>
+              {alertResolutionLabel(selected)}
+            </StatePill>
+          </p>
 
-            {selected.resolutionNote && (
-              <p className="font-sans text-ink-muted text-sm">{selected.resolutionNote}</p>
-            )}
-            {actionFailure && <Notice tone="danger">{actionFailure}</Notice>}
+          {selected.resolutionNote && <p>{selected.resolutionNote}</p>}
+          {actionFailure && <FailureNotice>{actionFailure}</FailureNotice>}
 
-            {mayWrite && (
-              <>
-                <Field label="対応内容" htmlFor="alert-note" error={noteError}>
-                  <TextInput
-                    id="alert-note"
-                    className="min-h-12"
-                    value={note}
-                    onChange={(event) => {
-                      setNote(event.target.value)
-                    }}
-                  />
-                </Field>
-                <div className="flex flex-wrap gap-3">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    className="min-h-12"
-                    disabled={selected.readAt !== null}
-                    onClick={() => {
-                      void acknowledge('read')
-                    }}
-                  >
-                    既読にする
-                  </Button>
-                  <Button
-                    type="button"
-                    className="min-h-12"
-                    disabled={selected.resolvedAt !== null}
-                    onClick={() => {
-                      void acknowledge('resolve')
-                    }}
-                  >
-                    対応済みにする
-                  </Button>
-                </div>
-              </>
-            )}
+          {mayWrite && (
+            <>
+              <Field label="対応内容" htmlFor="alert-note" error={noteError}>
+                <TextInput
+                  id="alert-note"
+                  className="min-h-12"
+                  value={note}
+                  onChange={(event) => {
+                    setNote(event.target.value)
+                  }}
+                />
+              </Field>
+              <Actions>
+                <Action
+                  disabled={selected.readAt !== null}
+                  onClick={() => {
+                    void acknowledge('read')
+                  }}
+                >
+                  既読にする
+                </Action>
+                <Action
+                  variant="primary"
+                  disabled={selected.resolvedAt !== null}
+                  onClick={() => {
+                    void acknowledge('resolve')
+                  }}
+                >
+                  対応済みにする
+                </Action>
+              </Actions>
+            </>
+          )}
 
-            <div>
-              <Button
-                type="button"
-                variant="ghost"
-                className="min-h-12"
-                onClick={() => {
-                  setSelected(undefined)
-                }}
-              >
-                閉じる
-              </Button>
-            </div>
-          </div>
-        </div>
+          <Actions>
+            <Action
+              onClick={() => {
+                setSelected(undefined)
+              }}
+            >
+              閉じる
+            </Action>
+          </Actions>
+        </Modal>
       )}
 
       {mayManage && conditions && (
-        <Card>
-          <section aria-label="警告条件と通知先" className="flex flex-col gap-4">
-            <h2 className="font-display font-semibold text-ink text-lg">警告条件と通知先</h2>
-            {settingsSaved && <Notice tone="success">警告条件を保存しました。</Notice>}
-            {settingsFailure && <Notice tone="danger">{settingsFailure}</Notice>}
-            <ul className="flex flex-col gap-3">
-              {conditions.map((condition) => (
-                <li key={condition.code} className="flex items-center gap-3">
-                  <input
-                    id={`alert-condition-${condition.code}`}
-                    type="checkbox"
-                    className="size-6"
-                    checked={condition.enabled}
-                    onChange={(event) => {
-                      updateCondition(condition.code, { enabled: event.target.checked })
-                    }}
-                  />
-                  <label
-                    htmlFor={`alert-condition-${condition.code}`}
-                    className="font-sans text-ink text-sm"
-                  >
-                    {alertConditionLabel(condition.code)}
-                  </label>
-                </li>
-              ))}
-            </ul>
+        <section aria-label="警告条件と通知先" className="mt-4.5">
+          <h2>警告条件と通知先</h2>
+          {settingsSaved && <StatusNotice>警告条件を保存しました。</StatusNotice>}
+          {settingsFailure && <FailureNotice>{settingsFailure}</FailureNotice>}
+          <Card>
+            {conditions.map((condition) => (
+              <p key={condition.code} className="my-2.5 flex items-center gap-3">
+                <input
+                  id={`alert-condition-${condition.code}`}
+                  type="checkbox"
+                  className="size-6"
+                  checked={condition.enabled}
+                  onChange={(event) => {
+                    updateCondition(condition.code, { enabled: event.target.checked })
+                  }}
+                />
+                <label htmlFor={`alert-condition-${condition.code}`}>
+                  {alertConditionLabel(condition.code)}
+                </label>
+              </p>
+            ))}
             {longWait && (
               <Field label="待ち時間の閾値（分）" htmlFor="alert-threshold">
                 <TextInput
@@ -457,19 +424,18 @@ export function AlertsScreen({ storeId, api, permissions, navigate }: Props) {
                 }}
               />
             </Field>
-            <div>
-              <Button
-                type="button"
-                className="min-h-12"
+            <Actions>
+              <Action
+                variant="primary"
                 onClick={() => {
                   void saveConditions()
                 }}
               >
                 警告条件を保存する
-              </Button>
-            </div>
-          </section>
-        </Card>
+              </Action>
+            </Actions>
+          </Card>
+        </section>
       )}
     </main>
   )

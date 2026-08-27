@@ -95,7 +95,7 @@ test('starts the approved public flow by selecting a published store and its pur
     await screen.findByRole('heading', { name: 'ご希望の日時を選んでください' }),
   ).toBeInTheDocument()
   fireEvent.change(screen.getByLabelText('ご希望の日'), { target: { value: '2026-09-01' } })
-  fireEvent.click(await screen.findByRole('button', { name: '9月1日（火） 10:00' }))
+  fireEvent.click(await screen.findByRole('button', { name: '9月1日（火）10:00' }))
   fireEvent.click(screen.getByRole('button', { name: 'お客様情報へ進む' }))
   expect(
     await screen.findByRole('heading', { name: 'ご連絡先を入力してください' }),
@@ -123,7 +123,7 @@ test('starts the approved public flow by selecting a published store and its pur
   fireEvent.click(screen.getByRole('button', { name: '予約日時を変更する' }))
   expect(await screen.findByRole('heading', { name: '変更後の日時を選ぶ' })).toBeInTheDocument()
   fireEvent.change(screen.getByLabelText('変更後の日'), { target: { value: '2026-09-01' } })
-  fireEvent.click(await screen.findByRole('button', { name: '9月1日（火） 10:00' }))
+  fireEvent.click(await screen.findByRole('button', { name: '9月1日（火）10:00' }))
   expect(changeReservation).toHaveBeenCalledWith(
     '00000000-0000-4000-8000-000000000001',
     expect.objectContaining({ version: 1, date: '2026-09-01', startTime: '10:00' }),
@@ -191,7 +191,7 @@ test('checks the coarse result with the same confirmation key after the booking 
   fireEvent.click(await screen.findByRole('button', { name: /メガネを新しく作りたい.*約60分/ }))
   fireEvent.click(screen.getByRole('button', { name: '日時へ進む' }))
   fireEvent.change(await screen.findByLabelText('ご希望の日'), { target: { value: '2026-09-01' } })
-  fireEvent.click(await screen.findByRole('button', { name: '9月1日（火） 10:00' }))
+  fireEvent.click(await screen.findByRole('button', { name: '9月1日（火）10:00' }))
   fireEvent.click(screen.getByRole('button', { name: 'お客様情報へ進む' }))
   fireEvent.change(screen.getByLabelText('お名前'), { target: { value: '田中花子' } })
   fireEvent.change(screen.getByLabelText('お名前（かな）'), { target: { value: 'タナカハナコ' } })
@@ -262,7 +262,7 @@ test('keeps customer input and returns to same-store alternatives when confirmat
   fireEvent.click(await screen.findByRole('button', { name: /メガネを新しく作りたい.*約60分/ }))
   fireEvent.click(screen.getByRole('button', { name: '日時へ進む' }))
   fireEvent.change(await screen.findByLabelText('ご希望の日'), { target: { value: '2026-09-01' } })
-  fireEvent.click(await screen.findByRole('button', { name: '9月1日（火） 11:00' }))
+  fireEvent.click(await screen.findByRole('button', { name: '9月1日（火）11:00' }))
   fireEvent.click(screen.getByRole('button', { name: 'お客様情報へ進む' }))
   fireEvent.change(screen.getByLabelText('お名前'), { target: { value: '田中花子' } })
   fireEvent.change(screen.getByLabelText('お名前（かな）'), { target: { value: 'タナカハナコ' } })
@@ -279,7 +279,7 @@ test('keeps customer input and returns to same-store alternatives when confirmat
   expect(screen.getByRole('alert')).toHaveTextContent(
     '選択した時間は他のお客様の予約で埋まりました',
   )
-  fireEvent.click(screen.getByRole('button', { name: '9月1日（火） 11:00' }))
+  fireEvent.click(screen.getByRole('button', { name: '9月1日（火）11:00' }))
   fireEvent.click(screen.getByRole('button', { name: 'お客様情報へ進む' }))
   expect(await screen.findByLabelText('お名前')).toHaveValue('田中花子')
   expect(readSlots).toHaveBeenCalledTimes(2)
@@ -349,7 +349,7 @@ test('顧客フローの各画面は承認済みモックの文言と工程表�
   expect(screen.getByRole('progressbar', { name: '予約工程 2 / 5' })).toBeInTheDocument()
   expect(screen.getByText('メガネを新しく作りたい · 約60分')).toBeInTheDocument()
   fireEvent.change(await screen.findByLabelText('ご希望の日'), { target: { value: '2026-09-01' } })
-  fireEvent.click(await screen.findByRole('button', { name: '9月1日（火） 10:00' }))
+  fireEvent.click(await screen.findByRole('button', { name: '9月1日（火）10:00' }))
   fireEvent.click(screen.getByRole('button', { name: 'お客様情報へ進む' }))
 
   expect(screen.getByRole('progressbar', { name: '予約工程 3 / 5' })).toBeInTheDocument()
@@ -371,5 +371,64 @@ test('顧客フローの各画面は承認済みモックの文言と工程表�
   expect(
     screen.getByText('もう一度予約ボタンを押さず、この画面で成立状況を確認してください。'),
   ).toBeInTheDocument()
-  expect(screen.getByText('照会番号 CHECK-6F82')).toBeInTheDocument()
+  // 照会番号は冪等キーそのものなので、顧客向けの画面には出さない。
+  expect(screen.queryByText(/CHECK-6F82/)).not.toBeInTheDocument()
+})
+
+test('顧客フローの主操作は本文の外（画面下端）に貼り付き、選択肢と要約帯は承認済みモックの語彙で組まれる', async () => {
+  const api: PublicBookingApi = {
+    listStores: async () => [store],
+    readStore: async () => detail,
+    readSlots: async () => ({
+      date: '2026-09-01',
+      timezone: 'Asia/Tokyo',
+      durationMinutes: 60,
+      intervalMinutes: 30,
+      slots: [
+        {
+          date: '2026-09-01',
+          startTime: '10:00',
+          endTime: '11:00',
+          startAt: '2026-09-01T01:00:00.000Z',
+          endAt: '2026-09-01T02:00:00.000Z',
+        },
+      ],
+    }),
+    createReservation: async () => ({
+      reservationNumber: 'EY-0001',
+      managementCode: 'ABCD-1234',
+      emailStatus: 'sent',
+    }),
+    readReservationStatus: async () => ({ status: 'confirmed' }),
+    verifyReservation: async () => {
+      throw new Error('unused')
+    },
+    cancelReservation: async () => ({ status: 'cancelled', version: 2 }),
+    changeReservation: async () => ({
+      status: 'confirmed',
+      version: 2,
+      startAt: '2026-09-01T02:00:00.000Z',
+      endAt: '2026-09-01T03:00:00.000Z',
+      purposeIds: ['00000000-0000-4000-8000-000000000001'],
+    }),
+  }
+  render(<PublicBooking api={api} />)
+
+  // 店舗詳細: 店の事実は白いカードではなく淡い緑地の要約帯にまとまる。
+  fireEvent.click(await screen.findByRole('button', { name: /銀座店.*店舗情報を見る/ }))
+  const detailHeading = await screen.findByRole('heading', { level: 1, name: '銀座店' })
+  expect(detailHeading).toBeInTheDocument()
+  expect(screen.getByText(/営業時間 10:00–19:00/).closest('div')).toHaveClass('bg-summary')
+  // 主操作は本文（main）の外にあり、画面下端に貼り付く。
+  const startBooking = screen.getByRole('button', { name: '銀座店で予約を始める' })
+  expect(screen.getByRole('main')).not.toContainElement(startBooking)
+
+  fireEvent.click(startBooking)
+  // 来店目的: 選択中の選択肢は 3px の緑枠になる。
+  const purpose = await screen.findByRole('button', { name: /メガネを新しく作りたい/ })
+  expect(purpose).not.toHaveClass('border-3')
+  fireEvent.click(purpose)
+  expect(screen.getByRole('button', { name: /メガネを新しく作りたい/ })).toHaveClass('border-3')
+  const toDatetime = screen.getByRole('button', { name: '日時へ進む' })
+  expect(screen.getByRole('main')).not.toContainElement(toDatetime)
 })

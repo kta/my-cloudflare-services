@@ -23,7 +23,12 @@ const IPAD = { width: 1176, height: 814 }
 const IPAD_SHORT = { width: 1176, height: 742 }
 const PHONE = { width: 359, height: 744 }
 
-for (const id of ['SETTINGS-SP']) SIZES[id] = { width: 375, height: 790 }
+// 設定ガイド SP。モックの `.phone` は外枠 9px 込みで 375×790。
+for (const id of ['SETTINGS-SP']) SIZES[id] = { width: 357, height: 772 }
+// 設定ガイドの別方言と、Web 予約の小型 2 面。
+SIZES['SETTINGS-GUIDE'] = { width: 1176, height: 814 }
+for (const id of ['WEB-PURPOSE-COMPACT', 'WEB-DATETIME-COMPACT'])
+  SIZES[id] = { width: 322, height: 660 }
 for (const id of [
   'WEB-STORE-SEARCH',
   'WEB-STORE-DETAIL',

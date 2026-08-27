@@ -1,16 +1,27 @@
 import { SharedTerminal, SharedTerminalIssue } from '@app/contracts'
-import { Button, Card, Field, Notice, TextInput } from '@app/ui'
 import { useCallback, useEffect, useState } from 'react'
-import {
-  AdminCard,
-  AdminCardGrid,
-  AdminHeading,
-  AdminRow,
-  AdminScreen,
-  AdminState,
-  AdminTitle,
-} from './admin-chrome'
+import { Action, Actions } from './design/controls'
+import { Modal } from './design/dialogs'
+import { TextField } from './design/forms'
+import { AdminLayout, AdminSurface, SideNavItem } from './design/layouts'
+import { FailureNotice, StatusNotice } from './design/notices'
+import { AdminRow, Card, CardGrid, StatePill, TitleRow } from './design/surfaces'
+import type { StaffLocation } from './staff-navigation'
 import type { StaffScreenProps } from './staff-screen'
+
+/** 節ナビ。モック `operations-approved.html#devices` の 4 つと、その順序。 */
+const SECTIONS: { label: string; to?: StaffLocation }[] = [
+  { label: '共有iPad', to: { screen: 'shared-terminals' } },
+  { label: '無操作ロック' },
+  { label: '個人PIN' },
+  { label: '共有セッション' },
+  /*
+   * モックの節ナビはこの面の中の節だけを並べる。ただし 2 本目の帯を作らない
+   * 以上、同じタブの下にある別の面へはここからしか行けない。到達できない画面を
+   * 作らないために、兄弟の面も同じ並びの末尾に置く。
+   */
+  { label: '録音運用', to: { screen: 'recording-ops' } },
+]
 
 const LOAD_FAILURE = '共有iPadの一覧を取得できませんでした。もう一度お試しください。'
 const CREATE_FAILURE = '共有iPadを登録できませんでした。もう一度お試しください。'
@@ -178,240 +189,219 @@ export function SharedTerminalScreen({
   }
 
   return (
-    <AdminScreen
-      label="端末とセキュリティ"
-      navigate={navigate}
-      sectionsLabel="端末とセキュリティの節"
-      activeSection="共有iPad"
-      sections={[
-        { label: '共有iPad', to: { screen: 'shared-terminals' } },
-        { label: '無操作ロック' },
-        { label: '個人PIN' },
-        { label: '共有セッション' },
-      ]}
-    >
-      <AdminTitle>
-        <AdminHeading title="共有iPad" description="店舗へ登録された端末と共有セッション" />
-        <Button
-          className="ml-auto min-h-11"
-          onClick={() => {
-            setRegistering(true)
-            setNameError(undefined)
-          }}
-        >
-          共有iPadを登録
-        </Button>
-      </AdminTitle>
-
-      {failure && (
-        <div className="mt-3">
-          <Notice tone="danger">{failure}</Notice>
-        </div>
-      )}
-
-      {registering && (
-        <Card className="mt-3 flex flex-col gap-3">
-          <form
-            className="flex flex-wrap items-end gap-3"
-            onSubmit={(event) => {
-              event.preventDefault()
-              void register()
-            }}
+    <AdminSurface label="端末とセキュリティ">
+      <AdminLayout
+        navLabel="端末とセキュリティの節"
+        nav={SECTIONS.map((section) => (
+          <SideNavItem
+            key={section.label}
+            on={section.label === '共有iPad'}
+            onClick={
+              section.to === undefined ? undefined : () => navigate(section.to as StaffLocation)
+            }
           >
-            <div className="min-w-64 flex-1">
-              <Field label="端末名" htmlFor="terminal-name" error={nameError}>
-                <TextInput
-                  id="terminal-name"
-                  className="min-h-12"
-                  value={name}
-                  onChange={(event) => setName(event.target.value)}
-                />
-              </Field>
-            </div>
-            <Button type="submit" className="min-h-12" disabled={busy}>
-              登録する
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              className="min-h-12"
-              onClick={() => setRegistering(false)}
+            {section.label}
+          </SideNavItem>
+        ))}
+      >
+        <TitleRow
+          gap={0}
+          push={
+            <Action
+              variant="primary"
+              inset="tight"
+              onClick={() => {
+                setRegistering(true)
+                setNameError(undefined)
+              }}
             >
-              やめる
-            </Button>
-          </form>
-        </Card>
-      )}
+              共有iPadを登録
+            </Action>
+          }
+        >
+          <div>
+            {/* `.title h2{margin:0}` — 見出しの下に副題が続くので既定の余白を落とす。 */}
+            <h1 className="my-0">共有iPad</h1>
+            <p>店舗へ登録された端末と共有セッション</p>
+          </div>
+        </TitleRow>
 
-      {terminals?.map((terminal) => {
-        const active = terminal.status === 'active'
-        return (
-          <AdminRow key={terminal.id} label={`${storeName} ${terminal.name}`}>
-            <b className="font-sans font-bold text-ink">{`${storeName} ${terminal.name}`}</b>
-            <span className="font-sans text-ink text-sm">
-              {`最終通信 ${formatLastSeen(terminal.lastSeenAt, now)}`}
-            </span>
-            {/* Text carries the state; the tint only reinforces it. */}
-            <AdminState>{active ? '利用中' : '停止中'}</AdminState>
-            {active ? (
-              <Button
-                variant="danger"
-                className="min-h-11"
-                onClick={() => setConfirmingRevoke(terminal)}
-              >
-                失効
-              </Button>
-            ) : (
-              <Button
-                variant="danger"
-                className="min-h-11"
-                onClick={() =>
-                  setDeleteNotice(`停止中の端末の削除は本部の承認が必要です。${CONSOLE_ONLY}`)
-                }
-              >
-                削除確認
-              </Button>
-            )}
-          </AdminRow>
-        )
-      })}
-      {terminals?.length === 0 && (
-        <p className="mt-3 font-sans text-ink-muted text-sm">
-          登録された共有iPadはまだありません。
-        </p>
-      )}
-      {deleteNotice && (
-        <div className="mt-3">
-          <Notice tone="info">{deleteNotice}</Notice>
-        </div>
-      )}
+        {failure && <FailureNotice>{failure}</FailureNotice>}
 
-      <AdminCardGrid>
-        <AdminCard title="無操作ロック">
-          {idleLockSeconds === undefined ? (
-            <>
-              <span className="block">未取得</span>
-              <span className="block text-ink-muted">
+        {registering && (
+          <div className="mt-3">
+            <Card>
+              <form
+                className="flex flex-wrap items-end gap-3"
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  void register()
+                }}
+              >
+                <div className="min-w-64 flex-1">
+                  <TextField
+                    id="terminal-name"
+                    label="端末名"
+                    error={nameError}
+                    value={name}
+                    onChange={(event) => setName(event.target.value)}
+                  />
+                </div>
+                <Action inset="tight" disabled={busy} onClick={() => void register()}>
+                  登録する
+                </Action>
+                <Action inset="tight" onClick={() => setRegistering(false)}>
+                  やめる
+                </Action>
+              </form>
+            </Card>
+          </div>
+        )}
+
+        {terminals?.map((terminal) => {
+          const active = terminal.status === 'active'
+          return (
+            <AdminRow key={terminal.id} label={`${storeName} ${terminal.name}`}>
+              <b>{`${storeName} ${terminal.name}`}</b>
+              <span>{`最終通信 ${formatLastSeen(terminal.lastSeenAt, now)}`}</span>
+              {/* 状態は文字が運ぶ。色は補強にしか使わない。 */}
+              <StatePill>{active ? '利用中' : '停止中'}</StatePill>
+              {/* 失効も削除も取り返しがつかない。既定の見た目にしない。 */}
+              {active ? (
+                <Action
+                  variant="danger"
+                  inset="tight"
+                  onClick={() => setConfirmingRevoke(terminal)}
+                >
+                  失効
+                </Action>
+              ) : (
+                <Action
+                  variant="danger"
+                  inset="tight"
+                  onClick={() =>
+                    setDeleteNotice(`停止中の端末の削除は本部の承認が必要です。${CONSOLE_ONLY}`)
+                  }
+                >
+                  削除確認
+                </Action>
+              )}
+            </AdminRow>
+          )
+        })}
+        {terminals?.length === 0 && <p>登録された共有iPadはまだありません。</p>}
+        {deleteNotice && <StatusNotice>{deleteNotice}</StatusNotice>}
+
+        <CardGrid>
+          <Card label="無操作ロック">
+            <b>無操作ロック</b>
+            <br />
+            {idleLockSeconds === undefined ? (
+              <>
+                未取得
+                <br />
                 無操作ロック時間はこの画面から取得できません。
-              </span>
-            </>
-          ) : (
-            <>
-              <span className="block">{`既定 ${formatMinutes(idleLockSeconds.organizationDefault)}`}</span>
-              <span className="block">
+              </>
+            ) : (
+              <>
+                {`既定 ${formatMinutes(idleLockSeconds.organizationDefault)}`}
+                <br />
                 {idleLockSeconds.storeOverride === null
                   ? '店舗上書きなし（既定を適用中）'
                   : `店舗上書き ${formatMinutes(idleLockSeconds.storeOverride)}（適用中）`}
-              </span>
-            </>
-          )}
-          <Button
-            variant="danger"
-            className="mt-2 min-h-11"
-            onClick={() => setIdleNotice(`無操作ロック時間の変更は${CONSOLE_ONLY}`)}
-          >
-            変更
-          </Button>
-          {idleNotice && <Notice tone="info">{idleNotice}</Notice>}
-        </AdminCard>
-        <AdminCard title="画面非表示時">直ちに顧客情報を隠す</AdminCard>
-        <AdminCard title="個人モード">
-          <span className="block">スタッフ選択＋4〜6桁PIN</span>
-          <span className="mt-2 flex flex-wrap gap-2">
-            <Button
-              variant="danger"
-              className="min-h-11"
-              onClick={() =>
-                setPinNotice(`個人PINの設定と変更は本人のみが行えます。${CONSOLE_ONLY}`)
-              }
+              </>
+            )}
+            <br />
+            <Action
+              inset="tight"
+              onClick={() => setIdleNotice(`無操作ロック時間の変更は${CONSOLE_ONLY}`)}
             >
-              個人PINを設定・変更
-            </Button>
-            <Button
-              variant="danger"
-              className="min-h-11"
-              onClick={() =>
-                setPinNotice(
-                  `本人確認後にPIN再設定を開始できます。PINそのものは管理者にも表示されません。${CONSOLE_ONLY}`,
-                )
-              }
-            >
-              個人PINの再設定を開始
-            </Button>
-          </span>
-          {pinNotice && <Notice tone="info">{pinNotice}</Notice>}
-        </AdminCard>
-      </AdminCardGrid>
+              変更
+            </Action>
+            {idleNotice && <StatusNotice>{idleNotice}</StatusNotice>}
+          </Card>
+          <Card label="画面非表示時">
+            <b>画面非表示時</b>
+            <br />
+            直ちに顧客情報を隠す
+          </Card>
+          <Card label="個人モード">
+            <b>個人モード</b>
+            <br />
+            スタッフ選択＋4〜6桁PIN
+            <br />
+            <span className="mt-2 flex flex-wrap gap-2">
+              <Action
+                inset="tight"
+                onClick={() =>
+                  setPinNotice(`個人PINの設定と変更は本人のみが行えます。${CONSOLE_ONLY}`)
+                }
+              >
+                個人PINを設定・変更
+              </Action>
+              <Action
+                inset="tight"
+                onClick={() =>
+                  setPinNotice(
+                    `本人確認後にPIN再設定を開始できます。PINそのものは管理者にも表示されません。${CONSOLE_ONLY}`,
+                  )
+                }
+              >
+                個人PINの再設定を開始
+              </Action>
+            </span>
+            {pinNotice && <StatusNotice>{pinNotice}</StatusNotice>}
+          </Card>
+        </CardGrid>
+      </AdminLayout>
 
       {issuedToken !== undefined && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="terminal-issued-title"
-          className="fixed inset-0 flex items-center justify-center bg-ink/40 p-6"
-        >
-          <Card className="flex w-full max-w-xl flex-col gap-3">
-            <h3 id="terminal-issued-title" className="font-display font-semibold text-2xl text-ink">
-              {issuedName}を登録しました
-            </h3>
-            <Notice tone="danger">
-              このトークンは今だけ表示されます。画面を閉じると二度と表示できません。端末に入力してから閉じてください。
-            </Notice>
-            <p className="break-all rounded-ctl border border-line bg-surface p-3 font-mono text-ink text-sm">
-              {issuedToken}
-            </p>
-            <div className="flex justify-end">
-              <Button
-                className="min-h-12"
-                onClick={() => {
-                  setIssuedToken(undefined)
-                  setIssuedName(undefined)
-                }}
-              >
-                控えたので閉じる
-              </Button>
-            </div>
-          </Card>
-        </div>
+        <Modal titleId="terminal-issued-title" title={`${issuedName}を登録しました`}>
+          {/* トークンは今この場でしか読めない。閉じる前に必ず理由まで読ませる。 */}
+          <FailureNotice>
+            このトークンは今だけ表示されます。画面を閉じると二度と表示できません。端末に入力してから閉じてください。
+          </FailureNotice>
+          {/* ID と鍵は等幅で。桁を目で追える必要があるので和文は混ぜない。 */}
+          <p className="mt-3 break-all rounded-card border border-line bg-surface p-3.5 font-record text-grid">
+            {issuedToken}
+          </p>
+          <Actions>
+            <Action
+              inset="tight"
+              onClick={() => {
+                setIssuedToken(undefined)
+                setIssuedName(undefined)
+              }}
+            >
+              控えたので閉じる
+            </Action>
+          </Actions>
+        </Modal>
       )}
 
       {confirmingRevoke && (
-        <div
-          role="alertdialog"
-          aria-modal="true"
-          aria-labelledby="terminal-revoke-title"
-          className="fixed inset-0 flex items-center justify-center bg-ink/40 p-6"
+        <Modal
+          urgent
+          titleId="terminal-revoke-title"
+          title={`${confirmingRevoke.name}を失効しますか？`}
         >
-          <Card className="flex w-full max-w-xl flex-col gap-3">
-            <h3 id="terminal-revoke-title" className="font-display font-semibold text-2xl text-ink">
-              {confirmingRevoke.name}を失効しますか？
-            </h3>
-            <p className="font-sans text-ink text-sm">
-              失効するとこの端末は次の通信で顧客情報と業務画面へアクセスできなくなります。
-            </p>
-            <p className="font-sans text-ink text-sm">
-              端末に残っている未送信の操作は実行されません。再び使うには登録し直します。
-            </p>
-            <div className="flex flex-wrap justify-end gap-3">
-              <Button
-                variant="ghost"
-                className="min-h-12"
-                onClick={() => setConfirmingRevoke(undefined)}
-              >
-                やめる
-              </Button>
-              <Button
-                variant="danger"
-                className="min-h-12"
-                disabled={busy}
-                onClick={() => void revoke(confirmingRevoke)}
-              >
-                失効する
-              </Button>
-            </div>
-          </Card>
-        </div>
+          <p>失効するとこの端末は次の通信で顧客情報と業務画面へアクセスできなくなります。</p>
+          <p>端末に残っている未送信の操作は実行されません。再び使うには登録し直します。</p>
+          <Actions>
+            <Action inset="tight" onClick={() => setConfirmingRevoke(undefined)}>
+              やめる
+            </Action>
+            <Action
+              variant="danger"
+              inset="tight"
+              disabled={busy}
+              onClick={() => void revoke(confirmingRevoke)}
+            >
+              失効する
+            </Action>
+          </Actions>
+        </Modal>
       )}
-    </AdminScreen>
+    </AdminSurface>
   )
 }

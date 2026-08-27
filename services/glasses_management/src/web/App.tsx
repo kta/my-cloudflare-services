@@ -1,7 +1,7 @@
 import { Notice } from '@app/ui'
 import { type ReactNode, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { barFor, barOverlay } from './app-chrome'
-import { PlainBar, Screen } from './design/chrome'
+import { AppBar, BarButton, BarPush, PlainBar, Screen, Wordmark } from './design/chrome'
 import { Action } from './design/controls'
 import { ExceptionContent, FullScreenState } from './design/layouts'
 import { bindSharedTerminalLifecycle, type createSharedTerminalController } from './shared-terminal'
@@ -9,24 +9,6 @@ import type { createStaffNavigation, StaffLocation } from './staff-navigation'
 import type { createStoreSwitchController, SelectedStore } from './store-switch'
 
 /* 承認済みモックの `.bar button` — 透明・白文字・44px 角丸 8px。 */
-const BAR_BUTTON =
-  'flex min-h-11 min-w-11 flex-col justify-center rounded-ctl px-3.5 font-sans text-base text-on-pine focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus'
-/* `.bar .on` / `.bar .primary` — 白ピルに pine 文字。選択状態は aria-current でも示す。 */
-const BAR_ON = 'bg-surface font-bold text-pine'
-/* approved.html の #home では 3 つの操作に白の細枠が付く。 */
-const BAR_OUTLINE = 'border border-on-pine/40 font-bold'
-
-/** 設定の中から辿れる運用系の入口。ヘッダーから消えても到達性は失わせない。 */
-const ADMIN_DESTINATIONS: readonly (readonly [string, StaffLocation])[] = [
-  ['店舗設定', { screen: 'settings' }],
-  ['共有端末', { screen: 'shared-terminals' }],
-  ['録音運用', { screen: 'recording-ops' }],
-  ['注意事項権限', { screen: 'attention-settings' }],
-  ['監査ログ', { screen: 'audit' }],
-  ['顧客の統合・訂正', { screen: 'customer-merge' }],
-  ['分析', { screen: 'analytics' }],
-  ['お知らせ', { screen: 'alerts' }],
-]
 
 type SharedTerminalController = ReturnType<typeof createSharedTerminalController>
 const inactiveSharedTerminalSnapshot = { status: 'inactive' as const, dailyState: {} }
@@ -243,104 +225,80 @@ export function App({
          `LEDGER-DAY--walkin-now--ipad-landscape.png`) をそのまま再現する:
          76px の pine バーは 1 本だけで、タブも主操作も副題も面ごとに入れ替わる
          (`app-chrome.ts`)。2 本目の緑帯は作らない。 */
-      <div className="flex h-dvh flex-col bg-paper text-ink">
-        <header className="flex h-19 shrink-0 items-center gap-3 bg-pine px-5 text-on-pine">
+      <Screen>
+        <AppBar variant={bar.kind === 'home' ? 'booking' : 'workspace'}>
           {/* モックでは飾りに見えるが、店舗切替の入口はここしかない。 */}
-          <button
-            type="button"
-            className={`${BAR_BUTTON} px-0 text-left font-bold text-xl leading-tight`}
+          <Wordmark
+            variant={bar.kind === 'home' ? 'booking' : 'workspace'}
+            subtitle={overlay.subtitle ?? bar.subtitle}
             onClick={() => setStorePickerOpen((open) => !open)}
-          >
-            EYEX予約
-            <small className="block font-normal text-sm">{overlay.subtitle ?? bar.subtitle}</small>
-          </button>
+          />
           {overlay.chip && (
-            <p className="ml-auto rounded-ctl border border-on-pine px-4 py-2 font-bold font-sans text-base text-on-pine">
-              {overlay.chip}
-            </p>
+            <BarPush variant="booking">
+              <p className="rounded-ctl border border-on-pine px-4 py-2 font-bold font-sans text-body text-on-pine">
+                {overlay.chip}
+              </p>
+            </BarPush>
           )}
           {bar.tabs.length > 0 && (
             <nav
-              aria-label={bar.kind === 'business' ? '業務メニュー' : '設定メニュー'}
+              /* 業務の面と設定の面で、同じ帯でも名乗る名前を分ける。 */
+              aria-label={bar.kind === 'admin' ? '設定メニュー' : '業務メニュー'}
               className="flex items-center gap-3"
             >
-              {bar.tabs.map((tab) => {
-                const active = tab.to.screen === location?.screen
-                return (
-                  <button
-                    key={tab.label}
-                    type="button"
-                    aria-current={active ? 'page' : undefined}
-                    className={`${BAR_BUTTON} ${active ? BAR_ON : ''}`}
-                    onClick={() => navigation?.navigate(tab.to)}
-                  >
-                    {tab.label}
-                  </button>
-                )
-              })}
+              {bar.tabs.map((tab) => (
+                <BarButton
+                  key={tab.label}
+                  on={tab.to.screen === location?.screen}
+                  current={tab.to.screen === location?.screen}
+                  onClick={() => navigation?.navigate(tab.to)}
+                >
+                  {tab.label}
+                </BarButton>
+              ))}
             </nav>
           )}
           {bar.primary && (
-            <button
-              type="button"
-              className={`${BAR_BUTTON} ${BAR_ON} ml-auto`}
-              onClick={() => navigation?.navigate(bar.primary?.to ?? { screen: 'home' })}
-            >
-              {bar.primary.label}
-            </button>
+            <BarPush>
+              <BarButton
+                on
+                onClick={() => navigation?.navigate(bar.primary?.to ?? { screen: 'home' })}
+              >
+                {bar.primary.label}
+              </BarButton>
+            </BarPush>
           )}
           {bar.kind === 'home' && (
-            <>
-              <button
-                type="button"
-                className={`${BAR_BUTTON} ${BAR_OUTLINE} ml-auto`}
+            <BarPush variant="booking">
+              <BarButton
+                outline
+                variant="booking"
                 onClick={() => navigation?.navigate({ screen: 'alerts' })}
               >
                 {`お知らせ ${notifications ? `${notifications.unreadAnnouncements}件` : '未取得'}`}
-              </button>
-              <button
-                type="button"
-                className={`${BAR_BUTTON} ${BAR_OUTLINE}`}
+              </BarButton>
+              <BarButton
+                outline
+                variant="booking"
                 onClick={() => navigation?.navigate({ screen: 'alerts' })}
               >
                 {`アラート ${notifications ? `${notifications.openAlerts}件` : '未取得'}`}
-              </button>
-              <button
-                type="button"
-                className={`${BAR_BUTTON} ${BAR_OUTLINE}`}
+              </BarButton>
+              <BarButton
+                outline
+                variant="booking"
                 onClick={() => navigation?.navigate({ screen: 'settings' })}
               >
                 設定
-              </button>
-            </>
+              </BarButton>
+            </BarPush>
           )}
-        </header>
+        </AppBar>
         <div className="min-h-0 flex-1 overflow-auto">
           {switchError && (
             <div className="mx-auto max-w-6xl px-5 pt-5">
               <Notice tone="danger">{switchError}</Notice>
             </div>
-          )}
-          {/*
-          運用系の入口は 8 つとも 設定 の中に置く。operations-approved.html の
-          とおり、これらはトップレベルのヘッダーボタンではなく 設定 の副タブ。
-        */}
-          {location?.screen === 'settings' && (
-            <nav
-              aria-label="管理メニュー"
-              className="flex flex-wrap gap-2 border-line border-b bg-panel px-5 py-3"
-            >
-              {ADMIN_DESTINATIONS.map(([label, to]) => (
-                <button
-                  key={label}
-                  type="button"
-                  className="min-h-11 rounded-ctl border border-line bg-surface px-3.5 text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
-                  onClick={() => navigation?.navigate(to)}
-                >
-                  {label}
-                </button>
-              ))}
-            </nav>
           )}
           {location && renderScreen ? (
             renderScreen(location)
@@ -390,7 +348,7 @@ export function App({
             </section>
           </div>
         )}
-      </div>
+      </Screen>
     )
   }
   return (

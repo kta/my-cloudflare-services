@@ -39,13 +39,6 @@ test('予約フローはタブも主操作も持たず、副題が工程を名�
   expect(bar.subtitle).toBe('銀座店 · 新規予約')
 })
 
-test('設定ガイドはバーに操作を一切持たない', () => {
-  const bar = barFor({ screen: 'settings' }, store, '2026-08-27')
-  expect(bar.tabs).toEqual([])
-  expect(bar.primary).toBeUndefined()
-  expect(bar.subtitle).toBe('銀座店 · 設定ガイド')
-})
-
 test('運用面は管理タブを 76px バーの中に持つ', () => {
   expect(tabs({ screen: 'audit' })).toEqual(['端末とセキュリティ', '利用者とロール', '監査ログ'])
   expect(barFor({ screen: 'audit' }, store, '2026-08-27').subtitle).toBe('銀座店 · 設定')
@@ -100,4 +93,34 @@ test('同じ値の書き込みでは購読者を起こさない', () => {
   expect(woken).toBe(1)
   stop()
   barOverlay.set({})
+})
+
+test('設定ガイドは、そこから出られるようバーにタブを持つ', () => {
+  /*
+   * 承認済みモックが 2 つあり、バーの中身が食い違っている。
+   * `settings-complete-approved.html` はワードマークだけ、
+   * `settings-approved.html` は `設定ガイド / 設定一覧 / 変更履歴` の 3 つ。
+   * 操作を 1 つも持たない側を採ると、ガイドに入ったら出られなくなるので、
+   * タブを持つ側に従う。
+   */
+  expect(tabs({ screen: 'settings' })).toEqual(['設定ガイド', '設定一覧', '変更履歴'])
+})
+
+test('設定と運用の面は、すべて 2 本目の帯なしで辿り着ける', () => {
+  /*
+   * 承認済みモックは緑帯を 1 本しか持たない。面から面への行き来はバーのタブと
+   * 各面の左サイドが担うので、どれか 1 つでも入口を失うと到達できない画面が
+   * できる。ここでバーのタブだけを辿り、閉じた集合になっているかを見る。
+   * 左サイドからしか行けない面は、その面のテストが押さえる。
+   */
+  const store = { name: '銀座店', isActive: true }
+  const seen = new Set<StaffLocation['screen']>()
+  const queue: StaffLocation[] = [{ screen: 'settings' }]
+  while (queue.length > 0) {
+    const location = queue.shift() as StaffLocation
+    if (seen.has(location.screen)) continue
+    seen.add(location.screen)
+    for (const tab of barFor(location, store, '2026-08-27').tabs) queue.push(tab.to)
+  }
+  expect([...seen].sort()).toEqual(['attention-settings', 'audit', 'settings', 'shared-terminals'])
 })

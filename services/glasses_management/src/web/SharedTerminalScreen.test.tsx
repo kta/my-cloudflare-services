@@ -72,12 +72,12 @@ test('端末名・最終通信・状態を文字で読み取れる (UC-EYEX-150,
   const api = vi.fn(async () => jsonResponse([registerDesk, receptionDesk]))
   renderScreen(api)
 
-  const active = await screen.findByRole('group', { name: /レジ横iPad/ })
+  const active = await screen.findByRole('article', { name: /レジ横iPad/ })
   expect(within(active).getByText(/最終通信 1分前/)).toBeInTheDocument()
   // State is carried by text, never by colour alone.
   expect(within(active).getByText('利用中')).toBeInTheDocument()
 
-  const revoked = screen.getByRole('group', { name: /受付iPad/ })
+  const revoked = screen.getByRole('article', { name: /受付iPad/ })
   expect(within(revoked).getByText(/最終通信 未通信/)).toBeInTheDocument()
   expect(within(revoked).getByText('停止中')).toBeInTheDocument()
   expect(within(revoked).getByRole('button', { name: '削除確認' })).toBeInTheDocument()
@@ -135,7 +135,7 @@ test('失効は確認を挟み、意味を先に示してから実行する (UC-
   })
   renderScreen(api as never)
 
-  const row = await screen.findByRole('group', { name: /レジ横iPad/ })
+  const row = await screen.findByRole('article', { name: /レジ横iPad/ })
   fireEvent.click(within(row).getByRole('button', { name: '失効' }))
 
   // Nothing is revoked until the operator confirms.
@@ -149,7 +149,7 @@ test('失効は確認を挟み、意味を先に示してから実行する (UC-
   fireEvent.click(within(confirm).getByRole('button', { name: '失効する' }))
   await waitFor(() => {
     expect(
-      within(screen.getByRole('group', { name: /レジ横iPad/ })).getByText('停止中'),
+      within(screen.getByRole('article', { name: /レジ横iPad/ })).getByText('停止中'),
     ).toBeInTheDocument()
   })
   expect(api).toHaveBeenCalledWith(
@@ -162,7 +162,7 @@ test('確認を取り消すと失効は行われない (UC-EYEX-136)', async () 
   const api = vi.fn(async () => jsonResponse([registerDesk]))
   renderScreen(api)
 
-  const row = await screen.findByRole('group', { name: /レジ横iPad/ })
+  const row = await screen.findByRole('article', { name: /レジ横iPad/ })
   fireEvent.click(within(row).getByRole('button', { name: '失効' }))
   const confirm = await screen.findByRole('alertdialog', { name: /失効しますか/ })
   fireEvent.click(within(confirm).getByRole('button', { name: 'やめる' }))
@@ -172,7 +172,7 @@ test('確認を取り消すと失効は行われない (UC-EYEX-136)', async () 
   })
   expect(api).toHaveBeenCalledTimes(1)
   expect(
-    within(screen.getByRole('group', { name: /レジ横iPad/ })).getByText('利用中'),
+    within(screen.getByRole('article', { name: /レジ横iPad/ })).getByText('利用中'),
   ).toBeInTheDocument()
 })
 
@@ -208,7 +208,7 @@ test('個人PINの設定・再設定は管理コンソールへ案内し、API�
   const api = vi.fn(async () => jsonResponse([registerDesk]))
   renderScreen(api)
 
-  await screen.findByRole('group', { name: /レジ横iPad/ })
+  await screen.findByRole('article', { name: /レジ横iPad/ })
   const section = screen.getByRole('region', { name: '個人モード' })
   fireEvent.click(within(section).getByRole('button', { name: '個人PINを設定・変更' }))
   expect(within(section).getByRole('status')).toHaveTextContent(

@@ -7,10 +7,14 @@ import {
   type CustomerMergeSummary,
   type StorePermission,
 } from '@app/contracts'
-import { Button, Card, Field, Notice, Select, Textarea, TextInput } from '@app/ui'
-import { type ReactNode, useState } from 'react'
-import { PermissionDenied } from './admin-chrome'
+import { Field, Select, Textarea, TextInput } from '@app/ui'
+import { useState } from 'react'
 import { mergeImpactRows, mergeImpactTotal } from './attention-view'
+import { Action, Actions } from './design/controls'
+import { Modal } from './design/dialogs'
+import { Compare, FullScreenState } from './design/layouts'
+import { FailureNotice, StatusNotice } from './design/notices'
+import { Card, CardGrid, FieldCard } from './design/surfaces'
 import type { StaffScreenProps } from './staff-screen'
 
 type Props = StaffScreenProps & {
@@ -47,42 +51,26 @@ function impactFrom(body: unknown): CustomerMergeImpact | undefined {
   return parsed.success ? parsed.data : undefined
 }
 
+/**
+ * 突き合わせる 1 人（モックの `.card`）。段落ではなく行で継ぐのは、`<p>` の
+ * 上下 1em がカードの高さを 2 人ぶん別々に押し広げてしまうため。
+ */
 function SummaryCard({ title, summary }: { title: string; summary: CustomerMergeSummary }) {
   return (
-    <div className="flex flex-col gap-1 rounded-ctl border border-line p-4">
-      <p className="font-sans font-semibold text-ink-muted text-xs">{title}</p>
-      <p className="font-sans font-medium text-ink">{summary.name}</p>
-      <p className="font-sans text-ink-muted text-sm">{summary.kana}</p>
-      <p className="font-sans text-ink text-sm">{summary.phone}</p>
-      <p className="font-sans text-ink-muted text-sm">来店 {summary.visitCount}回</p>
-      <p className="font-mono text-ink-muted text-xs">{summary.customerId}</p>
-    </div>
-  )
-}
-
-function Modal({
-  titleId,
-  title,
-  children,
-}: {
-  titleId: string
-  title: string
-  children: ReactNode
-}) {
-  return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby={titleId}
-      className="fixed inset-0 flex items-center justify-center overflow-y-auto bg-ink/40 p-6"
-    >
-      <Card className="flex w-full max-w-xl flex-col gap-4">
-        <h2 id={titleId} className="font-display font-semibold text-ink text-xl">
-          {title}
-        </h2>
-        {children}
-      </Card>
-    </div>
+    <Card label={title}>
+      <b>{title}</b>
+      <br />
+      {summary.name}
+      <br />
+      <small>{summary.kana}</small>
+      <br />
+      <span>{summary.phone}</span>
+      <br />
+      <small>{`来店 ${summary.visitCount}回`}</small>
+      <br />
+      {/* 顧客IDは読む値ではなく照合する値なので、桁の揃う等幅で置く。 */}
+      <small className="font-figure">{summary.customerId}</small>
+    </Card>
   )
 }
 
@@ -117,7 +105,15 @@ export function CustomerMergeScreen({ storeId, api, permissions, navigate }: Pro
 
   // 権限が無い操作者には、顧客の統合・訂正の存在も内容も見せない
   // (`exception-states-approved.html#permission-denied`)。
-  if (!mayCorrect) return <PermissionDenied onReturnHome={() => navigate({ screen: 'home' })} />
+  if (!mayCorrect)
+    return (
+      <FullScreenState glyph="—" title="この設定を表示する権限がありません">
+        <p>権限のある管理者に確認してください。設定の存在や内容はこれ以上表示しません。</p>
+        <Action size="roomy" variant="primary" onClick={() => navigate({ screen: 'home' })}>
+          業務開始画面へ戻る
+        </Action>
+      </FullScreenState>
+    )
 
   const reset = () => {
     setSuccess(undefined)
@@ -261,31 +257,33 @@ export function CustomerMergeScreen({ storeId, api, permissions, navigate }: Pro
   }
 
   return (
-    <main className="mx-auto flex w-full max-w-5xl flex-col gap-5 p-6">
-      <h1 className="font-display font-semibold text-2xl text-ink">顧客の重複と誤関連</h1>
+    /* 運用モックの本文（`.content{padding:24px 30px}`）。 */
+    <main className="px-7.5 py-6 font-sans">
+      <h1>顧客の重複と誤関連</h1>
 
-      {success && <Notice tone="success">{success}</Notice>}
-      {failure && <Notice tone="danger">{failure}</Notice>}
-      {failure && retry && (
-        <div>
-          <Button
-            type="button"
-            className="min-h-12"
-            onClick={() => {
-              retry()
-            }}
-          >
-            再試行する
-          </Button>
-        </div>
+      {success && <StatusNotice>{success}</StatusNotice>}
+      {failure && (
+        <FailureNotice>
+          {failure}
+          {retry && (
+            <Actions mt={4}>
+              <Action
+                onClick={() => {
+                  retry()
+                }}
+              >
+                再試行する
+              </Action>
+            </Actions>
+          )}
+        </FailureNotice>
       )}
 
-      <Card className="flex flex-col gap-4">
-        <h2 className="font-sans font-semibold text-ink text-sm">重複候補を比較</h2>
-        <p className="font-sans text-ink-muted text-sm">
-          比較しただけでは何も変わりません。統合は明示的に実行したときだけ行われます。
-        </p>
-        <div className="grid gap-4 md:grid-cols-2">
+      <Card className="mt-4.5" label="重複候補を比較">
+        <b>重複候補を比較</b>
+        <br />
+        比較しただけでは何も変わりません。統合は明示的に実行したときだけ行われます。
+        <div className="mt-3.5 grid grid-cols-2 gap-3">
           <Field label="残す顧客ID" htmlFor="merge-primary">
             <TextInput
               id="merge-primary"
@@ -303,63 +301,55 @@ export function CustomerMergeScreen({ storeId, api, permissions, navigate }: Pro
             />
           </Field>
         </div>
-        <div className="flex justify-end">
-          <Button type="button" className="min-h-12" onClick={comparePair}>
-            重複候補を比較する
-          </Button>
-        </div>
+        <Actions mt={4}>
+          <Action onClick={comparePair}>重複候補を比較する</Action>
+        </Actions>
       </Card>
 
       {preview && (
         <>
-          <Card>
-            <section aria-label="重複候補の比較" className="grid gap-4 md:grid-cols-2">
+          <section aria-label="重複候補の比較" className="mt-4.5">
+            <Compare>
               <SummaryCard title="残す顧客" summary={preview.primary} />
               <SummaryCard title="重複している顧客" summary={preview.duplicate} />
-            </section>
-          </Card>
+            </Compare>
+          </section>
 
-          <Card>
-            <section aria-label="統合の影響" className="flex flex-col gap-3">
-              <p className="font-sans text-ink-muted text-sm">
-                統合すると、次の履歴が残す顧客へ移ります。
-              </p>
-              <dl className="grid grid-cols-2 gap-3 md:grid-cols-3">
-                {mergeImpactRows(preview.impact).map((row) => (
-                  <div key={row.key}>
-                    <dt className="font-sans text-ink-muted text-xs">{row.label}</dt>
-                    <dd className="font-sans text-ink text-lg">{row.count}件</dd>
-                  </div>
-                ))}
-              </dl>
-              <p className="font-sans font-semibold text-ink text-sm">
-                合計 {mergeImpactTotal(preview.impact)}件
-              </p>
-              {preview.alreadyMerged ? (
-                <Notice tone="info">この顧客はすでに統合されています。</Notice>
-              ) : (
-                <div className="flex justify-end">
-                  <Button
-                    type="button"
-                    variant="danger"
-                    className="min-h-12"
-                    onClick={() => {
-                      setMergeReasonError(undefined)
-                      setConfirmingMerge(true)
-                    }}
-                  >
-                    統合する
-                  </Button>
-                </div>
-              )}
-            </section>
-          </Card>
+          <section aria-label="統合の影響" className="mt-4.5">
+            <p>統合すると、次の履歴が残す顧客へ移ります。</p>
+            <CardGrid>
+              {mergeImpactRows(preview.impact).map((row) => (
+                <FieldCard key={row.key} title={row.label}>
+                  {`${row.count}件`}
+                </FieldCard>
+              ))}
+            </CardGrid>
+            <p>
+              <b>{`合計 ${mergeImpactTotal(preview.impact)}件`}</b>
+            </p>
+            {preview.alreadyMerged ? (
+              <StatusNotice>この顧客はすでに統合されています。</StatusNotice>
+            ) : (
+              <Actions>
+                {/* 統合は元へ戻せない。既定の見た目にしない。 */}
+                <Action
+                  variant="danger"
+                  onClick={() => {
+                    setMergeReasonError(undefined)
+                    setConfirmingMerge(true)
+                  }}
+                >
+                  統合する
+                </Action>
+              </Actions>
+            )}
+          </section>
         </>
       )}
 
-      <Card className="flex flex-col gap-4">
-        <h2 className="font-sans font-semibold text-ink text-sm">誤った顧客関連を解除</h2>
-        <div className="grid gap-4 md:grid-cols-2">
+      <Card className="mt-4.5" label="誤った顧客関連を解除">
+        <b>誤った顧客関連を解除</b>
+        <div className="mt-3.5 grid grid-cols-2 gap-3">
           <Field label="受付種別" htmlFor="release-entry-type">
             <Select
               id="release-entry-type"
@@ -382,26 +372,23 @@ export function CustomerMergeScreen({ storeId, api, permissions, navigate }: Pro
             />
           </Field>
         </div>
-        <div className="flex justify-end">
-          <Button
-            type="button"
+        <Actions mt={4}>
+          <Action
             variant="danger"
-            className="min-h-12"
             onClick={() => {
               setReleaseReasonError(undefined)
               setConfirmingRelease(true)
             }}
           >
             誤関連を解除する
-          </Button>
-        </div>
+          </Action>
+        </Actions>
       </Card>
 
       {confirmingMerge && preview && (
-        <Modal titleId="merge-confirm-title" title="顧客の統合を確認">
-          <p className="font-sans text-ink text-sm">
-            {mergeImpactTotal(preview.impact)}件の履歴が残す顧客へ移ります。統合は自動では行われず、
-            実行者・日時・変更前後が監査記録に残ります。
+        <Modal urgent titleId="merge-confirm-title" title="顧客の統合を確認">
+          <p>
+            {`${mergeImpactTotal(preview.impact)}件の履歴が残す顧客へ移ります。統合は自動では行われず、実行者・日時・変更前後が監査記録に残ります。`}
           </p>
           <Field label="統合する理由" htmlFor="merge-reason" error={mergeReasonError}>
             <Textarea
@@ -411,27 +398,21 @@ export function CustomerMergeScreen({ storeId, api, permissions, navigate }: Pro
               onChange={(event) => setMergeReason(event.target.value)}
             />
           </Field>
-          <div className="flex flex-wrap justify-end gap-3">
-            <Button
-              type="button"
-              variant="ghost"
-              className="min-h-12"
-              onClick={() => setConfirmingMerge(false)}
-            >
+          <Actions>
+            <Action size="roomy" onClick={() => setConfirmingMerge(false)}>
               キャンセル
-            </Button>
-            <Button type="button" variant="danger" className="min-h-12" onClick={confirmMerge}>
+            </Action>
+            <Action size="roomy" variant="danger" onClick={confirmMerge}>
               統合を実行する
-            </Button>
-          </div>
+            </Action>
+          </Actions>
         </Modal>
       )}
 
       {confirmingRelease && (
-        <Modal titleId="release-confirm-title" title="誤った顧客関連の解除を確認">
-          <p className="font-sans text-ink text-sm">
-            この受付から顧客との関連だけを外します。受付そのものは残り、実行者・日時・変更前後が
-            監査記録に残ります。
+        <Modal urgent titleId="release-confirm-title" title="誤った顧客関連の解除を確認">
+          <p>
+            この受付から顧客との関連だけを外します。受付そのものは残り、実行者・日時・変更前後が監査記録に残ります。
           </p>
           <Field label="解除する理由" htmlFor="release-reason" error={releaseReasonError}>
             <Textarea
@@ -441,19 +422,14 @@ export function CustomerMergeScreen({ storeId, api, permissions, navigate }: Pro
               onChange={(event) => setReleaseReason(event.target.value)}
             />
           </Field>
-          <div className="flex flex-wrap justify-end gap-3">
-            <Button
-              type="button"
-              variant="ghost"
-              className="min-h-12"
-              onClick={() => setConfirmingRelease(false)}
-            >
+          <Actions>
+            <Action size="roomy" onClick={() => setConfirmingRelease(false)}>
               キャンセル
-            </Button>
-            <Button type="button" variant="danger" className="min-h-12" onClick={confirmRelease}>
+            </Action>
+            <Action size="roomy" variant="danger" onClick={confirmRelease}>
               解除を実行する
-            </Button>
-          </div>
+            </Action>
+          </Actions>
         </Modal>
       )}
     </main>

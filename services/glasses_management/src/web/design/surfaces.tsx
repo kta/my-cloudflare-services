@@ -116,13 +116,20 @@ export function StatePill({
   tone = 'plain',
 }: {
   children: ReactNode
-  tone?: 'plain' | 'danger'
+  /**
+   * `caution` は失敗ではない注意（`.warning` と同じ琥珀）。緑のピルで出すと
+   * 「済んでいる」と読めてしまうので、警告には必ずこちらを使う。モックには
+   * この段が無いが、面の `.warning` が持つ 2 色をそのまま借りている。
+   */
+  tone?: 'plain' | 'danger' | 'caution'
 }) {
   return (
     <span
       className={cn(
         'inline-block rounded-sheet px-2.25 py-1 font-bold',
-        tone === 'danger' ? 'bg-danger-soft text-danger' : 'bg-pine-soft text-pine',
+        tone === 'danger' && 'bg-danger-soft text-danger',
+        tone === 'caution' && 'bg-amber-soft text-amber',
+        tone === 'plain' && 'bg-pine-soft text-pine',
       )}
     >
       {children}
@@ -327,10 +334,18 @@ export function ListRow({
   children,
   selected = false,
   label,
+  onSelect,
 }: {
   children: ReactNode
   selected?: boolean
   label?: string
+  /**
+   * 実アプリの一覧は押して詳細を開く。モックは絵なので押せる印を持たないが、
+   * 行そのものを button にすると `article` の意味（1 件のまとまり）が消える
+   * ので、中身だけを行いっぱいの button で包む。渡さなければ突き合わせ台の
+   * ときと同じ、押せない板のまま。
+   */
+  onSelect?: () => void
 }) {
   return (
     <article
@@ -344,7 +359,65 @@ export function ListRow({
       // 選択状態で変えていない）。
       style={{ padding: '14px' }}
     >
-      {children}
+      {onSelect === undefined ? (
+        children
+      ) : (
+        /*
+         * 板の内側いっぱいを押せるようにする。地色も罫も持たせないので、
+         * 行の見た目はモックのままで、焦点だけが分かる。
+         */
+        <button
+          type="button"
+          onClick={onSelect}
+          className="block w-full bg-transparent p-0 text-left font-sans text-body text-inherit"
+        >
+          {children}
+        </button>
+      )}
     </article>
+  )
+}
+
+/*
+ * ガイド付き設定の端末方言（`settings-approved.html`）の面。上の `Card` /
+ * `Preview` と役割は同じだが、寸法体系が違うので寄せない。
+ *
+ *   .field{background:#fff;border:1px solid var(--l);border-radius:9px;
+ *          padding:14px;font-size:11px;min-height:76px}
+ *   .field b{display:block;font-size:13px;margin-bottom:6px}
+ *   .preview{margin-top:16px;border:1px solid var(--l);border-radius:9px;
+ *            background:#fff;padding:15px}
+ *   .impact{margin-top:14px;padding:12px;border-radius:8px;
+ *           background:#fff3e8;border:1px solid #e9c49e;font-size:10px}
+ */
+
+/** 読み取り欄（`.field`）。見出しだけ 13px で、中身は 11px。 */
+export function TerminalField({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="min-h-19 rounded-card border border-terminal-line bg-surface p-3.5 text-terminal-body">
+      <b className="mb-1.5 block font-bold text-note">{title}</b>
+      {children}
+    </div>
+  )
+}
+
+/** お客様から見た姿（`.preview`）。設定の言葉ではなく表示される言葉を置く。 */
+export function TerminalPreview({ children }: { children: ReactNode }) {
+  return (
+    <section className="mt-4 rounded-card border border-terminal-line bg-surface p-3.75">
+      {children}
+    </section>
+  )
+}
+
+/**
+ * 公開前の影響確認（`.impact`）。琥珀ではなく橙寄りの地で、失敗ではなく
+ * 「まだ確かめていないことがある」ことだけを伝える。
+ */
+export function TerminalImpact({ children }: { children: ReactNode }) {
+  return (
+    <section className="mt-3.5 rounded-ctl border border-terminal-impact-line bg-terminal-impact p-3 text-terminal-note">
+      {children}
+    </section>
   )
 }

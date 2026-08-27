@@ -1,5 +1,5 @@
 import { type CustomerCandidate, CustomerDetail } from '@app/contracts'
-import { Button, Card, Chip, cn, Field, focusRing, TextInput } from '@app/ui'
+import { Button, Card, Chip, Field, TextInput } from '@app/ui'
 import {
   createContext,
   type FormEvent,
@@ -23,6 +23,11 @@ import {
   selectedCandidate,
   withCandidates,
 } from './customer-search'
+import { AttentionCard, Candidate, RailSummary } from './design/booking'
+import { SearchField } from './design/controls'
+import { BookingLayout } from './design/layouts'
+import { FailureNotice } from './design/notices'
+import { Notice } from './design/surfaces'
 import type { StaffScreenProps } from './staff-screen'
 
 /*
@@ -233,156 +238,109 @@ export function CustomerPanel({
 
   if (bookingMode && bookingStep) {
     const attention = attentionNotes[0]
+    const prescription = detail?.currentPrescription
     return (
-      <div className="flex min-h-full flex-1 text-ink">
-        <section className="flex-1 overflow-auto px-12 pt-9 pb-10">
-          {bookingStep.header}
-          <form
-            className="mt-6"
-            onSubmit={(event: FormEvent) => {
-              event.preventDefault()
-              void search()
-            }}
-          >
-            <label className="sr-only" htmlFor="booking-customer-phone">
-              お電話番号
-            </label>
-            <input
-              id="booking-customer-phone"
-              inputMode="tel"
-              autoComplete="off"
-              value={phone}
-              onChange={(event) => setPhone(event.target.value)}
-              className={cn(
-                'min-h-14 w-full rounded-card border-2 border-pine bg-surface px-4 py-3',
-                'font-sans text-ink text-xl',
-                focusRing,
-              )}
-            />
-          </form>
+      <BookingLayout
+        railLabel="選択中のお客様"
+        main={
+          <>
+            {bookingStep.header}
+            {/*
+             * モックの主列には「候補を探す」ボタンが無い。入力が止まったら静かに
+             * 探し、Enter（form submit）でも探せるようにする。
+             */}
+            <form
+              onSubmit={(event: FormEvent) => {
+                event.preventDefault()
+                void search()
+              }}
+            >
+              <SearchField
+                size="roomy"
+                id="booking-customer-phone"
+                label="お電話番号"
+                inputMode="tel"
+                value={phone}
+                onChange={setPhone}
+              />
+            </form>
 
-          {hint !== undefined && (
-            <p aria-live="polite" className="mt-3 text-danger text-sm">
-              {hint}
-            </p>
-          )}
-          {error !== undefined && (
-            <p role="alert" className="mt-3 text-danger text-sm">
-              {error}
-            </p>
-          )}
-          {duplicated && (
-            <p className="mt-3 rounded-ctl border border-amber bg-amber-soft p-3 text-amber text-sm">
-              同じ電話番号の候補があります。統合はされません。
-            </p>
-          )}
+            {hint !== undefined && (
+              <p aria-live="polite" className="font-sans text-danger text-note">
+                {hint}
+              </p>
+            )}
+            {error !== undefined && <FailureNotice>{error}</FailureNotice>}
+            {duplicated && <Notice>同じ電話番号の候補があります。統合はされません。</Notice>}
 
-          <ul aria-label="顧客候補" className="mt-3 flex list-none flex-col gap-2">
-            {selection.candidates.map((candidate) => {
-              const isSelected = selected?.id === candidate.id
-              return (
-                <li key={candidate.id}>
-                  <button
-                    type="button"
-                    aria-pressed={isSelected}
-                    onClick={() => confirm(candidate)}
-                    className={cn(
-                      'flex min-h-16 w-full items-start justify-between gap-3 rounded-card p-4 text-left',
-                      focusRing,
-                      isSelected
-                        ? 'border-2 border-pine bg-pine-soft'
-                        : 'border border-line bg-surface',
-                    )}
-                  >
-                    <span className="font-sans text-base">
-                      <b className="font-semibold">{candidate.name} 様</b>
+            <ul aria-label="顧客候補" className="mt-3.5">
+              {selection.candidates.map((candidate) => {
+                const isSelected = selected?.id === candidate.id
+                return (
+                  <li key={candidate.id}>
+                    <Candidate
+                      selected={isSelected}
+                      state={isSelected ? '選択中' : '候補'}
+                      onClick={() => confirm(candidate)}
+                    >
+                      <b>{candidate.name} 様</b>
                       <br />
                       {candidate.phone} · {primaryStoreLabel(candidate)}
                       {candidate.visitCount}回
-                    </span>
-                    <b className="shrink-0 font-sans font-semibold text-base">
-                      {isSelected ? '選択中' : '候補'}
-                    </b>
-                  </button>
-                </li>
-              )
-            })}
-          </ul>
+                    </Candidate>
+                  </li>
+                )
+              })}
+            </ul>
 
-          {/* 候補ではないので候補の一覧には入れない。 */}
-          <button
-            type="button"
-            onClick={() => confirm(undefined)}
-            className={cn(
-              'mt-2 flex min-h-16 w-full items-center rounded-card border border-line bg-surface p-4 text-left font-sans text-base',
-              focusRing,
-              'hover:bg-pine-soft',
+            {/* 候補ではないので候補の一覧には入れない。 */}
+            <Candidate onClick={() => confirm(undefined)}>新しいお客様として登録する</Candidate>
+
+            {searched && selection.candidates.length === 0 && error === undefined && (
+              <p className="font-sans text-note">該当するお客様は見つかりませんでした</p>
             )}
-          >
-            新しいお客様として登録する
-          </button>
-
-          {searched && selection.candidates.length === 0 && error === undefined && (
-            <p className="mt-3 text-ink-muted text-sm">該当するお客様は見つかりませんでした</p>
-          )}
-        </section>
-
-        <aside
-          aria-label="選択中のお客様"
-          className="w-96 shrink-0 border-line border-l bg-paper px-8 pt-9"
-        >
-          <h3 className="font-sans font-semibold text-base text-ink">選択中のお客様</h3>
-          {!bound && (
-            <p className="mt-4 rounded-card border border-line bg-surface p-4 text-ink-muted text-sm">
-              お客様は未確定です
-            </p>
-          )}
-          {selection.newCustomer && (
-            <p className="mt-4 rounded-card border border-line bg-surface p-4 text-sm">
-              新規のお客様として進みます
-            </p>
-          )}
-          {selected !== undefined && detail === undefined && (
-            <p className="mt-4 rounded-card border border-line bg-surface p-4 text-ink-muted text-sm">
-              顧客情報は未取得です
-            </p>
-          )}
-          {selected !== undefined && detail?.currentPrescription != null && (
-            <section
-              aria-label="現在の度数"
-              className="mt-4 rounded-card border border-line bg-surface p-4 text-sm"
-            >
-              <b className="font-semibold">現在の度数</b>
-              <p className="mt-1">
-                R {detail.currentPrescription.rightSphere} / L{' '}
-                {detail.currentPrescription.leftSphere} / PD{' '}
-                {detail.currentPrescription.pupillaryDistance}
-              </p>
-            </section>
-          )}
-          {selected !== undefined && attention && (
-            <section
-              aria-label="対応時に確認"
-              className="mt-4 rounded-ctl border border-danger-line bg-danger-soft p-4 text-sm"
-            >
-              <b className="font-semibold">対応時に確認</b>
-              <p className="mt-1">{attention.body}</p>
-              <p className="mt-1 text-ink-muted text-xs">
-                根拠: {attention.recordedOn.replaceAll('-', '.')}の{attention.basis}
-              </p>
-            </section>
-          )}
-          {selected !== undefined && detail?.latestNote != null && (
-            <section
-              aria-label="最新メモ"
-              className="mt-4 rounded-card border border-line bg-surface p-4 text-sm"
-            >
-              <b className="font-semibold">最新メモ</b>
-              <p className="mt-1">{detail.latestNote.body}</p>
-            </section>
-          )}
-        </aside>
-      </div>
+          </>
+        }
+        rail={
+          <>
+            <h2>選択中のお客様</h2>
+            {/*
+             * モックは「お客様が決まった後」しか描いていない。決まる前と、記録を
+             * 取れなかったときの言葉は、同じ要約カードの語彙でそのまま残す。
+             */}
+            {!bound && <RailSummary>お客様は未確定です</RailSummary>}
+            {selection.newCustomer && <RailSummary>新規のお客様として進みます</RailSummary>}
+            {selected !== undefined && detail === undefined && (
+              <RailSummary>顧客情報は未取得です</RailSummary>
+            )}
+            {selected !== undefined && prescription != null && (
+              <RailSummary label="現在の度数">
+                <b>現在の度数</b>
+                <br />R {prescription.rightSphere} / L {prescription.leftSphere} / PD{' '}
+                {prescription.pupillaryDistance}
+              </RailSummary>
+            )}
+            {selected !== undefined && attention && (
+              <AttentionCard label="対応時に確認">
+                <b>対応時に確認</b>
+                <br />
+                {attention.body}
+                <br />
+                <small>
+                  根拠: {attention.recordedOn.replaceAll('-', '.')}の{attention.basis}
+                </small>
+              </AttentionCard>
+            )}
+            {selected !== undefined && detail?.latestNote != null && (
+              <RailSummary label="最新メモ">
+                <b>最新メモ</b>
+                <br />
+                {detail.latestNote.body}
+              </RailSummary>
+            )}
+          </>
+        }
+      />
     )
   }
 

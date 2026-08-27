@@ -144,6 +144,28 @@ test('leads with entry points only: no page heading, no status line, no count ca
   expect(screen.queryByText(/アラート/)).not.toBeInTheDocument()
 })
 
+/*
+ * HOME-DEFAULT の実測（`.hero button{min-height:108px;border-radius:12px;
+ * font-size:24px}` / `.quick button{min-height:76px;font-size:18px}` /
+ * `.home{grid-template-columns:1fr .8fr;gap:70px}`）。突き合わせ台の複製
+ * （`gallery/screens/HOME-DEFAULT.screen.tsx`）と同じ語彙で組まれていることを、
+ * 画素を撮らずに確かめる。
+ */
+test('draws the hero, the quick list and the two columns with the approved measurements', () => {
+  renderHome()
+  const primary = within(screen.getByRole('navigation', { name: '主操作' })).getAllByRole('button')
+  for (const hero of primary) {
+    expect(hero.className).toContain('min-h-27')
+    expect(hero.className).toContain('rounded-panel')
+    expect(hero.className).toContain('text-title')
+  }
+  const quick = within(screen.getByRole('navigation', { name: '副操作' })).getAllByRole('button')
+  for (const action of quick) expect(action.className).toContain('text-lead')
+  // 列幅 `1fr .8fr` は 4 の倍数でない実測値なので、配置としてインラインで持つ。
+  const columns = at(primary, 0).closest('nav')?.parentElement as HTMLElement
+  expect(columns.style.gridTemplateColumns).toBe('1fr .8fr')
+})
+
 // UC-EYEX-008 / AC-EYEX-123
 test('reaches both primary actions in order with the keyboard and activates them', () => {
   const { navigate } = renderHome()

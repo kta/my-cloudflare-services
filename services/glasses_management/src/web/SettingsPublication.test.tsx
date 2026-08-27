@@ -248,13 +248,13 @@ test('settings.manage が無ければ閲覧はできても下書き・公開操�
 
 test('状態は語で示し、競合と失敗は状態とは別の警告として並べる', async () => {
   setup()
-  const state = await screen.findByRole('group', { name: '設定の状態' })
+  const state = await screen.findByRole('region', { name: '設定の状態' })
   expect(within(state).getByText('下書き')).toBeTruthy()
   expect(within(state).getByText('保存済み')).toBeTruthy()
   expect(within(state).getByText('最終保存 2026年8月26日 18:05')).toBeTruthy()
   expect(within(state).getByText('変更者 山田 太郎')).toBeTruthy()
 
-  const warnings = await screen.findByRole('group', { name: '警告' })
+  const warnings = await screen.findByRole('region', { name: '警告' })
   expect(within(warnings).getByText('影響予約2件が未解消です')).toBeTruthy()
   expect(within(warnings).getByText('警告2件')).toBeTruthy()
   // 警告は状態ブロックの中には現れない。
@@ -263,7 +263,7 @@ test('状態は語で示し、競合と失敗は状態とは別の警告とし�
 
 test('工程1〜5に未保存の編集があれば未保存と最終保存時刻の両方を出す', async () => {
   setup({ dirty: true })
-  const state = await screen.findByRole('group', { name: '設定の状態' })
+  const state = await screen.findByRole('region', { name: '設定の状態' })
   expect(within(state).getByText('未保存')).toBeTruthy()
   expect(within(state).getByText('最終保存 2026年8月26日 18:05')).toBeTruthy()
 })
@@ -272,7 +272,7 @@ test('工程1〜5に未保存の編集があれば未保存と最終保存時刻
 
 test('影響確認は既存予約の競合・公開枠・技能不足・設備不足・営業時間外を出す', async () => {
   setup()
-  const panel = await screen.findByRole('group', { name: '影響確認' })
+  const panel = await screen.findByRole('region', { name: '影響確認' })
   expect(within(panel).getByText('公開枠 42件 → 38件（-4件）')).toBeTruthy()
   expect(within(panel).getByText('影響する台帳 18件')).toBeTruthy()
   expect(within(panel).getByText('8/28 10:00 の予約が営業時間外になります')).toBeTruthy()
@@ -283,11 +283,11 @@ test('影響確認は既存予約の競合・公開枠・技能不足・設備�
 
 test('重大度は色ではなく語で読める', async () => {
   setup()
-  const conflicts = await screen.findByRole('group', { name: '既存予約との競合' })
+  const conflicts = await screen.findByRole('region', { name: '既存予約との競合' })
   expect(within(conflicts).getByText('要対応')).toBeTruthy()
-  const skills = await screen.findByRole('group', { name: '技能不足' })
+  const skills = await screen.findByRole('region', { name: '技能不足' })
   expect(within(skills).getByText('警告')).toBeTruthy()
-  const hours = await screen.findByRole('group', { name: '営業時間外設定' })
+  const hours = await screen.findByRole('region', { name: '営業時間外設定' })
   expect(within(hours).getByText('情報')).toBeTruthy()
 })
 
@@ -296,7 +296,9 @@ test('重大度は色ではなく語で読める', async () => {
 test('未解消のブロッキング項目が残るあいだは公開できない', async () => {
   setup()
   const publish = await screen.findByRole('button', { name: '公開する' })
-  expect(publish.hasAttribute('disabled')).toBe(true)
+  // 押せないことは `aria-disabled` で示す。タブ順から外すと押せない理由の
+  // 説明にも辿り着けなくなる（design/controls の Action）。
+  expect(publish.getAttribute('aria-disabled')).toBe('true')
   expect(
     screen.getByText('影響予約ごとに代替設備、例外維持、顧客連絡を記録してください。'),
   ).toBeTruthy()
@@ -327,7 +329,7 @@ test('影響予約を解消すると記録され、すべて解消すれば公�
     },
   })
 
-  const conflicts = await screen.findByRole('group', { name: '既存予約との競合' })
+  const conflicts = await screen.findByRole('region', { name: '既存予約との競合' })
   fireEvent.click(within(conflicts).getAllByRole('button', { name: '解消を記録' })[0] as Element)
 
   const dialog = await screen.findByRole('dialog', { name: '影響予約の解消を記録' })
@@ -350,7 +352,7 @@ test('影響予約を解消すると記録され、すべて解消すれば公�
   })
 
   await waitFor(() => {
-    expect((screen.getByRole('button', { name: '公開する' }) as HTMLButtonElement).disabled).toBe(
+    expect(screen.getByRole('button', { name: '公開する' }).hasAttribute('aria-disabled')).toBe(
       false,
     )
   })
@@ -397,7 +399,7 @@ test('公開予約はJSTの壁時計で送られ、予定と取消・日時変�
     expect(typeof body?.idempotencyKey).toBe('string')
   })
 
-  const result = await screen.findByRole('group', { name: '公開結果' })
+  const result = await screen.findByRole('region', { name: '公開結果' })
   expect(within(result).getByText('公開予約')).toBeTruthy()
   expect(within(result).getByText(/公開予定 2026年8月30日 18:00/)).toBeTruthy()
   expect(within(result).getByRole('button', { name: '公開予定を取消' })).toBeTruthy()
@@ -447,7 +449,7 @@ test('公開結果は版ID・対象店舗・反映件数・失敗件数・Web枠
     },
   })
   fireEvent.click(await screen.findByRole('button', { name: '公開する' }))
-  const result = await screen.findByRole('group', { name: '公開結果' })
+  const result = await screen.findByRole('region', { name: '公開結果' })
   expect(within(result).getByText(`版 ${VERSION_ID} の公開結果`)).toBeTruthy()
   expect(within(result).getByText('成功 12店舗')).toBeTruthy()
   expect(within(result).getByText('失敗 1店舗')).toBeTruthy()
@@ -484,7 +486,7 @@ test('再試行は失敗店舗だけを対象にし、成功済み店舗へ再�
   })
   fireEvent.click(await screen.findByRole('button', { name: '公開する' }))
 
-  const failed = await screen.findByRole('group', { name: '失敗した店舗' })
+  const failed = await screen.findByRole('region', { name: '失敗した店舗' })
   expect(within(failed).getByText(OTHER_STORE)).toBeTruthy()
   expect(within(failed).getByText('視力測定機が停止中')).toBeTruthy()
   expect(within(failed).queryByText(STORE_ID)).toBeNull()
@@ -504,12 +506,12 @@ test('再試行は失敗店舗だけを対象にし、成功済み店舗へ再�
 
 test('過去版の差分を変更前後で読める', async () => {
   setup()
-  const history = await screen.findByRole('group', { name: '版履歴' })
+  const history = await screen.findByRole('region', { name: '版履歴' })
   expect(within(history).getByText('第3版')).toBeTruthy()
   expect(within(history).getByText('佐藤 美咲')).toBeTruthy()
   fireEvent.click(within(history).getByRole('button', { name: '版の差分を見る' }))
 
-  const diff = await screen.findByRole('group', { name: '第3版の差分' })
+  const diff = await screen.findByRole('region', { name: '第3版の差分' })
   const row = within(diff).getByRole('row', { name: /受付状態/ })
   expect(within(row).getByText('open')).toBeTruthy()
   expect(within(row).getByText('paused')).toBeTruthy()
@@ -525,7 +527,7 @@ test('復元は再公開ではなく新しい下書きを作り、影響確認�
       return undefined
     },
   })
-  const history = await screen.findByRole('group', { name: '版履歴' })
+  const history = await screen.findByRole('region', { name: '版履歴' })
   fireEvent.click(within(history).getByRole('button', { name: '過去版から新しい下書きを作る' }))
 
   await waitFor(() => {
@@ -539,8 +541,8 @@ test('復元は再公開ではなく新しい下書きを作り、影響確認�
     ),
   ).toBeTruthy()
   // 復元は直接の再公開ではない。公開ボタンは影響確認の結果に従う。
-  expect((screen.getByRole('button', { name: '公開する' }) as HTMLButtonElement).disabled).toBe(
-    true,
+  expect(screen.getByRole('button', { name: '公開する' }).getAttribute('aria-disabled')).toBe(
+    'true',
   )
   expect(calls.some((call) => call.url.endsWith('/availability/publications'))).toBe(false)
 })
@@ -549,7 +551,7 @@ test('復元は再公開ではなく新しい下書きを作り、影響確認�
 
 test('適用元と上書きした項目を区別して読める', async () => {
   setup()
-  const panel = await screen.findByRole('group', { name: '適用元' })
+  const panel = await screen.findByRole('region', { name: '適用元' })
   expect(within(panel).getByText('店舗上書き')).toBeTruthy()
   expect(within(panel).getByText('全店共通 第7版')).toBeTruthy()
   expect(within(panel).getByText('営業時間')).toBeTruthy()
@@ -575,7 +577,7 @@ test('上書き解除は共通値と影響を先に見せる', async () => {
   fireEvent.click(await screen.findByRole('button', { name: '店舗上書きを解除' }))
   expect(await screen.findByText('全店共通値 第7版を新しい下書きにしました')).toBeTruthy()
   expect(screen.getByText('公開する前に影響確認を行ってください。')).toBeTruthy()
-  const panel = await screen.findByRole('group', { name: '適用元' })
+  const panel = await screen.findByRole('region', { name: '適用元' })
   expect(within(panel).getByText('全店共通')).toBeTruthy()
 })
 
@@ -617,6 +619,6 @@ test('確認へ回すと下書きの状態が確認待ちになる', async () =>
     expect(body?.status).toBe('review')
     expect(body?.settings?.storeId).toBeUndefined()
   })
-  const state = await screen.findByRole('group', { name: '設定の状態' })
+  const state = await screen.findByRole('region', { name: '設定の状態' })
   expect(within(state).getByText('確認待ち')).toBeTruthy()
 })

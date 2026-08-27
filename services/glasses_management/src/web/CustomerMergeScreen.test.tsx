@@ -130,7 +130,8 @@ test('影響と理由を確認したうえでのみ統合する (UC-EYEX-181, AC
   await screen.findByRole('region', { name: '統合の影響' })
   fireEvent.click(screen.getByRole('button', { name: '統合する' }))
 
-  const dialog = await screen.findByRole('dialog', { name: '顧客の統合を確認' })
+  // 取り返しのつかない書き込みの確認なので alertdialog（design/dialogs の urgent）。
+  const dialog = await screen.findByRole('alertdialog', { name: '顧客の統合を確認' })
   expect(dialog).toHaveTextContent('13件の履歴が残す顧客へ移ります。')
   fireEvent.click(within(dialog).getByRole('button', { name: '統合を実行する' }))
   expect(await within(dialog).findByText('理由を入力してください。')).toBeInTheDocument()
@@ -162,7 +163,8 @@ test('影響が食い違えば統合せず最新の影響を見せ直す (AC-EYE
 
   await screen.findByRole('region', { name: '統合の影響' })
   fireEvent.click(screen.getByRole('button', { name: '統合する' }))
-  const dialog = await screen.findByRole('dialog', { name: '顧客の統合を確認' })
+  // 取り返しのつかない書き込みの確認なので alertdialog（design/dialogs の urgent）。
+  const dialog = await screen.findByRole('alertdialog', { name: '顧客の統合を確認' })
   fireEvent.change(within(dialog).getByLabelText('統合する理由'), {
     target: { value: '同一人物。' },
   })
@@ -200,7 +202,7 @@ test('誤関連解除は明示操作と理由を要求する (UC-EYEX-181, AC-EY
   fireEvent.change(screen.getByLabelText('受付ID'), { target: { value: RESERVATION_ID } })
   fireEvent.click(screen.getByRole('button', { name: '誤関連を解除する' }))
 
-  const dialog = await screen.findByRole('dialog', { name: '誤った顧客関連の解除を確認' })
+  const dialog = await screen.findByRole('alertdialog', { name: '誤った顧客関連の解除を確認' })
   fireEvent.click(within(dialog).getByRole('button', { name: '解除を実行する' }))
   expect(await within(dialog).findByText('理由を入力してください。')).toBeInTheDocument()
   expect(calls).toHaveLength(0)
@@ -240,7 +242,8 @@ test('監査に残せない統合は成立させず、入力を保持して再�
 
   await screen.findByRole('region', { name: '統合の影響' })
   fireEvent.click(screen.getByRole('button', { name: '統合する' }))
-  const dialog = await screen.findByRole('dialog', { name: '顧客の統合を確認' })
+  // 取り返しのつかない書き込みの確認なので alertdialog（design/dialogs の urgent）。
+  const dialog = await screen.findByRole('alertdialog', { name: '顧客の統合を確認' })
   fireEvent.change(within(dialog).getByLabelText('統合する理由'), {
     target: { value: '同一人物。' },
   })
@@ -249,7 +252,7 @@ test('監査に残せない統合は成立させず、入力を保持して再�
   await screen.findByText(
     '監査記録に残せなかったため、この操作は成立していません。入力はそのまま保持しています。',
   )
-  expect(within(screen.getByRole('dialog')).getByLabelText('統合する理由')).toHaveValue(
+  expect(within(screen.getByRole('alertdialog')).getByLabelText('統合する理由')).toHaveValue(
     '同一人物。',
   )
   fireEvent.click(screen.getByRole('button', { name: '再試行する' }))
@@ -263,12 +266,50 @@ test('権限外は顧客の突き合わせ画面そのものを出さない (AC-
   renderScreen(api, ['customer.read'])
 
   expect(api).not.toHaveBeenCalled()
-  const denied = screen.getByRole('region', { name: '権限がありません' })
+  // 権限が無い面は EX-403 の全画面状態そのもの。名乗るのはモックの見出し。
+  const denied = screen.getByRole('region', { name: 'この設定を表示する権限がありません' })
   expect(denied).toHaveTextContent(
     '権限のある管理者に確認してください。設定の存在や内容はこれ以上表示しません。',
   )
   expect(within(denied).getByRole('button', { name: '業務開始画面へ戻る' })).toBeInTheDocument()
+  // モック `#permission-denied` の 54px の記号。
+  expect(within(denied).getByText('—')).toBeInTheDocument()
   expect(screen.queryByLabelText('残す顧客ID')).not.toBeInTheDocument()
+})
+
+// 承認済みモックの語彙: 取り返しのつかない操作は `danger`（白地に警告色の罫と字）で、
+// 既定の見た目にしない。
+test('統合と解除の確定は危険な操作として描く', async () => {
+  const { api } = createApi(() => jsonResponse(preview))
+  renderScreen(api)
+  compare()
+  await screen.findByRole('region', { name: '統合の影響' })
+
+  for (const name of ['統合する', '誤関連を解除する']) {
+    const button = screen.getByRole('button', { name })
+    expect(button.className).toContain('border-danger')
+    expect(button.className).toContain('text-danger')
+  }
+
+  fireEvent.click(screen.getByRole('button', { name: '統合する' }))
+  // 取り返しのつかない書き込みの確認なので alertdialog（design/dialogs の urgent）。
+  const dialog = await screen.findByRole('alertdialog', { name: '顧客の統合を確認' })
+  const run = within(dialog).getByRole('button', { name: '統合を実行する' })
+  expect(run.className).toContain('border-danger')
+  expect(run.className).toContain('text-danger')
+})
+
+// 突き合わせは 2 面を並べて見せる（モックの `.compare{grid-template-columns:1fr 1fr}`）。
+test('残す顧客と重複している顧客を 2 面で並べる', async () => {
+  const { api } = createApi(() => jsonResponse(preview))
+  renderScreen(api)
+  compare()
+
+  const comparison = await screen.findByRole('region', { name: '重複候補の比較' })
+  const pair = comparison.firstElementChild as HTMLElement
+  expect(pair.className).toContain('grid-cols-2')
+  expect(within(comparison).getByRole('region', { name: '残す顧客' })).toBeInTheDocument()
+  expect(within(comparison).getByRole('region', { name: '重複している顧客' })).toBeInTheDocument()
 })
 
 test('端末に顧客情報を残さない (完全共有iPad)', async () => {
