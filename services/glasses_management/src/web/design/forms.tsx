@@ -21,7 +21,7 @@ const CONTROL =
   'block min-h-13 w-full rounded-ctl border border-line bg-surface p-3 font-sans text-body text-ink'
 
 /** 欄の名前とエラー。名前は必ず見える形で置く（プレースホルダで代替しない）。 */
-export function Labeled({
+function Labeled({
   label,
   htmlFor,
   error,

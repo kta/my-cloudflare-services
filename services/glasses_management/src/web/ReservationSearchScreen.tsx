@@ -209,21 +209,21 @@ async function readJson(response: Response): Promise<unknown> {
 export const FOCUS_RING =
   'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus'
 /** `.workspace{height:calc(100% - 76px);grid-template-columns:390px 1fr}` */
-export const WORKSPACE = 'grid h-full grid-cols-[390px_1fr]'
+const WORKSPACE = 'grid h-full grid-cols-[390px_1fr]'
 /** `.list{padding:16px;background:#e7ede9;border-right:1px solid var(--l);overflow:auto}` */
-export const LIST_PANE = 'overflow-auto border-line border-r bg-panel p-4'
+const LIST_PANE = 'overflow-auto border-line border-r bg-panel p-4'
 /** `.detail{padding:22px;overflow:auto}` */
-export const DETAIL_PANE = 'overflow-auto p-5.5'
+const DETAIL_PANE = 'overflow-auto p-5.5'
 /** `.filterline{display:flex;gap:8px;margin:10px 0}` */
-export const FILTER_LINE = 'mt-2.5 flex flex-wrap items-center gap-2'
+const FILTER_LINE = 'mt-2.5 flex flex-wrap items-center gap-2'
 /** `.filter{min-height:44px;border:1px solid var(--l);background:#fff;border-radius:8px;padding:0 12px}` */
-export const FILTER = `min-h-11 rounded-ctl border border-line bg-surface px-3 font-sans text-ink text-sm ${FOCUS_RING}`
+const FILTER = `min-h-11 rounded-ctl border border-line bg-surface px-3 font-sans text-ink text-sm ${FOCUS_RING}`
 /** `.row{background:#fff;border:1px solid var(--l);border-radius:9px;padding:14px;margin-top:10px}` */
-export const ROW = `mt-2.5 block w-full rounded-card border border-line bg-surface p-3.5 text-left font-sans ${FOCUS_RING}`
+const ROW = `mt-2.5 block w-full rounded-card border border-line bg-surface p-3.5 text-left font-sans ${FOCUS_RING}`
 /** `.row.selected{border:3px solid var(--g);background:var(--gs)}` */
-export const ROW_SELECTED = `mt-2.5 block w-full rounded-card border-[3px] border-pine bg-pine-soft p-3.5 text-left font-sans ${FOCUS_RING}`
+const ROW_SELECTED = `mt-2.5 block w-full rounded-card border-[3px] border-pine bg-pine-soft p-3.5 text-left font-sans ${FOCUS_RING}`
 /** `.card{background:#fff;border:1px solid var(--l);border-radius:9px;padding:14px}` */
-export const CARD = 'rounded-card border border-line bg-surface p-3.5 font-sans text-ink'
+const CARD = 'rounded-card border border-line bg-surface p-3.5 font-sans text-ink'
 /**
  * `.audio{border:1px solid var(--l);padding:14px;border-radius:9px;margin-top:14px}`
  * モックの `.audio` は地色を持たない。台紙の色をそのまま透かす。
@@ -275,7 +275,7 @@ export function PermissionDenied({ onBack }: { onBack: () => void }) {
  * 空は異常ではないので記号を置かない。ただし「消えたのではない」と言い切り、
  * 戻る道を必ず 1 つ添える。
  */
-export function EmptyReservations({ onClear }: { onClear: () => void }) {
+function EmptyReservations({ onClear }: { onClear: () => void }) {
   return (
     <FullScreenState title="条件に一致する予約はありません">
       <p>検索語またはフィルターを変更してください。履歴自体は削除されていません。</p>
