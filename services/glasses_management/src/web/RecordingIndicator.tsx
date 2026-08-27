@@ -58,7 +58,7 @@ export function RecordingIndicator({ state, elapsedSeconds }: RecordingIndicator
 const TOUCH = 'min-h-12 px-5'
 
 /** モックの白いカード面（`.permission`）。 */
-function Sheet({ label, children }: { label: string; children: React.ReactNode }) {
+function _Sheet({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <section
       aria-label={label}

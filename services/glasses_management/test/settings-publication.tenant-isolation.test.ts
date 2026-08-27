@@ -44,7 +44,7 @@ async function publishedScope() {
     scope,
     draftId: draft.id,
     publicationId: publication.id,
-    versionId: versions[0]!.versionId,
+    versionId: versions[0]?.versionId,
   }
 }
 

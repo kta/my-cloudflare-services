@@ -102,7 +102,7 @@ describe('settings impact check (UC-EYEX-093, 097, 115, AC-EYEX-46, 66)', () => 
         body: JSON.stringify({
           date: '2026-08-31',
           startTime: '11:00',
-          purposeIds: [published.purposes[0]!.id],
+          purposeIds: [published.purposes[0]?.id],
           customer: { name: '予約 太郎', kana: 'ヨヤク タロウ', phone: '09000000001' },
           recital: '8月31日11時から視力測定です。',
         }),

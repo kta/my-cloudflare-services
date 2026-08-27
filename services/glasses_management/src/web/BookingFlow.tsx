@@ -233,7 +233,7 @@ export function BookingFlow({
   const [sessionId] = useState(newRecordingSessionId)
   const [recordingState, setRecordingState] = useState<RecordingState>('permission_check')
   const recordingRef = useRef<RecordingState>('permission_check')
-  const [permissionResult, setPermissionResult] = useState<MicrophonePermissionResult | null>(null)
+  const [_permissionResult, setPermissionResult] = useState<MicrophonePermissionResult | null>(null)
   const [recordingOffered, setRecordingOffered] = useState(true)
   const [requestingPermission, setRequestingPermission] = useState(false)
   const [recordingId, setRecordingId] = useState<string | null>(null)

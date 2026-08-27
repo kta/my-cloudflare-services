@@ -2285,7 +2285,7 @@ async function reissueManagementCode(
         ),
       )
   )[0]
-  if (!row || !row.email)
+  if (!row?.email)
     return c.json({ error: 'reservation_not_eligible_for_management_code_reissue' }, 404)
   if (row.status !== 'confirmed') return c.json({ error: 'reservation_not_confirmed' }, 409)
   const idempotencyKey = c.req.header('idempotency-key')?.trim()
@@ -2462,7 +2462,7 @@ async function reissueManagementCode(
         ),
       )
   )[0]
-  if (!deliveryState || deliveryState.status !== 'confirmed') {
+  if (deliveryState?.status !== 'confirmed') {
     return c.json(ManagementCodeReissueResult.parse({ emailStatus: 'pending' }), 201)
   }
   const job = NotificationJob.parse({
@@ -3252,7 +3252,7 @@ async function prepareReservationAllocation(
     selectClaimUnit(
       'equipment',
       equipmentId,
-      settings.equipment.find((candidate) => candidate.id === equipmentId)!.capacity,
+      settings.equipment.find((candidate) => candidate.id === equipmentId)?.capacity,
       claimSlots,
       occupiedClaims,
     ),
@@ -3261,7 +3261,7 @@ async function prepareReservationAllocation(
     selectClaimUnit(
       'purpose',
       purposeId,
-      settings.purposes.find((candidate) => candidate.id === purposeId)!.maxConcurrent,
+      settings.purposes.find((candidate) => candidate.id === purposeId)?.maxConcurrent,
       claimSlots,
       occupiedClaims,
     ),
@@ -4359,7 +4359,7 @@ async function changeReservation(
       return selectClaimUnit(
         'equipment',
         equipmentId,
-        equipment!.capacity,
+        equipment?.capacity,
         claimSlots,
         occupiedClaims,
       )
@@ -4369,7 +4369,7 @@ async function changeReservation(
       return selectClaimUnit(
         'purpose',
         purposeId,
-        purpose!.maxConcurrent,
+        purpose?.maxConcurrent,
         claimSlots,
         occupiedClaims,
       )
@@ -5541,15 +5541,14 @@ async function sharedTerminalWriteFailure(
       .from(organizations)
       .where(eq(organizations.id, identity.organizationId))
   )[0]
-  if (!organization || organization.isDisabled !== '0')
-    return c.json({ error: 'org_disabled' }, 403)
+  if (organization?.isDisabled !== '0') return c.json({ error: 'org_disabled' }, 403)
   const store = (
     await db
       .select({ isActive: stores.isActive })
       .from(stores)
       .where(and(eq(stores.id, storeId), eq(stores.organizationId, identity.organizationId)))
   )[0]
-  if (!store || store.isActive !== '1') return c.json({ error: 'terminal_store_inactive' }, 403)
+  if (store?.isActive !== '1') return c.json({ error: 'terminal_store_inactive' }, 403)
   return null
 }
 
@@ -6438,15 +6437,14 @@ async function readSharedTerminalSession(
   const organization = (
     await db.select().from(organizations).where(eq(organizations.id, row.organizationId))
   )[0]
-  if (!organization || organization.isDisabled !== '0')
-    return c.json({ error: 'org_disabled' }, 403)
+  if (organization?.isDisabled !== '0') return c.json({ error: 'org_disabled' }, 403)
   const store = (
     await db
       .select()
       .from(stores)
       .where(and(eq(stores.id, row.storeId), eq(stores.organizationId, row.organizationId)))
   )[0]
-  if (!store || store.isActive !== '1') return c.json({ error: 'terminal_store_inactive' }, 403)
+  if (store?.isActive !== '1') return c.json({ error: 'terminal_store_inactive' }, 403)
   const now = nowIso(clock)
   const accessError = sharedTerminalAccessError(row, new Date(now))
   if (accessError) return c.json({ error: accessError }, 401)
@@ -6496,8 +6494,7 @@ async function readSharedTerminalSession(
         .from(organizations)
         .where(eq(organizations.id, current.organizationId))
     )[0]
-    if (!currentOrganization || currentOrganization.isDisabled !== '0')
-      return c.json({ error: 'org_disabled' }, 403)
+    if (currentOrganization?.isDisabled !== '0') return c.json({ error: 'org_disabled' }, 403)
     const currentStore = (
       await db
         .select({ isActive: stores.isActive })
@@ -6506,8 +6503,7 @@ async function readSharedTerminalSession(
           and(eq(stores.id, current.storeId), eq(stores.organizationId, current.organizationId)),
         )
     )[0]
-    if (!currentStore || currentStore.isActive !== '1')
-      return c.json({ error: 'terminal_store_inactive' }, 403)
+    if (currentStore?.isActive !== '1') return c.json({ error: 'terminal_store_inactive' }, 403)
     return c.json({ error: 'terminal_revoked' }, 401)
   }
   const terminal = sharedTerminalFromRowOrUndefined({ ...row, lastSeenAt: now })
