@@ -27,9 +27,10 @@ Read it before doing any implementation. It is intentionally broader than the we
 ## Workspace and safety state
 
 - Branch: `002-eyex-reservation-product` (not the default branch).
-- No commit or push has been made for the current worktree changes. A normal
-  `git commit -m "feat: add eyex reservation service"` was attempted on
-  2026-08-27 and was correctly stopped by the pre-commit hook; do not bypass it.
+- The baseline implementation snapshot is committed as `4acc9ce feat: add eyex
+  reservation service`. The user explicitly authorized a one-off
+  `--no-verify` commit because this is a handoff snapshot, not a quality-complete
+  release. It is not evidence that the service is complete or that CI passes.
 - No deployment, remote D1 migration, secret mutation, or other external side effect has been performed.
 - The legacy `services/glasses_reservation` is intentionally deleted. The new service is `services/glasses_management`; do not revive the legacy service.
 - The source tree has intentionally untracked new service files. Do not use `git clean` or reset. Exclude local Drizzle inspection directories matching `services/glasses_management/.drizzle-meta-*` from any future staging.
@@ -110,7 +111,9 @@ pnpm run test:traceability
 # spec-status/mapping issues. This is expected until the whole product is done.
 ```
 
-Therefore **`pnpm check` is not green**. Repository rules require local CI-equivalent checks to be green before push. Do not use `--no-verify` / `LEFTHOOK=0` to mask this; fix the remaining roadmap work and coverage/traceability evidence first.
+Therefore **`pnpm check` is not green**. The handoff snapshot is intentionally
+incomplete; the recipient must not treat its existence as permission to weaken
+coverage, traceability, or normal commit checks.
 
 ### Latest normal commit attempt (2026-08-27)
 
@@ -132,21 +135,28 @@ formatting changes to 65 files, then stopped with the following remaining errors
 The combined test command then stopped earlier than the glasses-management suite
 at `@app/contracts`: functions **69.23%** and branches **78.94%**, both below the
 mandatory 80% gate. Add behavior-focused contract tests; do not weaken coverage.
-After these are fixed, rerun the ordinary hook/`pnpm check`, then commit and push
-normally. The worktree is staged except for the two untracked temporary
-`services/glasses_management/.drizzle-meta-*` directories; never stage them.
+Since that attempt, the focused public-booking accessibility test is green after
+adding a real `progressbar` role/value, and the scoped Biome check has no errors
+(only warnings). The remaining full-gate blocker verified immediately before this
+handoff update is contracts coverage: functions **69.23%**, branches **78.94%**.
+The Worker branch coverage and full traceability deficits above are still open.
+The local inspection directories matching
+`services/glasses_management/.drizzle-meta-*` are intentionally untracked;
+never stage them.
 
 ## Review status
 
-- A fresh `gpt-5.6-luna`, max-reasoning Task 5 reviewer was started with scope covering the public client/state/UI/E2E and Worker verification response.
-- It was intentionally interrupted before returning a verdict because the user asked for an immediate handoff.
-- On resume, start a new independent Luna Max review for Task 5. Record Critical/Important findings in `.superpowers/sdd/2026-08-27-eyex-web-booking/progress.md`, address each with TDD, and request a scoped re-review before marking Task 5 complete.
+- A Task 5 Luna review was started but intentionally interrupted before a verdict.
+- The user has now explicitly delegated reviews to Claude. Do not restart Luna
+  merely because this document predates that decision; Claude should conduct and
+  record the independent review before considering Task 5 review-complete.
 
 ## First steps for the next agent
 
 1. Read the active-goal attachment and all sources listed above.
 2. Run `git status --short`, confirm no unexpected files or secrets, and preserve all worktree changes.
-3. Resume the Task 5 Luna Max review. Do not start the next roadmap task until Task 5 Critical/Important findings are resolved or formally ruled on in the ledger.
+3. Conduct the Task 5 review in Claude, record Critical/Important findings in the
+   ledger, and resolve each with TDD before marking Task 5 review-complete.
 4. Add focused tests before every behavior change (Red → Green → Refactor). In particular, improve any reviewer-found gaps around:
    - 401 management-code expiry/attempt-limit UI showing only contact/reissue guidance;
    - cancellation/change idempotency response-loss recovery;

@@ -782,47 +782,41 @@ async function createPublicReservation(
                       ),
                     ),
                 ),
-                db
-                  .insert(availabilityBookings)
-                  .values({
-                    id,
-                    organizationId: store.organizationId,
-                    storeId: store.storeId,
-                    startAt: selected.startAt,
-                    endAt: selected.endAt,
-                    purposeIdsJson: JSON.stringify(input.purposeIds),
-                    staffId: allocation.staffId,
-                    equipmentIdsJson: JSON.stringify(allocation.equipmentIds),
-                    status: 'confirmed',
-                  }),
-                db
-                  .insert(webBookingRecords)
-                  .values({
-                    id: crypto.randomUUID(),
-                    organizationId: store.organizationId,
-                    storeId: store.storeId,
-                    reservationId: id,
-                    confirmationKeyHash,
-                    managementCodeHash,
-                    consentVersion: input.consentVersion,
-                    consentedAt: createdAt,
-                    inputHistoryJson: JSON.stringify(input),
-                    createdAt,
-                  }),
-                db
-                  .insert(webBookingManagementCodeIssues)
-                  .values({
-                    id: crypto.randomUUID(),
-                    organizationId: store.organizationId,
-                    storeId: store.storeId,
-                    reservationId: id,
-                    codeHash: managementCodeHash,
-                    issuedAt: createdAt,
-                    expiresAt: selected.endAt,
-                    revokedAt: null,
-                    failedAttempts: 0,
-                    issuedBy: 'system:web-reservation',
-                  }),
+                db.insert(availabilityBookings).values({
+                  id,
+                  organizationId: store.organizationId,
+                  storeId: store.storeId,
+                  startAt: selected.startAt,
+                  endAt: selected.endAt,
+                  purposeIdsJson: JSON.stringify(input.purposeIds),
+                  staffId: allocation.staffId,
+                  equipmentIdsJson: JSON.stringify(allocation.equipmentIds),
+                  status: 'confirmed',
+                }),
+                db.insert(webBookingRecords).values({
+                  id: crypto.randomUUID(),
+                  organizationId: store.organizationId,
+                  storeId: store.storeId,
+                  reservationId: id,
+                  confirmationKeyHash,
+                  managementCodeHash,
+                  consentVersion: input.consentVersion,
+                  consentedAt: createdAt,
+                  inputHistoryJson: JSON.stringify(input),
+                  createdAt,
+                }),
+                db.insert(webBookingManagementCodeIssues).values({
+                  id: crypto.randomUUID(),
+                  organizationId: store.organizationId,
+                  storeId: store.storeId,
+                  reservationId: id,
+                  codeHash: managementCodeHash,
+                  issuedAt: createdAt,
+                  expiresAt: selected.endAt,
+                  revokedAt: null,
+                  failedAttempts: 0,
+                  issuedBy: 'system:web-reservation',
+                }),
                 completeInBatch(issued, persisted),
                 ...[
                   ...claimSlots.map((slotStartAt) => ({
@@ -3486,6 +3480,7 @@ async function cancelReservation(
   } catch (error) {
     // A transport/D1 batch error can arrive after commit. Keep the claim
     // fail-closed so a retry cannot execute a second lifecycle operation.
+    console.error('reservation cancellation batch failed after idempotency claim', error)
     throw error
   }
   if (!batchStatementChanged(batchResults[0])) {
@@ -3778,6 +3773,7 @@ async function markReservationNoShow(
   } catch (error) {
     // A transport/D1 batch error can arrive after commit. Keep the claim
     // fail-closed so a retry cannot execute a second lifecycle operation.
+    console.error('reservation no-show batch failed after idempotency claim', error)
     throw error
   }
 
