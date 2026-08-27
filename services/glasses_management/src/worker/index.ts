@@ -42,6 +42,7 @@ import {
   AvailabilityMaintenance,
   AvailabilityPurpose,
   AvailabilitySettingsInput,
+  type AvailabilitySlot,
   AvailabilitySlotsQuery,
   AvailabilitySlotsResponse,
   AvailabilityStaff,
@@ -705,9 +706,21 @@ async function readPublicStore(c: AppContext, slug: string) {
       ),
     )
     .orderBy(asc(availabilityBusinessHours.dayOfWeek))
+  /*
+   * 詳細も一覧と同じ「本日営業」を名乗る。PublicStoreDetail は PublicStoreSummary を
+   * 拡張しているので、ここで埋めないと既定の null が常に返り、週次の営業時間は
+   * あるのに本日だけ休みに見える。曜日は UTC ではなく JST で引く。
+   */
+  const todayDayOfWeek = new Date(`${jstDateKey(requestClock(c))}T00:00:00.000Z`).getUTCDay()
+  const todayRow = businessHours.find((hour) => hour.dayOfWeek === todayDayOfWeek)
+  const todayBusinessHours =
+    todayRow === undefined
+      ? null
+      : businessHoursText(parseJson(todayRow.periodsJson, 'public business hours'))
   return c.json(
     PublicStoreDetail.parse({
       slug: store.slug,
+      todayBusinessHours,
       name: store.name,
       contactPhone: store.contactPhone,
       accessText: store.accessText,
@@ -819,6 +832,120 @@ async function readPublicAvailability(
       return c.json({ error: 'invalid_public_purpose_selection' }, 400)
     throw error
   }
+}
+
+/*
+ * 顧客Web予約の候補枠（オファー）。
+ *
+ * なぜ /slots と別関数なのか: /slots は「この日の空き」を答えるが、承認済みモックの
+ * 第 2 工程は日付を訊かずに既製のショートリストを並べる。日付は入力ではなく走査の
+ * 結果なので、JST の今日から days 日ぶんを順に空き計算し、先に埋まった順で limit 件
+ * だけ採る。開始済みの枠は押せても必ず失敗するので isOfferableSlot で落とす。
+ */
+async function readPublicOffers(c: AppContext, slug: string, query: PublicOffersQuery) {
+  const db = drizzle(c.env.DB)
+  const rows = await db
+    .select({
+      organizationId: stores.organizationId,
+      storeId: stores.id,
+      isActive: stores.isActive,
+      isOrganizationDisabled: organizations.isDisabled,
+      receptionStatus: availabilitySettings.receptionStatus,
+      status: webBookingPublications.status,
+      startsAt: webBookingPublications.startsAt,
+      endsAt: webBookingPublications.endsAt,
+      contactPhone: webBookingPublications.contactPhone,
+      publicPurposeIdsJson: webBookingPublications.publicPurposeIdsJson,
+    })
+    .from(stores)
+    .innerJoin(organizations, eq(organizations.id, stores.organizationId))
+    .leftJoin(
+      availabilitySettings,
+      and(
+        eq(availabilitySettings.organizationId, stores.organizationId),
+        eq(availabilitySettings.storeId, stores.id),
+      ),
+    )
+    .innerJoin(
+      webBookingPublications,
+      and(
+        eq(webBookingPublications.organizationId, stores.organizationId),
+        eq(webBookingPublications.storeId, stores.id),
+      ),
+    )
+    .where(eq(webBookingPublications.publicSlug, slug))
+  const store = rows[0]
+  if (!store) return c.json({ error: 'public_store_not_found' }, 404)
+  const clock = requestClock(c)
+  const reason = publicationUnavailableReason(
+    {
+      isActive: store.isActive === '1',
+      isOrganizationDisabled: store.isOrganizationDisabled === '1',
+      receptionStatus:
+        store.receptionStatus === 'paused'
+          ? 'paused'
+          : store.receptionStatus === 'open'
+            ? 'open'
+            : undefined,
+      status: store.status === 'published' ? 'published' : 'hidden',
+      startsAt: store.startsAt,
+      endsAt: store.endsAt,
+    },
+    clock.now(),
+  )
+  if (reason)
+    return c.json(
+      { error: 'public_store_unavailable', reason, contactPhone: store.contactPhone },
+      409,
+    )
+  const publishedPurposeIds = parseJson(store.publicPurposeIdsJson, 'public purpose ids')
+  if (
+    !Array.isArray(publishedPurposeIds) ||
+    !publishedPurposeIds.every((id): id is string => typeof id === 'string') ||
+    !query.purposeIds.every((id) => publishedPurposeIds.includes(id))
+  ) {
+    return c.json({ error: 'invalid_public_purpose_selection' }, 400)
+  }
+  const settings = await readAvailabilitySettings(db, store.organizationId, store.storeId)
+  const bookings = await readAvailabilityBookings(db, store.organizationId, store.storeId)
+  const now = clock.now()
+  const slots: AvailabilitySlot[] = []
+  let durationMinutes = 0
+  for (const date of upcomingJstDates(jstDateKey(clock), query.days)) {
+    if (slots.length >= query.limit) break
+    let result: ReturnType<typeof calculateAvailability>
+    try {
+      result = calculateAvailability(
+        {
+          date,
+          store: {
+            receptionStatus: settings.receptionStatus,
+            businessHours: settings.businessHours,
+            exceptions: settings.exceptions,
+          },
+          purposes: settings.purposes,
+          staff: settings.staff,
+          shifts: settings.shifts,
+          equipment: settings.equipment,
+          maintenance: settings.maintenance,
+          bookings,
+        },
+        query.purposeIds,
+      )
+    } catch (error) {
+      if (error instanceof RangeError)
+        return c.json({ error: 'invalid_public_purpose_selection' }, 400)
+      throw error
+    }
+    // 所要時間は目的の設定で決まるので日付によらず同じ。最後に計算した日の値でよい。
+    durationMinutes = result.durationMinutes
+    for (const slot of result.slots) {
+      if (!isOfferableSlot(slot, now)) continue
+      slots.push(slot)
+      if (slots.length >= query.limit) break
+    }
+  }
+  return c.json(PublicOffersResponse.parse({ timezone: 'Asia/Tokyo', durationMinutes, slots }))
 }
 
 async function createPublicReservation(
@@ -11132,6 +11259,10 @@ const routes = app
   // organization or store id taken from the query.
   .get('/api/public/stores/:slug/slots', zValidator('query', AvailabilitySlotsQuery), async (c) =>
     readPublicAvailability(c as AppContext, c.req.param('slug'), c.req.valid('query')),
+  )
+  // 候補枠は日付を受け取らない。日付は顧客の入力ではなく走査の結果である。
+  .get('/api/public/stores/:slug/offers', zValidator('query', PublicOffersQuery), async (c) =>
+    readPublicOffers(c as AppContext, c.req.param('slug'), c.req.valid('query')),
   )
   .post(
     '/api/public/stores/:slug/reservations',

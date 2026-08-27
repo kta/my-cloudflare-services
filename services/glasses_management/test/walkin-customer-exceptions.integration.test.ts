@@ -281,8 +281,16 @@ describe('walk-in customer linking exceptions', () => {
 
     expect(response.status).toBe(409)
     await expect(response.json()).resolves.toEqual({
+      // EX-CONFLICT: 版番号だけでは操作者が判断できないため、409 は最新の内容と
+      // 更新者・更新時刻まで返す（更新者名は「店舗名 操作者」）。
       error: 'version_conflict',
       currentVersion: walkin.version + 1,
+      latest: [
+        { label: '状態', value: '接客中' },
+        { label: 'お客様', value: '顧客未登録' },
+      ],
+      updatedBy: expect.stringMatching(/^ウォークイン例外店舗 /),
+      updatedAt: '2026-08-31T00:00:00.000Z',
     })
     const created = await env.DB.prepare(
       'SELECT count(*) AS total FROM customers WHERE phone_normalized = ?',
@@ -412,8 +420,16 @@ describe('walk-in customer linking exceptions', () => {
     expect(responses.map((response) => response.status).sort()).toEqual([200, 409])
     const conflict = responses.find((response) => response.status === 409)
     await expect(conflict?.json()).resolves.toEqual({
+      // EX-CONFLICT: 版番号だけでは操作者が判断できないため、409 は最新の内容と
+      // 更新者・更新時刻まで返す（更新者名は「店舗名 操作者」）。
       error: 'version_conflict',
       currentVersion: walkin.version + 1,
+      latest: [
+        { label: '状態', value: '接客中' },
+        { label: 'お客様', value: '顧客未登録' },
+      ],
+      updatedBy: 'ウォークイン例外店舗 例外検証iPad',
+      updatedAt: '2026-08-31T00:00:00.000Z',
     })
     // Exactly one update may commit, and the terminal must be recorded as its actor.
     const stored = await env.DB.prepare('SELECT version FROM walkins WHERE id = ?')

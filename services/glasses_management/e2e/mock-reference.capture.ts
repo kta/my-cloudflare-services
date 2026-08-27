@@ -18,16 +18,16 @@ const OUT = '../../docs/frontend/reference'
  * 見えなくなる。宣言どおりの書体を注入してから撮る。
  */
 const FONTS = [
-  '@fontsource/ibm-plex-sans-jp/japanese-400.css',
-  '@fontsource/ibm-plex-sans-jp/japanese-500.css',
-  '@fontsource/ibm-plex-sans-jp/japanese-600.css',
-  '@fontsource/ibm-plex-sans-jp/japanese-700.css',
-  '@fontsource/ibm-plex-sans-jp/latin-400.css',
-  '@fontsource/ibm-plex-sans-jp/latin-500.css',
-  '@fontsource/ibm-plex-sans-jp/latin-600.css',
-  '@fontsource/ibm-plex-sans-jp/latin-700.css',
-  '@fontsource/ibm-plex-mono/latin-500.css',
-  '@fontsource/ibm-plex-mono/latin-600.css',
+  /*
+   * アプリが読むのと同じ一式にする。サブセットを絞ると、そこに入っていない
+   * 文字（記号など）だけが基準の側でシステム書体へ落ちて、同じ字形にならない。
+   */
+  '@fontsource/ibm-plex-sans-jp/400.css',
+  '@fontsource/ibm-plex-sans-jp/500.css',
+  '@fontsource/ibm-plex-sans-jp/600.css',
+  '@fontsource/ibm-plex-sans-jp/700.css',
+  '@fontsource/ibm-plex-mono/500.css',
+  '@fontsource/ibm-plex-mono/600.css',
 ].map((file) => `http://127.0.0.1:4176/packages/ui/node_modules/${file}`)
 
 /*

@@ -78,15 +78,14 @@
   --color-pine: #1f604b; /* モック --g */
   --color-on-pine: #ffffff;
   /*
-   * 緑バーの上の細枠。モックは `#ffffff70`（43.92%）で、Tailwind の不透明度は
-   * 1% 刻みなので 44% では 1 つずれる。緑に重ねた結果の色をそのまま持つ。
+   * バーと確定操作の細枠。モックは `#ffffff70`（43.92%）。Tailwind の不透明度
+   * 修飾は 1% 刻みで 43.92% を表せないので、半透明のまま色として持つ。
+   * 不透明な近似色に置き換えると、直線は合っても角の丸みで下地との混ざり方が
+   * 変わってしまう。
    */
-  --color-pine-hairline: #81a69a;
-  /*
-   * Web 予約の進捗の目盛り。モックは `#ffffff55`（33.33%）で、こちらも
-   * Tailwind の 1% 刻みでは表せない。緑に重ねた結果の色を持つ。
-   */
-  --color-pine-tick: #699587;
+  --color-pine-hairline: #ffffff70;
+  /* Web 予約の進捗の目盛り。モックは `#ffffff55`（33.33%）。理由は上と同じ。 */
+  --color-pine-tick: #ffffff55;
   --color-pine-deep: #184b3a; /* SP のしおり帯 */
   --color-pine-soft: #e1efe8; /* 選択・予約セルの地 — モック --gs */
 

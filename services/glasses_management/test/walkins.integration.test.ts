@@ -626,8 +626,16 @@ describe('walk-in reception', () => {
     const conflict = responses.find((response) => response.status === 409)
     expect(conflict).toBeDefined()
     await expect(conflict?.json()).resolves.toEqual({
+      // EX-CONFLICT: 版番号だけでは操作者が判断できないため、409 は最新の内容と
+      // 更新者・更新時刻まで返す（更新者名は「店舗名 操作者」）。
       error: 'version_conflict',
       currentVersion: walkin.version + 1,
+      latest: [
+        { label: '状態', value: 'お待ち' },
+        { label: 'お客様', value: '顧客と関連付け済み' },
+      ],
+      updatedBy: expect.stringMatching(/^ウォークイン店舗 /),
+      updatedAt: '2026-08-31T00:00:00.000Z',
     })
     const customers = await env.DB.prepare(
       'SELECT phone_normalized FROM customers WHERE organization_id = ? AND phone_normalized IN (?, ?)',

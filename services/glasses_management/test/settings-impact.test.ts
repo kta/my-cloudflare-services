@@ -50,6 +50,8 @@ function settings(overrides: Record<string, unknown> = {}) {
       },
     ],
     maintenance: [],
+    // 希望時刻の読み上げ件数。契約の既定（6 件）をそのまま使う。
+    desiredTimeCandidateCount: 6,
     ...overrides,
   }
 }

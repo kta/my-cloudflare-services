@@ -307,8 +307,16 @@ describe('shared-terminal daily-route scope exceptions', () => {
     )
     expect(stale.status).toBe(409)
     await expect(stale.json()).resolves.toEqual({
+      // EX-CONFLICT: 版番号だけでは操作者が判断できないため、409 は最新の内容と
+      // 更新者・更新時刻まで返す（更新者名は「店舗名 操作者」）。
       error: 'version_conflict',
       currentVersion: walkin.version,
+      latest: [
+        { label: '状態', value: 'お待ち' },
+        { label: 'お客様', value: '顧客未登録' },
+      ],
+      updatedBy: '例外系店舗 例外系受付iPad',
+      updatedAt: '2026-08-31T00:00:00.000Z',
     })
   })
 })

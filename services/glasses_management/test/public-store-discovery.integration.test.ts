@@ -388,6 +388,8 @@ describe('public store detail', () => {
       region: '東京都中央区',
       nearestStation: '銀座駅',
       businessHours: [{ dayOfWeek: 1, periods: [{ startTime: '10:00', endTime: '19:00' }] }],
+      // 2026-08-31（JST）は月曜。詳細も一覧と同じ「本日営業」を名乗る。
+      todayBusinessHours: '10:00\u201319:00',
       purposes: [{ id: publishedPurposeId, label: '新しいメガネを作る', durationMinutes: 60 }],
       services: [],
     })
