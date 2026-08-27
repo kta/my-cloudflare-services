@@ -703,7 +703,11 @@ test('keeps staff screens operable by keyboard, at 200% text, with 44px targets 
   expect(overflow.scrollWidth).toBeLessThanOrEqual(overflow.clientWidth + 1)
 })
 
-// @e2e-covers AC-EYEX-124
+/*
+ * AC-EYEX-124 の追跡は 200% 拡大を直接確かめている上の 1 本が担う。ここは
+ * 等倍の横向きでも脇の列が潰れないことを別途押さえる補助で、追跡の分母には
+ * 数えない（1 つの AC に 2 本を対応させない）。
+ */
 test('横向きiPadの予約入力で、入力列も脇の情報列も読める幅を保つ', async ({ page }) => {
   // 脇の列が縮むと「お客様を探す」が 1 文字ずつ縦に折り返り、顧客情報が
   // 事実上読めなくなる。文字が欠けないことは幅で確かめるしかない。
