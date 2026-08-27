@@ -18,6 +18,7 @@ describe('EYEX ledger contracts', () => {
         assignedStaffId: null,
         assignedEquipmentIds: [],
         nextGuidance: null,
+        purposeNames: ['視力測定・新調相談'],
         warnings: [
           {
             code: 'long_wait',
