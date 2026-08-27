@@ -10,7 +10,8 @@
 /** JST の today から days 日ぶんの日付キー（YYYY-MM-DD）を昇順で返す。 */
 export function upcomingJstDates(todayJst: string, days: number): string[] {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(todayJst)) throw new RangeError('invalid JST date key')
-  if (!Number.isSafeInteger(days) || days < 1) throw new RangeError('days must be a positive integer')
+  if (!Number.isSafeInteger(days) || days < 1)
+    throw new RangeError('days must be a positive integer')
   // JST 日付キーどうしの加算なので、UTC 正午ではなく 00:00Z 起点で日数だけ足す。
   // 日付キーは時刻を持たないため、この加算に夏時間も時差も入り込まない。
   const start = Date.parse(`${todayJst}T00:00:00.000Z`)

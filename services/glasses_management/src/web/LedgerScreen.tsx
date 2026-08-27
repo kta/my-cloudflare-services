@@ -207,9 +207,7 @@ export function LedgerScreen({ storeId, storeName, api, navigate, date, now }: L
   /** 未割当と ウォークイン は名簿の後ろ。空の未割当レーンは出さない。 */
   const unassignedLane = view === 'staff' ? UNASSIGNED_STAFF_LANE : UNASSIGNED_EQUIPMENT_LANE
   const orderedLanes = [
-    ...[...lanes.entries()].filter(
-      ([lane]) => lane !== unassignedLane && lane !== WALKIN_LANE,
-    ),
+    ...[...lanes.entries()].filter(([lane]) => lane !== unassignedLane && lane !== WALKIN_LANE),
     ...[...lanes.entries()].filter(
       ([lane, placed]) => lane === unassignedLane && placed.length > 0,
     ),
@@ -248,9 +246,7 @@ export function LedgerScreen({ storeId, storeName, api, navigate, date, now }: L
            * 1 日が収まらなくなる。それらは選択したときの右パネルが受け持つ。
            */}
           {!walkin && (
-            <span>
-              {[...entry.purposeNames, SOURCE_LABELS[entry.source]].join(' · ')}
-            </span>
+            <span>{[...entry.purposeNames, SOURCE_LABELS[entry.source]].join(' · ')}</span>
           )}
           {entry.customerId === null && walkin && <span>顧客未登録</span>}
         </button>
@@ -338,10 +334,10 @@ export function LedgerScreen({ storeId, storeName, api, navigate, date, now }: L
                 <thead className="contents">
                   <tr className="contents">
                     {/*
-                      * モックの見出しセルは「担当者」の一語だけである。設備軸へ
-                      * 切り替える口をツールバーとして 1 段足すのではなく、この
-                      * セル自身を切り替えボタンにして段を増やさない。
-                      */}
+                     * モックの見出しセルは「担当者」の一語だけである。設備軸へ
+                     * 切り替える口をツールバーとして 1 段足すのではなく、この
+                     * セル自身を切り替えボタンにして段を増やさない。
+                     */}
                     <th
                       scope="col"
                       className="sticky left-0 z-20 min-h-10 border-line border-r border-b bg-grid-head p-2 text-left font-bold font-sans"
@@ -349,7 +345,9 @@ export function LedgerScreen({ storeId, storeName, api, navigate, date, now }: L
                       <button
                         type="button"
                         aria-label={
-                          view === 'staff' ? '担当者で見る（設備に切り替え）' : '設備で見る（担当者に切り替え）'
+                          view === 'staff'
+                            ? '担当者で見る（設備に切り替え）'
+                            : '設備で見る（担当者に切り替え）'
                         }
                         aria-pressed={view === 'staff'}
                         onClick={() => setView(view === 'staff' ? 'equipment' : 'staff')}

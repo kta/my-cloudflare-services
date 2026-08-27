@@ -57,7 +57,10 @@ function compare(id: string, actual: Buffer) {
   const reference = PNG.sync.read(readFileSync(`${REF}/ref--${id}.png`))
   const mine = PNG.sync.read(actual)
   if (reference.width !== mine.width || reference.height !== mine.height)
-    return { ratio: 1, note: `寸法が違う ref=${reference.width}x${reference.height} impl=${mine.width}x${mine.height}` }
+    return {
+      ratio: 1,
+      note: `寸法が違う ref=${reference.width}x${reference.height} impl=${mine.width}x${mine.height}`,
+    }
 
   const diff = new PNG({ width: reference.width, height: reference.height })
   let differing = 0

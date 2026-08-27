@@ -53,9 +53,7 @@ test('confirms discard before switching a staff workspace with unfinished input'
   fireEvent.click(screen.getByRole('button', { name: /銀座店/ }))
   fireEvent.click(screen.getByRole('button', { name: /^丸の内店/ }))
   expect(screen.getByRole('dialog')).toHaveTextContent('店舗を切り替える前に確認してください')
-  fireEvent.click(
-    screen.getByRole('button', { name: '入力を破棄して丸の内店へ切り替える' }),
-  )
+  fireEvent.click(screen.getByRole('button', { name: '入力を破棄して丸の内店へ切り替える' }))
   await waitFor(() => expect(screen.getByRole('button', { name: /丸の内店/ })).toBeInTheDocument())
 })
 
@@ -537,9 +535,7 @@ test('EX-SESSION-REVOKED: 誰が失効させたかと未送信データの扱い
   })
   const onReregisterTerminal = vi.fn()
   controller.handleApiError(401, { error: 'terminal_revoked' })
-  render(
-    <App sharedTerminalController={controller} onReregisterTerminal={onReregisterTerminal} />,
-  )
+  render(<App sharedTerminalController={controller} onReregisterTerminal={onReregisterTerminal} />)
 
   expect(screen.getByRole('banner')).toHaveTextContent('共有iPad')
   expect(screen.getByRole('heading', { name: 'この端末の利用は停止されています' })).toBeVisible()

@@ -313,7 +313,8 @@ export function spokenPhone(phone: string): string {
   const trimmed = phone.trim()
   if (!/^[0-9]+$/.test(trimmed)) return trimmed
   // 携帯・IP 電話は 3-4-4、市外局番 2 桁（03 / 06）は 2-4-4、それ以外は 3-3-4。
-  if (trimmed.length === 11) return `${trimmed.slice(0, 3)}-${trimmed.slice(3, 7)}-${trimmed.slice(7)}`
+  if (trimmed.length === 11)
+    return `${trimmed.slice(0, 3)}-${trimmed.slice(3, 7)}-${trimmed.slice(7)}`
   if (trimmed.length === 10) {
     const head = /^0[36]/.test(trimmed) ? 2 : 3
     return `${trimmed.slice(0, head)}-${trimmed.slice(head, 6)}-${trimmed.slice(6)}`

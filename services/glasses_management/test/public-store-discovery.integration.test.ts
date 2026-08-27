@@ -420,7 +420,11 @@ describe('public store detail', () => {
     // 公開していない目的まで説明に出るか、説明が予約導線に化ける。
     const scope = await syncStore()
     const purposeId = uuid()
-    await addVisitPurpose(scope, { id: purposeId, label: 'メガネを新しく作りたい', durationMinutes: 60 })
+    await addVisitPurpose(scope, {
+      id: purposeId,
+      label: 'メガネを新しく作りたい',
+      durationMinutes: 60,
+    })
     const slug = await publish(scope, {
       publicPurposeIds: [purposeId],
       publicServicesJson: JSON.stringify([
@@ -609,7 +613,6 @@ describe('public availability by slug', () => {
     await expect(response.json()).resolves.toEqual({ error: 'invalid_public_purpose_selection' })
   })
 })
-
 
 describe('public offers by slug', () => {
   it('offers a shortlist without asking the customer for a date first', async () => {

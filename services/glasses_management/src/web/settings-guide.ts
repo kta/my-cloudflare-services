@@ -246,7 +246,10 @@ export type BusinessHoursSummary = {
  * `月 / 水–土` という誰も口にしない表現になる（承認済みモックが根拠）。
  */
 export function summariseBusinessHours(
-  businessHours: readonly { dayOfWeek: number; periods: readonly { startTime: string; endTime: string }[] }[],
+  businessHours: readonly {
+    dayOfWeek: number
+    periods: readonly { startTime: string; endTime: string }[]
+  }[],
 ): BusinessHoursSummary {
   const rangeOf = (day: number): string | undefined => {
     const period = businessHours.find((entry) => entry.dayOfWeek === day)?.periods[0]

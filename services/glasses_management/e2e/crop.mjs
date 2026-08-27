@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { PNG } from 'pngjs'
+
 const [src, out, x, y, w, h, scale = '3'] = process.argv.slice(2)
 const src2 = PNG.sync.read(readFileSync(src))
 const S = Number(scale)

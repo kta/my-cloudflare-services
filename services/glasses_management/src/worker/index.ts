@@ -67,10 +67,10 @@ import {
   OrganizationSync,
   PinVerificationResponse,
   PublicAvailabilityResponse,
-  PublicOffersQuery,
-  PublicOffersResponse,
   PublicBookingCreate,
   PublicBookingResult,
+  PublicOffersQuery,
+  PublicOffersResponse,
   PublicReservationCancel,
   PublicReservationChange,
   PublicReservationChangeResult,
@@ -533,13 +533,7 @@ async function listPublicStores(
   )
   return PublicStoreSummary.array().parse(
     ordered.map(
-      ({
-        latitude: _latitude,
-        longitude: _longitude,
-        organizationId,
-        storeId,
-        ...store
-      }) => ({
+      ({ latitude: _latitude, longitude: _longitude, organizationId, storeId, ...store }) => ({
         ...store,
         todayBusinessHours: todayHours.get(`${organizationId}:${storeId}`) ?? null,
       }),
@@ -693,9 +687,7 @@ async function readPublicStore(c: AppContext, slug: string) {
           parseJson(store.publicPurposesJson, 'public purpose snapshot'),
         )
   const parsedServices =
-    store.publicServicesJson === null
-      ? []
-      : parseJson(store.publicServicesJson, 'public services')
+    store.publicServicesJson === null ? [] : parseJson(store.publicServicesJson, 'public services')
   if (!Array.isArray(parsedServices) || !parsedServices.every((s) => typeof s === 'string')) {
     throw new Error('invalid public services')
   }
@@ -4738,10 +4730,7 @@ async function purposeNameLookup(c: AppContext, storeId: string): Promise<Map<st
     .select({ id: visitPurposes.id, name: visitPurposes.staffName })
     .from(visitPurposes)
     .where(
-      and(
-        eq(visitPurposes.organizationId, c.get('auth').org),
-        eq(visitPurposes.storeId, storeId),
-      ),
+      and(eq(visitPurposes.organizationId, c.get('auth').org), eq(visitPurposes.storeId, storeId)),
     )
   return new Map(rows.map((row) => [row.id, row.name]))
 }
@@ -5241,9 +5230,7 @@ async function versionConflictBody(
     await db
       .select({ name: stores.name })
       .from(stores)
-      .where(
-        and(eq(stores.organizationId, c.get('auth').org), eq(stores.id, input.storeId)),
-      )
+      .where(and(eq(stores.organizationId, c.get('auth').org), eq(stores.id, input.storeId)))
   )[0]
   let actorName: string | undefined
   if (event?.actorType === 'shared_terminal') {
@@ -5343,7 +5330,9 @@ async function reservationConflict(
         {
           label: '店内工程',
           value:
-            row.progress === null ? '未着手' : (CONFLICT_PROGRESS_LABELS[row.progress] ?? row.progress),
+            row.progress === null
+              ? '未着手'
+              : (CONFLICT_PROGRESS_LABELS[row.progress] ?? row.progress),
         },
         { label: '担当者', value: staffName ?? '担当者未定' },
         { label: '次のご案内', value: row.nextGuidance ?? 'なし' },
