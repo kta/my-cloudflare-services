@@ -21,8 +21,8 @@
 - Web予約完全フローHTML: [`web-booking-complete-approved.html`](./web-booking-complete-approved.html)
 - 管理・運用画面HTML: [`operations-approved.html`](./operations-approved.html)
 - 例外・回復状態HTML: [`exception-states-approved.html`](./exception-states-approved.html)
-- 画面・状態・UC/AC台帳: [`../../../../specs/glasses_reservation/features/002-eyex-reservation-product/design/SCREEN_INVENTORY.md`](../../../../specs/glasses_reservation/features/002-eyex-reservation-product/design/SCREEN_INVENTORY.md)
-- 要件: [`../../../../specs/glasses_reservation/features/002-eyex-reservation-product/design/EYEX_RESERVATION_DESIGN.md`](../../../../specs/glasses_reservation/features/002-eyex-reservation-product/design/EYEX_RESERVATION_DESIGN.md)
+- 画面・状態・UC/AC台帳: [`../../../../specs/glasses_management/features/002-eyex-reservation-product/design/SCREEN_INVENTORY.md`](../../../../specs/glasses_management/features/002-eyex-reservation-product/design/SCREEN_INVENTORY.md)
+- 要件: [`../../../../specs/glasses_management/features/002-eyex-reservation-product/design/EYEX_RESERVATION_DESIGN.md`](../../../../specs/glasses_management/features/002-eyex-reservation-product/design/EYEX_RESERVATION_DESIGN.md)
 
 ## 正とするもの
 

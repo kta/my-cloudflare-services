@@ -90,7 +90,7 @@ const orgs = [
 const lines = [
   ...orgs.map(
     (o) =>
-      `INSERT OR IGNORE INTO organizations (id, name, plan, is_disabled, is_operator, created_at) VALUES (${q(o.id)}, ${q(o.name)}, ${q(o.plan)}, '0', ${q(o.operator)}, ${q(NOW)});`,
+      `INSERT OR IGNORE INTO organizations (id, name, plan, is_disabled, is_operator, sync_revision, created_at) VALUES (${q(o.id)}, ${q(o.name)}, ${q(o.plan)}, '0', ${q(o.operator)}, 1, ${q(NOW)});`,
   ),
   `INSERT OR IGNORE INTO users (id, organization_id, email, password_hash, role, created_at) VALUES ('user-admin-seed', 'org-admin-seed', ${q(ADMIN_EMAIL)}, ${q(passwordHash)}, 'admin', ${q(NOW)});`,
 ]

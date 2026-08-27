@@ -106,6 +106,11 @@ const MANAGEMENT_ROUTES = [
   },
   { name: 'DELETE /api/organizations/:id', method: 'DELETE', path: '/api/organizations/unknown' },
   {
+    name: 'POST /api/organizations/:id/sync',
+    method: 'POST',
+    path: '/api/organizations/unknown/sync',
+  },
+  {
     name: 'POST /api/organizations/:id/invitations',
     method: 'POST',
     path: '/api/organizations/unknown/invitations',

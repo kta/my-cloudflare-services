@@ -1,0 +1,56 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "glasses-management",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-06-25",
+  "observability": { "enabled": true },
+  // One Worker serves both the SPA (static assets) and the API. Only /api/*
+  // reaches the Worker script; every other path is served as an asset (with
+  // SPA fallback to index.html). `directory` is intentionally absent: the
+  // Cloudflare Vite plugin points it at the client build output.
+  "assets": {
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  // One D1 database per domain. Replace database_id with the real UUID from
+  // `wrangler d1 create glasses_management` (Terraform output) before deploying
+  // remotely — local dev/tests ignore it. Domain migrations are introduced with
+  // the first persisted feature.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "glasses_management",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  // Recordings stay private in R2. The binding is provisioned by Terraform in
+  // a later foundation task; the bucket name is intentionally explicit here.
+  "r2_buckets": [
+    {
+      "binding": "RECORDINGS",
+      "bucket_name": "glasses-management-recordings"
+    }
+  ],
+  // Short-lived state (for example, future reservation flows) belongs in this
+  // service-local KV namespace. Replace the placeholder ID before deployment.
+  "kv_namespaces": [
+    {
+      "binding": "SHORT_LIVED",
+      "id": "00000000000000000000000000000000"
+    }
+  ],
+  // Customer-facing and company-issued reservation email is sent through the
+  // internal notifier Worker. The binding is intentionally separate from the
+  // domain D1 so a delivery failure never rolls back a reservation.
+  "services": [
+    {
+      "binding": "NOTIFIER",
+      "service": "notifier"
+    },
+    {
+      "binding": "ADMIN",
+      "service": "admin"
+    }
+  ]
+}

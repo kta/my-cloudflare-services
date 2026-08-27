@@ -12,7 +12,7 @@ Zod を単一ソースに、ドメインごと `src/<service>.ts`。バックは
 
 ## 通知（`services/notifier` — Queue なし・無料枠）
 - 呼び出し側（各サービス）→ `sendNotification`（@app/shared）で notifier の `POST /api/internal/send` に **service binding 同期 POST**（best-effort）。
-- notifier: KV `DEDUPE` で冪等（`job.id`、TTL 24h）+ Resend idempotency-key。送信は pluggable（Log / Resend）。
+- notifier: KV `DEDUPE` で冪等（`job.id` と検証済み payload の SHA-256、TTL 24h）+ Resend idempotency-key。同じ `job.id` で payload が変わった場合は 409 `idempotency_conflict` として送信しない。送信は Resend のみで、`RESEND_API_KEY` または `MAIL_FROM` が未設定なら fail close（502）。
 - DLQ の代替は UI フォールバック / 再検知 Cron（`docs/howto/notifications.md`）。Cron（UTC）。
 
 ## 解析（`packages/shared/src/analytics.ts`）

@@ -5,29 +5,34 @@ import {
   IssueTokenRequest,
   LoginRequest,
   Organization,
+  PinVerificationRequest,
   Plan,
+  RefreshRequest,
 } from '@app/contracts'
 import {
   type AuthVariables,
   generateRefreshToken,
   hashToken,
   internalAuth,
+  internalAuthFor,
   REFRESH_TTL_SECONDS,
   requireRole,
   signAccessToken,
   tenantAuth,
 } from '@app/shared'
-import type { D1Database, KVNamespace } from '@cloudflare/workers-types'
+import type { D1Database, Fetcher, KVNamespace } from '@cloudflare/workers-types'
 import { zValidator } from '@hono/zod-validator'
-import { desc, eq } from 'drizzle-orm'
+import { desc, eq, type SQL, sql } from 'drizzle-orm'
 import { drizzle } from 'drizzle-orm/d1'
-import { Hono, type MiddlewareHandler } from 'hono'
+import { type Context, Hono, type MiddlewareHandler } from 'hono'
 import { except } from 'hono/combine'
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie'
 import { HTTPException } from 'hono/http-exception'
 import { z } from 'zod'
 import { type AuthDeps, acceptInvite, login, refresh, revokeOne } from './auth/service'
 import { invitations, organizations, users } from './db/schema'
+import { proxyLogin, proxyRefresh, proxyVerifyPin } from './domain-auth'
+import { syncOrganization } from './sync'
 
 // The admin SPA is served by this same Worker (same origin) — no CORS.
 export type Bindings = {
@@ -37,9 +42,16 @@ export type Bindings = {
   JWT_SECRET: string
   AUTH_PEPPER: string
   AUTH_DEV_GRANT?: string
+  // Domain service binding. The binding is the only route to the domain
+  // Worker; its internal API still requires the shared INTERNAL_KEY.
+  GLASSES_MANAGEMENT: Fetcher
   // 招待リンクの基底 URL の明示オーバーライド(プロキシ/カスタムドメイン用)。
   // 未設定ならリクエストの origin から導出する(/invite はこの SPA 自身が配信)。
   INVITE_BASE_URL?: string
+  // Secret used by all service-binding internal endpoints. Missing key is a
+  // fail-closed configuration error (see internalAuth()).
+  INTERNAL_KEY: string
+  DOMAIN_AUTH_KEY: string
 }
 
 const REFRESH_COOKIE = 'rt'
@@ -90,6 +102,35 @@ function toOrganization(r: {
   })
 }
 
+type AdminContext = Context<{ Bindings: Bindings; Variables: AuthVariables }>
+
+/**
+ * Propagate the canonical snapshot after the admin D1 write. The source of
+ * truth is intentionally retained when the domain is unavailable; callers get
+ * a retryable 502 instead of a false success or a rolled-back admin record.
+ */
+async function syncOrganizationOrError(
+  c: AdminContext,
+  organization: Organization,
+  revision: number,
+): Promise<Response | null> {
+  const outcome = await syncOrganization(
+    c.env.GLASSES_MANAGEMENT,
+    c.env.INTERNAL_KEY,
+    organization,
+    revision,
+  )
+  if (outcome.ok) return null
+  return c.json(
+    {
+      error: 'organization_sync_failed' as const,
+      organizationId: organization.id,
+      retryable: outcome.retryable,
+    },
+    502,
+  )
+}
+
 /**
  * 運営者(オペレーター)ゲート。この管理コンソールはプラットフォーム運営者の
  * ツールであり、招待で作られた**テナント**の admin には触らせない(触らせると
@@ -114,7 +155,19 @@ function requireOperator(): MiddlewareHandler<{
 }
 
 // Internal endpoints: shared-key guarded (other Workers → service binding).
-app.use('/api/internal/*', internalAuth())
+app.use('/api/internal/*', async (c, next) => {
+  if (c.req.path.startsWith('/api/internal/domain-auth/pin/')) return next()
+  return (
+    internalAuth() as unknown as MiddlewareHandler<{ Bindings: Bindings; Variables: AuthVariables }>
+  )(c, next)
+})
+app.use(
+  '/api/internal/domain-auth/pin/*',
+  internalAuthFor('DOMAIN_AUTH_KEY') as unknown as MiddlewareHandler<{
+    Bindings: Bindings
+    Variables: AuthVariables
+  }>,
+)
 
 // Default-deny: EVERY /api/* route requires an operator-org admin JWT unless
 // explicitly exempted (health / auth are public; internal has its own key
@@ -132,11 +185,23 @@ app.use(
 const routes = app
   .get('/api/health', (c) => c.json({ status: 'ok' as const }))
 
+  // ---- Internal domain authentication proxy ----
+  // The internal-key middleware above is the sole guard. These handlers return
+  // the opaque refresh token to the calling domain Worker; no cookie is set on
+  // this Worker because the browser is connected to the domain origin.
+  .post('/api/internal/domain-auth/login', zValidator('json', LoginRequest), async (c) =>
+    proxyLogin(c, c.req.valid('json')),
+  )
+  .post('/api/internal/domain-auth/refresh', zValidator('json', RefreshRequest), async (c) =>
+    proxyRefresh(c, c.req.valid('json')),
+  )
+  .post(
+    '/api/internal/domain-auth/pin/verify',
+    zValidator('json', PinVerificationRequest),
+    async (c) => proxyVerifyPin(c, c.req.valid('json')),
+  )
+
   // ---- Public auth API (admin SPA, same origin) ----
-  // NOTE: このテンプレには「ドメイン Worker が admin へ認証をプロキシする」
-  // internal auth API は置いていない(呼び出し元が無いコードは腐る)。その構成に
-  // する fork は、この public ルート群と同じ auth/service.ts の関数を
-  // /api/internal/auth/* として薄く公開すればよい(cookie 化を境界側で行う)。
   .post('/api/auth/login', zValidator('json', LoginRequest), async (c) => {
     const out = await login(authDeps(c), { ...c.req.valid('json'), ip: clientIp(c) })
     if (!out.ok) {
@@ -191,6 +256,7 @@ const routes = app
         plan: 'free',
         isDisabled: '0',
         isOperator: '1',
+        syncRevision: 1,
         createdAt: new Date().toISOString(),
       })
       .onConflictDoNothing({ target: organizations.id })
@@ -219,10 +285,14 @@ const routes = app
         plan: input.plan ?? 'free',
         isDisabled: '0',
         isOperator: '0',
+        syncRevision: 1,
         createdAt: new Date().toISOString(),
       }
       await db.insert(organizations).values(org)
-      return c.json(toOrganization(org), 201)
+      const organization = toOrganization(org)
+      const syncFailure = await syncOrganizationOrError(c, organization, org.syncRevision)
+      if (syncFailure) return syncFailure
+      return c.json(organization, 201)
     },
   )
   .patch(
@@ -236,13 +306,14 @@ const routes = app
       const id = c.req.param('id')
       const patch = c.req.valid('json')
       // 1 クエリで更新 + 更新後行の取得(SELECT→UPDATE の 2 往復と読み書き競合を防ぐ)。
-      const set: Record<string, string> = {}
+      const set: Record<string, string | SQL> = {}
       if (patch.plan !== undefined) set.plan = patch.plan
       if (patch.isDisabled !== undefined) set.isDisabled = patch.isDisabled ? '1' : '0'
       if (Object.keys(set).length === 0) {
         const rows = await db.select().from(organizations).where(eq(organizations.id, id))
         return rows[0] ? c.json(toOrganization(rows[0])) : c.json({ error: 'not_found' }, 404)
       }
+      set.syncRevision = sql`${organizations.syncRevision} + 1`
       const updated = await db
         .update(organizations)
         .set(set)
@@ -250,7 +321,10 @@ const routes = app
         .returning()
       const row = updated[0]
       if (!row) return c.json({ error: 'not_found' }, 404)
-      return c.json(toOrganization(row))
+      const organization = toOrganization(row)
+      const syncFailure = await syncOrganizationOrError(c, organization, row.syncRevision)
+      if (syncFailure) return syncFailure
+      return c.json(organization)
     },
   )
   // Delete an organization: disable it while keeping the canonical row as an audit trail.
@@ -259,12 +333,29 @@ const routes = app
     const id = c.req.param('id')
     const updated = await db
       .update(organizations)
-      .set({ isDisabled: '1' })
+      .set({ isDisabled: '1', syncRevision: sql`${organizations.syncRevision} + 1` })
       .where(eq(organizations.id, id))
       .returning()
     const row = updated[0]
     if (!row) return c.json({ error: 'not_found' }, 404)
+    const organization = toOrganization(row)
+    const syncFailure = await syncOrganizationOrError(c, organization, row.syncRevision)
+    if (syncFailure) return syncFailure
     return c.json({ id, isDisabled: true as const })
+  })
+  // Explicit recovery path for a downstream sync outage. This only reads the
+  // canonical row and retries the exact same snapshot; it never creates a new
+  // revision or lets a tenant admin choose another organization's payload.
+  .post('/api/organizations/:id/sync', async (c) => {
+    const db = drizzle(c.env.DB)
+    const id = c.req.param('id')
+    const rows = await db.select().from(organizations).where(eq(organizations.id, id))
+    const row = rows[0]
+    if (!row) return c.json({ error: 'not_found' }, 404)
+    const organization = toOrganization(row)
+    const syncFailure = await syncOrganizationOrError(c, organization, row.syncRevision)
+    if (syncFailure) return syncFailure
+    return c.json({ ...organization, revision: row.syncRevision }, 200)
   })
   // Invite a user (staff by default) to an org and return a manual-share link.
   .post(

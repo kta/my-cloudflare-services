@@ -28,16 +28,22 @@ dev/example_service:
 dev/admin:
 	 pnpm --filter @app/admin dev
 
-## dev/glasses_reservation: run glasses reservation mock SPA (:5175)
-dev/glasses_reservation:
-	pnpm --filter @app/glasses_reservation dev
+## dev/glasses_management: run glasses_management — SPA + API in one dev server (:5175)
+dev/glasses_management:
+	pnpm --filter @app/glasses_management dev
 
-## dev/all: run admin (:5174) + example_service (:5173) together — service bindings resolve across dev servers
+## dev/notifier: run notifier internal notification Worker (:5176)
+dev/notifier:
+	pnpm --filter @app/notifier dev -- --port 5176
+
+## dev/all: run admin (:5174), example_service (:5173), glasses_management (:5175), and notifier (:5176) together
 dev/all:
-	@echo "starting admin (:5174) + example_service (:5173); Ctrl-C stops both"
+	@echo "starting admin (:5174) + example_service (:5173) + glasses_management (:5175) + notifier (:5176); Ctrl-C stops all"
 	@trap 'kill 0' EXIT; \
 		pnpm --filter @app/admin dev & \
 		pnpm --filter @app/example_service dev & \
+		pnpm --filter @app/glasses_management dev & \
+		pnpm --filter @app/notifier dev -- --port 5176 & \
 		wait
 
 ## db/generate: generate Drizzle migrations from schemas
@@ -90,6 +96,6 @@ worktree/rm:
 help:
 	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/## //' | awk -F': ' '{printf "  \033[36m%-26s\033[0m %s\n", $$1, $$2}'
 
-.PHONY: init dev/example_service dev/admin dev/glasses_reservation dev/all db/generate db/migrate/local db/migrate/remote db/seed/local \
+.PHONY: init dev/example_service dev/admin dev/glasses_management dev/notifier dev/all db/generate db/migrate/local db/migrate/remote db/seed/local \
 	build test typecheck lint check dev-vars deploy/admin \
 	worktree/new worktree/rm help

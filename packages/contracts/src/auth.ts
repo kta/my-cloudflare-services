@@ -71,6 +71,30 @@ export const RefreshResponse = z.strictObject({
 })
 export type RefreshResponse = z.infer<typeof RefreshResponse>
 
+/**
+ * Internal domain-auth proxy refresh request. The domain Worker receives the
+ * browser cookie and sends only the opaque token across the service binding;
+ * admin remains the sole refresh-token authority.
+ */
+export const RefreshRequest = z.strictObject({
+  refreshToken: z.string().min(1),
+})
+export type RefreshRequest = z.infer<typeof RefreshRequest>
+
+/** Internal admin verification request for a client-stretched personal PIN. */
+export const PinVerificationRequest = z.strictObject({
+  organizationId: z.string().min(1),
+  userId: z.string().min(1),
+  stretchedPin: z.string().min(1),
+})
+export type PinVerificationRequest = z.infer<typeof PinVerificationRequest>
+
+/** Credential material never leaves admin; callers receive only this outcome. */
+export const PinVerificationResponse = z.strictObject({
+  verified: z.boolean(),
+})
+export type PinVerificationResponse = z.infer<typeof PinVerificationResponse>
+
 // 招待発行(管理者操作)。org は URL(/api/organizations/:id/invitations)で指定
 // するため body には含めない。admin worker の zValidator がこれを直接使う。
 export const InviteRequest = z.strictObject({

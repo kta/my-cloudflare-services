@@ -24,6 +24,7 @@ topology and ownership boundary.
 |---|---|---|
 | [`services/admin`](./services/admin) | [`src/worker/index.ts`](./services/admin/src/worker/index.ts) | Operator SPA/API, organization source of truth, authentication, invitations, and organization reconciliation. |
 | [`services/example_service`](./services/example_service) | [`src/worker/index.ts`](./services/example_service/src/worker/index.ts) | Template domain Worker: same-origin SPA/API, tenant-scoped items, and received organization records. |
+| [`services/glasses_management`](./services/glasses_management) | [`src/worker/index.ts`](./services/glasses_management/src/worker/index.ts) | EYEX reservation domain Worker: same-origin SPA/API, dedicated D1, private recording R2, and short-lived KV state. |
 | [`services/notifier`](./services/notifier) | [`src/index.ts`](./services/notifier/src/index.ts) | Internal notification endpoint, KV deduplication, and Resend delivery. |
 | [`services/ops`](./services/ops) | [`src/index.ts`](./services/ops/src/index.ts) | Cron and Workflow entry points for D1 backup, freshness/capacity checks, and service health checks. |
 | [`packages/contracts`](./packages/contracts) | [`src/index.ts`](./packages/contracts/src/index.ts) | Zod API contracts shared by Workers and web clients. |
@@ -40,14 +41,15 @@ and required tests; the sibling `CLAUDE.md` is a symlink to that same source.
 
 | Service | Runtime bindings |
 |---|---|
-| `admin` | D1, `AUTH_RL` KV, `EXAMPLE_SERVICE`, `NOTIFIER`, Cron |
+| `admin` | D1, `AUTH_RL` KV, `GLASSES_MANAGEMENT`, `NOTIFIER`, Cron |
 | `example_service` | D1, `NOTIFIER` |
+| `glasses_management` | D1, `RECORDINGS` R2, `SHORT_LIVED` KV, `NOTIFIER` |
 | `notifier` | `DEDUPE` KV |
 | `ops` | `BACKUPS` R2, `BACKUP_WF`, `ADMIN`, `NOTIFIER`, Cron |
 
 All services consume `packages/contracts` and `packages/shared`; SPA services
-(`admin` and `example_service`) also consume `packages/ui`. These packages do
-not depend on services.
+(`admin`, `example_service`, and `glasses_management`) also consume
+`packages/ui`. These packages do not depend on services.
 
 ## Core flows
 

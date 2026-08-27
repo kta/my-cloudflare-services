@@ -7,15 +7,17 @@
 ```
 呼び出し側 Worker ──service binding──▶ notifier POST /api/internal/send
    (best-effort・失敗しても自処理は継続)      ├─ x-internal-key 検証(fail close)
-                                              ├─ KV DEDUPE: job.id 冪等(TTL 24h)
-                                              └─ Resend(idempotency-key=job.id)
-                                                  RESEND_API_KEY も MAIL_DEV_LOG も
+                                              ├─ KV DEDUPE: organizationId + job.id + payload hash 冪等(TTL 24h)
+                                              └─ Resend(tenant namespaced idempotency-key)
+                                                  RESEND_API_KEY または MAIL_FROM が
                                                   無ければ **fail close(502)**
 ```
 
-- **契約**: body は `NotificationJob`(`packages/contracts/src/notification.ts`)。`id` が冪等キー。
+- **契約**: body は `NotificationJob`(`packages/contracts/src/notification.ts`)。`organizationId` と`id`から生成するtenant namespaced keyが冪等キー。
 - **呼び出し側**は `c.env.NOTIFIER.fetch('http://notifier/api/internal/send', ...)` を try/catch で包み、失敗しても本処理を成功させる(best-effort)。
-- **応答**: `sent` / `duplicate`(既送信)/ 502 `send_failed`(Resend 非 2xx。呼び出し側がフォールバック)。
+- **応答**: `sent` / `duplicate`(同じ `organizationId`・job.id・payload)/ 409 `idempotency_conflict`(同じ組織・job.idだがpayloadが異なる) / 409 `idempotency_in_progress`(Resendが同一キーを処理中。**同じ組織・job.idで再試行**) / 502 `send_failed`(設定・KV・Resend の失敗。呼び出し側がフォールバック)。
+
+KVにはcompare-and-setがないため、並行したWorker要求をKVだけで排他しない。Resendの`POST /emails`のIdempotency-Key（24時間保持）を送信の一次排他とし、同一keyの同時要求は409 `idempotency_in_progress`として返す。したがって再試行・KV書込み遅延がメールを重複送信しないことは、Resendの24時間保証に依存する。KVは成功後の高速なduplicate応答とpayload相違の検出だけを担う。
 
 ## DLQ の代替 3 原則(at-least-once 保証を持たない設計の作法)
 
