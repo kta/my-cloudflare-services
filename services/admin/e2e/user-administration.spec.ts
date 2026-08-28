@@ -52,7 +52,7 @@ async function acceptInvite(page: Page, acceptUrl: string, email: string): Promi
   await page.waitForURL((url) => !url.pathname.startsWith('/invite'))
 }
 
-// @e2e-covers UC-EYEX-149
+// @e2e-covers UC-ADMIN-USERS-01
 test('本部管理者が利用者を検索し、権限差分を見て標準ロールと担当店舗を変更する', async ({
   page,
   request,
@@ -120,7 +120,7 @@ test('本部管理者が利用者を検索し、権限差分を見て標準ロ�
   expect(JSON.parse(entries[0]?.after ?? '{}')).toMatchObject({ standardRole: 'store_manager' })
 })
 
-// @e2e-covers UC-EYEX-151
+// @e2e-covers UC-ADMIN-USERS-02
 test('本人が個人PINを設定・変更し、管理者は本人確認後に再設定を開始できるがPINは見えない', async ({
   page,
   request,

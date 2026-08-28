@@ -1,16 +1,9 @@
 /*
- * theme.css が名乗る書体を自前で配る。承認済みモックは全画面 IBM Plex Sans JP
- * で組まれており、これが読み込まれていないと和文が system-ui に落ちて字面が
- * まるごと別物になる。ここで読むので、コンポーネントを使うアプリは何もしなくてよい。
- * 必要なウェイトだけを読む（400 本文 / 500 中間 / 600 見出し / 700 太字）。
+ * 共有 UI。承認済みモック `docs/frontend/mockups/eyex` は Apple HIG に従い
+ * iPadOS の既定書体（SF Pro JP / ヒラギノ）で組まれているので、書体は自前で配らない。
+ * 自己ホストの Web フォントを読むと、iPad では必ず system 書体が先に当たるため
+ * 15MB 分が丸ごと無駄になる。theme.css の `--font-sans` の予備は総称に任せる。
  */
-import '@fontsource/ibm-plex-mono/500.css'
-import '@fontsource/ibm-plex-mono/600.css'
-import '@fontsource/ibm-plex-sans-jp/400.css'
-import '@fontsource/ibm-plex-sans-jp/500.css'
-import '@fontsource/ibm-plex-sans-jp/600.css'
-import '@fontsource/ibm-plex-sans-jp/700.css'
-
 export { cn } from './cn'
 export {
   Button,
@@ -19,6 +12,7 @@ export {
   Chip,
   Field,
   focusRing,
+  focusRingOnPine,
   Notice,
   Select,
   Textarea,

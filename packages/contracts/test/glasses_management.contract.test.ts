@@ -1,205 +1,177 @@
+import { Actor, OrganizationSync, Store, StoreMembership, StorePermission } from '@app/contracts'
 import { describe, expect, it } from 'vitest'
-import {
-  Actor,
-  AvailabilityException,
-  AvailabilitySlotsQuery,
-  OrganizationSync,
-  PublicBookingCreate,
-  Store,
-  StoreMembership,
-  StorePatch,
-  StorePermission,
-  WebBookingPublication,
-} from '../src/index'
 
-const organizationId = '5f73d9dd-0e4f-4ac5-b6d9-1bd9e4d70c75'
-const canonicalOrganizationId = 'org-admin-seed'
-const storeId = '79a59f06-5bd1-4fb4-8574-14b7a79bd48b'
-const userId = 'c6a2a900-9c85-4f4d-b9d4-c9d8c55c20cb'
-const timestamp = '2026-08-26T00:00:00.000Z'
+const ORG = 'org-eyex'
+const UUID = '11111111-2222-4333-8444-555555555555'
+const UUID2 = '99999999-8888-4777-8666-555555555555'
+const NOW = '2026-08-27T02:08:00.000Z'
 
-describe('glasses_management contracts', () => {
-  it('parses an organization synchronization payload strictly', () => {
-    expect(
-      OrganizationSync.parse({
-        id: canonicalOrganizationId,
-        name: 'EYEX organization',
-        plan: 'contracted',
-        isDisabled: false,
-        createdAt: timestamp,
-        revision: 1,
-      }),
-    ).toMatchObject({
-      id: canonicalOrganizationId,
+describe('OrganizationSync', () => {
+  it('accepts a canonical snapshot from admin', () => {
+    const parsed = OrganizationSync.parse({
+      id: ORG,
+      name: 'EYEX',
       plan: 'contracted',
       isDisabled: false,
-      revision: 1,
+      createdAt: NOW,
+      revision: 7,
     })
-    expect(
-      OrganizationSync.safeParse({
-        id: canonicalOrganizationId,
-        name: 'EYEX organization',
-        plan: 'free',
-        isDisabled: false,
-        createdAt: timestamp,
-        revision: 1,
-        organizationId: 'spoofed',
-      }).success,
-    ).toBe(false)
+    expect(parsed.revision).toBe(7)
   })
 
-  it('accepts canonical non-UUID organization ids while keeping revision monotonic', () => {
+  it('defaults revision to 0 so a pre-revision snapshot still applies', () => {
     expect(
-      OrganizationSync.safeParse({
-        id: 'org-sample-free-seed',
-        name: 'Sample Org',
+      OrganizationSync.parse({
+        id: ORG,
+        name: 'EYEX',
         plan: 'free',
         isDisabled: false,
-        createdAt: timestamp,
-        revision: 7,
-      }).success,
-    ).toBe(true)
-    expect(
-      Actor.safeParse({
-        subjectId: userId,
-        organizationId: 'org-sample-free-seed',
-        role: 'staff',
-        permissions: ['store.read'],
-      }).success,
-    ).toBe(true)
-    expect(
-      OrganizationSync.safeParse({
-        id: 'org-sample-free-seed',
-        name: 'Sample Org',
+        createdAt: NOW,
+      }).revision,
+    ).toBe(0)
+  })
+
+  it('rejects a negative or fractional revision', () => {
+    for (const revision of [-1, 1.5]) {
+      expect(() =>
+        OrganizationSync.parse({
+          id: ORG,
+          name: 'EYEX',
+          plan: 'free',
+          isDisabled: false,
+          createdAt: NOW,
+          revision,
+        }),
+      ).toThrow()
+    }
+  })
+
+  it('rejects an unknown key so a stale admin field never lands silently', () => {
+    expect(() =>
+      OrganizationSync.parse({
+        id: ORG,
+        name: 'EYEX',
         plan: 'free',
         isDisabled: false,
-        createdAt: timestamp,
+        createdAt: NOW,
         revision: 0,
-      }).success,
-    ).toBe(true)
-  })
-
-  it('parses a store and rejects an invalid slug', () => {
-    expect(
-      Store.parse({
-        id: storeId,
-        organizationId,
-        name: '銀座店',
-        slug: 'ginza',
-        isActive: true,
-        createdAt: timestamp,
-      }).slug,
-    ).toBe('ginza')
-    expect(
-      Store.safeParse({
-        id: storeId,
-        organizationId,
-        name: '銀座店',
-        slug: 'Ginza Store',
-        isActive: true,
-        createdAt: timestamp,
-      }).success,
-    ).toBe(false)
-    expect(
-      Store.parse({
-        id: storeId,
-        organizationId: canonicalOrganizationId,
-        name: '銀座店',
-        slug: 'ginza',
-        isActive: true,
-        createdAt: timestamp,
-      }).organizationId,
-    ).toBe(canonicalOrganizationId)
-  })
-
-  it('keeps membership permissions as a typed allow-list', () => {
-    const membership = StoreMembership.parse({
-      id: '955fcb60-67f7-4f6e-9ce5-5ad136ec4e38',
-      organizationId,
-      storeId,
-      userId,
-      permissions: ['store.read', 'store.manage'],
-      createdAt: timestamp,
-    })
-    expect(membership.permissions).toEqual(['store.read', 'store.manage'])
-    expect(StorePermission.safeParse('root.all').success).toBe(false)
-  })
-
-  it('describes the authenticated actor without accepting organization spoofing', () => {
-    expect(
-      Actor.parse({
-        subjectId: userId,
-        organizationId,
-        role: 'staff',
-        permissions: ['store.read'],
+        legacyFlag: true,
       }),
-    ).toMatchObject({ subjectId: userId, organizationId, role: 'staff' })
+    ).toThrow()
   })
 
-  it('requires at least one field in a store patch', () => {
-    expect(StorePatch.safeParse({ name: '新しい店名' }).success).toBe(true)
-    expect(StorePatch.safeParse({}).success).toBe(false)
-    expect(StorePatch.safeParse({ name: '', organizationId: 'spoofed' }).success).toBe(false)
+  it('rejects an empty id and a non-datetime createdAt', () => {
+    expect(() =>
+      OrganizationSync.parse({
+        id: '  ',
+        name: 'EYEX',
+        plan: 'free',
+        isDisabled: false,
+        createdAt: NOW,
+      }),
+    ).toThrow()
+    expect(() =>
+      OrganizationSync.parse({
+        id: ORG,
+        name: 'EYEX',
+        plan: 'free',
+        isDisabled: false,
+        createdAt: '2026-08-27',
+      }),
+    ).toThrow()
+  })
+})
+
+describe('StorePermission', () => {
+  it('is an allow-list: an unknown permission fails closed', () => {
+    expect(() => StorePermission.parse('reservation.delete')).toThrow()
   })
 
-  it('requires a period only for an exceptional opening', () => {
+  it('keeps the separation that lets a viewer stay a viewer', () => {
+    for (const permission of ['attention.read', 'attention.publish', 'analytics.read']) {
+      expect(StorePermission.parse(permission)).toBe(permission)
+    }
+  })
+})
+
+describe('StoreMembership', () => {
+  const base = {
+    id: UUID,
+    organizationId: ORG,
+    storeId: UUID2,
+    userId: 'user-1',
+    permissions: ['store.read', 'reservation.read'],
+    createdAt: NOW,
+  }
+
+  it('accepts a membership carrying allow-listed permissions', () => {
+    expect(StoreMembership.parse(base).permissions).toEqual(['store.read', 'reservation.read'])
+  })
+
+  it('accepts an empty permission list — that is how admin revokes an assignment', () => {
+    expect(StoreMembership.parse({ ...base, permissions: [] }).permissions).toEqual([])
+  })
+
+  it('rejects an unknown permission inside the list', () => {
+    expect(() =>
+      StoreMembership.parse({ ...base, permissions: ['store.read', 'store.destroy'] }),
+    ).toThrow()
+  })
+
+  it('requires UUIDs for domain-owned ids but not for the admin organization id', () => {
+    expect(() => StoreMembership.parse({ ...base, storeId: 'store-1' })).toThrow()
     expect(
-      AvailabilityException.safeParse({ date: '2026-12-31', mode: 'open', periods: [] }).success,
-    ).toBe(false)
-    expect(
-      AvailabilityException.safeParse({ date: '2026-12-31', mode: 'closed', periods: [] }).success,
-    ).toBe(true)
+      StoreMembership.parse({ ...base, organizationId: 'org-admin-seed' }).organizationId,
+    ).toBe('org-admin-seed')
+  })
+})
+
+describe('Store', () => {
+  const base = {
+    id: UUID,
+    organizationId: ORG,
+    name: 'EYEX 銀座店',
+    slug: 'ginza',
+    isActive: true,
+    createdAt: NOW,
+  }
+
+  it('fills the optional contact fields with empty strings', () => {
+    const parsed = Store.parse(base)
+    expect([parsed.phone, parsed.address, parsed.accessNote]).toEqual(['', '', ''])
   })
 
-  it('accepts only UTC-normalized publication windows and a fixed public-purpose snapshot', () => {
-    const publication = WebBookingPublication.parse({
-      id: storeId,
-      organizationId: canonicalOrganizationId,
-      storeId,
-      publicSlug: 'eyex-ginza',
-      status: 'published',
-      startsAt: timestamp,
-      endsAt: '2026-08-27T00:00:00.000Z',
-      contactPhone: '03-0000-0000',
-      accessText: '銀座駅',
-      notice: '',
-      region: '東京都中央区',
-      nearestStation: '銀座駅',
-      latitude: 35.6717,
-      longitude: 139.765,
-      publicPurposeIds: ['af1d3c4c-913c-43e9-a2f6-78a111d2d947'],
-      version: 1,
-      publishedAt: timestamp,
-      updatedAt: timestamp,
+  it('accepts a hyphenated lowercase slug and rejects anything else', () => {
+    expect(Store.parse({ ...base, slug: 'ginza-main' }).slug).toBe('ginza-main')
+    for (const slug of ['Ginza', 'ginza_main', '-ginza', 'ginza-', 'ぎんざ', '']) {
+      expect(() => Store.parse({ ...base, slug })).toThrow()
+    }
+  })
+
+  it('trims and bounds the display name', () => {
+    expect(Store.parse({ ...base, name: '  EYEX 銀座店  ' }).name).toBe('EYEX 銀座店')
+    expect(() => Store.parse({ ...base, name: 'あ'.repeat(201) })).toThrow()
+  })
+})
+
+describe('Actor', () => {
+  it('defaults terminalId to null so a personal device carries no terminal', () => {
+    expect(
+      Actor.parse({ subjectId: 'user-1', organizationId: ORG, kind: 'staff' }).terminalId,
+    ).toBeNull()
+  })
+
+  it('carries the terminal when the shared iPad is the audited subject', () => {
+    const parsed = Actor.parse({
+      subjectId: UUID,
+      organizationId: ORG,
+      kind: 'terminal',
+      terminalId: UUID,
     })
-    expect(publication.publicSlug).toBe('eyex-ginza')
-    expect(
-      WebBookingPublication.safeParse({ ...publication, startsAt: '2026-08-26T09:00:00+09:00' })
-        .success,
-    ).toBe(false)
+    expect(parsed.kind).toBe('terminal')
   })
 
-  it('keeps public booking input separate from staff-only memos and requires consent', () => {
-    expect(
-      AvailabilitySlotsQuery.parse({
-        date: '2026-08-31',
-        purposeIds: 'af1d3c4c-913c-43e9-a2f6-78a111d2d947',
-      }).purposeIds,
-    ).toHaveLength(1)
-    expect(
-      PublicBookingCreate.safeParse({
-        date: '2026-08-31',
-        startTime: '10:00',
-        purposeIds: ['af1d3c4c-913c-43e9-a2f6-78a111d2d947'],
-        customer: {
-          name: '田中花子',
-          kana: 'タナカハナコ',
-          phone: '09012345678',
-          email: 'tanaka@example.test',
-        },
-        consentVersion: '2026-08-27',
-        reservationMemo: 'internal-only',
-      }).success,
-    ).toBe(false)
+  it('rejects an actor kind outside the closed set', () => {
+    expect(() => Actor.parse({ subjectId: 'x', organizationId: ORG, kind: 'robot' })).toThrow()
   })
 })

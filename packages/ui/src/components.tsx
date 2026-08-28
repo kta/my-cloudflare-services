@@ -21,8 +21,19 @@ import { cn } from './cn'
  */
 
 /** Shared focus treatment — amber is spent ONLY here (see theme.css). */
+/**
+ * フォーカスの輪。白・下地・薄い緑の上で 5.8:1 あり、地の色に紛れない。
+ * `--color-focus` は他のどの役割にも使わない専用トークン。
+ */
 export const focusRing =
-  'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber'
+  'focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-focus'
+
+/**
+ * 緑の面（上のバー・主操作ボタン）の上に置く操作用。青い輪は緑の上で 1.03:1 になり
+ * 消えてしまうので、そこだけ白い輪にする（緑の上で 6.0:1）。
+ */
+export const focusRingOnPine =
+  'focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-focus-on-pine'
 
 // All interactive controls meet the 44px touch-target floor.
 const controlBase = 'min-h-11 rounded-ctl font-sans text-sm'

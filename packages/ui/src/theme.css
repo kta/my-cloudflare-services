@@ -1,8 +1,8 @@
 /*
  * デザイントークン — この製品の見た目が住む唯一の場所。
  *
- * 値はすべて `docs/frontend/mockups/eyex-reservation/` の承認済みモックの
- * `:root` と各クラスの実測から採った。アプリのコードはこのセマンティック
+ * 値は承認済みモック `docs/frontend/mockups/eyex/`（0ベース版・68画面）の
+ * `assets/eyex.css` の `:root` から採った。アプリのコードはこのセマンティック
  * トークンだけを参照する。生の hex、Tailwind 既定パレット（bg-blue-500 等）、
  * 任意値（p-[13px]）は使わない。
  *
@@ -11,260 +11,93 @@
  *   --font-sans → font-sans
  *   --radius-ctl → rounded-ctl
  *
- * モック間で同じ役割に僅かに違う hex が使われている箇所（注意事項の罫線が
- * #d6a99f と #d4a299 など）は、役割ごとに 1 つへ寄せた。寄せた事実は該当
- * トークンのコメントに残す。
+ * 旧モック（`eyex-reservation`）専用だった方言トークン（terminal-* / viz-* /
+ * sp-* / compact-*）は、対応する画面ごと作り直したので削除した。
  */
 @theme {
-  /* --- 書体。モックは全画面 IBM Plex Sans JP。IBM Plex Mono は時刻・ID・
-     グリッドの数値だけに使う（和文グリフを持たないので日本語には使わない）。
-     ワードマークも本文と同じ書体の 700 で、別の見出し書体は無い。 --- */
-  /* 予備は総称の sans-serif だけにする。モックが `font:16px/1.5
-     "IBM Plex Sans JP",sans-serif` で、間に system-ui を挟むと ✓ のような
-     Plex JP に無い記号だけ別の書体（幅も別）で描かれ、その行の字送りが
-     丸ごとずれる。 */
-  --font-display: "IBM Plex Sans JP", sans-serif;
-  --font-sans: "IBM Plex Sans JP", sans-serif;
-  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
-  /* 記号（完了の ✓ など）。IBM Plex Sans JP はこの手の記号グリフを持たないので
-     必ず代替に落ちる。モックの `font:16px/1.5 "IBM Plex Sans JP",sans-serif` と
-     同じ落ち先にするため、間に system-ui を挟まない。 */
-  --font-glyph: "IBM Plex Sans JP", sans-serif;
-  /* 監査イベントの生記録だけは、モックが書いたとおりの `ui-monospace,
-     monospace` で描く。記録は出したままの姿で読ませる面で、IBM Plex Mono に
-     寄せると和文と欧文の桁がモックとずれる。 */
-  --font-record: ui-monospace, monospace;
-  /* 分析の数字とステータスバーは、モックが書いたとおり代替を持たない
-     `'IBM Plex Mono'` 単独で描く。代替を足すと和文（「中央値」「Wi‑Fi」）の
-     落ち先が変わり、行の高さが 3px 縮んでグラフから下が丸ごとずれる。 */
-  --font-figure: "IBM Plex Mono";
-  /* 予約フローの録音経過（approved.html `.record{font:700 16px ui-monospace}`）。
-     `--font-record` と違って予備を 1 つも並べないのは、等幅書体が持たない `●` が
-     予備へ落ちた瞬間に字面の幅が 3px 変わり、右端揃えの経過時間がずれるため。 */
-  --font-timer: ui-monospace;
+  /* --- 書体。Apple HIG に従い iPadOS の既定を先頭に置く。和文が無い環境のために
+     自前ホストの IBM Plex Sans JP を後ろに残す（packages/ui/src/index.ts が読む）。
+     等幅は時刻・予約番号・数値だけに使い、和文には使わない。 --- */
+  --font-sans:
+    -apple-system, "SF Pro JP", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "IBM Plex Sans JP",
+    "Noto Sans JP", sans-serif;
+  /* 見出し用の別書体は持たない。1 書体のウェイトだけで段を作る（モックと同じ）。 */
+  --font-display:
+    -apple-system, "SF Pro JP", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "IBM Plex Sans JP",
+    "Noto Sans JP", sans-serif;
+  --font-mono: "SF Mono", ui-monospace, "IBM Plex Mono", Menlo, monospace;
 
   /* --- 文字寸法。モックが実際に使っている段だけを持つ。ここに無い大きさは
-     モックに存在しないということなので、任意値で足さずにまずモックを見る。
-     行間もモックの `font:16px/1.5` と各見出しの実測に合わせる。 --- */
-  --text-glyph: 3.375rem; /* 54px 全画面状態の記号 */
-  --text-figure: 1.75rem; /* 28px 公開結果の件数 */
-  --text-script: 1.8125rem; /* 29px 予約フローの読み上げ見出し */
-  --text-readout: 1.5625rem; /* 25px 復唱文 */
-  /* 復唱文だけ行間が広い（`.readout{line-height:1.8}`）。読み上げる人が行を
-     見失わないための段で、本文の 1.5 とは役割が違うので寸法に結び付けて持つ。 */
-  --text-readout--line-height: 1.8;
-  --text-title: 1.5rem; /* 24px h2 と主操作タイル */
-  --text-search: 1.25rem; /* 20px 電話番号の検索欄 */
-  --text-brand: 1.25rem; /* 20px 予約フローのワードマーク（approved.html） */
-  --text-bar: 1.1875rem; /* 19px 業務・運用のワードマーク */
-  --text-lead: 1.125rem; /* 18px 副導線 */
-  /* 18.72px。モックのレール見出しは `<h3>` を素のまま使っていて、ブラウザ既定の
-     1.17em がそのまま設計になっている。18px に丸めるとレール全体が 1px ずつ
-     上へずれるので、既定値をそのまま段として持つ。 */
-  --text-h3: 1.17rem;
+     モックに存在しないということなので、任意値で足さずにまずモックを見る。 --- */
+  --text-hero: 1.75rem; /* 28px トップの主操作 */
+  --text-title: 1.375rem; /* 22px 画面の問いかけ・見出し */
+  --text-bar: 1.1875rem; /* 19px 上のバーの店名 */
+  --text-lead: 1.0625rem; /* 17px 選択肢・入力・一覧の見出し */
   --text-body: 1rem; /* 16px 本文 */
   --text-body--line-height: 1.5;
-  --text-grid: 0.875rem; /* 14px 台帳・監査ブロック */
-  --text-note: 0.8125rem; /* 13px 副題・工程ラベル */
+  --text-grid: 0.8125rem; /* 13px 台帳・補足 */
+  --text-note: 0.75rem; /* 12px 状態の札・凡例 */
+  --text-fine: 0.6875rem; /* 11px 目盛・端末名 */
 
-  /* --- 面と文字。モック `--bg` / `--w` / `--i` / `--m` / `--l`。 --- */
-  --color-paper: #eef2ef; /* アプリのキャンバス */
+  /* --- 面と罫。モック --canvas / --surface / --surface-2 / --line / --line-strong --- */
+  --color-paper: #f1f4f2; /* 画面の下地 */
   --color-surface: #ffffff; /* カード・入力・セル */
-  --color-ink: #17251f; /* 本文 */
-  --color-ink-muted: #52655c; /* 補足 */
-  --color-line: #cbd6d0; /* 罫線 */
+  --color-surface-2: #e9eeeb; /* 見出し行・左ペイン・サイドバー */
+  --color-line: #d3dbd7; /* 罫線（装飾。仕切りとしてだけ使う） */
+  /* 押せるもの（入力欄・ボタン・選べる札）の縁と、表の外枠。
+     この線が「そこが操作できる」ことを伝える唯一の手がかりなので、
+     WCAG 1.4.11（非テキスト 3:1）を満たす濃さにしてある。
+     モックの実測値 #b6c2bc は白地 1.84:1 で届かないため、色相と彩度を保ったまま
+     明度だけ下げた（白 3.55:1 / 下地 3.20:1 / 見出し行 3.02:1）。 */
+  --color-line-strong: #778d82;
 
-  /* --- ブランド。緑ひとつがヘッダー・主操作・選択状態を担う。 --- */
-  --color-pine: #1f604b; /* モック --g */
+  /* --- 文字 --- */
+  --color-ink: #16211d; /* 本文 */
+  --color-ink-muted: #566761; /* 補足 */
+  /* プレースホルダ。入力前の手がかりも本文と同じ 4.5:1 を満たす必要があるので、
+     モックの実測値 #7d8b85（白地 3.56:1）を色相そのままで暗くした（白 5.31:1）。 */
+  --color-ink-faint: #626e69;
+
+  /* --- 眼鏡店の緑。ヘッダー・主操作・選択状態はこの 1 色が担う。
+     白文字とのコントラストは WCAG AA を満たす。 --- */
+  --color-pine: #17705a;
   --color-on-pine: #ffffff;
-  /*
-   * バーと確定操作の細枠。モックは `#ffffff70`（43.92%）。Tailwind の不透明度
-   * 修飾は 1% 刻みで 43.92% を表せないので、半透明のまま色として持つ。
-   * 不透明な近似色に置き換えると、直線は合っても角の丸みで下地との混ざり方が
-   * 変わってしまう。
-   */
-  --color-pine-hairline: #ffffff70;
-  /* Web 予約の進捗の目盛り。モックは `#ffffff55`（33.33%）。理由は上と同じ。 */
-  --color-pine-tick: #ffffff55;
-  --color-pine-deep: #184b3a; /* SP のしおり帯 */
-  --color-pine-soft: #e1efe8; /* 選択・予約セルの地 — モック --gs */
+  --color-pine-deep: #0f5645;
+  --color-pine-soft: #e4f0eb; /* 選択の塗り */
+  /* 選択された札の縁。塗りと文字でも選択は分かるが、縁だけで選択を示す場面
+     （時間の枠など）があるので 3:1 を満たす濃さにする（白 3.53:1 / 選択の塗り 3.02:1）。 */
+  --color-pine-line: #58947f;
 
-  /* --- 状態。地色と、その上で読める文字色を対で持つ。 --- */
-  --color-danger: #8b3b2c; /* 失敗・現在時刻線・破壊的操作 — モック --warn */
+  /* --- 予約の出どころ。色だけに意味を持たせず、必ず文字を添える。 --- */
+  --color-web: #1c5c8c; /* Web予約 */
+  --color-web-soft: #e6eef5;
+  --color-walkin: #9a5a15; /* ウォークイン */
+  --color-walkin-soft: #fbeedd;
+
+  /* --- 状態 --- */
+  --color-danger: #97302b; /* 取消・警告・現在時刻の線・破壊的操作 */
   --color-on-danger: #ffffff;
-  --color-danger-soft: #fff0ed; /* 運用面の失敗行・顧客の注意事項の地 */
-  --color-danger-line: #d4a299; /* 同上の罫線 */
-  /*
-   * 同じ「失敗」でも面ごとに hex が違う。役割で寄せると、並べたときに
-   * 面の塗りだけが少し違うという最も気づきにくい形の食い違いになるので、
-   * 出どころごとに持つ。
-   */
-  --color-danger-panel: #fff1ed; /* 例外画面と予約フローの注意事項の地 */
-  --color-danger-panel-line: #d2a099; /* 例外画面の罫線 */
-  --color-attention-line: #d6a99f; /* 予約フローの注意事項の罫線 */
-  --color-record: #9b3425; /* 録音の経過時間（approved.html の --danger） */
-  /* 録音の波形。再生位置を持たない装飾なので、本文とも罫とも別の段で持つ
-     （受付履歴モックの `.wave` が repeating-linear-gradient で敷く色）。 */
-  --color-wave: #89b4a2;
-  --color-walkin-soft: #fff0e8; /* 台帳のウォークイン行 */
+  --color-danger-soft: #fbe9e7;
   --color-amber: #7a5415; /* 失敗ではない注意 */
-  --color-amber-ink: #4b3713; /* 琥珀の面の上に置く文字 */
-  --color-amber-soft: #fff6e5; /* 琥珀の面 */
-  --color-amber-line: #d4ad66; /* 琥珀の罫線 */
-  --color-notice-soft: #fff7e9; /* 予約フローの案内 `.notice` */
-  --color-notice-line: #c58d36;
-  /* 顧客向け Web 予約の注意カード `.error`。琥珀より赤寄りで、業務画面の
-     `--color-amber-*` とは別の hex なので統合せずに持つ。 */
-  --color-alert-soft: #fff3e8;
-  --color-alert-line: #c49550;
-  --color-focus: #005fcc; /* フォーカスリング専用 */
-  --color-accent: #075f78; /* モックが使う唯一の非緑アクセント（進行中の工程） */
+  --color-amber-soft: #fff6e5;
+  --color-busy: #cdd5d1; /* 埋まっている枠 */
+  --color-free: #eef6f2; /* 空いている枠 */
+  --color-focus: #0a63c4; /* フォーカスリング（白・下地の上で 5.8:1） */
+  /* 緑の面（上のバー・主操作ボタン）の上では #0a63c4 が 1.03:1 で消えるので、
+     そこだけ白いリングにする（緑の上で 6.00:1）。 */
+  --color-focus-on-pine: #ffffff;
 
-  /* --- 作業領域の中の構造的な地色。役割が違うので統合しない。 --- */
-  --color-panel: #e7ede9; /* 詳細に並ぶ一覧の列 — staff `.list` */
-  --color-side: #e5ece8; /* 管理画面の節ナビ — operations `.side` */
-  --color-steps: #e4ebe7; /* 設定ガイドの工程レール — settings `.steps` */
-  --color-rail: #f6f8f6; /* 予約フローの右レール — approved `.aside` */
-  --color-summary: #f0f5f2; /* Web 予約の要約帯 */
-  --color-grid-head: #dce5e0; /* 台帳の見出し行 */
-  --color-app-frame: #dce3df; /* 端末外枠の外側 */
-  /* 幕の上に浮く面の影。切替シートのように「手前に来た」ことを縁だけで
-     言えない面で使う（モック store-switch の `0 24px 70px #10271e66`）。 */
-  --color-sheet-shadow: #10271e66;
+  /* --- 台帳の時間グリッド。30分ごとは薄く、1時間ごとは少し濃く。
+     予約の帯をまたいでも途切れないよう、背景として通す。 --- */
+  --color-grid: #e7ecea;
+  --color-grid-hour: #cbd5d1;
 
-  /* --- 端末モック（reception-history-approved / store-switch-approved）の方言。
-     この 2 面は他より後に描かれていて、寸法体系ごと違う。上に 25px の iOS
-     ステータスバーが乗り、緑のバーは 67px（他は 76px）、本文は 10〜11px、緑は
-     #286b55 と僅かに明るい。役割は同じでも値が違うので既存トークンへ寄せず、
-     `terminal-` の名前で並べて持つ（寄せると 2 面だけが 1px ずつ狂う）。 --- */
-  --text-terminal-h2: 1.3125rem; /* 21px 受付履歴の見出し */
-  --text-terminal-h3: 1.17rem; /* 18.72px ブラウザ既定の h3（切替シートの見出し） */
-  --text-terminal-body: 0.6875rem; /* 11px 検索欄・日付見出し・時刻 */
-  --text-terminal-note: 0.625rem; /* 10px 本文 */
-  --text-terminal-micro: 0.5625rem; /* 9px 台帳の見出し行 */
-
-  --color-terminal-pine: #286b55;
-  --color-terminal-pine-soft: #dfeee7;
-  --color-terminal-nav: #d9ebe3; /* バーの非選択タブの文字 */
-  --color-terminal-chip: #ffffff16; /* バーの中の店舗ボタンの地 */
-  --color-terminal-chip-line: #ffffff5c;
-  --color-terminal-paper: #f7f8f6;
-  --color-terminal-ink: #1a2923;
-  --color-terminal-ink-muted: #68776f;
-  --color-terminal-line: #d7ded9;
-  --color-terminal-panel: #edf1ee; /* 受付履歴の一覧列 */
-  --color-terminal-status: #fbfcfb; /* iOS ステータスバー */
-  --color-terminal-danger: #b74834; /* 受付停止の店舗 */
-  --color-terminal-selected: #f2f8f4; /* 選択中の記録 */
-  --color-terminal-highlight: #f0f7f3; /* 選択中の店舗行 */
-  --color-terminal-hairline: #e8ece9; /* カードの中の行罫 */
-  --color-terminal-store-line: #e7ebe8; /* 切替シートの行罫 */
-  --color-terminal-filter-line: #c8d4cd; /* 絞り込みボタンの罫 */
-  --color-terminal-grid-head: #e9eeeb;
-  --color-terminal-grid-line: #e5eae7;
-  --color-terminal-boundary: #f4f6f4; /* 切替シートの末尾の但し書き */
-  --color-terminal-boundary-ink: #5f7168;
-  --color-terminal-wave: #89b4a2; /* 録音の波形 */
-  --color-terminal-veil: #17382b66; /* シートの背後を伏せる幕 */
-  --color-terminal-shadow: #10271e66;
-
-  /* 同じ方言で描かれた「ガイド付き設定」（settings-approved）が足す段。
-     工程レールの地は台帳の見出し行と同じ hex だが、出どころも役割も別なので
-     寄せない（片方を直すともう片方が動く）。 */
-  --text-terminal-title: 1.4375rem; /* 23px ガイド付き設定の見出し */
-  --color-terminal-steps: #e9eeeb; /* 工程レールの地 */
-  --color-terminal-step-line: #b9c8c0; /* これからの工程の左罫 */
-  --color-terminal-impact: #fff3e8; /* 公開前の影響確認の地 */
-  --color-terminal-impact-line: #e9c49e; /* 同上の罫線 */
-
-  /* --- 形。モックは 8px（操作）と 9px（カード）が基本で、
-     全画面のパネルだけ 12px、シート状のものが 14px。 --- */
+  /* --- 形。モックは 8px（操作）・12px（カード）・16px（大きな面）と、
+     丸ごと丸いピル。 --- */
   --radius-ctl: 0.5rem; /* 8px */
-  --radius-card: 0.5625rem; /* 9px */
-  --radius-panel: 0.75rem; /* 12px */
-  --radius-sheet: 0.875rem; /* 14px */
-  --radius-none: 0;
+  --radius-card: 0.75rem; /* 12px */
+  --radius-panel: 1rem; /* 16px */
   --radius-full: 9999px;
   --radius-circle: 50%;
-  --radius-pill: 9999px;
-
-  /* --- 分析「運用診断」だけが持つ寸法体系。承認済みモック
-     `analytics-approved.html` は他の面より一段小さく組まれており（バー 67px、
-     本文 10〜11px）、緑も罫線も僅かに違う hex を使う。役割が同じでも値が違う
-     ので、上の段へ混ぜずに `viz` として分けて持つ。混ぜると分析を直すたびに
-     全画面が動く。 --- */
-  --color-viz-pine: #286b55; /* モック --g */
-  --color-viz-pine-soft: #dfeee7; /* モック --gs */
-  --color-viz-on-pine-muted: #d9ebe3; /* バーの中の非選択タブ */
-  --color-viz-paper: #f7f8f6; /* モック --p */
-  --color-viz-ink: #1a2923; /* モック --i */
-  --color-viz-ink-muted: #68776f; /* モック --m */
-  --color-viz-line: #d7ded9; /* モック --l */
-  --color-viz-hairline: #e5eae7; /* 定義書きの区切り */
-  --color-viz-critical: #ee654f; /* 目標を大きく超えた時間帯 — モック --co */
-  --color-viz-warn: #f3a450; /* 目標に迫る時間帯 — モック --amber */
-  --color-viz-bar: #82bda5; /* 通常の時間帯 */
-  --color-viz-axis: #aebcb4; /* グラフの基線 */
-  --color-viz-panel: #e9eeeb; /* 指標の一覧 */
-  --color-viz-rail: #f0f2ef; /* 右の点検欄 */
-  --color-viz-status: #fbfcfb; /* 端末のステータスバー */
-
-  --text-viz-figure: 2rem; /* 32px 中央値 */
-  --text-viz-body: 0.6875rem; /* 11px 指標名・所見 */
-  --text-viz-note: 0.625rem; /* 10px 補足・カード本文 */
-  --text-viz-fine: 0.5625rem; /* 9px 目盛と定義書き */
-
-  /* --- 設定ガイドのスマートフォン版だけが持つ体系。承認済みモック
-     `settings-responsive-approved.html` は iPad 版（1194px）とは別に組まれて
-     いて、緑も罫線も文字寸法も違う。役割が同じでも値が違うので分けて持つ。
-     先頭 5 つは `viz` と同じ hex だが、出どころが別のモックで今後も別々に
-     動くため、片方へ寄せない（寄せると分析を直すたびに SP が動く）。 --- */
-  /* 設定ガイド SP の等幅（`font:600 9px 'IBM Plex Mono'`）。モックは予備を
-     1 つも並べていないので、Plex Mono が持たない全角スペースと ✓ はブラウザ
-     既定の書体に落ちる。`--font-mono` のように ui-monospace を挟むと、その
-     2 文字だけ幅が変わって行が丸ごとずれる。 */
-  --font-sp-mono: "IBM Plex Mono";
-
-  --color-sp-pine: #286b55; /* モック --g */
-  --color-sp-pine-soft: #dfeee7; /* 済んだ工程の丸 — モック --gs */
-  --color-sp-line: #d7ded9; /* モック --l */
-  --color-sp-ink: #1a2923; /* 本文 */
-  --color-sp-ink-muted: #68776f; /* 工程名 — モック --m */
-  --color-sp-rail: #f4f6f4; /* 工程帯の地と、丸の内側 */
-  --color-sp-rail-line: #c7d1cc; /* 工程どうしをつなぐ線 */
-  --color-sp-circle-line: #aab9b1; /* これからの工程の丸 */
-  --color-sp-changed: #f2f8f4; /* この工程で変えた欄の地 */
-  --color-sp-ring: #cfe4da; /* 現在の工程の丸を囲む輪 */
-
-  --text-sp-title: 1.25rem; /* 20px 本文の見出し */
-  --text-sp-head: 1.0625rem; /* 17px ワードマーク */
-  --text-sp-body: 0.625rem; /* 10px 欄の中身 */
-  --text-sp-fine: 0.5625rem; /* 9px 進捗の見出し・丸の数字・ステータスバー */
-  --text-sp-step: 0.4375rem; /* 7px 工程名 */
-
-  /* --- 顧客向け Web 予約の「小さい端末」版（web-booking-approved）。
-     `-complete-` 版（幅 359px・本文 16px）とは別に組まれていて、端末幅も
-     文字寸法も罫線の太さも違う。緑や罫線の hex は他の方言と重なるものが
-     あるが、出どころが別のモックで今後も別々に動くので寄せない。 --- */
-  --font-compact-mono: "IBM Plex Mono"; /* 日付・時刻の枠（予備を並べない） */
-
-  --color-compact-pine: #286b55; /* モック --g */
-  --color-compact-line: #d7ded9; /* モック --l */
-  --color-compact-ink: #1a2923; /* モック --i */
-  --color-compact-ink-muted: #68776f; /* モック --m */
-  --color-compact-tick: #ffffff48; /* 進捗の未通過（28.24%。近似色に置き換えない） */
-  --color-compact-selected: #f1f8f4; /* 選択中の選択肢・時間枠の地 */
-  --color-compact-summary: #eef5f1; /* 持ち越した目的の要約帯 */
-
-  --text-compact-title: 1.3125rem; /* 21px 問いかけの見出し */
-  --text-compact-title--line-height: 1.45;
-  --text-compact-head: 1.0625rem; /* 17px ワードマーク */
-  --text-compact-option: 0.875rem; /* 14px 選択肢の見出し */
-  --text-compact-body: 0.75rem; /* 12px 選択肢の本文・時間枠 */
-  --text-compact-note: 0.6875rem; /* 11px 補足 */
-  --text-compact-note--line-height: 1.6;
-  --text-compact-fine: 0.625rem; /* 10px 要約帯・日付 */
-  --text-compact-micro: 0.5625rem; /* 9px しおり帯 */
-
-  --radius-compact: 0.625rem; /* 10px 選択肢と要約帯（この方言だけ） */
+  --radius-none: 0;
 }
