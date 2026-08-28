@@ -23,17 +23,14 @@ export default defineConfig({
    * モックは deviceScaleFactor 2 で撮ってあるので、突き合わせる project も 2 にする。
    */
   snapshotPathTemplate: '{testDir}/../../../docs/frontend/mockups/eyex/reference/{arg}{ext}',
+  /*
+   * D1 は 1 本しか無く、業務の e2e はその 1 本を書き換える（スタッフ・設備・目的を足す
+   * 経路は消す経路を持たない）。並べて走らせると、撮っている最中に別の面が書き込む。
+   * 1 本ずつ順に走らせ、**突き合わせ（mock）を業務の e2e より先に置く** ——
+   * 承認済みモックと比べるのは seed のままの盤面でなければ意味が無いからである。
+   */
+  workers: 1,
   projects: [
-    {
-      name: 'ipad',
-      use: { ...devices['Desktop Chrome'], viewport: { width: 1194, height: 834 } },
-      testIgnore: [/web-booking\.spec\.ts$/, /mock-compare\.spec\.ts$/],
-    },
-    {
-      name: 'iphone',
-      use: { ...devices['Desktop Chrome'], viewport: { width: 390, height: 844 }, isMobile: false },
-      testMatch: /web-booking\.spec\.ts$/,
-    },
     {
       /*
        * 実装とモックの突き合わせだけを走らせる面（iPad）。画素で比べるので倍率を揃える。
@@ -58,10 +55,22 @@ export default defineConfig({
       },
       testMatch: /mock-compare-web\.spec\.ts$/,
     },
+    {
+      name: 'ipad',
+      use: { ...devices['Desktop Chrome'], viewport: { width: 1194, height: 834 } },
+      testIgnore: [/web-booking\.spec\.ts$/, /mock-compare\.spec\.ts$/],
+    },
+    {
+      name: 'iphone',
+      use: { ...devices['Desktop Chrome'], viewport: { width: 390, height: 844 }, isMobile: false },
+      testMatch: /web-booking\.spec\.ts$/,
+    },
   ],
   webServer: {
     command: withDisposableState(
-      'pnpm exec wrangler d1 migrations apply glasses_management --local --persist-to "$E2E_STATE_PATH" && pnpm run build && pnpm exec vite preview --port 4175 --strictPort',
+      // migration → seed → build → preview。seed は E2E_STATE_PATH を読んで
+      // 使い捨ての D1 に入る（開発者の .wrangler/state は触らない）。
+      'pnpm exec wrangler d1 migrations apply glasses_management --local --persist-to "$E2E_STATE_PATH" && node seed.mjs && pnpm run build && pnpm exec vite preview --port 4175 --strictPort',
     ),
     url: 'http://localhost:4175',
     name: 'EYEX予約',

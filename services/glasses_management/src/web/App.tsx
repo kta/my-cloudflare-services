@@ -3,6 +3,7 @@ import { auth } from '@app/shared'
 import { Button, Field, focusRing, focusRingOnPine, Notice, TextInput } from '@app/ui'
 import { type FormEvent, useCallback, useEffect, useState } from 'react'
 import { client } from './client'
+import { SettingsScreen } from './settings/SettingsScreen'
 import { AppShell } from './shell/AppShell'
 import { RAIL_BY_DEFAULT } from './shell/destinations'
 
@@ -140,6 +141,12 @@ function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
         )}
         {current === 'home' ? (
           <Home stores={stores} currentStoreId={store?.id} />
+        ) : current === 'settings' ? (
+          store ? (
+            <SettingsScreen storeId={store.id} />
+          ) : (
+            <p className="p-11 text-body text-ink-muted">読み込んでいます…</p>
+          )
         ) : (
           <p className="p-11 text-body text-ink-muted">この画面はこれから作ります。</p>
         )}
@@ -201,7 +208,7 @@ function PrimaryAction({
     >
       <span
         aria-hidden="true"
-        className={`grid size-16 shrink-0 place-items-center rounded-circle text-2xl text-on-pine ${
+        className={`grid size-16 shrink-0 place-items-center rounded-circle text-hero text-on-pine ${
           tone === 'pine' ? 'bg-pine' : 'bg-walkin'
         }`}
       >

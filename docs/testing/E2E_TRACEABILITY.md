@@ -41,14 +41,15 @@ idempotency ID を検証するためだけに使う。production Worker にテ�
 
 ## 現在の基準線
 
-Approved かつ UC/AC を持つ spec は次の 3 本である。`admin` の service spec と
+Approved かつ UC/AC を持つ spec は次の 4 本である。`admin` の service spec と
 infrastructure-only の文書には UC/AC がないため、分母には入らない（機械的な免除ではなく、
 そもそも product behavior を定義していない）。新しい production behavior は Approved spec
 に UC/AC を付け、この表と E2E mapping を同じ変更で追加する。
 
-`glasses_management` は 0 から作り直している最中で、P1 以降の feature spec は
+`glasses_management` は 0 から作り直している最中で、P2 以降の feature spec は
 **`- ステータス: Draft` のまま置いてある**。Approved にした瞬間に E2E が必須になるので、
 そのフェーズの E2E が緑になってから Approved へ上げる（`specs/glasses_management/design/08-traceability.md`）。
+P1（`004-store-settings`）はこの表の下 36 行がそろった時点で Approved にした。
 
 | Spec ID | Playwright scenario |
 |---|---|
@@ -64,6 +65,42 @@ infrastructure-only の文書には UC/AC がないため、分母には入ら�
 | AC-FOUND-03 | `services/glasses_management/e2e/foundation.spec.ts` — 店舗がまだ届いていないときは、その事実だけを出す |
 | AC-FOUND-04 | `services/glasses_management/e2e/foundation.spec.ts` — 業務を終えると業務開始の画面へ戻る |
 | AC-FOUND-05 | `services/glasses_management/e2e/foundation.spec.ts` — ヘルスチェックは認証なしで ok を返す |
+| UC-SET-01 | `services/glasses_management/e2e/store-settings.spec.ts` — 設定を開くと店舗の情報が出て、お店の基本と行き方のご案内が並ぶ |
+| AC-SET-01 | `services/glasses_management/e2e/store-settings.spec.ts` — 設定を開くと店舗の情報が出て、お店の基本と行き方のご案内が並ぶ |
+| AC-SET-02 | `services/glasses_management/e2e/store-settings.spec.ts` — 店名と住所を直すと未保存の変更 2件になり、保存すると保存しましたが 1 度だけ伝わる |
+| AC-SET-03 | `services/glasses_management/e2e/store-settings.spec.ts` — 変更を捨てると値が編集前へ戻り、未保存の札が消える |
+| UC-SET-02 | `services/glasses_management/e2e/store-settings.spec.ts` — 紹介文は 200 文字ちょうどなら保存でき、201 文字は 2 文で拒む |
+| AC-SET-04 | `services/glasses_management/e2e/store-settings.spec.ts` — 紹介文は 200 文字ちょうどなら保存でき、201 文字は 2 文で拒む |
+| UC-SET-03 | `services/glasses_management/e2e/store-settings.spec.ts` — 閉店を開店と同じ時刻にすると 2 文で拒み、営業時間は元のままである |
+| AC-SET-05 | `services/glasses_management/e2e/store-settings.spec.ts` — 閉店を開店と同じ時刻にすると 2 文で拒み、営業時間は元のままである |
+| UC-SET-04 | `services/glasses_management/e2e/store-settings.spec.ts` — 止める時間帯を足すと行が 1 つ増える |
+| AC-SET-06 | `services/glasses_management/e2e/store-settings.spec.ts` — 止める時間帯を足すと行が 1 つ増える |
+| UC-SET-05 | `services/glasses_management/e2e/store-settings.spec.ts` — 予約の間隔を見ると、最後にお受けできる時刻が空き枠と同じ式で出る |
+| AC-SET-07 | `services/glasses_management/e2e/store-settings.spec.ts` — 予約の間隔を見ると、最後にお受けできる時刻が空き枠と同じ式で出る |
+| UC-SET-06 | `services/glasses_management/e2e/store-settings.spec.ts` — 営業日の丸を押して保存すると、その日が休みになり臨時のお休みに入る |
+| AC-SET-08 | `services/glasses_management/e2e/store-settings.spec.ts` — 営業日の丸を押して保存すると、その日が休みになり臨時のお休みに入る |
+| AC-SET-09 | `services/glasses_management/e2e/store-settings.spec.ts` — 臨時のお休みをもう一度押して保存すると営業日へ戻り、一覧から消える |
+| UC-SET-07 | `services/glasses_management/e2e/store-settings.spec.ts` — スタッフを選ぶと右がその人の設定になり、持っている技能に ✓ が付く |
+| AC-SET-10 | `services/glasses_management/e2e/store-settings.spec.ts` — スタッフを選ぶと右がその人の設定になり、持っている技能に ✓ が付く |
+| AC-SET-11 | `services/glasses_management/e2e/store-settings.spec.ts` — 技能を押して保存すると、一覧のその人の技能に加わる |
+| UC-SET-08 | `services/glasses_management/e2e/store-settings.spec.ts` — 日曜の勤務を直して保存すると残り、営業時間の外へ出ても警告だけで保存できる |
+| AC-SET-12 | `services/glasses_management/e2e/store-settings.spec.ts` — 日曜の勤務を直して保存すると残り、営業時間の外へ出ても警告だけで保存できる |
+| UC-SET-09 | `services/glasses_management/e2e/store-settings.spec.ts` — 設備を止めると、保存の前に影響するご予約を数えて見せる |
+| AC-SET-13 | `services/glasses_management/e2e/store-settings.spec.ts` — 設備を止めると、保存の前に影響するご予約を数えて見せる |
+| AC-SET-14 | `services/glasses_management/e2e/store-settings.spec.ts` — 影響するご予約が 0 件の設備を止めても、影響の一覧は出ず札も赤くならない |
+| UC-SET-10 | `services/glasses_management/e2e/store-settings.spec.ts` — 目的の所要時間を延ばすと、変更の札と受けられなくなる Web 枠が出る |
+| AC-SET-15 | `services/glasses_management/e2e/store-settings.spec.ts` — 目的の所要時間を延ばすと、変更の札と受けられなくなる Web 枠が出る |
+| AC-SET-16 | `services/glasses_management/e2e/store-settings.spec.ts` — Web予約に出すを切ると、一覧のその行がお店で受けるだけになる |
+| AC-SET-17 | `services/glasses_management/e2e/store-settings.spec.ts` — スタッフの権限で保存すると、店長だけができると断られ下書きは残る |
+| UC-SET-11 | `services/glasses_management/e2e/store-settings.spec.ts` — いま使えるの切り替えは入切を持つ操作で、状態が字でも読めて 44pt 以上ある |
+| AC-SET-18 | `services/glasses_management/e2e/store-settings.spec.ts` — いま使えるの切り替えは入切を持つ操作で、状態が字でも読めて 44pt 以上ある |
+| AC-SET-19 | `services/glasses_management/e2e/store-settings.spec.ts` — 件数の変化は割り込まない知らせとして伝わり、警告にはしない |
+| UC-SET-12 | `services/glasses_management/e2e/store-settings.spec.ts` — スタッフを足すと 7名になり、いま使えるを切っても行は消えない |
+| AC-SET-20 | `services/glasses_management/e2e/store-settings.spec.ts` — スタッフを足すと 7名になり、いま使えるを切っても行は消えない |
+| UC-SET-13 | `services/glasses_management/e2e/store-settings.spec.ts` — 設備を足すと一覧に 1 行増える |
+| AC-SET-21 | `services/glasses_management/e2e/store-settings.spec.ts` — 設備を足すと一覧に 1 行増える |
+| UC-SET-14 | `services/glasses_management/e2e/store-settings.spec.ts` — 目的を足すと 7件になり、並べ替えた順のまま残る |
+| AC-SET-22 | `services/glasses_management/e2e/store-settings.spec.ts` — 目的を足すと 7件になり、並べ替えた順のまま残る |
 
 validator 自体は `scripts/check-e2e-traceability.test.mjs` で unit test する。通常の実行は次の
 とおり。

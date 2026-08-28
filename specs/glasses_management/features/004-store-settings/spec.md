@@ -1,7 +1,7 @@
 # 004-store-settings: 店舗の受付条件
 
 - サービス: `glasses_management`
-- ステータス: Draft
+- ステータス: Approved
 
 ## 1. WHAT / WHY
 

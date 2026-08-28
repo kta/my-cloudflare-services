@@ -62,17 +62,13 @@ export function AppShell({
         <div className="ml-auto flex items-center gap-2">{barActions}</div>
       </header>
 
-      <div
-        className={cn(
-          'grid min-h-0 flex-1',
-          rail ? 'grid-cols-[76px_1fr]' : 'grid-cols-[216px_1fr]',
-        )}
-      >
+      {/* 幅は任意値で書かない。--spacing の刻みで 76px（w-19）/ 216px（w-54）を作る。 */}
+      <div className="flex min-h-0 flex-1">
         <nav
           aria-label="画面の切り替え"
           className={cn(
-            'flex min-h-0 flex-col gap-1 overflow-hidden border-r border-line bg-surface-2 py-4',
-            rail ? 'items-center px-2.5' : 'px-3.5',
+            'flex min-h-0 shrink-0 flex-col gap-1 overflow-hidden border-r border-line bg-surface-2 py-4',
+            rail ? 'w-19 items-center px-2.5' : 'w-54 px-3.5',
           )}
         >
           <button
@@ -139,7 +135,7 @@ export function AppShell({
           )}
         </nav>
 
-        <div className="flex min-h-0 min-w-0 flex-col overflow-hidden">{children}</div>
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">{children}</div>
       </div>
     </div>
   )

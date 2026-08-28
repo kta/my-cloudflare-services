@@ -56,12 +56,18 @@ describe('複数テナントの相互不可視', () => {
     expect(rc.stores.map((s) => s.name)).toEqual(['C 渋谷店'])
   })
 
-  it('同じ slug を別テナントが使っても衝突せず、互いに見えない', async () => {
+  it('同じ店舗 id を持つ 2 テナントは作れないが、slug は全組織で先取り順になる', async () => {
     const [a, b] = [orgId(), orgId()]
     const [ta, tb] = await Promise.all([tokenFor(a), tokenFor(b)])
-    await seedStore(a, 'A の銀座店', 'ginza')
-    await seedStore(b, 'B の銀座店', 'ginza')
+    const slug = `ginza-${crypto.randomUUID().slice(0, 8)}`
+    await seedStore(a, 'A の銀座店', slug)
 
+    // お客様向けの /w/:storeSlug は未認証で組織を知らないまま引くので、slug は
+    // 全組織横断で一意。2 社目は同じ slug を取れない（取れない保存は画面が 400 で受ける）。
+    await expect(seedStore(b, 'B の銀座店', slug)).rejects.toThrow()
+
+    // id は UUID なので、先取りされるのは slug だけ。互いの店舗は依然として見えない。
+    await seedStore(b, 'B の銀座店', `ginza-${crypto.randomUUID().slice(0, 8)}`)
     expect((await listStores(ta)).stores.map((s) => s.name)).toEqual(['A の銀座店'])
     expect((await listStores(tb)).stores.map((s) => s.name)).toEqual(['B の銀座店'])
   })
@@ -159,5 +165,233 @@ describe('内部 API は組織を越えて配れるが、業務 API は越えら
       headers: { ...JSON_HEADERS, authorization: `Bearer ${token}` },
     })
     expect(res.status).toBe(401)
+  })
+})
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * P1 店舗の受付条件
+ * 6 面の読み書きに、他社・他店舗へ手が届く経路が無いことを潰す。
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+/** 店長として入り、店舗 1 つを持つ組織を用意する。 */
+async function managerOf(name = 'EYEX 銀座店') {
+  const org = orgId()
+  const token = await tokenFor(org)
+  const storeId = await seedStore(org, name, `store-${crypto.randomUUID().slice(0, 8)}`)
+  await SELF.fetch(`${BASE}/api/internal/store-memberships/sync`, {
+    method: 'POST',
+    headers: INTERNAL_HEADERS,
+    body: JSON.stringify({
+      id: crypto.randomUUID(),
+      organizationId: org,
+      storeId,
+      userId: `dev:${org}`,
+      permissions: ['settings.read', 'settings.manage'],
+      createdAt: NOW,
+    }),
+  })
+  return { org, token, storeId }
+}
+
+function callAs(token: string) {
+  return async (method: string, path: string, body?: unknown) => {
+    const res = await SELF.fetch(`${BASE}${path}`, {
+      method,
+      headers: authed(token),
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    })
+    return { status: res.status, body: (await res.json().catch(() => null)) as never }
+  }
+}
+
+const sevenRows = (opensAt: string, closesAt: string) =>
+  [0, 1, 2, 3, 4, 5, 6].map((weekday) => ({ weekday, isClosed: false, opensAt, closesAt }))
+
+async function saveHours(token: string, storeId: string, opensAt: string, closesAt: string) {
+  return callAs(token)('PUT', `/api/staff/stores/${storeId}/business-hours`, {
+    rows: sevenRows(opensAt, closesAt),
+    version: 1,
+  })
+}
+
+async function addStaffMember(token: string, storeId: string, displayName: string) {
+  const created = await callAs(token)('POST', `/api/staff/stores/${storeId}/staff`, {
+    displayName,
+  })
+  return (created.body as { id: string }).id
+}
+
+async function addEquipmentUnit(token: string, storeId: string, name: string) {
+  const created = await callAs(token)('POST', `/api/staff/stores/${storeId}/equipment`, {
+    name,
+    kind: 'measure',
+    roleLabel: '視力測定',
+  })
+  return (created.body as { id: string }).id
+}
+
+async function addVisitPurpose(token: string, nameInternal: string, sortOrder: number) {
+  const created = await callAs(token)('POST', '/api/staff/purposes', {
+    nameInternal,
+    namePublic: nameInternal,
+    nameShort: '相談',
+    durationMinutes: 30,
+    sortOrder,
+  })
+  return (created.body as { id: string }).id
+}
+
+describe('受付条件は組織をまたがない', () => {
+  it('3 テナントが同じ曜日に営業時間を持っても、各自の 7 行しか読めない', async () => {
+    const [a, b, c] = await Promise.all([managerOf('A 店'), managerOf('B 店'), managerOf('C 店')])
+    await saveHours(a.token, a.storeId, '10:00', '19:00')
+    await saveHours(b.token, b.storeId, '11:00', '20:00')
+    await saveHours(c.token, c.storeId, '09:00', '18:00')
+
+    for (const [tenant, opensAt] of [
+      [a, '10:00'],
+      [b, '11:00'],
+      [c, '09:00'],
+    ] as const) {
+      const read = await callAs(tenant.token)(
+        'GET',
+        `/api/staff/stores/${tenant.storeId}/business-hours`,
+      )
+      const rows = (read.body as { rows: { opensAt: string }[] }).rows
+      expect(rows).toHaveLength(7)
+      expect(rows.every((row) => row.opensAt === opensAt)).toBe(true)
+    }
+  })
+
+  it('他テナントの storeId をパスに入れた設定の読み取りは 404 になる（403 で存在を漏らさない）', async () => {
+    const [mine, theirs] = await Promise.all([managerOf(), managerOf()])
+    await saveHours(theirs.token, theirs.storeId, '11:00', '20:00')
+
+    const call = callAs(mine.token)
+    expect((await call('GET', `/api/staff/stores/${theirs.storeId}`)).status).toBe(404)
+    expect((await call('GET', `/api/staff/stores/${theirs.storeId}/business-hours`)).status).toBe(
+      404,
+    )
+    expect((await call('GET', `/api/staff/stores/${theirs.storeId}/staff`)).status).toBe(404)
+    expect((await call('GET', `/api/staff/stores/${theirs.storeId}/equipment`)).status).toBe(404)
+  })
+
+  it('他テナントの storeId をパスに入れた設定の保存は 404 になり、相手の行は 1 行も変わらない', async () => {
+    const [mine, theirs] = await Promise.all([managerOf(), managerOf()])
+    await saveHours(theirs.token, theirs.storeId, '11:00', '20:00')
+
+    const intruded = await callAs(mine.token)(
+      'PUT',
+      `/api/staff/stores/${theirs.storeId}/business-hours`,
+      { rows: sevenRows('06:00', '07:00'), version: 2 },
+    )
+    expect(intruded.status).toBe(404)
+
+    const read = await callAs(theirs.token)(
+      'GET',
+      `/api/staff/stores/${theirs.storeId}/business-hours`,
+    )
+    const rows = (read.body as { rows: { opensAt: string }[] }).rows
+    expect(rows.every((row) => row.opensAt === '11:00')).toBe(true)
+  })
+
+  it('本文に別テナントの organizationId を混ぜても、保存されるのは JWT の org である', async () => {
+    const [mine, theirs] = await Promise.all([managerOf(), managerOf()])
+    const call = callAs(mine.token)
+
+    // 契約は strictObject なので、組織を名指しする本文はそもそも受け取らない。
+    const forged = await call('POST', `/api/staff/stores/${mine.storeId}/equipment`, {
+      name: '視力測定機 A',
+      kind: 'measure',
+      roleLabel: '視力測定',
+      organizationId: theirs.org,
+    })
+    expect(forged.status).toBe(400)
+
+    // 正しい本文で保存した行の organization_id は、本文ではなく JWT の org になる。
+    const id = await addEquipmentUnit(mine.token, mine.storeId, '視力測定機 A')
+    const saved = await env.DB.prepare('SELECT organization_id AS org FROM equipment WHERE id = ?')
+      .bind(id)
+      .first<{ org: string }>()
+    expect(saved?.org).toBe(mine.org)
+    expect(
+      (await callAs(theirs.token)('GET', `/api/staff/stores/${theirs.storeId}/equipment`)).body,
+    ).toEqual([])
+  })
+
+  it('他テナントのスタッフ id を staff-shifts の保存に混ぜると 404 になる', async () => {
+    const [mine, theirs] = await Promise.all([managerOf(), managerOf()])
+    const theirStaff = await addStaffMember(theirs.token, theirs.storeId, '高橋 健')
+
+    const intruded = await callAs(mine.token)(
+      'PUT',
+      `/api/staff/stores/${mine.storeId}/staff-shifts`,
+      {
+        staffId: theirStaff,
+        weekly: [0, 1, 2, 3, 4, 5, 6].map((weekday) => ({
+          weekday,
+          isOff: false,
+          startsAt: '10:00',
+          endsAt: '19:00',
+          breaks: [],
+        })),
+        effectiveFrom: '2026-08-27',
+        version: 1,
+      },
+    )
+    expect(intruded.status).toBe(404)
+    const rows = await env.DB.prepare('SELECT COUNT(*) AS n FROM staff_shifts WHERE staff_id = ?')
+      .bind(theirStaff)
+      .first<{ n: number }>()
+    expect(rows?.n).toBe(0)
+  })
+
+  it('他テナントの目的 id を purposes/order に混ぜると 404 になり、自テナントの並び順も変わらない', async () => {
+    const [mine, theirs] = await Promise.all([managerOf(), managerOf()])
+    const first = await addVisitPurpose(mine.token, 'メガネを新しく作る', 0)
+    const second = await addVisitPurpose(mine.token, '今のメガネを調整したい', 1)
+    const theirPurpose = await addVisitPurpose(theirs.token, '修理・部品交換', 0)
+
+    const intruded = await callAs(mine.token)('PUT', '/api/staff/purposes/order', {
+      purposeIds: [second, theirPurpose, first],
+    })
+    expect(intruded.status).toBe(404)
+
+    const listed = await callAs(mine.token)('GET', '/api/staff/purposes')
+    expect((listed.body as { id: string }[]).map((purpose) => purpose.id)).toEqual([first, second])
+  })
+
+  it('他テナントの設備 id を点検の追加に混ぜると 404 になる', async () => {
+    const [mine, theirs] = await Promise.all([managerOf(), managerOf()])
+    const theirUnit = await addEquipmentUnit(theirs.token, theirs.storeId, '視力測定機 B')
+
+    const intruded = await callAs(mine.token)(
+      'POST',
+      `/api/staff/stores/${mine.storeId}/equipment/${theirUnit}/maintenance`,
+      { startsAt: '2026-08-28T01:00:00.000Z', endsAt: '2026-08-28T03:00:00.000Z' },
+    )
+    expect(intruded.status).toBe(404)
+    const rows = await env.DB.prepare(
+      'SELECT COUNT(*) AS n FROM equipment_maintenance WHERE equipment_id = ?',
+    )
+      .bind(theirUnit)
+      .first<{ n: number }>()
+    expect(rows?.n).toBe(0)
+  })
+
+  it('店舗をまたぐ読み取りは無い — 同じ組織の別店舗の営業時間は storeId を変えないと読めない', async () => {
+    const mine = await managerOf('EYEX 銀座店')
+    const another = await seedStore(
+      mine.org,
+      'EYEX 丸の内店',
+      `marunouchi-${crypto.randomUUID().slice(0, 8)}`,
+    )
+    await saveHours(mine.token, mine.storeId, '10:00', '19:00')
+
+    const other = await callAs(mine.token)('GET', `/api/staff/stores/${another}/business-hours`)
+    // 同じ組織なので 404 にはならないが、銀座店の 7 行は 1 行も出てこない（定休として返る）。
+    expect(other.status).toBe(200)
+    const rows = (other.body as { rows: { isClosed: boolean }[] }).rows
+    expect(rows.every((row) => row.isClosed)).toBe(true)
   })
 })
