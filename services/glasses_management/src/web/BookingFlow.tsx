@@ -37,6 +37,7 @@ import {
 } from './RecordingIndicator'
 import { canTransitionRecording } from './recording'
 import {
+  bookingBarSubtitle,
   createStaffBookingDraft,
   desiredTimes,
   hasUnsavedBookingInput,
@@ -481,10 +482,10 @@ export function BookingFlow({
   useEffect(() => {
     barOverlay.set({
       chip: showChip ? contextChip : undefined,
-      subtitle: step === 'recital' || step === 'complete' ? `${storeName} · 最終確認` : undefined,
+      subtitle: bookingBarSubtitle(step, storeName, draft.reservationNumber),
     })
     return () => barOverlay.set({})
-  }, [contextChip, showChip, step, storeName])
+  }, [contextChip, showChip, step, storeName, draft.reservationNumber])
 
   const customerReady =
     draft.customer.name.trim() !== '' &&

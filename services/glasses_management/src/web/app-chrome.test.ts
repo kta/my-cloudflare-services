@@ -191,3 +191,20 @@ test('サイドバーの行き先は、柱を出すすべての面から現在�
   for (const location of withSidebar)
     expect(destinations.has(sidebarCurrentScreen(location))).toBe(true)
 })
+
+/*
+ * 運用の 8 面は承認済みモック（`operations-approved.html`）でそれぞれ違う名を
+ * バーに出している。ひとまとめに「設定」と名乗ると、監査ログと注意事項の確認と
+ * 端末の一覧が、バーの上では区別できない同じ面に見える。
+ *
+ * 組織共通の面（注意事項の権限・監査ログ）は店舗名を持たない。持たせると
+ * 「この店舗の監査」と読めてしまい、実際に見えている範囲を偽る。
+ */
+test('運用の面はモックどおり面ごとの名を副題に出す', () => {
+  expect(barFor({ screen: 'attention-review' }, store).subtitle).toBe('銀座店 · 注意事項')
+  expect(barFor({ screen: 'attention-settings' }, store).subtitle).toBe('組織共通設定')
+  expect(barFor({ screen: 'audit' }, store).subtitle).toBe('監査')
+  // モックが `銀座店 · 設定` のままの 2 面は変えない。
+  expect(barFor({ screen: 'shared-terminals' }, store).subtitle).toBe('銀座店 · 設定')
+  expect(barFor({ screen: 'recording-ops' }, store).subtitle).toBe('銀座店 · 設定')
+})

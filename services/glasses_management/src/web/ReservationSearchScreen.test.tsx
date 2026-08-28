@@ -137,6 +137,73 @@ function listResponse(reservations: unknown[]) {
   }
 }
 
+/*
+ * 承認済みモック `RES-SEARCH` の「予約内容」は `視力測定・新調相談` と目的の名で
+ * 始まる。`1件` という件数は、電話口で復唱できず、何の予約かも決まらない。
+ */
+test('予約詳細の来店目的は件数ではなく目的の名を出す (RES-SEARCH)', async () => {
+  const { api } = renderScreen((route) => {
+    if (route.url.endsWith('/availability/settings'))
+      return jsonResponse({
+        storeId: STORE_ID,
+        version: 1,
+        receptionStatus: 'open',
+        businessHours: [],
+        exceptions: [],
+        purposes: [
+          {
+            id: PURPOSE_ID,
+            staffName: '視力測定・新調相談',
+            customerLabel: '視力測定',
+            durationMinutes: 60,
+            slotIntervalMinutes: 30,
+            isPublic: true,
+            requiredSkills: [],
+            requiredEquipment: [],
+            maxConcurrent: 1,
+          },
+        ],
+        staff: [],
+        shifts: [],
+        equipment: [],
+        maintenance: [],
+        desiredTimeCandidateCount: 6,
+      })
+    return listResponse([tanaka])(route)
+  })
+  searchFor('田中')
+  fireEvent.click(await screen.findByRole('button', { name: /田中 花子/ }))
+
+  const detail = await screen.findByRole('region', { name: '予約詳細' })
+  await waitFor(() => expect(detail).toHaveTextContent('視力測定・新調相談'))
+  expect(detail).not.toHaveTextContent('来店目的 1件')
+  expect(api).toHaveBeenCalledWith(`/api/staff/stores/${STORE_ID}/availability/settings`)
+})
+
+test('予約内容の見出しは来店日時を繰り返さない (RES-SEARCH)', async () => {
+  /*
+   * 来店日時は面の見出し（`8月27日（木）11:00`）がすでに名乗っている。カードで
+   * 繰り返すと、承認済みモックが「予約内容」に置いている目的・担当が押し出される。
+   */
+  renderScreen(listResponse([tanaka]))
+  searchFor('田中')
+  fireEvent.click(await screen.findByRole('button', { name: /田中 花子/ }))
+
+  const detail = await screen.findByRole('region', { name: '予約詳細' })
+  expect(detail).not.toHaveTextContent('来店日時')
+  expect(detail).toHaveTextContent('8月27日（木）11:00')
+})
+
+test('目的の名がまだ引けないときは件数で耐える (RES-SEARCH)', async () => {
+  // 設定が読めない間に目的を空欄にすると、何の予約か分からない詳細になる。
+  renderScreen(listResponse([tanaka]))
+  searchFor('田中')
+  fireEvent.click(await screen.findByRole('button', { name: /田中 花子/ }))
+
+  const detail = await screen.findByRole('region', { name: '予約詳細' })
+  expect(detail).toHaveTextContent('1件')
+})
+
 // UC-EYEX-056 / AC-EYEX-90: the store is fixed; no store filter, no 全店舗 option.
 test('fixes the search to the selected store and offers no store filter', async () => {
   const { calls } = renderScreen(listResponse([tanaka]))
@@ -238,7 +305,7 @@ test('looks for a destination slot while the original reservation is still held'
   expect(await screen.findByRole('button', { name: '10:00〜11:00' })).toBeInTheDocument()
   // The original reservation is untouched while the operator looks around.
   const detail = screen.getByRole('region', { name: '予約詳細' })
-  expect(within(detail).getByText('2026年8月27日 11:00')).toBeInTheDocument()
+  expect(within(detail).getByRole('heading', { name: '8月27日（木）11:00' })).toBeInTheDocument()
   expect(within(detail).getByText('予約済み')).toBeInTheDocument()
 })
 
@@ -279,7 +346,7 @@ test('switches the reservation only after the destination slot is secured', asyn
     purposeIds: [PURPOSE_ID],
     reason: 'お客様都合',
   })
-  expect(await screen.findByText('2026年8月28日 10:00')).toBeInTheDocument()
+  expect(await screen.findByRole('heading', { name: '8月28日（金）10:00' })).toBeInTheDocument()
 })
 
 // AC-EYEX-22: a conflicting new slot keeps the original and offers alternatives.
@@ -309,7 +376,7 @@ test('keeps the original reservation and offers alternatives when the new slot c
     await screen.findByText('選択した枠を確保できませんでした。元の予約はそのままです。'),
   ).toBeInTheDocument()
   const detail = screen.getByRole('region', { name: '予約詳細' })
-  expect(within(detail).getByText('2026年8月27日 11:00')).toBeInTheDocument()
+  expect(within(detail).getByRole('heading', { name: '8月27日（木）11:00' })).toBeInTheDocument()
   expect(within(detail).getByText('予約済み')).toBeInTheDocument()
   // Alternatives are offered instead.
   expect(await screen.findByRole('button', { name: '14:00〜15:00' })).toBeInTheDocument()
@@ -338,7 +405,7 @@ test('reports a version conflict without losing the original reservation', async
     await screen.findByText('別の端末で更新されました。最新の内容を読み直してください。'),
   ).toBeInTheDocument()
   const detail = screen.getByRole('region', { name: '予約詳細' })
-  expect(within(detail).getByText('2026年8月27日 11:00')).toBeInTheDocument()
+  expect(within(detail).getByRole('heading', { name: '8月27日（木）11:00' })).toBeInTheDocument()
 })
 
 // UC-EYEX-060 / AC-EYEX-23: cancellation needs a reason and a deliberate confirmation.

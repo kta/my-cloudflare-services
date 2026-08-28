@@ -100,6 +100,15 @@ function Region({
   )
 }
 
+/** モックの日付は点区切り（`2026.05.18`）。罫のある行の中で数字が読みやすい。 */
+/*
+ * 承認済みモック `CUSTOMER-CURRENT` の日付はすべて `2026.02.10` の形で、生の ISO は
+ * どの面にも無い。日付を出すところは必ずここを通す。
+ */
+function dotted(date: string): string {
+  return date.replaceAll('-', '.')
+}
+
 function PrescriptionLines({
   prescription,
 }: {
@@ -112,7 +121,7 @@ function PrescriptionLines({
       {prescription.addPower !== null && ` / ADD ${prescription.addPower}`}
       <br />
       <span className="text-ink-muted">
-        測定日 {prescription.measuredOn}・店舗 {prescription.storeName}・記録者{' '}
+        測定日 {dotted(prescription.measuredOn)}・店舗 {prescription.storeName}・記録者{' '}
         {prescription.recordedBy}
       </span>
     </p>
@@ -426,7 +435,7 @@ export function CustomerPanel({
                         {detail.latestNote.body}
                         <br />
                         <small className="text-ink-muted">
-                          {detail.latestNote.recordedOn}・{detail.latestNote.storeName}・
+                          {dotted(detail.latestNote.recordedOn)}・{detail.latestNote.storeName}・
                           {detail.latestNote.recordedBy}
                         </small>
                       </Region>
@@ -439,7 +448,7 @@ export function CustomerPanel({
                               {glasses.label}（{glasses.lensType}）
                               <small className="text-ink-muted">
                                 {' '}
-                                {glasses.purchasedOn}・{glasses.storeName}
+                                {dotted(glasses.purchasedOn)}・{glasses.storeName}
                               </small>
                             </li>
                           ))}
@@ -458,20 +467,17 @@ export function CustomerPanel({
                           <li key={`${note.recordedOn}-${note.body}`}>
                             {note.body}
                             <br />
+                            {/*
+                             * モックは日付を先に置き、`·` で繋ぐ（`発生日時 2026.02.10 ·
+                             * 根拠 接客記録 · …`）。日付の呼び名だけは契約の
+                             * `recordedOn` に忠実な「記録日」のままにする——
+                             * 記録した日を「発生日時」と名乗ると、いつ起きたことなのかを
+                             * 実際より確かに言ってしまう。
+                             */}
                             <small>
-                              根拠 {note.basis}・記録者 {note.recordedBy}・記録日 {note.recordedOn}
+                              記録日 {dotted(note.recordedOn)} · 根拠 {note.basis} · 記録者{' '}
+                              {note.recordedBy}
                             </small>
-                          </li>
-                        ))}
-                      </ul>
-                    </Region>
-                  )}
-                  {mode === 'ledger' && pastPrescriptions.length > 0 && (
-                    <Region label="過去の度数">
-                      <ul className="list-none">
-                        {pastPrescriptions.map((prescription) => (
-                          <li key={prescription.measuredOn}>
-                            <PrescriptionLines prescription={prescription} />
                           </li>
                         ))}
                       </ul>
@@ -482,7 +488,31 @@ export function CustomerPanel({
                       <ul className="list-none">
                         {visitHistory.map((visit) => (
                           <li key={`${visit.visitedOn}-${visit.summary}`}>
-                            {visit.visitedOn}・{visit.storeName}・{visit.summary}
+                            {/*
+                             * モックは「2026.05.18 銀座店 フィッティング調整」と
+                             * 空白で並べる。中黒で繋ぐと、要約自体に中黒を含む
+                             * 目的（`視力測定・新調`）との切れ目が読めなくなる。
+                             */}
+                            {`${dotted(visit.visitedOn)} ${visit.storeName} ${visit.summary}`}
+                          </li>
+                        ))}
+                      </ul>
+                    </Region>
+                  )}
+                  {/*
+                   * 過去の度数はモックに無い面である。モックは「現在の度数」しか
+                   * 描いていないが、度数は前回からどう変わったかを見て決めるもので、
+                   * 現在値だけでは接客の判断材料にならない（UC-EYEX-027 の履歴は
+                   * 常に帰属つきで残す）。予約フロー側では出さず、腰を据えて読む
+                   * 顧客台帳だけに置く。モックの並びを崩さないよう、モックが持つ面
+                   * （現在値・注意・来店履歴）をすべて出しきった後ろに置く。
+                   */}
+                  {mode === 'ledger' && pastPrescriptions.length > 0 && (
+                    <Region label="過去の度数">
+                      <ul className="list-none">
+                        {pastPrescriptions.map((prescription) => (
+                          <li key={prescription.measuredOn}>
+                            <PrescriptionLines prescription={prescription} />
                           </li>
                         ))}
                       </ul>

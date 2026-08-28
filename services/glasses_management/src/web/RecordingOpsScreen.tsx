@@ -57,6 +57,19 @@ function text(value: unknown): string | null {
  * 失敗だけを再試行できる (UC-EYEX-154, AC-EYEX-100)。再生はストリーミングのみで、
  * この画面のどこにもダウンロード操作を置かない (UC-EYEX-129, AC-EYEX-79)。
  */
+/*
+ * 承認済みモック `operations-approved.html#recording-ops` は破棄受付の保存期間を
+ * `3日保存` と読む。契約は時間で持つが、隣に並ぶ「成立予約」が `90日保存` なので、
+ * 時間のまま出すと同じ段の 2 枚が別の単位になり、どちらが長いかをその場で
+ * 比べられない。24 で割り切れないときだけ時間のまま出す——丸めると、実際に
+ * 消えるまでの時間を偽ることになる。
+ */
+function discardedRetentionLabel(hours: string): string {
+  const value = Number(hours)
+  if (!Number.isInteger(value) || value < 24 || value % 24 !== 0) return `${hours}時間保存`
+  return `${value / 24}日保存`
+}
+
 export function RecordingOpsScreen({
   storeId,
   storeName,
@@ -78,6 +91,12 @@ export function RecordingOpsScreen({
   const [confirmedDays, setConfirmedDays] = useState('')
   const [discardedHours, setDiscardedHours] = useState('')
   const [retentionFailure, setRetentionFailure] = useState<string | null>(null)
+  /*
+   * 保存期間は読み取りが既定（承認済みモックの `90日保存` / `3日保存`）。編集の欄は
+   * 明示の操作の先にだけ出す。欄を常に開いておくと、モックにある「いま何日なのか」
+   * という事実が単位のない裸の数値に置き換わってしまう。
+   */
+  const [editingRetention, setEditingRetention] = useState(false)
   const [pending, setPending] = useState<PendingAction | null>(null)
   const [reauthFor, setReauthFor] = useState<PendingAction | null>(null)
   const [reauthToken, setReauthToken] = useState<string | null>(null)
@@ -233,6 +252,14 @@ export function RecordingOpsScreen({
   const failedRows = rows.filter((row) => row.state === 'failed')
   const heldRows = rows.filter((row) => row.state === 'held')
 
+  /* 読み取りの面から編集へ入る唯一の口。開いたうえで最初の欄へ焦点を送る。 */
+  const openRetentionEditor = () => {
+    setEditingRetention(true)
+    setRetentionFailure(null)
+    // 欄はこの描画の後に現れるので、焦点は次のフレームで送る。
+    requestAnimationFrame(() => document.getElementById('retention-days')?.focus())
+  }
+
   return (
     /* 承認済みモック `operations-approved.html#recording-ops` /
        `RECORDING-OPS--failure-hold--ipad-landscape.png` の骨格と文言。 */
@@ -255,7 +282,7 @@ export function RecordingOpsScreen({
           <Card label="成立予約">
             <b>成立予約</b>
             <br />
-            {mayManage ? (
+            {editingRetention ? (
               /* カード見出しが「成立予約」と言っているので、可視ラベルを重ねない。
                  名前は aria-label で入力自身に持たせる。 */
               <TextField
@@ -273,11 +300,19 @@ export function RecordingOpsScreen({
             )}
             <br />
             <small>{`最低${MINIMUM_CONFIRMED_RETENTION_DAYS}日未満には設定できません`}</small>
+            {mayManage && !editingRetention && (
+              <>
+                <br />
+                <Action inset="tight" onClick={openRetentionEditor}>
+                  変更
+                </Action>
+              </>
+            )}
           </Card>
           <Card label="破棄した受付">
             <b>破棄した受付</b>
             <br />
-            {mayManage ? (
+            {editingRetention ? (
               <TextField
                 hideLabel
                 id="retention-hours"
@@ -289,7 +324,7 @@ export function RecordingOpsScreen({
             ) : discardedHours === '' ? (
               '未取得'
             ) : (
-              `${discardedHours}時間保存`
+              discardedRetentionLabel(discardedHours)
             )}
             <br />
             <small>{`最低${MINIMUM_DISCARDED_RETENTION_HOURS}時間未満には設定できません`}</small>
@@ -302,19 +337,14 @@ export function RecordingOpsScreen({
             {mayManage && (
               /* ここは保存操作ではなく「これから店舗の値を入れる」導線なので、
                  押しただけで保存を走らせない。 */
-              <Action
-                inset="tight"
-                onClick={() => {
-                  document.getElementById('retention-days')?.focus()
-                }}
-              >
+              <Action inset="tight" onClick={openRetentionEditor}>
                 店舗上書きを設定
               </Action>
             )}
           </Card>
         </CardGrid>
 
-        {mayManage && (
+        {mayManage && editingRetention && (
           <>
             {retentionFailure && <FailureNotice>{retentionFailure}</FailureNotice>}
             <Actions>
@@ -556,7 +586,9 @@ export function RecordingOpsScreen({
           terminalId={terminalId}
           terminalName={terminalName}
           organizationId={organizationId}
-          actionLabel={reauthFor.kind === 'hold' ? '録音の保全' : '録音の保全解除'}
+          /* 承認済みモック `REAUTH` の本文は「録音の保全指定は個人認証が必要です。」。
+             `保全` だけに縮めると、モックと一字ずれる。 */
+          actionLabel={reauthFor.kind === 'hold' ? '録音の保全指定' : '録音の保全解除'}
           onGranted={(token) => {
             setReauthToken(token)
             setPending(reauthFor)

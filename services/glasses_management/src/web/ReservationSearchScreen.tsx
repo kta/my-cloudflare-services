@@ -1,4 +1,9 @@
-import { AvailabilitySlotsResponse, type Recording, Reservation } from '@app/contracts'
+import {
+  AvailabilitySlotsResponse,
+  AvailabilityStoreSettings,
+  type Recording,
+  Reservation,
+} from '@app/contracts'
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import {
   Action,
@@ -117,7 +122,7 @@ export function formatJstDayHeading(iso: string): string {
 }
 
 /** `8/27 11:00` — the compact form the approved `.row` uses. */
-function formatJstRowDateTime(iso: string): string {
+export function formatJstRowDateTime(iso: string): string {
   const at = new Date(iso)
   const parts = Object.fromEntries(
     headingFormat.formatToParts(at).map((part) => [part.type, part.value]),
@@ -467,6 +472,7 @@ export function ReservationSearchScreen({
   const [searchError, setSearchError] = useState<string>()
   const [forbidden, setForbidden] = useState(false)
   const [selected, setSelected] = useState<Reservation>()
+  const [purposeNames, setPurposeNames] = useState<Map<string, string>>(new Map())
   const [panel, setPanel] = useState<'none' | 'change' | 'cancel'>('none')
   const [changeDate, setChangeDate] = useState(today)
   const [slots, setSlots] = useState<AvailabilitySlotsResponse['slots']>()
@@ -492,6 +498,38 @@ export function ReservationSearchScreen({
   )
 
   // A preselected reservation (arrived from the ledger) opens straight away.
+  /*
+   * 目的の名を引く。承認済みモック `RES-SEARCH` の「予約内容」は `視力測定・新調相談`
+   * と目的の名で始まっており、`1件` という件数では電話口で復唱できない。予約が持つ
+   * のは目的の id だけなので、店舗設定から名を引き当てる。
+   */
+  useEffect(() => {
+    let active = true
+    void (async () => {
+      const response = await api(`/api/staff/stores/${storeId}/availability/settings`)
+      if (!response.ok) return
+      const parsed = AvailabilityStoreSettings.safeParse(await readJson(response))
+      if (!parsed.success || !active) return
+      setPurposeNames(
+        new Map(parsed.data.purposes.map((purpose) => [purpose.id, purpose.staffName])),
+      )
+    })().catch(() => undefined)
+    return () => {
+      active = false
+    }
+  }, [api, storeId])
+
+  /*
+   * 名が 1 つも引けないうちは件数で耐える。空欄にすると「何の予約か」が消えるので、
+   * 名を待つあいだも読めるものを残す。
+   */
+  const purposeText = (purposeIds: string[]): string => {
+    const named = purposeIds.map((id) => purposeNames.get(id)).filter((name) => name !== undefined)
+    return named.length === purposeIds.length && named.length > 0
+      ? named.join('・')
+      : `${purposeIds.length}件`
+  }
+
   useEffect(() => {
     if (!reservationId) return
     let active = true
@@ -766,8 +804,9 @@ export function ReservationSearchScreen({
                 <CardColumns>
                   <Card className="mt-2.5">
                     <b>予約内容</b>
-                    <CardRow label="来店日時">{formatJstDateTime(selected.startAt)}</CardRow>
-                    <CardRow label="来店目的">{`${selected.purposeIds.length}件`}</CardRow>
+                    {/* 来店日時は面の見出しが名乗っている。ここで繰り返すと、
+                        承認済みモックが「予約内容」に置いている目的が押し出される。 */}
+                    <CardRow label="来店目的">{purposeText(selected.purposeIds)}</CardRow>
                     <CardRow label="予約番号">{selected.reservationNumber}</CardRow>
                     <CardRow label="店舗">{storeName}</CardRow>
                   </Card>

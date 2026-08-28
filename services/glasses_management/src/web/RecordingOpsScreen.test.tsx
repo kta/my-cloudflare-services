@@ -275,10 +275,64 @@ test('最低保持期限より前の削除は拒否され、最低保持期限�
   expect(calls.some((call) => call.init?.method === 'DELETE')).toBe(true)
 })
 
+/*
+ * 承認済みモック `RECORDING-OPS` の保存期間は `90日保存` / `3日保存` という
+ * 読み取りの表示で、欄ではない。単位のない裸の `90` / `72` を面に置くと、
+ * 日なのか時間なのかが読めず、モックにある事実がそのぶん消える。
+ * `REBUILD.md` のとおり、設定の本文は読み取りが既定で編集は操作の先である。
+ */
+test('保存期間は既定で読み取りの表示にする (RECORDING-OPS)', async () => {
+  renderScreen(defaultRoutes([stored]))
+  const confirmed = await screen.findByRole('region', { name: '成立予約' })
+  expect(confirmed).toHaveTextContent('90日保存')
+  // モックの読み方は `3日保存`（隣の `90日保存` と同じ単位で並べる）。
+  expect(screen.getByRole('region', { name: '破棄した受付' })).toHaveTextContent('3日保存')
+  expect(screen.queryByLabelText('成立予約の保存日数')).toBeNull()
+  expect(screen.queryByRole('button', { name: '保存期間を更新' })).toBeNull()
+})
+
+test('保存期間の編集は明示の操作の先にある (RECORDING-OPS)', async () => {
+  renderScreen(defaultRoutes([stored]))
+  const confirmed = await screen.findByRole('region', { name: '成立予約' })
+  fireEvent.click(within(confirmed).getByRole('button', { name: '変更' }))
+
+  expect(screen.getByLabelText('成立予約の保存日数')).toBeInTheDocument()
+  expect(screen.getByLabelText('破棄受付の保存時間')).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: '保存期間を更新' })).toBeInTheDocument()
+})
+
+/** 権限が無ければ編集の口は出ない（保存期間そのものも取りに行かないので未取得）。 */
+test('保存期間を変える権限が無ければ変更の口を出さない (RECORDING-OPS)', async () => {
+  renderScreen(defaultRoutes([stored]), { permissions: ['recording.read'] })
+  const confirmed = await screen.findByRole('region', { name: '成立予約' })
+  expect(within(confirmed).queryByRole('button', { name: '変更' })).toBeNull()
+  expect(screen.queryByLabelText('成立予約の保存日数')).toBeNull()
+})
+
+/** 保全の個人再認証の本文は、モックの `録音の保全指定は…` と一字一句同じにする。 */
+test('保全の個人再認証はモックの文言で名乗る (REAUTH)', async () => {
+  renderScreen(defaultRoutes([stored]), { terminalId: TERMINAL_ID })
+  fireEvent.click(
+    within(await screen.findByTestId(`recording-${STORED_ID}`)).getByRole('button', {
+      name: '保全する',
+    }),
+  )
+  expect(
+    await screen.findByText(
+      '録音の保全指定は個人認証が必要です。共有端末と認証した個人の両方を監査記録に残します。',
+    ),
+  ).toBeInTheDocument()
+})
+
 /** AC-EYEX-99 */
 test('最低値を下回る保存期間は理由つきで拒否し、送信しない', async () => {
   const { calls } = renderScreen(defaultRoutes([stored]))
-  const days = await screen.findByLabelText('成立予約の保存日数')
+  fireEvent.click(
+    within(await screen.findByRole('region', { name: '成立予約' })).getByRole('button', {
+      name: '変更',
+    }),
+  )
+  const days = screen.getByLabelText('成立予約の保存日数')
   fireEvent.change(days, { target: { value: '10' } })
   fireEvent.click(screen.getByRole('button', { name: '保存期間を更新' }))
   expect(await screen.findByRole('alert')).toHaveTextContent('最低30日')
@@ -296,7 +350,12 @@ test('最低値を下回る保存期間は理由つきで拒否し、送信し�
 /** AC-EYEX-99 */
 test('最低値以上なら保存期間を送信する', async () => {
   const { calls } = renderScreen(defaultRoutes([stored]))
-  fireEvent.change(await screen.findByLabelText('成立予約の保存日数'), { target: { value: '120' } })
+  fireEvent.click(
+    within(await screen.findByRole('region', { name: '成立予約' })).getByRole('button', {
+      name: '変更',
+    }),
+  )
+  fireEvent.change(screen.getByLabelText('成立予約の保存日数'), { target: { value: '120' } })
   fireEvent.click(screen.getByRole('button', { name: '保存期間を更新' }))
   await waitFor(() => {
     const call = calls.find((entry) => entry.init?.method === 'PUT')
@@ -391,5 +450,33 @@ test('適用元の店舗上書きボタンは保存せず、保存日数の入�
   const button = within(origin).getByRole('button', { name: '店舗上書きを設定' })
   fireEvent.click(button)
   expect(calls.some((call) => call.init?.method === 'PUT')).toBe(false)
-  expect(screen.getByLabelText('成立予約の保存日数')).toHaveFocus()
+  // 読み取りの面から押しても、欄を開いたうえでそこへ送る。
+  await waitFor(() => expect(screen.getByLabelText('成立予約の保存日数')).toHaveFocus())
+})
+
+/*
+ * 承認済みモック `operations-approved.html#recording-ops` の「破棄した受付」は
+ * `3日保存` と読む。契約は時間で持つが、隣の「成立予約」が `90日保存` なので
+ * 時間のまま出すと同じ段の 2 枚が別の単位で並び、長短をその場で比べられない。
+ * 24 で割り切れないときだけ時間のまま出す（丸めて実際より短く見せない）。
+ */
+function renderWithRetentionHours(hours: number) {
+  renderScreen(({ url }: ApiCall): Response | undefined => {
+    if (url.includes('/recording-retention'))
+      return jsonResponse({ ...retention, discardedRetentionHours: hours })
+    if (url.includes('/recordings')) return jsonResponse([])
+    return undefined
+  })
+}
+
+test('破棄した受付の保存期間は日で読める値なら日で出す (RECORDING-OPS)', async () => {
+  renderWithRetentionHours(72)
+  expect(await screen.findByRole('region', { name: '破棄した受付' })).toHaveTextContent('3日保存')
+})
+
+test('24 で割り切れない保存期間は時間のまま出す (RECORDING-OPS)', async () => {
+  renderWithRetentionHours(30)
+  expect(await screen.findByRole('region', { name: '破棄した受付' })).toHaveTextContent(
+    '30時間保存',
+  )
 })

@@ -161,11 +161,36 @@ test('instants are rendered in JST without reading the clock', () => {
 
 test('every view states period, timezone, last update and the counted rows', () => {
   const context = reportContext(report())
-  expect(context.periodText).toBe('2026-08-24〜2026-08-30（週）')
-  expect(context.previousPeriodText).toBe('2026-08-17〜2026-08-23')
+  /*
+   * 帯に出る字は承認済みモックの `8月1日〜8月25日 · JST · 10:15更新` と同じ語彙で
+   * なければならない。生の `2026-08-24` を面に残さないのは製品全体の約束であり、
+   * ここは操作者が読む字であって送信する値ではない。
+   */
+  /*
+   * 粒度は帯の 日/週/月 の切り替えがすでに名乗っている。ここに `（週）` を足すと、
+   * 単日のときの `（日）` が曜日の `（日）`（日曜）と同じ字になり、同じ行に並ぶ
+   * 曜日つきの読み返しと食い違って見える。承認済みモックのピルも粒度を書かない。
+   */
+  expect(context.periodText).toBe('8月24日〜8月30日')
+  expect(context.previousPeriodText).toBe('8月17日〜8月23日')
   expect(context.timezoneText).toBe('JST(Asia/Tokyo)')
-  expect(context.lastUpdatedText).toBe('2026-08-27 14:30 JST')
+  expect(context.lastUpdatedText).toBe('8月27日 14:30')
   expect(context.totalCountText).toBe('対象件数 214件')
+})
+
+test('a single-day period is named once, not as a range of one day', () => {
+  const source = report()
+  const context = reportContext({
+    ...source,
+    period: {
+      ...source.period,
+      granularity: 'day',
+      startDate: '2026-08-27',
+      endDate: '2026-08-27',
+    },
+  })
+  // 単日は曜日で名乗る。`（日）` は粒度の「日」ではなく曜日として読まれる。
+  expect(context.periodText).toBe('8月27日（木）')
 })
 
 /* --- comparison and target (AC-EYEX-52) ----------------------------------- */

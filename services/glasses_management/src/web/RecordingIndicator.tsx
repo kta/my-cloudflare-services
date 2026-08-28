@@ -1,7 +1,7 @@
 import type { RecordingState } from '@app/contracts'
-import { cn, focusRing } from '@app/ui'
 import { FlowButton, RailSummary, RecordIndicator } from './design/booking'
-import { Action } from './design/controls'
+import { Action, Actions } from './design/controls'
+import { ExceptionContent, Panel } from './design/layouts'
 import { formatJstTime } from './ReservationSearchScreen'
 import { RECORDING_STATE_LABEL } from './recording'
 
@@ -155,55 +155,6 @@ export function BookingRecordingRail({
  * 全画面の状態
  * ------------------------------------------------------------------ */
 
-const TOUCH = 'min-h-12 px-5'
-
-/** モックの白いカード面（`.permission`）。 */
-function _Sheet({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <section
-      aria-label={label}
-      className="mx-auto mt-24 w-full max-w-2xl rounded-card border border-line bg-surface p-8"
-    >
-      {children}
-    </section>
-  )
-}
-/** モックの淡い副操作（`.btn.ghost`）。 */
-function SecondaryButton({
-  onClick,
-  children,
-}: {
-  onClick: () => void
-  children: React.ReactNode
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        TOUCH,
-        'rounded-ctl border border-line bg-surface font-sans font-semibold text-base text-ink',
-        focusRing,
-      )}
-    >
-      {children}
-    </button>
-  )
-}
-
-/** モックの赤い枠の告知（`.error-panel`）。 */
-function ErrorPanel({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div
-      role="alert"
-      className="rounded-card border border-danger-line bg-danger-soft p-6 text-ink"
-    >
-      <p className="font-sans font-semibold text-lg text-danger">{title}</p>
-      {children}
-    </div>
-  )
-}
-
 export function RecordingUploadFailedScreen({
   upload,
   onRetryUpload,
@@ -215,28 +166,37 @@ export function RecordingUploadFailedScreen({
   onOpenReservation: () => void
 }) {
   return (
-    <section aria-label="予約は成立しました" className="mx-auto w-full max-w-4xl px-12 pt-10">
-      <h2 className="font-sans font-semibold text-2xl text-ink">予約は成立しました</h2>
-      <div className="mt-6">
-        <ErrorPanel title="録音を保存できていません">
-          <p className="mt-3 font-sans text-base leading-relaxed">
+    /*
+     * 業務のクロムごと入れ替わる全画面の状態なので、他の例外面（EX-403 など）と
+     * 同じ器・同じ段の見出し・同じ赤い面で組む。ここだけ独自の寸法を持つと、
+     * 承認済みモックの余白と字寸法から静かにずれていく。
+     */
+    <ExceptionContent>
+      <h1>予約は成立しました</h1>
+      <Panel tone="error">
+        {/* 失敗そのものは割り込んで読ませる。面の見出しは告知ではない。 */}
+        <div role="alert">
+          <b>録音を保存できていません</b>
+          <p>
             予約内容は登録済みです。録音は端末内の受付セッションに保持され、通信回復後に同じ送信キーで再試行します。
           </p>
           {upload && (
-            <p className="mt-3 font-sans text-base">
+            <p>
               再試行 {upload.attempt}/{upload.maxAttempts} · 最終試行{' '}
               {formatJstTime(upload.lastAttemptAt)}
             </p>
           )}
-        </ErrorPanel>
-      </div>
-      <div className="mt-6 flex flex-wrap justify-end gap-3">
-        <SecondaryButton onClick={onOpenReservation}>予約詳細を見る</SecondaryButton>
+        </div>
+      </Panel>
+      <Actions>
+        <Action size="roomy" onClick={onOpenReservation}>
+          予約詳細を見る
+        </Action>
         {/* 主操作は緑の面。寸法は全画面状態の 48px（`size="roomy"`）。 */}
-        <Action variant="primary" size="roomy" onClick={onRetryUpload}>
+        <Action size="roomy" variant="primary" onClick={onRetryUpload}>
           今すぐ再試行
         </Action>
-      </div>
-    </section>
+      </Actions>
+    </ExceptionContent>
   )
 }

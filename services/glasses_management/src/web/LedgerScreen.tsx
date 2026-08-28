@@ -1,4 +1,9 @@
-import { AvailabilityStoreSettings, CustomerCandidate, LedgerEntry } from '@app/contracts'
+import {
+  AvailabilityStoreSettings,
+  CustomerCandidate,
+  LedgerEntry,
+  VersionConflict,
+} from '@app/contracts'
 import { type ReactNode, useCallback, useEffect, useState } from 'react'
 import { Action, Actions } from './design/controls'
 import { TextField } from './design/forms'
@@ -72,10 +77,25 @@ function timeRange(entry: LedgerEntry): string {
   return `${formatJstMinutes(jstMinutesOf(entry.startAt))}–${formatJstMinutes(jstMinutesOf(entry.endAt))}`
 }
 
-function conflictVersion(payload: unknown): number | undefined {
-  if (typeof payload !== 'object' || payload === null) return undefined
-  const version = (payload as Record<string, unknown>).currentVersion
-  return typeof version === 'number' ? version : undefined
+/**
+ * 409 の本文。承認済みモック `#conflict` の「最新の内容」は版番号ではなく
+ * **いま保存されている値** と **誰がいつ更新したか** を並べる。契約
+ * `VersionConflict` はその 3 要素をすでに運んでいるので、版番号だけを拾って
+ * 捨てない（版番号は操作者の判断材料ではない）。
+ */
+function parseConflict(payload: unknown): VersionConflict | undefined {
+  const parsed = VersionConflict.safeParse(payload)
+  return parsed.success ? parsed.data : undefined
+}
+
+/** 更新時刻は JST の時計表示。日付はモックどおり出さない（同じ日の話だから）。 */
+function formatJstClock(at: string): string {
+  return new Intl.DateTimeFormat('ja-JP', {
+    timeZone: 'Asia/Tokyo',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(new Date(at))
 }
 
 type Placed = { entry: LedgerEntry; startColumn: number; spanColumns: number }
@@ -104,7 +124,7 @@ export function LedgerScreen({ storeId, storeName, api, date, now }: LedgerScree
   const [loadFailed, setLoadFailed] = useState(false)
   const [view, setView] = useState<'staff' | 'equipment'>('staff')
   const [selectedId, setSelectedId] = useState<string>()
-  const [conflict, setConflict] = useState<{ attempt: Attempt; currentVersion: number }>()
+  const [conflict, setConflict] = useState<{ attempt: Attempt; latest: VersionConflict }>()
   const [searchName, setSearchName] = useState('')
   const [candidates, setCandidates] = useState<CustomerCandidate[]>()
   const [newCustomer, setNewCustomer] = useState({ name: '', kana: '', phone: '' })
@@ -154,9 +174,9 @@ export function LedgerScreen({ storeId, storeName, api, date, now }: LedgerScree
   const run = async (attempt: Attempt, version: number) => {
     const response = await attempt.send(version)
     if (response.status === 409) {
-      const latest = conflictVersion(await response.json().catch(() => undefined))
+      const latest = parseConflict(await response.json().catch(() => undefined))
       await load()
-      if (latest !== undefined) setConflict({ attempt, currentVersion: latest })
+      if (latest !== undefined) setConflict({ attempt, latest })
       return
     }
     setConflict(undefined)
@@ -297,11 +317,11 @@ export function LedgerScreen({ storeId, storeName, api, date, now }: LedgerScree
 
       {conflict && (
         <ConflictPanel
-          currentVersion={conflict.currentVersion}
+          latest={conflict.latest}
           input={conflict.attempt.describe}
           onDiscard={() => setConflict(undefined)}
           onReapply={() => {
-            void run(conflict.attempt, conflict.currentVersion)
+            void run(conflict.attempt, conflict.latest.currentVersion)
           }}
         />
       )}
@@ -534,12 +554,12 @@ export function LedgerScreen({ storeId, storeName, api, date, now }: LedgerScree
  * record, and chooses between them — never a bare notice (AC-EYEX-110).
  */
 export function ConflictPanel({
-  currentVersion,
+  latest,
   input,
   onDiscard,
   onReapply,
 }: {
-  currentVersion: number
+  latest: VersionConflict
   input: string
   onDiscard: () => void
   onReapply: () => void
@@ -550,10 +570,30 @@ export function ConflictPanel({
       <Compare>
         <Panel>
           <b className="block">最新の内容</b>
-          <p>{`この画面は最新の状態に更新済みです（版 ${currentVersion}）。`}</p>
+          {/*
+           * モックは「電話番号 …／メモ「…」／更新者: 銀座店 受付iPad 14:31」と、
+           * 値そのものと更新者を並べる。版番号は操作者が破棄と再適用を選ぶ
+           * 材料にならないので出さない。
+           */}
+          <p>
+            {latest.latest.map((field) => (
+              <span key={field.label} className="block">{`${field.label} ${field.value}`}</span>
+            ))}
+            {latest.updatedBy !== null && (
+              <span className="block">
+                {`更新者: ${latest.updatedBy}${
+                  latest.updatedAt === null ? '' : ` ${formatJstClock(latest.updatedAt)}`
+                }`}
+              </span>
+            )}
+          </p>
         </Panel>
-        {/* この端末の入力だけが淡い赤地。失われうるのはこちらだから。 */}
-        <Panel tone="error">
+        {/*
+         * この端末の入力は淡い琥珀。失敗ではなく「まだ確かめていない入力」なので、
+         * 失敗の赤にすると保存できなかったのが手元の側だと読めてしまう
+         * （モックの `.panel.warn` / `admin-chrome.tsx` の `ConflictCompare` と同じ扱い）。
+         */}
+        <Panel tone="warning">
           <b className="block">この端末の入力</b>
           <p>{input}</p>
         </Panel>

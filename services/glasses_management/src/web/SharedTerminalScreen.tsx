@@ -175,6 +175,24 @@ export function SharedTerminalScreen({ storeId, storeName, api, now, idleLockSec
     }
   }
 
+  /*
+   * 無操作ロックの設定 API はまだ無く、実アプリはこの面へ `idleLockSeconds` を
+   * 渡していない。渡されていないときは、登録済みの共有iPad が実際に使っている値で
+   * 答える——推測した既定値ではなく、この面がすでに受け取っている事実である。
+   * 端末ごとに値が割れているときは黙る。1 つを選んで「既定」と書くと、もう一方の
+   * 端末について嘘になる。
+   */
+  const observedIdleSeconds = (() => {
+    const values = new Set((terminals ?? []).map((terminal) => terminal.idleTimeoutSeconds))
+    const [only] = [...values]
+    return values.size === 1 && only !== undefined ? only : undefined
+  })()
+  const idleLock =
+    idleLockSeconds ??
+    (observedIdleSeconds === undefined
+      ? undefined
+      : { organizationDefault: observedIdleSeconds, storeOverride: null })
+
   return (
     <AdminSurface label="端末とセキュリティ">
       <AdminLayout
@@ -286,13 +304,13 @@ export function SharedTerminalScreen({ storeId, storeName, api, now, idleLockSec
               失敗文言だった。推測した既定値を描かない意図は、書かないことで
               同じように守れる（下の変更導線はそのまま残る）。
             */}
-            {idleLockSeconds === undefined ? null : (
+            {idleLock === undefined ? null : (
               <>
-                {`既定 ${formatMinutes(idleLockSeconds.organizationDefault)}`}
+                {`既定 ${formatMinutes(idleLock.organizationDefault)}`}
                 <br />
-                {idleLockSeconds.storeOverride === null
+                {idleLock.storeOverride === null
                   ? '店舗上書きなし（既定を適用中）'
-                  : `店舗上書き ${formatMinutes(idleLockSeconds.storeOverride)}（適用中）`}
+                  : `店舗上書き ${formatMinutes(idleLock.storeOverride)}（適用中）`}
               </>
             )}
             <br />

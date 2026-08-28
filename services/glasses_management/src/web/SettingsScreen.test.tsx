@@ -234,13 +234,13 @@ test('営業時間・休業日・臨時営業・受付停止を編集できる (
   expect(screen.getByLabelText('火曜を営業日にする')).not.toBeChecked()
 
   const exceptions = screen.getByRole('list', { name: '臨時営業・休業日' })
-  expect(within(exceptions).getByText(/2026-09-23/)).toBeInTheDocument()
+  expect(within(exceptions).getByText(/9月23日/)).toBeInTheDocument()
 
   fireEvent.change(screen.getByLabelText('日付'), { target: { value: '2026-10-01' } })
   fireEvent.change(screen.getByLabelText('区分'), { target: { value: 'closed' } })
   fireEvent.change(screen.getByLabelText('理由'), { target: { value: '棚卸' } })
   fireEvent.click(screen.getByRole('button', { name: '臨時設定を追加' }))
-  expect(within(exceptions).getByText(/2026-10-01/)).toBeInTheDocument()
+  expect(within(exceptions).getByText(/10月1日/)).toBeInTheDocument()
 
   fireEvent.change(screen.getByLabelText('受付状態'), { target: { value: 'paused' } })
   expect(
@@ -284,8 +284,16 @@ test('来店目的を非公開にしても既存予約と履歴は削除され�
   api.mockResolvedValueOnce(jsonResponse({ ...settings, version: 4 }))
   fireEvent.click(screen.getByRole('button', { name: '設定を保存' }))
 
-  await waitFor(() => expect(api).toHaveBeenCalledTimes(2))
-  const [, init] = api.mock.calls[1] as unknown as [string, RequestInit]
+  // 回数ではなく保存そのものを見る（面は影響の報告も引くので呼び出しは増える）。
+  await waitFor(() =>
+    expect(
+      api.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === 'PUT'),
+    ).toBe(true),
+  )
+  const put = api.mock.calls.find(
+    ([, options]) => (options as RequestInit | undefined)?.method === 'PUT',
+  )
+  const [, init] = put as unknown as [string, RequestInit]
   const payload = JSON.parse(String(init.body))
   expect(payload.version).toBe(3)
   expect(payload.purposes).toHaveLength(2)
@@ -607,4 +615,14 @@ test('公開結果は柱から辿れる独立した面として出る (UC-EYEX-1
   // バーの副題はモックどおり `設定公開`。
   expect(barOverlay.snapshot().subtitle).toBe('銀座店 · 設定公開')
   expect(screenSections.snapshot().find((section) => section.current)?.label).toBe('公開結果')
+})
+
+test('編集欄の例外日も日本語の日付で読ませる（生の ISO を画面に出さない）', async () => {
+  const api = settingsApi(settings)
+  renderScreen(api)
+  await openEditor()
+
+  const list = await screen.findByRole('list', { name: '臨時営業・休業日' })
+  expect(within(list).getByText('9月23日')).toBeTruthy()
+  expect(list.textContent).not.toContain('2026-09-23')
 })

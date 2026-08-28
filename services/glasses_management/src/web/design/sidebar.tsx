@@ -1,5 +1,5 @@
 import { cn } from '@app/ui'
-import { type ReactNode, useState } from 'react'
+import { createContext, type ReactNode, useContext, useState } from 'react'
 
 /*
  * 全画面共通の左サイドバー。
@@ -45,7 +45,7 @@ export function AppSidebar({ children }: { children: ReactNode }) {
             >
               閉じる
             </button>
-            {children}
+            <DismissDrawer.Provider value={() => setOpen(false)}>{children}</DismissDrawer.Provider>
           </nav>
         </div>
       )}
@@ -53,6 +53,15 @@ export function AppSidebar({ children }: { children: ReactNode }) {
     </>
   )
 }
+
+/**
+ * 引き出しを閉じる手。行き先と節が自分で呼ぶ。
+ *
+ * 幕や `<nav>` に `onClick` を置くと、押せる要素でないものが押せる振りをする
+ * （キーボードからは届かない）。閉じる合図は、もともと押せるボタンの側から
+ * 出す。柱として並んでいるときは何もしない。
+ */
+const DismissDrawer = createContext<() => void>(() => {})
 
 /** 広い画面で本文と横に並ぶ柱そのもの。 */
 function SidebarColumn({ children }: { children: ReactNode }) {
@@ -69,10 +78,12 @@ function SidebarColumn({ children }: { children: ReactNode }) {
        * 映る量より押せることを採る。
        */
       /*
-       * 柱そのものは送らせない。13 の行き先は 44px 行のまま 648px で収まる。
-       * 入り切らないのは開いている面の節だけなので、送るのはそちら（`SidebarSections`）。
+       * 入り切らないときは柱ごと送らせる。節だけを 88px の窓に押し込んでいたが、
+       * 設定の 6 工程・分析の 6 観点はモックでは常に全部見えている列で、窓に
+       * 入れると 2 つしか見えず、行が上下で切れて次の行き先と字が重なった。
+       * 行を詰めて全部映す道は採らない（44pt を割ると狙って押せなくなる）。
        */
-      className="min-h-0 max-md:hidden shrink-0 overflow-hidden border-line border-r bg-side p-3"
+      className="min-h-0 max-md:hidden shrink-0 overflow-auto border-line border-r bg-side p-3"
       style={{ width: '250px' }}
     >
       {children}
@@ -100,11 +111,15 @@ export function SidebarItem({
   current?: boolean
   onClick?: () => void
 }) {
+  const dismiss = useContext(DismissDrawer)
   return (
     <button
       type="button"
       aria-current={current ? 'page' : undefined}
-      onClick={onClick}
+      onClick={() => {
+        dismiss()
+        onClick?.()
+      }}
       className={cn(
         // 44px 行。指で押す列なので、ここを下回らせない。
         'min-h-11 w-full whitespace-nowrap rounded-ctl px-2.5 py-1 text-left font-sans text-body',
@@ -122,13 +137,12 @@ export function SidebarItem({
  * 行き先の下に一段下げて置く。行き先と同じ見た目で並べると、押した先が別の面
  * なのか同じ面の絞り込みなのかが読めなくなる。
  *
- * 節はここだけを送らせる。13 の行き先（44px 行で 648px）は必ず全部見えていな
- * ければならない——見えない行き先は「無い」のと同じで、それを無くすために柱を
- * 作った。節が入り切らないときに送るのは節の側である。高さの上限 88px は、
- * 738px から行き先 648px を引いた残りに収まる値。
+ * 節は高さで切らない。設定の 6 工程・分析の 6 観点はモックでは常に全部見えて
+ * いる列で、88px の窓に入れると 2 つしか見えず、行が上下で切れて直下の行き先と
+ * 字が重なった。入り切らないぶんは柱ごと送らせる（`SidebarColumn`）。
  */
 export function SidebarSections({ children }: { children: ReactNode }) {
-  return <div className="max-h-22 overflow-auto border-line border-l-2 pl-2.5">{children}</div>
+  return <div className="border-line border-l-2 pl-2.5">{children}</div>
 }
 
 /** 節ひとつ。行き先より一段小さく、選択中は緑の太字にする。 */
@@ -144,6 +158,7 @@ export function SidebarSection({
   name?: string
   onClick?: () => void
 }) {
+  const dismiss = useContext(DismissDrawer)
   return (
     <button
       type="button"
@@ -153,7 +168,10 @@ export function SidebarSection({
        */
       aria-current={current ? 'step' : undefined}
       aria-label={name}
-      onClick={onClick}
+      onClick={() => {
+        dismiss()
+        onClick?.()
+      }}
       disabled={onClick === undefined}
       className={cn(
         // 節も押せる列なので 44px を割らない。字面だけ一段小さくする。

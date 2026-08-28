@@ -116,3 +116,11 @@ test('最終試行は JST の時刻で読める形にする', () => {
   expect(panel).toHaveTextContent('最終試行 14:32')
   expect(panel.textContent).not.toContain('2026-08-27T05:32:36.041Z')
 })
+
+test('全画面の見出しは面そのものの見出し（h1）で、他の全画面状態と段を揃える', () => {
+  // 承認済みモック EX-UPLOAD-FAILED / EX-403 は、業務のクロムごと入れ替わる面を
+  // どれも 1 段目の見出しで始める。ここだけ h2 だと、読み上げでは前の面の
+  // 見出しの下にぶら下がって聞こえる。
+  renderUploadFailed()
+  expect(screen.getByRole('heading', { level: 1, name: '予約は成立しました' })).toBeVisible()
+})

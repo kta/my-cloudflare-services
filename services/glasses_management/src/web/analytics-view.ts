@@ -57,8 +57,47 @@ export function formatJstDateTime(instant: string): string {
   return `${date} ${time} JST`
 }
 
+/**
+ * `YYYY-MM-DD` を `8月27日` に読み下す。
+ *
+ * 分析の帯は操作者が読む字であって、送信する値ではない。承認済みモックの
+ * ピルは `8月1日〜8月25日 · JST · 10:15更新` で、生の ISO はどの面にも無い。
+ * 読めない字は読み下さず、そのまま返す（欠けた期間を勝手に作らない）。
+ */
+function dayText(isoDate: string): string {
+  const match = /^\d{4}-(\d{2})-(\d{2})$/.exec(isoDate)
+  if (!match) return isoDate
+  const [, month = '', day = ''] = match
+  return `${Number(month)}月${Number(day)}日`
+}
+
+const WEEKDAY = ['日', '月', '火', '水', '木', '金', '土'] as const
+
+/** `8月27日（木）`。`Date.UTC` で組むのは端末のタイムゾーンで日が前後しないため。 */
+function dayTextWithWeekday(isoDate: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate)
+  if (!match) return isoDate
+  const [, year = '', month = '', day = ''] = match
+  const at = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)))
+  return `${dayText(isoDate)}（${WEEKDAY[at.getUTCDay()]}）`
+}
+
+/** JST の壁時計で `8月27日 14:30`。日本に夏時間は無いので +09:00 の固定加算で足りる。 */
+function instantText(instant: string): string {
+  const shifted = new Date(new Date(instant).getTime() + 9 * 60 * 60 * 1000).toISOString()
+  return `${dayText(shifted.slice(0, 10))} ${shifted.slice(11, 16)}`
+}
+
+/*
+ * 粒度（日/週/月）はここに書かない。帯の 日/週/月 の切り替えがすでに名乗っており、
+ * 単日のときの `（日）` は曜日の `（日）`（日曜）と同じ字になる。同じ行に曜日つきの
+ * 読み返しが並ぶので、粒度のつもりの `（日）` が木曜の日付に付いて食い違って見えた。
+ * 承認済みモックのピル（`8月1日〜8月25日 · JST · 10:15更新`）も粒度を書かない。
+ */
 function periodText(period: AnalyticsPeriod): string {
-  return `${period.startDate}〜${period.endDate}`
+  // 1 日の期間を `8月27日〜8月27日` と書くと、同じ日が 2 度出て範囲に見える。
+  if (period.startDate === period.endDate) return dayTextWithWeekday(period.startDate)
+  return `${dayText(period.startDate)}〜${dayText(period.endDate)}`
 }
 
 export type ReportContext = {
@@ -75,10 +114,10 @@ export type ReportContext = {
  */
 export function reportContext(report: AnalyticsReport): ReportContext {
   return {
-    periodText: `${periodText(report.period)}（${granularityLabel(report.period.granularity)}）`,
+    periodText: periodText(report.period),
     previousPeriodText: periodText(report.previousPeriod),
     timezoneText: `JST(${report.timezone})`,
-    lastUpdatedText: formatJstDateTime(report.lastUpdatedAt),
+    lastUpdatedText: instantText(report.lastUpdatedAt),
     totalCountText: `対象件数 ${report.totalCount}件`,
   }
 }

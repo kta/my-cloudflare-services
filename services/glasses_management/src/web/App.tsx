@@ -293,7 +293,12 @@ export function App({
          * 開いている面の節を並べる。予約フローと例外の面は業務から離れる面
          * なので柱を出さない（受付の途中で別の面へ移す動線を置かない）。
          */}
-        <div className="flex min-h-0 flex-1">
+        {/*
+         * 狭い画面では柱が畳まれ、代わりに「画面の一覧を開く」の口だけが残る。
+         * 横並びのままだとその口が縦長の列になって本文の幅を奪うので、SP では
+         * 縦に積んで本文の上の帯にする。
+         */}
+        <div className="flex min-h-0 flex-1 max-md:flex-col">
           {showSidebar && (
             <AppSidebar>
               {sidebarFor(today).map((group) => (

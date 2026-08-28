@@ -40,6 +40,8 @@ const IPAD = { width: 1176, height: 814 }
 /* 例外・回復の面だけモックの端末が低い。 */
 const IPAD_SHORT = { width: 1176, height: 742 }
 const SP = { width: 359, height: 744 }
+/* 設定ガイドの SP だけモックの端末が別寸法（`.phone` は外枠 9px 込みで 375×790）。 */
+const SP_SETTINGS = { width: 357, height: 772 }
 
 /* ------------------------------------------------------------------ *
  * 出力
@@ -171,6 +173,14 @@ async function openAdmin(page: Page, label: string) {
    */
   if (destination !== '設定ガイド')
     await sidebar.getByRole('button', { name: destination, exact: true }).click()
+  /*
+   * 引き出しは行き先を押した時点で閉じる。押さずに着いた（設定ガイドそのもの）
+   * ときだけ開いたまま残るので、ここで閉じる。開いたままでは本文が引き出しの
+   * 下に隠れて撮れない。
+   */
+  const drawer = page.getByRole('navigation', { name: '画面の一覧（開いた状態）' })
+  if ((await drawer.count()) > 0)
+    await drawer.getByRole('button', { name: '閉じる', exact: true }).click()
 }
 
 /* ------------------------------------------------------------------ *
@@ -242,10 +252,11 @@ function slotsFor(storeId: string, date: string, times: string[]) {
   }
 }
 
+/* 承認済みモックは姓と名を空けて書く（`田中 花子 様`）。撮影もその形に揃える。 */
 const hanako = {
   id: hanakoId,
-  name: '田中花子',
-  kana: 'タナカハナコ',
+  name: '田中 花子',
+  kana: 'タナカ ハナコ',
   phone: '090-1234-5678',
   email: null,
   primaryStoreId: ginzaId,
@@ -254,8 +265,8 @@ const hanako = {
 /* 承認済みモック BOOK-CUSTOMER の 2 件目（同じ店舗の別候補）。 */
 const taro = {
   id: taroId,
-  name: '田中一郎',
-  kana: 'タナカイチロウ',
+  name: '田中 一郎',
+  kana: 'タナカ イチロウ',
   phone: '090-1234-9912',
   email: null,
   primaryStoreId: ginzaId,
@@ -301,6 +312,23 @@ async function mockBookingApi(
 ) {
   const offered = options.offered ?? ['10:00', '10:30', '11:00', '11:30', '12:00']
   await refreshRoute(page)
+  /*
+   * 権限を返さないと、脇の列の `対応時に確認`（淡赤の注意面）が丸ごと消える。
+   * 承認済みモック BOOK-CUSTOMER はその面を描いているので、撮影の権限も
+   * それに合わせる（権限が無くて消えたのか実装が持たないのかを混ぜない）。
+   */
+  await page.route('**/api/staff/stores/*/permissions', (route) =>
+    route.fulfill({
+      json: [
+        'store.read',
+        'reservation.read',
+        'reservation.write',
+        'customer.read',
+        'customer.history',
+        'attention.read',
+      ],
+    }),
+  )
   await page.route('**/api/staff/stores/*/availability/settings', (route) =>
     route.fulfill({ json: availabilitySettings(ginzaId, bookingPurposes) }),
   )
@@ -331,7 +359,7 @@ async function mockBookingApi(
         id: '77777777-7777-4777-8777-777777777777',
         organizationId: 'org-eyex',
         storeId: ginzaId,
-        reservationNumber: 'EY-2001',
+        reservationNumber: 'EY-0828-1142',
         source: 'staff',
         status: 'confirmed',
         startAt: `${body.date}T01:00:00.000Z`,
@@ -413,7 +441,7 @@ async function captureBookingScreens(browser: Browser) {
     await page.getByRole('button', { name: /メガネを新しく作りたい/ }).click()
     await page.getByRole('button', { name: /かけ具合を調整したい/ }).click()
     await page.getByRole('button', { name: 'お客様情報へ進む' }).click()
-    await page.getByLabel('お電話番号').fill('０９０-1234')
+    await page.getByLabel('お電話番号').fill('090-1234')
     const options = page.getByRole('list', { name: '顧客候補' }).getByRole('button')
     await options.first().waitFor({ state: 'visible' })
     await options.nth(0).click()
@@ -508,7 +536,8 @@ const allRecordings: Recording[] = [
 ]
 
 const retentionSettings = {
-  confirmedRetentionDays: 45,
+  // 承認済みモック `RECORDING-OPS` の `90日保存` と同じ値で撮る。
+  confirmedRetentionDays: 90,
   discardedRetentionHours: 72,
   updatedAt: shifted(-10 * DAY),
 }
@@ -652,7 +681,7 @@ async function mockBookingRecordingApi(page: Page, options: { recordingPostStatu
         id: createdReservationId,
         organizationId: 'org-eyex',
         storeId: ginzaId,
-        reservationNumber: 'EY-2001',
+        reservationNumber: 'EY-0828-1142',
         source: 'staff',
         status: 'confirmed',
         startAt: `${body.date}T01:00:00.000Z`,
@@ -743,7 +772,12 @@ async function captureRecordingScreens(browser: Browser) {
  * 3. 台帳・来店受付・同時編集（e2e/staff-ledger.spec.ts のフィクスチャ）
  * ------------------------------------------------------------------ */
 
-const LEDGER_NOW = '2026-09-01T05:30:00.000Z' // JST 14:30
+/*
+ * 承認済みモック `LEDGER-DAY` の現在時刻は 11:08 で、盤の 10:00〜13:00 の中に
+ * 現在時刻の線が立っている。ここを JST 14:30 にすると線も進行中の行も盤の外へ
+ * 出てしまい、「マーカーが出ない実装」に見える撮り方になっていた。
+ */
+const LEDGER_NOW = '2026-09-01T02:08:00.000Z' // JST 11:08
 const LEDGER_TODAY = '2026-09-01'
 const webReservationId = 'aaaaaaaa-0000-4000-8000-000000000001'
 const phoneReservationId = 'aaaaaaaa-0000-4000-8000-000000000002'
@@ -751,6 +785,9 @@ const walkinId = 'bbbbbbbb-0000-4000-8000-000000000001'
 const ledgerStaffId = 'cccccccc-0000-4000-8000-000000000001'
 const ledgerEquipmentId = 'dddddddd-0000-4000-8000-000000000001'
 const ledgerCustomerId = 'eeeeeeee-0000-4000-8000-000000000001'
+/* モックの盤は担当者ごとに行が立つ。1 人しか居ないと「担当者未定」の行しか撮れない。 */
+const ledgerStaffId2 = 'cccccccc-0000-4000-8000-000000000002'
+const measuredReservationId = 'aaaaaaaa-0000-4000-8000-000000000003'
 
 type LedgerRow = Record<string, unknown> & { id: string; version: number }
 
@@ -764,11 +801,17 @@ function ledgerBase(overrides: Partial<LedgerRow> = {}): LedgerRow {
     endAt: '2026-09-01T02:00:00.000Z',
     customerName: '佐藤 陽子',
     customerId: ledgerCustomerId,
-    progress: null,
-    waitStartedAt: null,
-    assignedStaffId: null,
-    assignedEquipmentIds: [],
-    nextGuidance: null,
+    /*
+     * モックの工程盤（`JOURNEY-DEFAULT`）は「受付済み → 相談中 → 次にご案内」と
+     * 進んだ行を持つ。全行を `progress: null` にすると、どの行も 1 列目にしか
+     * 印が付かず、盤が進み具合を描けているかどうかを確かめられない。
+     */
+    progress: 'service_in_progress',
+    // JST 10:50 受付 → 現在 11:08 で「待ち18分」。モックと同じ読み。
+    waitStartedAt: '2026-09-01T01:50:00.000Z',
+    assignedStaffId: ledgerStaffId,
+    assignedEquipmentIds: [ledgerEquipmentId],
+    nextGuidance: '測定機A 11:30',
     // 予約行は purposeNames 必須（台帳セルの「目的 · 予約元」表示のため）。
     purposeNames: ['視力測定'],
     warnings: [],
@@ -785,9 +828,30 @@ function phoneRow(): LedgerRow {
     endAt: '2026-09-01T03:30:00.000Z',
     customerName: '鈴木 一郎',
     customerId: null,
+    progress: null,
+    waitStartedAt: null,
+    nextGuidance: null,
     assignedStaffId: ledgerStaffId,
     assignedEquipmentIds: [ledgerEquipmentId],
     version: 3,
+  })
+}
+
+/* 2 人目の担当者の行。モックの盤は担当者ごとに行が立つ。 */
+function measuredRow(): LedgerRow {
+  return ledgerBase({
+    id: measuredReservationId,
+    source: 'web',
+    startAt: '2026-09-01T01:30:00.000Z',
+    endAt: '2026-09-01T02:30:00.000Z',
+    customerName: '伊藤 健',
+    customerId: null,
+    progress: null,
+    waitStartedAt: null,
+    nextGuidance: null,
+    assignedStaffId: ledgerStaffId2,
+    assignedEquipmentIds: [],
+    version: 2,
   })
 }
 
@@ -798,12 +862,13 @@ function walkinRow(overrides: Partial<LedgerRow> = {}): LedgerRow {
     entryType: 'walkin',
     source: 'walkin',
     status: 'active',
-    startAt: '2026-09-01T05:00:00.000Z',
-    endAt: '2026-09-01T06:00:00.000Z',
-    customerName: 'ウォークイン 14:00',
+    // 営業時間の中（JST 11:00）に置く。外に置くと盤の行ではなく「営業時間外の受付」へ落ちる。
+    startAt: '2026-09-01T02:00:00.000Z',
+    endAt: '2026-09-01T03:00:00.000Z',
+    customerName: 'ウォークイン 003',
     customerId: null,
     progress: 'waiting',
-    waitStartedAt: '2026-09-01T05:00:00.000Z',
+    waitStartedAt: '2026-09-01T02:00:00.000Z',
     ...overrides,
   })
   return row as LedgerRow
@@ -840,6 +905,13 @@ async function mockLedgerApi(page: Page, state: LedgerState) {
               canBook: true,
               isActive: true,
             },
+            {
+              id: ledgerStaffId2,
+              name: '佐藤 美咲',
+              skills: ['refraction'],
+              canBook: true,
+              isActive: true,
+            },
           ],
           equipment: [
             {
@@ -855,7 +927,24 @@ async function mockLedgerApi(page: Page, state: LedgerState) {
     if (state.conflictOn && path === state.conflictOn.path) {
       const currentVersion = state.conflictOn.currentVersion
       state.conflictOn = undefined
-      return route.fulfill({ status: 409, json: { error: 'version_conflict', currentVersion } })
+      /*
+       * 実サーバー（`walkinConflict`）は「いま保存されている値」と更新者・更新時刻
+       * まで返す。ここを版番号だけにすると、承認済みモック `#conflict` の
+       * 「最新の内容」が空の面として撮れてしまう。
+       */
+      return route.fulfill({
+        status: 409,
+        json: {
+          error: 'version_conflict',
+          currentVersion,
+          latest: [
+            { label: '状態', value: '接客中' },
+            { label: 'お客様', value: '顧客未登録' },
+          ],
+          updatedBy: '銀座店 受付iPad',
+          updatedAt: '2026-09-01T05:31:00.000Z',
+        },
+      })
     }
     return route.fulfill({ json: { ok: true } })
   })
@@ -876,6 +965,7 @@ async function captureLedgerScreens(browser: Browser) {
       rows: [
         ledgerBase(),
         phoneRow(),
+        measuredRow(),
         walkinRow({
           warnings: [
             {
@@ -912,7 +1002,7 @@ async function captureLedgerScreens(browser: Browser) {
       currentVersion: 7,
     }
     state.rows = [walkinRow({ version: 7, nextGuidance: '他端末が更新しました' })]
-    await page.getByRole('button', { name: /ウォークイン 14:00/ }).click()
+    await page.getByRole('button', { name: /ウォークイン 003/ }).click()
     await page.getByRole('button', { name: '退店として記録する' }).click()
     await visible(page.getByRole('region', { name: '別の端末で先に更新されています' }))
     await shot(page, 'EX-CONFLICT', 'stale', 'ipad-landscape')
@@ -944,25 +1034,45 @@ const tanakaReservation = {
   createdAt: '2026-08-20T01:00:00.000Z',
 }
 
+/* モックの候補一覧は 2 件ある。1 件だけだと「選べる一覧」に見えない。 */
+const itoReservation = {
+  ...tanakaReservation,
+  id: '44444444-4444-4444-8444-444444444445',
+  reservationNumber: 'EY-0829-1330',
+  startAt: '2026-08-29T04:30:00.000Z',
+  endAt: '2026-08-29T05:30:00.000Z',
+  purposeIds: [adjustPurposeId],
+  customer: { name: '伊藤 健', kana: 'イトウ ケン', phone: '090-2222-3333', email: null },
+  version: 1,
+}
+
+/*
+ * 受付履歴のフィクスチャ。サーバー（`readReceptionHistory`）が実際に返す形に
+ * 揃えてある。ウォークインでも名前欄は空にならず受付連番が入り、
+ * `requiresAttention` は取消・無断キャンセルでしか立たない（予約を登録しただけの
+ * 記録に注意を持たせると、通常の状態が琥珀の「要確認」として撮れてしまう）。
+ */
 const historyEvents = [
   {
     id: '55555555-5555-4555-8555-000000000101',
-    occurredAt: '2026-08-27T05:26:00.000Z',
+    occurredAt: '2026-08-26T05:26:00.000Z',
     source: 'walkin',
     action: 'walkin_created',
     entityType: 'walkin',
     entityId: '55555555-5555-4555-8555-000000000901',
     reservationId: null,
-    customerName: null,
+    customerName: 'ウォークイン 006',
     customerPhone: null,
     reservationNumber: null,
     actorId: '山田',
     requiresAttention: false,
     recordingStatus: 'none',
+    startAt: null,
+    purposeIds: [],
   },
   {
     id: '55555555-5555-4555-8555-000000000102',
-    occurredAt: '2026-08-27T05:18:00.000Z',
+    occurredAt: '2026-08-26T05:18:00.000Z',
     source: 'staff',
     action: 'created',
     entityType: 'reservation',
@@ -972,12 +1082,14 @@ const historyEvents = [
     customerPhone: '090-1234-5678',
     reservationNumber: 'EY-0828-1142',
     actorId: '鈴木',
-    requiresAttention: true,
+    requiresAttention: false,
     recordingStatus: 'none',
+    startAt: '2026-08-28T02:00:00.000Z',
+    purposeIds: [examPurposeId],
   },
   {
     id: '55555555-5555-4555-8555-000000000103',
-    occurredAt: '2026-08-27T04:54:00.000Z',
+    occurredAt: '2026-08-26T04:54:00.000Z',
     source: 'web',
     action: 'created',
     entityType: 'reservation',
@@ -989,7 +1101,51 @@ const historyEvents = [
     actorId: 'web',
     requiresAttention: false,
     recordingStatus: 'none',
+    startAt: '2026-08-29T04:30:00.000Z',
+    purposeIds: [adjustPurposeId],
   },
+  {
+    id: '55555555-5555-4555-8555-000000000104',
+    occurredAt: '2026-08-26T04:32:00.000Z',
+    source: 'staff',
+    action: 'changed',
+    entityType: 'reservation',
+    entityId: '55555555-5555-4555-8555-000000000904',
+    reservationId: '55555555-5555-4555-8555-000000000904',
+    customerName: '松本 一郎',
+    customerPhone: '090-4444-5555',
+    reservationNumber: 'EY-0827-1500',
+    actorId: '山田',
+    requiresAttention: false,
+    recordingStatus: 'none',
+    startAt: '2026-08-28T01:00:00.000Z',
+    purposeIds: [adjustPurposeId],
+  },
+]
+
+/** 開いた記録がぶら下がる予約。詳細の「来店」「目的」はここからしか取れない。 */
+const historyReservation = {
+  id: '55555555-5555-4555-8555-000000000902',
+  organizationId: 'org-eyex',
+  storeId: ginzaId,
+  reservationNumber: 'EY-0828-1142',
+  source: 'staff',
+  status: 'confirmed',
+  startAt: '2026-08-28T02:00:00.000Z',
+  endAt: '2026-08-28T03:00:00.000Z',
+  purposeIds: [examPurposeId],
+  customer: { name: '田中 花子', kana: 'タナカ ハナコ', phone: '090-1234-5678', email: null },
+  recital: '8月28日11時にご来店ください。',
+  reservationMemo: null,
+  handoffNote: null,
+  version: 1,
+  createdAt: '2026-08-26T05:18:00.000Z',
+}
+
+/* 受付履歴の目的名は承認済みモックの語（`視力測定・新調相談` / `フレーム相談`）。 */
+const historyPurposes = [
+  { ...bookingPurposes[0], id: examPurposeId, staffName: '視力測定・新調相談' },
+  { ...bookingPurposes[1], id: adjustPurposeId, staffName: 'フレーム相談' },
 ]
 
 async function mockSearchApi(
@@ -1000,6 +1156,60 @@ async function mockSearchApi(
     const url = new URL(route.request().url())
     if (url.pathname === '/api/auth/refresh') return route.fulfill({ json: { token: 'e2e-token' } })
     if (url.pathname === '/api/staff/stores') return route.fulfill({ json: stores })
+    /*
+     * 権限を空で返すと、録音を見てよい人にだけ出す `iPad録音` の面が丸ごと
+     * 消える。承認済みモックは録音のある受付を描いているので、撮影の権限も
+     * それに合わせる。
+     */
+    if (url.pathname.endsWith('/permissions'))
+      return route.fulfill({
+        json: ['store.read', 'reservation.read', 'customer.read', 'recording.read'],
+      })
+    if (url.pathname.endsWith('/recordings'))
+      return route.fulfill({
+        json: [
+          /*
+           * 承認済みモック `RES-SEARCH` は録音のある予約を開いている。別の予約に
+           * 紐づけると、権限があるのに「録音なし」の面が撮れてしまい、再生の行が
+           * 出ない実装に見える（AC-EYEX-79 の欠落と区別が付かない）。
+           */
+          recordingRow({
+            id: storedId,
+            state: 'stored',
+            reservationId: tanakaId,
+            durationSeconds: 192,
+          }),
+          /*
+           * 受付履歴で開く記録（`EY-0828-1142`）の録音。RES-SEARCH の予約に
+           * だけ紐づけていると、権限があるのに `RECEPTION-HISTORY` は「録音なし」
+           * で撮れてしまい、承認済みモックの再生行と波形が出ない実装に見える。
+           */
+          recordingRow({
+            id: '66666666-6666-4666-8666-000000000902',
+            state: 'stored',
+            reservationId: '55555555-5555-4555-8555-000000000902',
+            durationSeconds: 192,
+          }),
+        ],
+      })
+    if (url.pathname.endsWith('/availability/settings'))
+      return route.fulfill({ json: availabilitySettings(ginzaId, historyPurposes) })
+    if (url.pathname.endsWith('/customers'))
+      return route.fulfill({
+        json: [
+          {
+            id: hanakoId,
+            name: '田中 花子',
+            kana: 'タナカ ハナコ',
+            phone: '090-1234-5678',
+            email: null,
+            primaryStoreId: ginzaId,
+            visitCount: 4,
+          },
+        ],
+      })
+    if (url.pathname.endsWith('/history')) return route.fulfill({ json: [] })
+    if (url.pathname.includes('/reservations/')) return route.fulfill({ json: historyReservation })
     if (url.pathname === `/api/staff/stores/${ginzaId}/reservations`)
       return route.fulfill({ json: options.reservations ?? [] })
     if (url.pathname === `/api/staff/stores/${ginzaId}/reception-history`)
@@ -1012,7 +1222,7 @@ async function captureSearchScreens(browser: Browser) {
   // RES-SEARCH: 選択店舗固定の検索結果と詳細。
   {
     const page = await newPage(browser, IPAD)
-    await mockSearchApi(page, { reservations: [tanakaReservation] })
+    await mockSearchApi(page, { reservations: [tanakaReservation, itoReservation] })
     await openHome(page)
     await page.getByRole('button', { name: '予約を検索', exact: true }).click()
     await visible(page.getByRole('heading', { name: '予約を検索する' }))
@@ -1028,6 +1238,11 @@ async function captureSearchScreens(browser: Browser) {
   // RECEPTION-HISTORY: 当日の受付イベントと詳細。
   {
     const page = await newPage(browser, IPAD)
+    /*
+     * 記録は 8/26 に起きたことになっている。実時刻のまま撮ると日付見出しだけが
+     * 撮影日を指し、「当日の記録」という面の前提が画の中で崩れる。
+     */
+    await page.clock.setFixedTime(new Date('2026-08-26T05:32:00.000Z'))
     await mockSearchApi(page, { history: historyEvents })
     await openHome(page)
     await secondary(page).getByRole('button', { name: '受付履歴' }).click()
@@ -1120,7 +1335,8 @@ const customerDetail = {
   attentionNotes: [
     {
       body: '鼻あての金属で肌が荒れやすい。',
-      basis: '2025-02-10のご本人申告',
+      // 根拠は「どこで分かったか」であって日付ではない（日付は記録日が持つ）。
+      basis: 'ご本人申告',
       recordedBy: '鈴木',
       recordedOn: '2025-02-12',
     },
@@ -1163,7 +1379,7 @@ async function captureCustomerScreen(browser: Browser) {
   await visible(list)
   await list.getByLabel('顧客を検索').fill('09012345678')
   // 候補 1 件は article のまとまりで、押せるのはその内側の button。
-  const candidate = list.getByRole('article', { name: '田中花子' })
+  const candidate = list.getByRole('article', { name: '田中 花子' })
   await candidate.getByRole('button').click()
   await visible(page.getByRole('region', { name: '現在の度数' }))
   await shot(page, 'CUSTOMER-CURRENT', 'default', 'ipad-landscape')
@@ -1228,6 +1444,33 @@ async function mockStoreSwitchApi(page: Page) {
     })
   })
   await page.route('**/api/staff/stores/*/ledger*', (route) => route.fulfill({ json: [] }))
+  /*
+   * 切替シートの副題「営業中 · 警告2件」は未対応のアラート件数から出る。空で
+   * 返すと副題が状態語だけになり、承認済みモックが「押す前に読ませる」と
+   * 決めた 1 行が撮れない。
+   */
+  await page.route('**/api/staff/stores/*/alerts*', (route) =>
+    route.fulfill({
+      json: [0, 1].map((index) => ({
+        id: `4000000${index}-0000-4000-8000-00000000000${index}`,
+        storeId: ginzaId,
+        kind: 'alert',
+        code: 'long_wait',
+        title: '長時間お待ちのお客様',
+        reason: '受付から30分経過しています。',
+        subject: `ウォークイン ${index + 1}`,
+        subjectType: 'walkin',
+        subjectId: `walkin-${index + 1}`,
+        nextAction: '担当者を割り当ててご案内してください。',
+        occurredAt: '2026-08-31T00:00:00.000Z',
+        readAt: null,
+        readBy: null,
+        resolvedAt: null,
+        resolvedBy: null,
+        resolutionNote: null,
+      })),
+    }),
+  )
 }
 
 async function captureStoreSwitchScreens(browser: Browser) {
@@ -1265,6 +1508,10 @@ async function captureStoreSwitchScreens(browser: Browser) {
 const settingsStaffId = '55555555-5555-4555-8555-555555555555'
 const settingsShiftId = '66666666-6666-4666-8666-666666666666'
 const settingsEquipmentId = '77777777-7777-4777-8777-777777777777'
+const settingsStaffTwoId = '55555555-5555-4555-8555-555555555556'
+const settingsShiftTwoId = '66666666-6666-4666-8666-666666666667'
+const settingsSeatId = '77777777-7777-4777-8777-777777777778'
+const settingsBenchId = '77777777-7777-4777-8777-777777777779'
 const settingsMaintenanceId = '88888888-8888-4888-8888-888888888888'
 const terminalId = '99999999-9999-4999-8999-999999999999'
 
@@ -1284,17 +1531,25 @@ function settingsFixture() {
       { dayOfWeek: 5, periods: [{ startTime: '10:00', endTime: '19:00' }] },
       { dayOfWeek: 6, periods: [{ startTime: '10:00', endTime: '19:00' }] },
     ],
-    exceptions: [{ date: '2026-09-23', mode: 'closed', periods: [], reason: '棚卸し' }],
+    /* モック #store-hours は「休業日 毎週火曜日」「臨時営業 9月23日 10:00–17:00」。 */
+    exceptions: [
+      {
+        date: '2026-09-23',
+        mode: 'open',
+        periods: [{ startTime: '10:00', endTime: '17:00' }],
+        reason: '祝日の臨時営業',
+      },
+    ],
     purposes: [
       {
         id: examPurposeId,
-        staffName: '視力測定',
+        staffName: '視力測定・新調相談',
         customerLabel: 'メガネを新しく作りたい',
         durationMinutes: 60,
-        slotIntervalMinutes: 30,
+        slotIntervalMinutes: 15,
         isPublic: true,
         requiredSkills: ['眼鏡作製技能'],
-        requiredEquipment: ['視力測定機'],
+        requiredEquipment: ['視力測定機', '相談席'],
         maxConcurrent: 1,
       },
       {
@@ -1309,11 +1564,19 @@ function settingsFixture() {
         maxConcurrent: 2,
       },
     ],
+    /* モック #staff-skills の 2 枚（佐藤 美咲・高橋 健）をそのまま持つ。 */
     staff: [
       {
         id: settingsStaffId,
-        name: '山田検査員',
-        skills: ['眼鏡作製技能'],
+        name: '佐藤 美咲',
+        skills: ['眼鏡作製技能', '調整'],
+        canBook: true,
+        isActive: true,
+      },
+      {
+        id: settingsStaffTwoId,
+        name: '高橋 健',
+        skills: ['視力測定', '調整'],
         canBook: true,
         isActive: true,
       },
@@ -1324,14 +1587,37 @@ function settingsFixture() {
         staffId: settingsStaffId,
         date: '2026-08-27',
         startTime: '10:00',
-        endTime: '19:00',
+        endTime: '18:00',
         breaks: [{ startTime: '13:00', endTime: '14:00' }],
       },
+      {
+        id: settingsShiftTwoId,
+        staffId: settingsStaffTwoId,
+        date: '2026-08-27',
+        startTime: '11:00',
+        endTime: '19:00',
+        breaks: [],
+      },
     ],
+    /* モック #equipment の 3 枚（視力測定機・相談席・調整台）と点検停止 1 件。 */
     equipment: [
       {
         id: settingsEquipmentId,
         name: '視力測定機',
+        capacity: 2,
+        isActive: true,
+        availablePeriods: [{ startTime: '10:00', endTime: '19:00' }],
+      },
+      {
+        id: settingsSeatId,
+        name: '相談席',
+        capacity: 4,
+        isActive: true,
+        availablePeriods: [{ startTime: '10:00', endTime: '19:00' }],
+      },
+      {
+        id: settingsBenchId,
+        name: '調整台',
         capacity: 2,
         isActive: true,
         availablePeriods: [{ startTime: '10:00', endTime: '19:00' }],
@@ -1341,9 +1627,9 @@ function settingsFixture() {
       {
         id: settingsMaintenanceId,
         equipmentId: settingsEquipmentId,
-        date: '2026-09-01',
-        startTime: '09:00',
-        endTime: '10:00',
+        date: '2026-09-10',
+        startTime: '13:00',
+        endTime: '17:00',
         reason: '定期点検',
       },
     ],
@@ -1358,6 +1644,63 @@ async function mockSettingsApi(page: Page) {
   await page.route('**/api/staff/stores/*/availability/settings', (route) =>
     route.fulfill({ json: settingsFixture() }),
   )
+  /* 見出しの右端の「下書き保存 14:32」が読む下書き（モックの `.title .push`）。 */
+  await page.route('**/api/staff/stores/*/availability/draft', (route) =>
+    route.fulfill({
+      json: {
+        id: draftId,
+        storeId: ginzaId,
+        draftVersion: 4,
+        baseVersion: 3,
+        status: 'draft',
+        origin: 'store_override',
+        restoredFromVersionId: null,
+        savedAt: '2026-08-26T05:32:00.000Z',
+        savedBy: '山田 太郎',
+        settings: settingsFixture(),
+      },
+    }),
+  )
+  /* 工程 1・3・4 の下に続く影響の面（モックの `.preview`）が読む報告。 */
+  await page.route('**/api/staff/stores/*/availability/draft/impact', (route) =>
+    route.fulfill({ json: settingsImpactFixture() }),
+  )
+}
+
+function settingsImpactFixture() {
+  return {
+    draftId: draftId,
+    storeId: ginzaId,
+    evaluatedAt: '2026-08-27T00:06:00.000Z',
+    blockingCount: 2,
+    warningCount: 1,
+    canPublish: false,
+    ledgerEntriesAffected: 18,
+    publicSlots: { date: '2026-08-27', publishedCount: 2, draftCount: 2 },
+    items: [
+      {
+        kind: 'reservation_conflict',
+        severity: 'blocking',
+        reservationId: conflictAId,
+        message: '9/10 13:00 の予約で使う視力測定機が停止します',
+        resolution: null,
+      },
+      {
+        kind: 'reservation_conflict',
+        severity: 'blocking',
+        reservationId: conflictBId,
+        message: '9/10 15:00 の予約で使う視力測定機が停止します',
+        resolution: null,
+      },
+      {
+        kind: 'missing_staff_skill',
+        severity: 'warning',
+        reservationId: null,
+        message: '佐藤の技能を外すと、新調相談4枠と既存予約1件が競合します。',
+        resolution: null,
+      },
+    ],
+  }
 }
 
 async function openSettings(page: Page) {
@@ -1383,38 +1726,32 @@ async function goToStep(page: Page, pattern: RegExp) {
   await page.waitForTimeout(200)
 }
 
-/* 入力欄は「編集」を押した先にある。読み取りカードが既定の面になった。 */
-async function startEditing(screen: Locator) {
-  await screen.getByRole('button', { name: '編集', exact: true }).click()
-}
-
 async function captureSettingsScreens(browser: Browser) {
   {
     const page = await newPage(browser, IPAD)
     await mockSettingsApi(page)
     const screen = await openSettings(page)
-    // 各工程の画は「編集」を開いた下書きの姿。読み取りカードのままでは撮らない。
-    await startEditing(screen)
-    await visible(page.getByRole('region', { name: '営業時間の編集' }))
+    /*
+     * 撮るのは読み取りカードの面。承認済みモックの 6 工程はどれも `.field` /
+     * `.card` しか持たず、入力欄は「編集」を押した先にある。編集を開いた姿で
+     * 撮ると、モックに無い入力欄が本文を押し下げて基準と並ばない。
+     */
+    await visible(screen.getByRole('button', { name: '編集', exact: true }))
     await shot(page, 'SETTINGS-STORE-HOURS', 'draft', 'ipad-landscape')
 
     await goToStep(page, /^工程2 来店目的/)
-    await startEditing(screen)
     await visible(page.getByRole('region', { name: 'Web予約プレビュー' }))
     await shot(page, 'SETTINGS-PURPOSES', 'draft', 'ipad-landscape')
 
     await goToStep(page, /^工程3 スタッフと技能/)
-    await startEditing(screen)
-    await visible(page.getByRole('region', { name: 'スタッフと技能の編集' }))
+    await visible(page.getByText('佐藤 美咲'))
     await shot(page, 'SETTINGS-STAFF-SKILLS', 'impact', 'ipad-landscape')
 
     await goToStep(page, /^工程4 設備と点検/)
-    await startEditing(screen)
-    await visible(page.getByRole('region', { name: '設備の編集' }))
+    await visible(page.getByText('点検停止'))
     await shot(page, 'SETTINGS-EQUIPMENT', 'maintenance', 'ipad-landscape')
 
     await goToStep(page, /^工程5 Web予約/)
-    await startEditing(screen)
     await visible(page.getByRole('region', { name: 'Web予約設定' }))
     await shot(page, 'SETTINGS-WEB', 'scheduled', 'ipad-landscape')
     await page.context().close()
@@ -1422,7 +1759,7 @@ async function captureSettingsScreens(browser: Browser) {
 
   // SETTINGS-SP: SP 幅の固定ステッパー。
   {
-    const page = await newPage(browser, SP)
+    const page = await newPage(browser, SP_SETTINGS)
     await mockSettingsApi(page)
     await openSettings(page)
     await visible(page.getByRole('navigation', { name: '設定の工程' }))
@@ -1444,13 +1781,30 @@ async function captureSettingsScreens(browser: Browser) {
             id: terminalId,
             organizationId: 'org-eyex',
             storeId: ginzaId,
-            name: '受付カウンターiPad',
+            name: 'レジ横iPad',
             status: 'active',
-            idleTimeoutSeconds: 300,
+            idleTimeoutSeconds: 120,
             expiresAt: '2026-12-01T00:00:00.000Z',
             lastSeenAt: '2026-08-27T02:58:00.000Z',
             createdAt: '2026-08-01T00:00:00.000Z',
             revokedAt: null,
+          },
+          /*
+           * 承認済みモック `DEVICE-LIST` は「利用中」と「停止中」を並べて、停止中の
+           * 行だけが `削除確認` を持つことを見せている。1 台だけだと、状態の書き分けも
+           * 行いの出し分けも撮れない。
+           */
+          {
+            id: '22222222-2222-4222-8222-000000000002',
+            organizationId: 'org-eyex',
+            storeId: ginzaId,
+            name: '受付iPad',
+            status: 'revoked',
+            idleTimeoutSeconds: 120,
+            expiresAt: '2026-12-01T00:00:00.000Z',
+            lastSeenAt: '2026-08-09T02:58:00.000Z',
+            createdAt: '2026-08-01T00:00:00.000Z',
+            revokedAt: '2026-08-20T02:00:00.000Z',
           },
         ],
       }),
@@ -1708,11 +2062,17 @@ function auditEvent(overrides: Record<string, unknown> = {}) {
     occurredAt: '2026-08-25T06:10:00.000Z',
     storeId: ginzaId,
     actorType: 'user',
-    actorId: 'user-yamada',
+    /*
+     * 承認済みモックの記録は `actor: 佐藤 美咲` / `target: attention EY-A-220` と、
+     * 人が読める名で書かれている。`user-yamada` / `note-1` のような内部の綴りで
+     * 撮ると、面に内部 ID を出しているように読めてしまう。サーバー側の受付履歴の
+     * フィクスチャ（`actorId: '山田'`）と同じ流儀に揃える。
+     */
+    actorId: '佐藤 美咲',
     action: 'attention.publish',
     entityType: 'attention_note',
-    entityId: 'note-1',
-    correlationId: 'corr-abc-123',
+    entityId: 'EY-A-220',
+    correlationId: 'corr-6f82-4a10',
     before: { status: 'pending_review', version: 1 },
     after: { status: 'published', version: 2 },
     ...overrides,
@@ -1725,7 +2085,7 @@ const auditEvents = [
     id: '10000000-0000-4000-8000-000000000002',
     action: 'attention.read',
     actorType: 'shared_terminal',
-    actorId: 'terminal-ginza-01',
+    actorId: '銀座店 レジ横iPad',
     correlationId: null,
     before: null,
     after: null,
@@ -1742,7 +2102,7 @@ function attentionNote(overrides: Record<string, unknown>) {
     version: 1,
     body: '鼻あての金属で肌が荒れやすい。',
     occurredAt: '2026-02-10T01:00:00.000Z',
-    basis: '2026-02-10のご本人申告',
+    basis: '2月10日のご本人申告',
     recommendedAction: '樹脂パッドへの交換を提案する',
     sharingScope: 'permitted_stores',
     recordedBy: '鈴木',
@@ -1833,8 +2193,8 @@ async function captureAttentionScreens(browser: Browser) {
             json: [
               {
                 id: noteCustomerId,
-                name: '田中花子',
-                kana: 'タナカハナコ',
+                name: '田中 花子',
+                kana: 'タナカ ハナコ',
                 phone: '090-1234-5678',
                 email: null,
                 primaryStoreId: ginzaId,
@@ -1869,7 +2229,7 @@ async function captureAttentionScreens(browser: Browser) {
             status: 'pending_review',
             body: '来店時に強い日差しで頭痛を訴えられた。',
             occurredAt: '2026-08-20T05:30:00.000Z',
-            basis: '2026-08-20の来店時のご申告',
+            basis: '8月20日の来店時のご申告',
             recommendedAction: '調光レンズを案内する',
           }),
         ],
@@ -1883,7 +2243,7 @@ async function captureAttentionScreens(browser: Browser) {
     await visible(search)
     await search.getByLabel('顧客を検索').fill('09012345678')
     await search.getByLabel('顧客を検索').press('Enter')
-    await search.getByRole('article', { name: '田中花子' }).getByRole('button').click()
+    await search.getByRole('article', { name: '田中 花子' }).getByRole('button').click()
     await page.getByRole('button', { name: '注意事項を確認・登録する' }).click()
     await visible(page.getByRole('heading', { name: '注意事項を確認', exact: true }))
     await shot(page, 'ATTENTION-REVIEW', 'pending', 'ipad-landscape')
@@ -1971,7 +2331,7 @@ async function mockSharedTerminalApi(page: Page, rows: Recording[]) {
         id: sharedTerminalId,
         organizationId: 'org-eyex',
         storeId: ginzaId,
-        name: '受付カウンターiPad',
+        name: 'レジ横iPad',
         status: 'active',
         idleTimeoutSeconds: 600,
         expiresAt: '2027-08-27T00:00:00.000Z',
@@ -2030,7 +2390,10 @@ async function captureSharedTerminalScreens(browser: Browser) {
     const screen = page.getByRole('region', { name: '録音運用' })
     await screen.first().waitFor({ state: 'visible' })
     await screen.getByRole('button', { name: '保全する' }).first().click()
-    await visible(page.getByRole('dialog', { name: '管理者として確認してください' }))
+    const reauth = page.getByRole('dialog', { name: '管理者として確認してください' })
+    await visible(reauth)
+    await reauth.getByLabel('個人ログインID').fill('sato')
+    await reauth.getByLabel('個人PIN').fill('482913')
     await shot(page, 'REAUTH', 'manager-pin', 'ipad-landscape')
     await page.context().close()
   }
@@ -2144,9 +2507,19 @@ const analyticsReport = {
       { key: 'web', label: 'Web予約', value: 80 },
       { key: 'staff', label: '店頭・電話', value: 48 },
     ]),
+    /*
+     * 承認済みモックの柱は 10 時から 16 時までの 7 本で、山が 1 つと次点が 1 つ
+     * 立っている。2 本だけにすると「柱が 2 本しか描けない実装」に見えてしまい、
+     * 塗り分け（最大＝赤・次点＝橙）も並びも確かめられない。
+     */
     breakdown('hour', [
-      { key: '10', label: '10時台', value: 40 },
-      { key: '14', label: '14時台', value: 88 },
+      { key: '10', label: '10時台', value: 20 },
+      { key: '11', label: '11時台', value: 27 },
+      { key: '12', label: '12時台', value: 18 },
+      { key: '13', label: '13時台', value: 40 },
+      { key: '14', label: '14時台', value: 48 },
+      { key: '15', label: '15時台', value: 32 },
+      { key: '16', label: '16時台', value: 23 },
     ]),
     breakdown('staff', [
       { key: 's1', label: '山田', value: 70 },
@@ -2237,6 +2610,26 @@ const analyticsReport = {
     },
   ],
   causeCandidates: [
+    /*
+     * 承認済みモック `ANALYTICS` の「確認すること」は原因候補 2 枚と「対象データ」
+     * 1 枚で埋まっている。撮っているのは最初の観点（予約と来店）なので、候補が
+     * `no_shows` だけだと欄が対象データ 1 枚になり、モックが「数字の隣に必ず
+     * 置く」と決めた点検欄が撮れない。観点ごとに候補が付くことまで証跡に残す。
+     */
+    {
+      metric: 'visits',
+      code: 'peak_hour_concentration',
+      hypothesis: '14時台に来店が偏っている可能性があります。',
+      evidenceCount: 48,
+      inspectionTarget: '14時台の予約枠と視力測定機Aの空き',
+    },
+    {
+      metric: 'visits',
+      code: 'staff_unassigned',
+      hypothesis: '受付後に担当が決まっていない来店が待ち時間を延ばしている可能性があります。',
+      evidenceCount: 5,
+      inspectionTarget: '担当未定のまま受付された来店',
+    },
     {
       metric: 'no_shows',
       code: 'web_source_concentration',
@@ -2280,13 +2673,14 @@ async function captureAnalyticsScreen(browser: Browser) {
  * ------------------------------------------------------------------ */
 
 const webPurposeId = '00000000-0000-4000-8000-000000000001'
+const webAdjustPurposeId = '00000000-0000-4000-8000-000000000003'
 const webReservationRecordId = '00000000-0000-4000-8000-000000000002'
 const webToken = 'a'.repeat(32)
 
 const webStore = {
   slug: 'ginza',
   name: '銀座店',
-  contactPhone: '03-0000-0000',
+  contactPhone: '03-1234-5678',
   region: '東京都',
   nearestStation: '銀座駅',
 }
@@ -2294,23 +2688,35 @@ const webStore = {
 const webStoreDetail = {
   ...webStore,
   accessText: '銀座駅 A3出口から徒歩2分',
-  notice: 'ご来店前に確認してください。',
+  notice: '',
   businessHours: [{ dayOfWeek: 1, periods: [{ startTime: '10:00', endTime: '19:00' }] }],
-  purposes: [{ id: webPurposeId, label: 'メガネを新しく作りたい', durationMinutes: 60 }],
+  /* 承認済みモックの目的は 2 件。1 件だと「選べる並び」に見えない。 */
+  purposes: [
+    { id: webPurposeId, label: 'メガネを新しく作りたい', durationMinutes: 60 },
+    { id: webAdjustPurposeId, label: '今のメガネを調整したい', durationMinutes: 20 },
+  ],
 }
 
 const webSlots = {
-  date: '2026-09-01',
+  date: '2026-08-28',
   timezone: 'Asia/Tokyo',
   durationMinutes: 60,
   intervalMinutes: 30,
   slots: [
     {
-      date: '2026-09-01',
-      startTime: '10:00',
-      endTime: '11:00',
-      startAt: '2026-09-01T01:00:00.000Z',
-      endAt: '2026-09-01T02:00:00.000Z',
+      date: '2026-08-28',
+      startTime: '11:00',
+      endTime: '12:00',
+      startAt: '2026-08-28T02:00:00.000Z',
+      endAt: '2026-08-28T03:00:00.000Z',
+    },
+    /* 2 枠目がないと、選んだ枠が「選択肢の中の 1 つ」だと画から読めない。 */
+    {
+      date: '2026-08-28',
+      startTime: '13:30',
+      endTime: '14:30',
+      startAt: '2026-08-28T04:30:00.000Z',
+      endAt: '2026-08-28T05:30:00.000Z',
     },
   ],
 }
@@ -2338,7 +2744,11 @@ async function mockPublicApi(page: Page, booking: 'success' | 'unknown') {
     if (booking === 'unknown') return route.abort('failed')
     return route.fulfill({
       status: 201,
-      json: { reservationNumber: 'EY-0001', managementCode: 'ABCD-1234', emailStatus: 'sent' },
+      json: {
+        reservationNumber: 'EY-0828-1142',
+        managementCode: 'ABCD-1234',
+        emailStatus: 'sent',
+      },
     })
   })
   await page.route('**/api/public/reservations/status?*', (route) =>
@@ -2350,9 +2760,9 @@ async function mockPublicApi(page: Page, booking: 'success' | 'unknown') {
       json: {
         reservationId: webReservationRecordId,
         verificationToken: webToken,
-        expiresAt: '2026-09-01T00:15:00.000Z',
+        expiresAt: '2026-08-28T00:15:00.000Z',
         version: 1,
-        startAt: '2026-09-01T01:00:00.000Z',
+        startAt: '2026-08-28T02:00:00.000Z',
         purposeIds: [webPurposeId],
         storeSlug: 'ginza',
       },
@@ -2363,8 +2773,8 @@ async function mockPublicApi(page: Page, booking: 'success' | 'unknown') {
       json: {
         status: 'confirmed',
         version: 2,
-        startAt: '2026-09-01T02:00:00.000Z',
-        endAt: '2026-09-01T03:00:00.000Z',
+        startAt: '2026-08-28T02:00:00.000Z',
+        endAt: '2026-08-28T03:00:00.000Z',
         purposeIds: [webPurposeId],
       },
     }),
@@ -2397,19 +2807,19 @@ async function captureWebScreens(browser: Browser) {
      * 契約も「日付は入力ではなく走査の結果」と書いている。候補が並ぶのを待つ。
      * 枠の名前は曜日込み（`japaneseSlotLabel`）。
      */
-    await page.getByRole('button', { name: '9月1日（火）10:00' }).waitFor({ state: 'visible' })
-    await page.getByRole('button', { name: '9月1日（火）10:00' }).click()
+    await page.getByRole('button', { name: '8月28日（金）11:00' }).waitFor({ state: 'visible' })
+    await page.getByRole('button', { name: '8月28日（金）11:00' }).click()
     await shot(page, 'WEB-DATETIME', 'selected', 'sp')
 
     await page.getByRole('button', { name: 'お客様情報へ進む' }).click()
-    await page.getByLabel('お名前', { exact: true }).fill('田中花子')
-    await page.getByLabel('お名前（かな）').fill('タナカハナコ')
-    await page.getByLabel('電話番号').fill('09012345678')
+    await page.getByLabel('お名前', { exact: true }).fill('田中 花子')
+    await page.getByLabel('お名前（かな）').fill('タナカ ハナコ')
+    await page.getByLabel('電話番号').fill('090-1234-5678')
     await page.getByLabel('メールアドレス').fill('hanako@example.test')
     await shot(page, 'WEB-CUSTOMER', 'filled', 'sp')
 
     await page.getByRole('button', { name: '確認へ進む' }).click()
-    await page.getByText('ご来店前に確認してください。').waitFor({ state: 'visible' })
+    await page.getByText('メガネを新しく作りたい · 約60分').waitFor({ state: 'visible' })
     await shot(page, 'WEB-CONFIRM', 'default', 'sp')
 
     await page.getByRole('button', { name: 'この内容で予約する' }).click()
@@ -2433,11 +2843,11 @@ async function captureWebScreens(browser: Browser) {
     await page.getByRole('button', { name: '銀座店で予約を始める' }).click()
     await page.getByRole('button', { name: /メガネを新しく作りたい.*約60分/ }).click()
     await page.getByRole('button', { name: '日時へ進む' }).click()
-    await page.getByRole('button', { name: '9月1日（火）10:00' }).click()
+    await page.getByRole('button', { name: '8月28日（金）11:00' }).click()
     await page.getByRole('button', { name: 'お客様情報へ進む' }).click()
-    await page.getByLabel('お名前', { exact: true }).fill('田中花子')
-    await page.getByLabel('お名前（かな）').fill('タナカハナコ')
-    await page.getByLabel('電話番号').fill('09012345678')
+    await page.getByLabel('お名前', { exact: true }).fill('田中 花子')
+    await page.getByLabel('お名前（かな）').fill('タナカ ハナコ')
+    await page.getByLabel('電話番号').fill('090-1234-5678')
     await page.getByLabel('メールアドレス').fill('hanako@example.test')
     await page.getByRole('button', { name: '確認へ進む' }).click()
     await page.getByRole('button', { name: 'この内容で予約する' }).click()

@@ -40,6 +40,9 @@
         "e2e/mock-reference.capture.ts",
         "e2e/gallery.diff.ts",
         "e2e/overlay.ts",
+        // 実アプリを実データで撮って基準と重ねる側。こちらも手動の入口。
+        "e2e/real-overlay.ts",
+        "e2e/app-overlay.ts",
         "e2e/*.mjs"
       ],
       "project": ["src/**/*.{ts,tsx,css}", "test/**/*.ts", "e2e/**/*.{ts,mjs}", "*.ts"],

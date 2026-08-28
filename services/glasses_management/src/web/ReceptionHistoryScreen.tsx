@@ -1,5 +1,6 @@
 import {
   AvailabilityPurpose,
+  CustomerCandidate,
   ReceptionHistoryEntry,
   Reservation,
   ReservationChangeHistoryEntry,
@@ -14,6 +15,7 @@ import {
   FOCUS_RING,
   formatJstDateTime,
   formatJstDayHeading,
+  formatJstRowDateTime,
   formatJstTime,
   PermissionDenied,
   RecordingPanel,
@@ -48,10 +50,13 @@ const STATUS_LABEL = {
 } as const
 
 /*
- * 経路の絞り込み（AC-EYEX-58）。ネイティブの `<select>` を置くとブラウザ既定の
- * 見た目が絞り込みの列に混ざり、選ばれている値も畳まれて見えなくなるので、
- * モックが記録の右肩で使っている語をそのままチップにする。`変更` だけは経路
- * ではなく操作なので、送る引数が違う。
+ * 経路の絞り込み（AC-EYEX-58）。**承認済みモックには無い**段である。モックの
+ * 左列は検索欄と `要確認` の 2 つだけで、経路で絞る口を持たない。それでも残す
+ * のは AC-EYEX-58 が経路での絞り込みを求めており、落とすと満たせなくなるため。
+ * ネイティブの `<select>` を置くとブラウザ既定の見た目が絞り込みの列に混ざり、
+ * 選ばれている値も畳まれて見えなくなるので、モックが記録の右肩で使っている語を
+ * そのままチップにして、語彙だけはモックの中に収める。`変更` だけは経路では
+ * なく操作なので、送る引数が違う。
  */
 const ROUTE_FILTERS = [
   { label: '店頭', param: 'source', value: 'walkin' },
@@ -133,6 +138,8 @@ type Props = StaffScreenProps & {
    */
   resolveRecording?: (entry: ReceptionHistoryEntry) => RecordingView | undefined
   permissions?: RecordingPermissions
+  /** 主利用店舗 ID → 店舗名。未知の ID は選択中店舗名にフォールバックしない。 */
+  storeNames?: Record<string, string>
 }
 
 /**
@@ -151,6 +158,7 @@ export function ReceptionHistoryScreen({
   recording,
   resolveRecording,
   permissions = { playRecording: false },
+  storeNames,
 }: Props) {
   const [filters, setFilters] = useState<Filters>(NO_FILTERS)
   const [entries, setEntries] = useState<ReceptionHistoryEntry[]>()
@@ -161,6 +169,8 @@ export function ReceptionHistoryScreen({
   const [changeCount, setChangeCount] = useState(0)
   /** 目的は id ではなくスタッフが口にする名称でないと読めない。店舗設定が源泉。 */
   const [purposeNames, setPurposeNames] = useState<Record<string, string>>()
+  /** 開いた記録のお客様（来店回数・主利用店）。受付の記録自体は持っていない。 */
+  const [customer, setCustomer] = useState<CustomerCandidate>()
 
   const load = useCallback(
     async (query: Filters) => {
@@ -232,6 +242,7 @@ export function ReceptionHistoryScreen({
 
   const selected = entries?.find((entry) => entry.id === selectedId)
   const selectedReservationId = selected?.reservationId
+  const selectedPhone = selected?.customerPhone ?? undefined
 
   /*
    * 記録は「何が起きたか」しか持たない。モックの詳細が名乗る「来店」「目的」
@@ -253,6 +264,31 @@ export function ReceptionHistoryScreen({
       active = false
     }
   }, [api, storeId, selectedReservationId])
+
+  const primaryStoreLabel = (candidate: CustomerCandidate) =>
+    storeNames?.[candidate.primaryStoreId] ??
+    (candidate.primaryStoreId === storeId ? storeName : '他店舗')
+
+  /*
+   * お客様の要約は電話番号でしか引けない（受付の記録は顧客 id を持たない）。
+   * 引けなかったことは「来店 0 回」ではないので、行ごと出さない。
+   */
+  useEffect(() => {
+    setCustomer(undefined)
+    if (selectedPhone === undefined) return undefined
+    let active = true
+    void api(`/api/staff/stores/${storeId}/customers?phone=${encodeURIComponent(selectedPhone)}`)
+      .then(async (response) => (response.ok ? await readJson(response) : undefined))
+      .then((body) => {
+        const parsed = CustomerCandidate.array().safeParse(body)
+        if (!active || !parsed.success) return
+        setCustomer(parsed.data[0])
+      })
+      .catch(() => undefined)
+    return () => {
+      active = false
+    }
+  }, [api, storeId, selectedPhone])
 
   if (forbidden) return <PermissionDenied onBack={() => navigate({ screen: 'home' })} />
 
@@ -324,7 +360,7 @@ export function ReceptionHistoryScreen({
       <section aria-label="受付履歴">
         {entries?.length === 0 && (
           <EmptyState
-            heading="条件に一致する受付履歴はありません。"
+            heading="条件に一致する受付履歴はありません"
             onClear={() => {
               setFilters(NO_FILTERS)
               void load(NO_FILTERS)
@@ -361,8 +397,14 @@ export function ReceptionHistoryScreen({
               {formatJstTime(entry.occurredAt)}
             </time>
             <b className="block">{titleOf(entry)}</b>
+            {/*
+             * モックの 2 行目は「いつ来るのか・何をしに来るのか」。経路は右肩の
+             * チップが、受付者は開いた記録の見出しが、それぞれすでに言っている
+             * ので、ここで繰り返さない。予約を持たない受付だけは来店予定が無い
+             * ので、誰の受付かと受付者を出す。
+             */}
             <span className="block text-grid text-ink-muted">
-              {SOURCE_LABEL[entry.source]} · {entry.actorId}
+              {rowSubtitle(entry, purposeNames)}
             </span>
           </button>
         ))}
@@ -405,9 +447,17 @@ export function ReceptionHistoryScreen({
         <Card>
           <b className="block">予約内容</b>
           {/* 「いつ来るのか」は記録の発生時刻ではない。予約の来店日時を出す。 */}
+          {/*
+           * モックの「来店」は `8月28日（金）11:00`。電話口で読み上げる面なので
+           * 曜日まで言い、年は見出しの日時がすでに持っている。
+           */}
           <DetailLine
             label="来店"
-            value={booking ? formatJstDateTime(booking.startAt) : '予約なし'}
+            value={
+              booking
+                ? `${formatJstDayHeading(booking.startAt)}${formatJstTime(booking.startAt)}`
+                : '予約なし'
+            }
           />
           <DetailLine label="目的" value={purposeLabel(booking, purposeNames)} />
           <DetailLine label="予約番号" value={selected.reservationNumber ?? '予約なし'} />
@@ -431,8 +481,21 @@ export function ReceptionHistoryScreen({
         </Card>
         <Card>
           <b className="block">お客様</b>
-          <p className="mt-1 font-bold">{selected.customerName ?? '顧客未登録'}</p>
+          {/* モックは敬称つき。受付の記録でも、お客様の呼び方は接客と同じにする。 */}
+          <p className="mt-1 font-bold">
+            {selected.customerName === null ? '顧客未登録' : `${selected.customerName} 様`}
+          </p>
           <p className="text-grid">{selected.customerPhone ?? '未登録'}</p>
+          {/*
+           * 「何回来ているお客様か・どの店を主に使うお客様か」は、受付の記録では
+           * なく顧客台帳が持つ。電話番号で引ける範囲だけを出し、引けないときは
+           * 行ごと出さない（0 回と未取得を混ぜない）。
+           */}
+          {customer !== undefined && (
+            <p className="text-grid text-ink-muted">
+              {`${customer.visitCount}回来店 · 主利用店 ${primaryStoreLabel(customer)}`}
+            </p>
+          )}
           <DetailLine label="顧客照合" value={selected.customerName ? '既存顧客' : '顧客未登録'} />
           {/* 変更履歴はモックどおりここに戻す（予約検索の詳細はこれを持たない）。 */}
           <DetailLine label="変更履歴" value={changeCount === 0 ? 'なし' : `${changeCount}件`} />
@@ -450,6 +513,23 @@ export function ReceptionHistoryScreen({
       <Workspace list={list} detail={detail} />
     </div>
   )
+}
+
+/**
+ * 一覧の 2 行目（承認済みモックの `.event` の本文最終行）。
+ *
+ * 予約のある受付は「いつ来るのか · 何をしに来るのか」、予約を持たない受付は
+ * 「顧客未登録 · 受付者」。経路（右肩のチップ）と受付者（開いた記録の見出し）を
+ * ここで繰り返さないのは、一覧と詳細で同じことを二度言わせないためである。
+ */
+function rowSubtitle(
+  entry: ReceptionHistoryEntry,
+  names: Record<string, string> | undefined,
+): string {
+  if (entry.startAt === null) return `顧客未登録 · ${entry.actorId}`
+  const purposes = entry.purposeIds.map((id) => names?.[id]).filter((name) => name !== undefined)
+  const what = purposes.length > 0 ? purposes.join('・') : `${entry.purposeIds.length}件`
+  return `${formatJstRowDateTime(entry.startAt)} · ${what}`
 }
 
 /**

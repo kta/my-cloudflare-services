@@ -4,6 +4,8 @@ import {
   type AvailabilityPurpose,
   type AvailabilityStaffShift,
   AvailabilityStoreSettings,
+  SettingsDraft,
+  SettingsImpactReport,
   type StorePermission,
   type WebBookingPublication,
 } from '@app/contracts'
@@ -19,6 +21,7 @@ import { SettingsPublication } from './SettingsPublication'
 import {
   DEFAULT_PURPOSE_TEMPLATE,
   deriveStepStates,
+  draftSavedAtLabel,
   formatJapaneseDate,
   formatSlashDate,
   SETTINGS_STEP_BY_ID,
@@ -26,6 +29,7 @@ import {
   type SettingsStepId,
   STEP_STATE_LABEL,
   type StepState,
+  stepImpact,
   stepperSummary,
   summariseBusinessHours,
   WEEKDAY_LABEL,
@@ -227,6 +231,14 @@ export function SettingsScreen({
   const canRead = permissions.includes('settings.read')
   const canManage = permissions.includes('settings.manage')
   const [draft, setDraft] = useState<Draft>()
+  /*
+   * 工程 1・3・4 の下に続く影響の面（モックの `.preview`）。工程 6 まで見せずに
+   * おくと、5 工程ぶん編集したあとで初めて公開できないと知ることになる。
+   * 下書きがまだ無い店舗では報告も無いので、取れないことは失敗にしない。
+   */
+  const [impact, setImpact] = useState<SettingsImpactReport>()
+  /* 見出しの右端に出す「下書き保存 14:32」の元。保存が無ければ黙る。 */
+  const [draftSavedAt, setDraftSavedAt] = useState<string>()
   const [current, setCurrent] = useState<SettingsStepId>(step ?? 'store-hours')
   /*
    * 公開結果は工程ではなく、承認済みモック `#publish-result` の全幅の独立した
@@ -279,6 +291,18 @@ export function SettingsScreen({
       }
       setDraft(parsed.data)
       setSelectedPurposeId(parsed.data.purposes[0]?.id)
+    })()
+    void (async () => {
+      const response = await api(`/api/staff/stores/${storeId}/availability/draft/impact`)
+      if (!response.ok) return
+      const parsed = SettingsImpactReport.safeParse(await readJson(response))
+      if (active && parsed.success) setImpact(parsed.data)
+    })()
+    void (async () => {
+      const response = await api(`/api/staff/stores/${storeId}/availability/draft`)
+      if (!response.ok) return
+      const parsed = SettingsDraft.safeParse(await readJson(response))
+      if (active && parsed.success) setDraftSavedAt(parsed.data.savedAt)
     })()
     return () => {
       active = false
@@ -488,7 +512,11 @@ export function SettingsScreen({
         <span>{summary.remainingLabel}</span>
       </p>
       <p className="my-0 text-note">{`現在の状態: ${summary.stateLabel}`}</p>
-      <div className="mt-1 grid grid-cols-3 gap-1">
+      {/*
+       * SP の工程レールは 2 列。357px で 3 列にすると 1 列 110px しか無く、
+       * `店舗と営業時間` が 3 行に折れて番号と名前の対応が読めなくなる。
+       */}
+      <div className="mt-1 grid grid-cols-2 gap-1">
         {stepSections.map((section) => (
           <button
             key={section.name}
@@ -510,6 +538,19 @@ export function SettingsScreen({
       </div>
     </nav>
   )
+
+  /* 工程の読み取りカードの下に続く影響の面。無いときは何も置かない。 */
+  const impactPanel = (id: SettingsStepId) => {
+    const panel = stepImpact(id, impact)
+    if (panel === undefined) return null
+    return (
+      <Preview tone={panel.tone} label={panel.label}>
+        <b>{panel.label}</b>
+        {'　'}
+        {panel.body}
+      </Preview>
+    )
+  }
 
   /* ---------------- 工程 1: 店舗と営業時間 ---------------- */
 
@@ -549,6 +590,7 @@ export function SettingsScreen({
           />
         </FieldCard>
       </CardGrid>
+      {impactPanel('store-hours')}
       {editing && canManage && (
         <Editor label="営業時間の編集">
           {WEEKDAY_LABEL.map((name, dayOfWeek) => {
@@ -604,7 +646,8 @@ export function SettingsScreen({
                 key={`${exception.date}-${exception.mode}`}
                 className="flex flex-wrap items-center gap-3"
               >
-                <span>{exception.date}</span>
+                {/* 生の ISO は画面に出さない。読み取りカードと同じ日本語の日付で並べる。 */}
+                <span>{formatJapaneseDate(exception.date)}</span>
                 <span>{EXCEPTION_MODE_LABEL[exception.mode]}</span>
                 <span>{exception.periods.map((period) => formatRange(period)).join('・')}</span>
                 <span>{exception.reason ?? ''}</span>
@@ -728,7 +771,14 @@ export function SettingsScreen({
               <FieldCard title="必要技能">{selectedPurpose.requiredSkills.join('・')}</FieldCard>
               <FieldCard title="必要設備">{selectedPurpose.requiredEquipment.join('・')}</FieldCard>
             </CardGrid>
-            {/* 店員向けの名称ではなく、お客様に見える言い回しで確認させる。 */}
+            {/*
+             * 店員向けの名称ではなく、お客様に見える言い回しで確認させる。
+             *
+             * モックの `.preview` は 2 行だが、実アプリは 3 行目に公開・非公開を
+             * 書く。モックは 1 目的ぶんの例なので出てこないが、実アプリは目的を
+             * 複数持ち、`isPublic` を切り替えられる。3 行目を落とすと、いま見て
+             * いる目的が Web に出ているのかがこの面のどこにも残らない。
+             */}
             <Preview label="Web予約プレビュー">
               <b>Web予約プレビュー</b>
               <br />
@@ -839,6 +889,7 @@ export function SettingsScreen({
           </Card>
         )
       })}
+      {impactPanel('staff-skills')}
       {editing && canManage && (
         <Editor label="スタッフと技能の編集">
           {draft.staff.map((member) => {
@@ -956,6 +1007,7 @@ export function SettingsScreen({
           <Lines lines={maintenanceLines.length > 0 ? maintenanceLines : ['設定なし']} />
         </FieldCard>
       </CardGrid>
+      {impactPanel('equipment')}
       {editing && canManage && (
         <Editor label="設備の編集">
           {draft.equipment.map((item) => (
@@ -1169,6 +1221,12 @@ export function SettingsScreen({
       ? '全店共通'
       : '店舗設定'
     : undefined
+  /*
+   * モックの `.push` はここに「下書き保存 14:32」を置く。適用元が分かっている
+   * ときだけそちらを優先するのは、上書きの出どころの方が読み違えの被害が
+   * 大きいため（保存時刻はいつでも取り直せる）。
+   */
+  const savedLabel = draftSavedAtLabel(draftSavedAt)
 
   return (
     <section aria-label="店舗設定" className="flex min-h-full flex-col font-sans">
@@ -1177,14 +1235,26 @@ export function SettingsScreen({
         {!resultOpen && current !== 'impact' && (
           <>
             <TitleRow
-              push={originLabel === undefined ? undefined : <span>{`適用元: ${originLabel}`}</span>}
+              push={
+                originLabel === undefined ? (
+                  savedLabel === undefined ? undefined : (
+                    <span>{savedLabel}</span>
+                  )
+                ) : (
+                  <span>{`適用元: ${originLabel}`}</span>
+                )
+              }
             >
               <h1>{heading}</h1>
             </TitleRow>
             {chainDefaults && chainDefaults.overriddenFields.length > 0 && (
               <p className="my-0">{`店舗上書き: ${chainDefaults.overriddenFields.join('、')}`}</p>
             )}
-            {/* 目的は複数あり、どれを見ているのかは工程名からは分からない。 */}
+            {/*
+             * モックに無い行。モックは目的 1 件の例なので工程名の下にいきなり
+             * カードが並ぶが、実アプリは目的を複数持つ。どれを見ているのかを
+             * 選べる列が無いと、2 件目以降の目的に到達する動線が消える。
+             */}
             {current === 'purposes' && draft && draft.purposes.length > 1 && (
               <FilterLine>
                 {draft.purposes.map((purpose) => (

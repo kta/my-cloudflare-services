@@ -153,6 +153,11 @@ test('marks the stage already passed, the stage in hand and the one to go next (
   const board = await screen.findByRole('grid', { name: '接客の進み具合' })
   const cells = stageCellsOfFirstRow(board)
   expect(cells[0]).toHaveTextContent('受付済み')
+  /*
+   * 承認済みモックの済んだ工程は `受付済み` / `9:58 山田` と、いつ・誰がを並べる。
+   * 名前だけだと、その受付がさっきのことか 1 時間前のことかが読めない。
+   */
+  expect(cells[0]).toHaveTextContent('10:50 佐藤 美咲')
   expect(cells[1]).toHaveTextContent('相談中')
   expect(cells[1]).toHaveTextContent('佐藤 美咲')
   expect(cells[2]).toHaveTextContent('次にご案内')
@@ -379,7 +384,17 @@ test('states each warning in words, never by colour alone (UC-EYEX-053, AC-EYEX-
 test('refuses a stale save and compares the latest content with this terminal’s input (UC-EYEX-172, UC-EYEX-173, AC-EYEX-110)', async () => {
   const api = mockApi(
     () => json([reservation()]),
-    () => json({ error: 'version_conflict', currentVersion: 7 }, 409),
+    () =>
+      json(
+        {
+          error: 'version_conflict',
+          currentVersion: 7,
+          latest: [{ label: '状態', value: '接客中' }],
+          updatedBy: '銀座店 受付iPad',
+          updatedAt: '2026-09-01T05:31:00.000Z',
+        },
+        409,
+      ),
     () => json([reservation({ version: 7 })]),
     () => json(reservation({ version: 8, progress: 'service_completed' })),
     () => json([reservation({ version: 8, progress: 'service_completed' })]),
@@ -393,7 +408,10 @@ test('refuses a stale save and compares the latest content with this terminal’
   const conflict = await screen.findByRole('region', { name: '別の端末で先に更新されています' })
   expect(within(conflict).getByText('最新の内容')).toBeInTheDocument()
   expect(within(conflict).getByText('この端末の入力')).toBeInTheDocument()
-  expect(within(conflict).getByText(/版 7/)).toBeInTheDocument()
+  // 版番号ではなく、いま保存されている値と更新者を並べる（AC-EYEX-110）。
+  expect(within(conflict).getByText('状態 接客中')).toBeInTheDocument()
+  expect(within(conflict).getByText('更新者: 銀座店 受付iPad 14:31')).toBeInTheDocument()
+  expect(within(conflict).queryByText(/版 7/)).not.toBeInTheDocument()
 
   fireEvent.click(within(conflict).getByRole('button', { name: '最新内容へ再適用' }))
 

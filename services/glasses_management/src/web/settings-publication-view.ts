@@ -264,8 +264,12 @@ export function impactSummary(report: SettingsImpactReport): ImpactSummary {
       : '影響予約ごとに代替設備、例外維持、顧客連絡を記録してください。',
     blockingLabel: `影響予約${String(unresolved.length)}件`,
     warningLabel: `${String(report.warningCount)}件`,
-    slotLabel: `公開枠 ${String(report.publicSlots.publishedCount)}件 → ${String(report.publicSlots.draftCount)}件（${signedDelta(report.publicSlots.publishedCount, report.publicSlots.draftCount)}）`,
-    ledgerLabel: `影響する台帳 ${String(report.ledgerEntriesAffected)}件`,
+    /*
+     * カードの見出しがすでに `公開予定枠` `既存予約` と言っている。値の側で
+     * もう一度名乗ると、モックの 1 行（`42件`）が 2 語ぶん長くなって折り返す。
+     */
+    slotLabel: `${String(report.publicSlots.publishedCount)}件 → ${String(report.publicSlots.draftCount)}件（${signedDelta(report.publicSlots.publishedCount, report.publicSlots.draftCount)}）`,
+    ledgerLabel: `${String(report.ledgerEntriesAffected)}件`,
     evaluatedAtLabel: `確認日時 ${formatJstInstant(report.evaluatedAt)}`,
   }
 }
@@ -309,10 +313,14 @@ export type PublicationView = {
   executedLabel: string
   /** 見出しの名乗り。人が読む採番で、保存用の UUID は含めない。 */
   versionLabel: string
-  appliedLabel: string
-  failedLabel: string
-  webSlotLabel: string
-  ledgerLabel: string
+  /** 成功した店舗数（モックは 28px で立てる）。 */
+  appliedCount: number
+  failedCount: number
+  /** 成功の内訳。公開後に立っている枠の数。 */
+  slotCountLabel: string
+  /** 反映確認は「全店舗のうち何店舗で確認できたか」。モックの `12/13`。 */
+  webConfirmLabel: string
+  ledgerConfirmLabel: string
   applied: SettingsPublicationTarget[]
   failed: SettingsPublicationTarget[]
   pending: SettingsPublicationTarget[]
@@ -356,10 +364,15 @@ export function publicationView(publication: SettingsPublication): PublicationVi
       publication.executedAt === null
         ? '実行日時 未実行'
         : `実行日時 ${formatJstInstant(publication.executedAt)}`,
-    appliedLabel: `成功 ${String(publication.appliedCount)}店舗`,
-    failedLabel: `失敗 ${String(publication.failedCount)}店舗`,
-    webSlotLabel: `Web公開枠 ${String(effect.previousSlotCount)}件 → ${String(effect.publishedSlotCount)}件（${signedDelta(effect.previousSlotCount, effect.publishedSlotCount)}）`,
-    ledgerLabel: `予約台帳 ${String(publication.ledgerEntriesAffected)}件反映`,
+    appliedCount: publication.appliedCount,
+    failedCount: publication.failedCount,
+    slotCountLabel: `公開枠 ${String(effect.publishedSlotCount)}件`,
+    /*
+     * 反映確認は店舗数の比で読ませる（モックの `Web予約 12/13`）。件数の増減は
+     * 成功カードの内訳が持つので、ここは「何店舗まで届いたか」だけに絞る。
+     */
+    webConfirmLabel: `Web予約 ${String(publication.appliedCount)}/${String(publication.appliedCount + publication.failedCount)}`,
+    ledgerConfirmLabel: `予約台帳 ${String(publication.appliedCount)}/${String(publication.appliedCount + publication.failedCount)}`,
     applied: publication.targets.filter((target) => target.status === 'applied'),
     failed,
     pending: publication.targets.filter((target) => target.status === 'pending'),

@@ -212,6 +212,11 @@ export function CardGrid({
         'grid gap-3',
         mt === 4 ? 'mt-4' : 'mt-4.5',
         columns === 2 ? 'grid-cols-2' : 'grid-cols-3',
+        /*
+         * SP 幅だけ 1 列に落とす。モックの 2 列・3 列は iPad の実測値で、357px
+         * の端末で保つと 1 列 170px を切り、和文の見出しが 1 行 1 文字に折れる。
+         */
+        'max-sm:grid-cols-1',
         className,
       )}
     >
@@ -223,9 +228,11 @@ export function CardGrid({
 /*
  * `.customer-top{grid-template-columns:repeat(3,1fr)}` — 3 枚組のカード。
  *
- * 枚数を幅から決めさせない。実アプリは 250px の柱をさらに引くので、幅で
- * 決めると 2 列へ落ち、「現在のメガネ」が段を下げて 3 枚組が読めなくなる。
- * モックどおり必ず 3 列を保つ。
+ * 守るのは枚数ではなく 1 枚の幅である。モックのこのカードは 236〜247px あり、
+ * そこに「視力測定・新調相談」が 1 行で載っていた。実アプリは同じ本文から
+ * 250px の柱をさらに引くので、3 列を固定すると 1 枚 152px になり
+ * `測定日 2026-06-` / `01・店舗` と語中で折れる。列の数はモックに合わせられても、
+ * 読めない字ではモックに似ていない。下限 200px を敷き、入らないときだけ段を下げる。
  *
  * `minmax(0,1fr)` の 0 は、格子の列が既定で「中身より狭くならない」ため。
  * 長い和文が 1 列を押し広げて板をはみ出させるのを、ここで止める。
@@ -236,7 +243,7 @@ export function CardGrid({
  * （`anywhere` にすると列の最小幅まで縮められ、短い値まで割れてしまう）。
  */
 const CARD_COLUMNS: CSSProperties = {
-  gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
   wordBreak: 'auto-phrase',
   overflowWrap: 'break-word',
 }
@@ -325,9 +332,11 @@ export function Matrix({
             <th scope="row" className="border border-line p-2.5 text-left font-normal">
               {row.label}
             </th>
-            {row.cells.map((cell) => (
+            {/* 目印は位置で持つ。`許可` / `不可` は 1 行に何度も並ぶので、
+                字を目印にすると同じ目印が重なり、更新すべきセルを取り違える。 */}
+            {row.cells.map((cell, index) => (
               <td
-                key={cell.text}
+                key={`${row.label}-${index}`}
                 className={cn(
                   'border border-line p-2.5 text-center',
                   // 許可されている操作だけ緑の太字。不可は本文色のまま置く。

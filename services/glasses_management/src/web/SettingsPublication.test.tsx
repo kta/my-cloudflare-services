@@ -183,6 +183,26 @@ const partiallyFailedPublication = {
   ],
 }
 
+/* 店舗の名前は `/api/staff/stores` からしか引けない。公開結果は複数店舗を並べる。 */
+const storeList = [
+  {
+    id: STORE_ID,
+    organizationId: 'org-eyex',
+    name: '銀座店',
+    slug: 'ginza',
+    isActive: true,
+    createdAt: '2026-01-01T00:00:00.000Z',
+  },
+  {
+    id: OTHER_STORE,
+    organizationId: 'org-eyex',
+    name: '丸の内店',
+    slug: 'marunouchi',
+    isActive: true,
+    createdAt: '2026-01-01T00:00:00.000Z',
+  },
+]
+
 type Call = { url: string; method: string; body: unknown }
 
 function setup(
@@ -200,6 +220,7 @@ function setup(
     calls.push({ url, method, body })
     const custom = options.handlers?.(url, method, calls)
     if (custom !== undefined) return custom
+    if (url.endsWith('/api/staff/stores') && method === 'GET') return jsonResponse(storeList)
     if (url.endsWith('/availability/draft') && method === 'GET') return jsonResponse(draft)
     if (url.endsWith('/availability/draft') && method === 'PUT') return jsonResponse(draft, 201)
     if (url.endsWith('/availability/draft/impact')) return jsonResponse(impact)
@@ -250,7 +271,7 @@ test('settings.read が無ければ内容を一切出さない', () => {
 
 test('settings.manage が無ければ閲覧はできても下書き・公開操作を出さない', async () => {
   setup({ permissions: ['settings.read'] })
-  expect(await screen.findByText('公開枠 42件 → 38件（-4件）')).toBeTruthy()
+  expect(await screen.findByText('42件 → 38件（-4件）')).toBeTruthy()
   expect(screen.queryByRole('button', { name: '公開する' })).toBeNull()
   expect(screen.queryByRole('button', { name: '下書きを保存' })).toBeNull()
   expect(screen.queryByRole('button', { name: '店舗上書きを解除' })).toBeNull()
@@ -285,8 +306,8 @@ test('工程1〜5に未保存の編集があれば未保存と最終保存時刻
 test('影響確認は既存予約の競合・公開枠・技能不足・設備不足・営業時間外を出す', async () => {
   setup()
   const panel = await screen.findByRole('region', { name: '影響確認' })
-  expect(within(panel).getByText('公開枠 42件 → 38件（-4件）')).toBeTruthy()
-  expect(within(panel).getByText('影響する台帳 18件')).toBeTruthy()
+  expect(within(panel).getByText('42件 → 38件（-4件）')).toBeTruthy()
+  expect(within(panel).getByText('18件')).toBeTruthy()
   expect(within(panel).getByText('8/28 10:00 の予約が営業時間外になります')).toBeTruthy()
   expect(within(panel).getByText('眼鏡作製技能を持つスタッフがいません')).toBeTruthy()
   expect(within(panel).getByText('視力測定機が不足します')).toBeTruthy()
@@ -465,10 +486,13 @@ test('公開結果は人が読む版の採番・対象店舗・反映件数・�
   // 版は人が読む採番で名乗る。保存用の UUID は画面に出さない。
   expect(within(result).getByText('第4版の公開結果')).toBeTruthy()
   expect(result.textContent).not.toContain(VERSION_ID)
-  expect(within(result).getByText('成功 12店舗')).toBeTruthy()
-  expect(within(result).getByText('失敗 1店舗')).toBeTruthy()
-  expect(within(result).getByText('Web公開枠 428件 → 402件（-26件）')).toBeTruthy()
-  expect(within(result).getByText('予約台帳 13件反映')).toBeTruthy()
+  // 承認済みモック `#publish-result` の 3 枚。数は 28px で立て、内訳は下に添える。
+  expect(within(result).getByText('12店舗')).toBeTruthy()
+  expect(within(result).getByText('公開枠 402件')).toBeTruthy()
+  expect(within(result).getByText('1店舗')).toBeTruthy()
+  expect(within(result).getByText('丸の内店 · 視力測定機が停止中')).toBeTruthy()
+  expect(within(result).getByText('Web予約 12/13')).toBeTruthy()
+  expect(within(result).getByText('予約台帳 12/13')).toBeTruthy()
   expect(within(result).getByText(/実行日時 2026年8月26日 18:00/)).toBeTruthy()
   expect(within(result).getByText('一部失敗')).toBeTruthy()
 })
@@ -501,7 +525,9 @@ test('再試行は失敗店舗だけを対象にし、成功済み店舗へ再�
   fireEvent.click(await screen.findByRole('button', { name: '公開する' }))
 
   const failed = await screen.findByRole('region', { name: '失敗した店舗' })
-  expect(within(failed).getByText(OTHER_STORE)).toBeTruthy()
+  // 生の UUID は画面に出さない。誰も読めず、店舗の取り違えを招く。
+  expect(within(failed).getByText('丸の内店')).toBeTruthy()
+  expect(within(failed).queryByText(OTHER_STORE)).toBeNull()
   expect(within(failed).getByText('視力測定機が停止中')).toBeTruthy()
   expect(within(failed).queryByText(STORE_ID)).toBeNull()
   expect(screen.getByText('再試行対象 1店舗')).toBeTruthy()
@@ -635,4 +661,34 @@ test('確認へ回すと下書きの状態が確認待ちになる', async () =>
   })
   const state = await screen.findByRole('region', { name: '設定の状態' })
   expect(within(state).getByText('確認待ち')).toBeTruthy()
+})
+
+test('公開結果は実行者と、版へ戻る 2 つの操作を持つ (承認済みモック #publish-result)', async () => {
+  const { calls } = setup({
+    handlers: (url, method) => {
+      if (url.endsWith('/availability/draft/impact')) return jsonResponse(clearedImpact)
+      if (url.endsWith('/availability/publications') && method === 'POST') {
+        return jsonResponse(partiallyFailedPublication, 201)
+      }
+      return undefined
+    },
+  })
+  fireEvent.click(await screen.findByRole('button', { name: '公開する' }))
+  const result = await screen.findByRole('region', { name: '公開結果' })
+
+  // 誰が公開したかは版が持っている。契約に無い「承認者」は名乗らない。
+  expect(within(result).getByText(/実行者 佐藤 美咲/)).toBeTruthy()
+
+  fireEvent.click(within(result).getByRole('button', { name: '版の差分を見る' }))
+  await waitFor(() => {
+    expect(
+      calls.some((call) => call.url.endsWith(`/availability/versions/${PAST_VERSION_ID}`)),
+    ).toBe(true)
+  })
+  fireEvent.click(within(result).getByRole('button', { name: '過去版から新しい下書きを作る' }))
+  await waitFor(() => {
+    expect(
+      calls.some((call) => call.url.endsWith(`/availability/versions/${PAST_VERSION_ID}/restore`)),
+    ).toBe(true)
+  })
 })

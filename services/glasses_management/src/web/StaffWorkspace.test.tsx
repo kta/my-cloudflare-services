@@ -489,3 +489,42 @@ test('shows real unread and open counts in the header instead of a permanent 未
   expect(await screen.findByRole('button', { name: 'お知らせ 1件' })).toBeInTheDocument()
   expect(screen.getByRole('button', { name: 'アラート 1件' })).toBeInTheDocument()
 })
+
+/*
+ * 承認済みモック `store-switch-approved.html` の切替シートは、店舗名の下に
+ * 「営業中 · 警告2件」と、切り替えてよいかどうかの材料を 1 行で出す。件数は
+ * すでにアラートの取得で分かっているので、切替シートにも渡す。
+ */
+test('the store switch sheet names the open alerts of the selected store (UC-EYEX-007)', async () => {
+  const openAlerts = [0, 1].map((index) => ({
+    id: `4000000${index}-0000-4000-8000-00000000000${index}`,
+    storeId: '11111111-1111-4111-8111-111111111111',
+    kind: 'alert',
+    code: 'long_wait',
+    title: '長時間お待ちのお客様',
+    reason: '受付から30分経過しています。',
+    subject: `ウォークイン ${index + 1}`,
+    subjectType: 'walkin',
+    subjectId: `walkin-${index + 1}`,
+    nextAction: '担当者を割り当ててご案内してください。',
+    occurredAt: '2026-08-31T00:00:00.000Z',
+    readAt: null,
+    readBy: null,
+    resolvedAt: null,
+    resolvedBy: null,
+    resolutionNote: null,
+  }))
+  const api = vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.endsWith('/api/staff/stores')) return storeListResponse()
+    if (url.endsWith('/permissions')) return new Response('["store.read"]', { status: 200 })
+    if (url.includes('/alerts')) return new Response(JSON.stringify(openAlerts), { status: 200 })
+    return new Response('[]', { status: 200 })
+  })
+
+  render(<StaffWorkspace restore={async () => true} api={api} today="2026-08-31" />)
+
+  fireEvent.click(await screen.findByRole('button', { name: /銀座店/ }))
+  const sheet = await screen.findByRole('dialog', { name: '作業する店舗を切り替える' })
+  await waitFor(() => expect(sheet).toHaveTextContent('営業中 · 警告2件'))
+})

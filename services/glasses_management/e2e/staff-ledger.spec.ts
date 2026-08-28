@@ -403,6 +403,9 @@ test('registers a new customer from a walk-in and keeps a departed unregistered 
       actorId: 'staff-1',
       requiresAttention: false,
       recordingStatus: 'none',
+      // ウォークインは予約を持たないので、来店予定も目的も無い。
+      startAt: null,
+      purposeIds: [],
     },
   ]
   await page.reload()

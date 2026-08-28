@@ -303,13 +303,38 @@ test('keeps 現在度数 and 過去度数 in separate regions with 測定日・�
   const past = screen.getByRole('region', { name: '過去の度数' })
   expect(current).not.toBe(past)
   expect(current).not.toContainElement(past)
-  expect(current).toHaveTextContent('2026-05-18')
+  /*
+   * 承認済みモック `CUSTOMER-CURRENT` の日付は `2026.02.10` の形で、生の ISO は
+   * どの面にも無い。既に「根拠」と「記録日」だけが点に直されており、測定日・
+   * 購入日・最新メモだけ生のままだった。
+   */
+  expect(current).toHaveTextContent('2026.05.18')
+  expect(current).not.toHaveTextContent('2026-05-18')
   expect(current).toHaveTextContent('銀座店')
   expect(current).toHaveTextContent('佐藤 美咲')
-  expect(current).not.toHaveTextContent('2024-11-02')
-  expect(past).toHaveTextContent('2024-11-02')
+  expect(current).not.toHaveTextContent('2024.11.02')
+  expect(past).toHaveTextContent('2024.11.02')
+  expect(past).not.toHaveTextContent('2024-11-02')
   expect(past).toHaveTextContent('丸の内店')
   expect(past).toHaveTextContent('山田 太郎')
+})
+
+test('現在のメガネと最新メモの日付も点で区切る (CUSTOMER-CURRENT)', async () => {
+  render(
+    <CustomerPanel
+      {...staffProps(jsonApi([hanako]))}
+      mode="ledger"
+      onSelect={vi.fn()}
+      permissions={allowed}
+      detail={detail}
+    />,
+  )
+  await searchLedger('090-1234')
+  fireEvent.click(await screen.findByRole('button', { name: /田中 花子/ }))
+
+  const glasses = screen.getByRole('region', { name: '現在のメガネ' })
+  expect(glasses).toHaveTextContent('2026.02.10')
+  expect(glasses).not.toHaveTextContent('2026-02-10')
 })
 
 test('the ledger puts 現在情報 before 履歴 (AC-EYEX-16)', async () => {
@@ -362,7 +387,7 @@ test('carries 根拠・記録者・記録日 on every 対応時に確認 (UC-EYE
   const attention = screen.getByRole('region', { name: '対応時に確認' })
   expect(attention).toHaveTextContent('根拠 接客記録')
   expect(attention).toHaveTextContent('記録者 佐藤 美咲')
-  expect(attention).toHaveTextContent('記録日 2026-02-10')
+  expect(attention).toHaveTextContent('記録日 2026.02.10')
 })
 
 test('hides even the existence of restricted information from unpermitted staff (UC-EYEX-029, AC-EYEX-91)', async () => {
@@ -498,7 +523,7 @@ test('opens the attention-note review for the chosen customer from the ledger', 
  * 柱を引いた幅でも 3 枚が横に並び続けること、そして和文が板からはみ出さない
  * こと。自動の枚数決めに任せると 2 列へ落ち、「現在のメガネ」が段を下げる。
  */
-test('現在の度数・最新メモ・現在のメガネ を 3 列のまま並べる', async () => {
+test('現在の度数・最新メモ・現在のメガネ は 1 枚の幅を守って並べる', async () => {
   render(
     <CustomerPanel
       {...staffProps(jsonApi([hanako]))}
@@ -514,7 +539,82 @@ test('現在の度数・最新メモ・現在のメガネ を 3 列のまま並�
     .getByRole('region', { name: '現在の度数' })
     .closest('div[style*="grid-template-columns"]')
   expect(columns).not.toBeNull()
-  expect(columns?.getAttribute('style')).toContain('repeat(3, minmax(0, 1fr))')
-  // `keep-all` は和文をどこでも折らないので、1 枚 156px の列からはみ出す。
+  /*
+   * 守るのは枚数ではなく 1 枚の幅。3 列を固定すると、柱 250px と詳細レール
+   * 390px を引いた残りで 1 枚 152px になり `測定日 2026-06-` / `01・店舗` と
+   * 語中で折れる。モックのこのカードは 236〜247px あった。
+   */
+  expect(columns?.getAttribute('style')).toContain('repeat(auto-fit, minmax(200px, 1fr))')
+  // `keep-all` は和文をどこでも折らないので、狭い列からはみ出す。
   expect(columns?.getAttribute('style')).not.toContain('keep-all')
+})
+
+/*
+ * 承認済みモック `staff-approved.html#customer-ledger` の来店履歴は
+ * 「2026.05.18 銀座店 フィッティング調整」と、点区切りの日付・店舗・要約を
+ * 空白で並べる。中黒で繋ぐと店舗名と要約の切れ目が読めなくなる。
+ */
+test('来店履歴 reads as the approved mock writes it (AC-EYEX-16)', async () => {
+  render(
+    <CustomerPanel
+      {...staffProps(jsonApi([hanako]))}
+      mode="ledger"
+      onSelect={vi.fn()}
+      permissions={allowed}
+      detail={detail}
+    />,
+  )
+  await searchLedger('090-1234')
+  fireEvent.click(await screen.findByRole('button', { name: /田中 花子/ }))
+  const history = screen.getByRole('region', { name: '来店履歴' })
+  expect(history).toHaveTextContent('2026.05.18 銀座店 フィッティング調整')
+  expect(history).toHaveTextContent('2026.02.10 丸の内店 視力測定・新調')
+})
+
+/* モックの注記は「日付が先、根拠が次」で、区切りは中黒ではなく `·`。 */
+test('対応時に確認 leads with the date, as the approved mock does (UC-EYEX-030)', async () => {
+  render(
+    <CustomerPanel
+      {...staffProps(jsonApi([hanako]))}
+      mode="ledger"
+      onSelect={vi.fn()}
+      permissions={allowed}
+      detail={detail}
+    />,
+  )
+  await searchLedger('090-1234')
+  fireEvent.click(await screen.findByRole('button', { name: /田中 花子/ }))
+  const attention = screen.getByRole('region', { name: '対応時に確認' })
+  expect(attention).toHaveTextContent('記録日 2026.02.10 · 根拠 接客記録 · 記録者 佐藤 美咲')
+})
+
+/*
+ * 承認済みモック `staff-approved.html#customer-ledger` の並びそのもの。
+ *
+ *   .customer-top（現在の度数 / 最新メモ / 現在のメガネ）→ 対応時に確認 → 来店履歴
+ *
+ * 「過去の度数」はモックに無い増補（`CustomerPanel` の注記のとおり）なので、
+ * モックの並びを崩さないように最後へ回す。ここが崩れると、接客の直前に読む
+ * 面（現在値と注意）より先に過去の記録が目に入る。
+ */
+test('顧客台帳の面はモックの並びで出る (CUSTOMER-CURRENT)', async () => {
+  render(
+    <CustomerPanel
+      {...staffProps(jsonApi([hanako]))}
+      mode="ledger"
+      onSelect={vi.fn()}
+      permissions={allowed}
+      detail={detail}
+    />,
+  )
+  await searchLedger('090-1234')
+  fireEvent.click(await screen.findByRole('button', { name: /田中 花子/ }))
+
+  const order = ['現在の度数', '最新メモ', '現在のメガネ', '対応時に確認', '来店履歴', '過去の度数']
+  const regions = order.map((name) => screen.getByRole('region', { name }))
+  for (const [index, region] of regions.entries()) {
+    const next = regions[index + 1]
+    if (next === undefined) continue
+    expect(region.compareDocumentPosition(next) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  }
 })

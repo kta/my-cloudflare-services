@@ -863,6 +863,15 @@ export const ReceptionHistoryEntry = z.strictObject({
   actorId: z.string().min(1).max(200),
   requiresAttention: z.boolean(),
   recordingStatus: z.literal('none'),
+  /*
+   * 承認済みモック `reception-history-approved.html` の一覧は、記録の 2 行目に
+   * 「いつ来るのか・何をしに来るのか」を出す（`8/28 11:00 · 視力測定・新調相談`）。
+   * 受付の記録自体はそれを持たないので、記録がぶら下がる予約の来店日時と目的を
+   * ここへ載せる。1 件ずつ予約を引きに行くと、一覧を開くだけで N 回の往復に
+   * なってしまう。ウォークインには予約が無いので `null` / 空になる。
+   */
+  startAt: z.string().datetime().nullable().default(null),
+  purposeIds: z.string().uuid().array().max(20).default([]),
 })
 export type ReceptionHistoryEntry = z.infer<typeof ReceptionHistoryEntry>
 

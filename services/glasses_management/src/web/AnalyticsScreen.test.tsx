@@ -225,9 +225,9 @@ afterEach(() => {
 test('the view states its period, JST, last update and counted rows', async () => {
   const { api } = createApi(() => jsonResponse(baseReport()))
   renderScreen(api)
-  expect(await screen.findByText('2026-08-27〜2026-08-27（日）')).toBeTruthy()
+  expect(await screen.findByText('8月27日（木）')).toBeTruthy()
   expect(screen.getByText('JST(Asia/Tokyo)')).toBeTruthy()
-  expect(screen.getByText('最終更新 2026-08-27 14:30 JST')).toBeTruthy()
+  expect(screen.getByText('最終更新 8月27日 14:30')).toBeTruthy()
   expect(screen.getByText('対象件数 214件')).toBeTruthy()
   // 指標定義 travels with the number, not in a manual somewhere else.
   expect(screen.getByText('対象期間に開始予定だった予約の件数。')).toBeTruthy()

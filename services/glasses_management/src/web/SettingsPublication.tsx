@@ -9,6 +9,7 @@ import {
   SettingsPublication as SettingsPublicationContract,
   SettingsVersionDetail,
   SettingsVersionSummary,
+  Store,
   type StorePermission,
 } from '@app/contracts'
 import { type ReactNode, useCallback, useEffect, useId, useState } from 'react'
@@ -96,6 +97,18 @@ const SEVERITY_TONE: Record<SettingsImpactSeverity, 'plain' | 'danger' | 'cautio
 
 const LOAD_ERROR = '設定を取得できませんでした。もう一度お試しください。'
 
+/**
+ * 公開結果の数（モックの `.card strong{font-size:28px}`）。28px は 4 の倍数では
+ * ない実測値なので、純粋な寸法としてインラインで持つ。
+ */
+function Tally({ count }: { count: string }) {
+  return (
+    <strong className="block font-bold" style={{ fontSize: '28px' }}>
+      {count}
+    </strong>
+  )
+}
+
 /** 公開できない理由を指す先。押せない「公開する」から `aria-describedby` で結ぶ。 */
 const BLOCKED_REASON_ID = 'settings-publication-blocked'
 
@@ -145,6 +158,12 @@ export function SettingsPublication({
   const [versions, setVersions] = useState<SettingsVersionSummary[]>([])
   const [versionDetail, setVersionDetail] = useState<SettingsVersionDetail>()
   const [publication, setPublication] = useState<SettingsPublicationContract>()
+  /*
+   * 店舗の名前。公開は複数店舗に当たるので、結果の行が `storeId` のままだと
+   * 生の UUID が画面に出る。UUID は誰も読めず、隣り合う店舗を取り違える。
+   * 名前は `/api/staff/stores` にしか無いので、ここで引いて対応表にする。
+   */
+  const [storeNames, setStoreNames] = useState<Record<string, string>>({})
   const [releaseNotice, setReleaseNotice] = useState<OverrideReleaseNotice>()
   const [error, setError] = useState<string>()
   const [info, setInfo] = useState<string>()
@@ -172,14 +191,14 @@ export function SettingsPublication({
     if (!canRead) return
     let active = true
     void (async () => {
-      const [draftResponse, impactResponse, overrideResponse, versionsResponse] = await Promise.all(
-        [
+      const [draftResponse, impactResponse, overrideResponse, versionsResponse, storesResponse] =
+        await Promise.all([
           api(`${base}/draft`),
           api(`${base}/draft/impact`),
           api(`${base}/override`),
           api(`${base}/versions`),
-        ],
-      )
+          api('/api/staff/stores'),
+        ])
       if (!active) return
       // 下書きがまだ無いのは失敗ではない。無いものを「取得できません」と
       // 言うと、実際の失敗と区別できなくなる。
@@ -201,6 +220,12 @@ export function SettingsPublication({
         const parsed = SettingsVersionSummary.array().safeParse(await readJson(versionsResponse))
         if (active && parsed.success) setVersions(parsed.data)
       }
+      if (storesResponse.ok) {
+        const parsed = Store.array().safeParse(await readJson(storesResponse))
+        if (active && parsed.success) {
+          setStoreNames(Object.fromEntries(parsed.data.map((store) => [store.id, store.name])))
+        }
+      }
     })()
     return () => {
       active = false
@@ -210,6 +235,20 @@ export function SettingsPublication({
   if (!canRead) {
     return <StatusNotice>設定を閲覧する権限がありません。</StatusNotice>
   }
+
+  /*
+   * 名前が引けていない店舗は UUID を出さずに「店舗名未取得」と言う。生の ID を
+   * 出すくらいなら、分かっていないことを分かっていないと書く方が読める。
+   */
+  const storeLabel = (id: string) => storeNames[id] ?? '店舗名未取得'
+
+  /*
+   * 版履歴は新しい順で返る。結果の面はいちばん新しい版だけを指す（差分も復元も
+   * 「いま公開した版」が対象で、古い版を選ばせるのは版履歴の面の役目）。
+   */
+  const latestVersion = versions[0]
+  /* 見出しの下に出す実行者。公開した版の `publishedBy` を名前として読む。 */
+  const resultVersion = latestVersion
 
   const summary = impact === undefined ? undefined : impactSummary(impact)
   const saveState = draftSaveState({ draft, dirty })
@@ -438,22 +477,46 @@ export function SettingsPublication({
           }
         >
           <div>
-            {/* `.title h2{margin:0}` — 実行者・承認者の行がすぐ下に続く。 */}
+            {/* `.title h2{margin:0}` — 実行者の行がすぐ下に続く。 */}
             <h1 className="my-0">{result.versionLabel}</h1>
-            <p>{`${result.executedLabel} · ${result.scheduledLabel}`}</p>
+            {/*
+             * モックはここに「実行者 山田 · 承認者 佐藤」と書く。実行者は版が
+             * `publishedBy` として持っているので出す。承認者は契約のどこにも
+             * 無いので名乗らない（誰が承認したかを推測で書かない）。
+             */}
+            <p>
+              {[
+                result.executedLabel,
+                ...(resultVersion === undefined ? [] : [`実行者 ${resultVersion.publishedBy}`]),
+                result.scheduledLabel,
+              ].join(' · ')}
+            </p>
           </div>
         </TitleRow>
 
+        {/*
+         * モックの 3 枚（`.card strong{font-size:28px}`）。数を大きく立て、その
+         * 内訳を下に 1 行だけ添える。数と内訳を同じ大きさで並べると、一部失敗の
+         * 「1」が文章に埋もれて見落とされる。
+         */}
         <CardGrid>
-          <FieldCard title="成功">{result.appliedLabel}</FieldCard>
+          <FieldCard title="成功">
+            <Tally count={`${String(result.appliedCount)}店舗`} />
+            <span className="block">{result.slotCountLabel}</span>
+          </FieldCard>
           <FieldCard title="失敗" tone={result.failed.length > 0 ? 'error' : 'plain'}>
-            {result.failedLabel}
+            <Tally count={`${String(result.failedCount)}店舗`} />
+            {result.failed.map((target) => (
+              <span key={target.storeId} className="block">
+                {`${storeLabel(target.storeId)} · ${target.failureReason ?? '理由不明'}`}
+              </span>
+            ))}
           </FieldCard>
           <FieldCard title="反映確認">
             {/* Web枠と台帳は別々に読ませる。1 行に繋ぐと、どちらが未反映
                 なのかを目で切り分けられない。 */}
-            <span className="block">{result.webSlotLabel}</span>
-            <span className="block">{result.ledgerLabel}</span>
+            <span className="block">{result.webConfirmLabel}</span>
+            <span className="block">{result.ledgerConfirmLabel}</span>
           </FieldCard>
         </CardGrid>
 
@@ -463,8 +526,8 @@ export function SettingsPublication({
             {/* 再試行が何店舗に当たるのかを、押す前に語で出す。 */}
             <Line>{`再試行対象 ${result.retryStoreIds.length}店舗`}</Line>
             {result.failed.map((target) => (
-              <AdminRow key={target.storeId} tone="error" label={target.storeId}>
-                <b>{target.storeId}</b>
+              <AdminRow key={target.storeId} tone="error" label={storeLabel(target.storeId)}>
+                <b>{storeLabel(target.storeId)}</b>
                 <span>{target.failureReason ?? '理由不明'}</span>
                 <span>公開未反映</span>
                 {canManage && result.canRetry ? (
@@ -483,16 +546,37 @@ export function SettingsPublication({
           </section>
         )}
 
+        {/*
+         * モックに無い面。モックは失敗した 1 店舗だけを行にするが、実アプリの
+         * 公開は店舗数が可変で、成功した側が「どの版まで進んだか」はここにしか
+         * 残らない。再試行のあと版が揃ったことを確かめる先が要る。
+         */}
         {result.applied.length > 0 && (
           <Preview label="反映済みの店舗">
             <b className="block">反映済みの店舗</b>
             {result.applied.map((target) => (
               <Line key={target.storeId}>
-                <span>{target.storeId}</span>
+                <span>{storeLabel(target.storeId)}</span>
                 <span>{` ・ 第${target.appliedVersion ?? 0}版`}</span>
               </Line>
             ))}
           </Preview>
+        )}
+
+        {/*
+         * モック `#publish-result` の下端の 2 つ。結果を見た人がそのまま
+         * 「何が変わったのか」と「やり直す」へ行けるようにする（版履歴の面まで
+         * 辿らせると、失敗した直後にもう一度探すことになる）。
+         */}
+        {latestVersion !== undefined && (
+          <Actions gap={2.5} mt={4}>
+            <Action onClick={() => void openDiff(latestVersion.versionId)}>版の差分を見る</Action>
+            {canManage && (
+              <Action onClick={() => void restoreVersion(latestVersion.versionId)}>
+                過去版から新しい下書きを作る
+              </Action>
+            )}
+          </Actions>
         )}
 
         {canManage && (result.canCancel || result.canReschedule) && (
@@ -545,6 +629,17 @@ export function SettingsPublication({
               </FieldCard>
               <FieldCard title="警告">{summary.warningLabel}</FieldCard>
             </CardGrid>
+            {/*
+             * 「公開できません」は 4 枚の数のすぐ下に置く（モック #impact の
+             * `.preview.warning` の位置）。競合の内訳より後ろに回すと、内訳が
+             * 伸びたぶん折り返しの下へ落ちて、公開できない事実に気づかない。
+             */}
+            {summary.blockedReason !== undefined && (
+              <Preview id={BLOCKED_REASON_ID} tone="caution" label="公開できない理由">
+                <b className="block">{summary.blockedHeadline}</b>
+                {summary.blockedReason}
+              </Preview>
+            )}
             {summary.groups.map((group) => (
               <Preview key={group.kind} label={group.label}>
                 <b className="block">{group.label}</b>
@@ -584,12 +679,6 @@ export function SettingsPublication({
               </Preview>
             ))}
             <Line>{summary.evaluatedAtLabel}</Line>
-            {summary.blockedReason !== undefined && (
-              <Preview id={BLOCKED_REASON_ID} tone="caution" label="公開できない理由">
-                <b className="block">{summary.blockedHeadline}</b>
-                {summary.blockedReason}
-              </Preview>
-            )}
           </>
         )}
       </section>

@@ -4,12 +4,14 @@ import {
   DEFAULT_BUSINESS_HOURS,
   DEFAULT_PURPOSE_TEMPLATE,
   deriveStepStates,
+  draftSavedAtLabel,
   formatJapaneseDate,
   formatSlashDate,
   SETTINGS_STEP_BY_ID,
   SETTINGS_STEPS,
   type SettingsStepId,
   STEP_STATE_LABEL,
+  stepImpact,
   stepperSummary,
   summariseBusinessHours,
 } from './settings-guide'
@@ -245,4 +247,78 @@ test('日付は用途ごとに 9月23日 と 9/10 を出し分ける', () => {
   // 解釈できない値は推測せずそのまま返す。
   expect(formatJapaneseDate('unknown')).toBe('unknown')
   expect(formatSlashDate('unknown')).toBe('unknown')
+})
+
+/* ---------------- 工程ごとの影響 (承認済みモックの `.preview`) ---------------- */
+
+const impactReport = {
+  draftId: '00000000-0000-4000-8000-0000000000d1',
+  storeId: '00000000-0000-4000-8000-000000000010',
+  evaluatedAt: '2026-08-26T09:06:00.000Z',
+  blockingCount: 2,
+  warningCount: 1,
+  canPublish: false,
+  ledgerEntriesAffected: 18,
+  publicSlots: { date: '2026-08-27', publishedCount: 2, draftCount: 2 },
+  items: [
+    {
+      kind: 'reservation_conflict' as const,
+      severity: 'blocking' as const,
+      reservationId: '00000000-0000-4000-8000-000000000031',
+      message: '8/28 10:00 の予約が営業時間外になります',
+      resolution: null,
+    },
+    {
+      kind: 'reservation_conflict' as const,
+      severity: 'blocking' as const,
+      reservationId: '00000000-0000-4000-8000-000000000032',
+      message: '8/29 15:00 の予約の設備が停止します',
+      resolution: null,
+    },
+    {
+      kind: 'missing_staff_skill' as const,
+      severity: 'warning' as const,
+      reservationId: null,
+      message: '眼鏡作製技能を持つスタッフが勤務していません',
+      resolution: null,
+    },
+  ],
+}
+
+test('影響の報告が無いあいだは、どの工程にも影響の面を出さない', () => {
+  for (const step of SETTINGS_STEPS) expect(stepImpact(step.id, undefined)).toBeUndefined()
+})
+
+test('工程ごとの影響は、その工程で決めたことの結果だけを言う', () => {
+  expect(stepImpact('store-hours', impactReport)).toEqual({
+    label: '影響',
+    body: '公開中のWeb枠2件を再確認します。',
+    tone: 'plain',
+  })
+  expect(stepImpact('staff-skills', impactReport)).toEqual({
+    label: '影響',
+    body: '眼鏡作製技能を持つスタッフが勤務していません',
+    tone: 'caution',
+  })
+  expect(stepImpact('equipment', impactReport)).toEqual({
+    label: '影響予約 2件',
+    body: '代替設備の割当または顧客連絡が必要です。',
+    tone: 'caution',
+  })
+  // 来店目的とWeb予約はモックが `.preview` を影響に使っていない（別の役目を持つ）。
+  expect(stepImpact('purposes', impactReport)).toBeUndefined()
+  expect(stepImpact('web-booking', impactReport)).toBeUndefined()
+})
+
+test('影響が無い工程には面を出さない（空の琥珀を残さない）', () => {
+  const clear = { ...impactReport, items: [], blockingCount: 0, warningCount: 0, canPublish: true }
+  expect(stepImpact('staff-skills', clear)).toBeUndefined()
+  expect(stepImpact('equipment', clear)).toBeUndefined()
+})
+
+test('下書きの保存時刻は JST の時刻だけを出し、保存が無ければ黙る', () => {
+  // 2026-08-26T05:32:00Z = JST 14:32（モックの `下書き保存 14:32`）。
+  expect(draftSavedAtLabel('2026-08-26T05:32:00.000Z')).toBe('下書き保存 14:32')
+  expect(draftSavedAtLabel(undefined)).toBeUndefined()
+  expect(draftSavedAtLabel('not-a-date')).toBeUndefined()
 })

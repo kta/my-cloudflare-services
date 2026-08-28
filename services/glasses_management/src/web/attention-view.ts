@@ -420,5 +420,11 @@ export function relativeJstDay(instant: string, today: string): string {
   const yesterday = new Date(`${today}T00:00:00Z`)
   yesterday.setUTCDate(yesterday.getUTCDate() - 1)
   if (day === yesterday.toISOString().slice(0, 10)) return '昨日'
-  return day
+  /*
+   * それ以外の日は月日で名乗る。生の `2026-08-20` を柱に残すと、承認済みモックが
+   * `本日` / `昨日` と読ませている場所だけが ISO になる（面に生の ISO は出さない）。
+   * 年は出さない。柱は同じ客の数件を見分けるための札で、年まで足すと折り返す。
+   */
+  const [, month = '', date = ''] = day.split('-')
+  return `${Number(month)}月${Number(date)}日`
 }

@@ -22,6 +22,21 @@ export type BarSpec = {
 
 type StoreSummary = { name: string; isActive: boolean }
 
+/*
+ * 運用の面の副題は承認済みモック `operations-approved.html` のバーそのもの。
+ * 8 面をひとまとめに「設定」と名乗ると、監査ログ・注意事項の確認・端末の一覧が
+ * バーの上では見分けられない同じ面になる。
+ *
+ * 組織共通の面（注意事項の権限・監査ログ）だけ店舗名を持たない。店舗名を足すと
+ * 「この店舗の監査」と読めてしまい、実際に見えている範囲より狭く伝わる。
+ * ここに無い面はモックどおり `<店舗> · 設定` のまま。
+ */
+const OPERATION_SUBTITLES: Partial<Record<StaffLocation['screen'], (name: string) => string>> = {
+  'attention-review': (name) => `${name} · 注意事項`,
+  'attention-settings': () => '組織共通設定',
+  audit: () => '監査',
+}
+
 /** 運用面の管理タブ。モック `operations-approved.html` の 3 つと、その順序。 */
 const OPERATION_SCREENS = new Set<StaffLocation['screen']>([
   'shared-terminals',
@@ -116,7 +131,7 @@ export function barFor(location: StaffLocation, store: StoreSummary): BarSpec {
   if (OPERATION_SCREENS.has(location.screen))
     return {
       kind: 'admin',
-      subtitle: `${name} · 設定`,
+      subtitle: OPERATION_SUBTITLES[location.screen]?.(name) ?? `${name} · 設定`,
       tabs: [],
     }
 

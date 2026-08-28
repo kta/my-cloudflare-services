@@ -5,6 +5,10 @@
   "extends": "../../../tsconfig.base.json",
   "compilerOptions": {
     "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    // 突き合わせの道具（`node e2e/real-overlay.ts`）は node の型剥がしで直接
+    // 走らせるので、隣のモジュールを `./overlay.ts` と拡張子つきで読む。
+    // Playwright の spec はビルドせず走るため、この許可で困るものは無い。
+    "allowImportingTsExtensions": true,
     "types": []
   },
   "include": ["."]

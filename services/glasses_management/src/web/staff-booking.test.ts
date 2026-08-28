@@ -1,6 +1,7 @@
 import type { AvailabilitySlot, AvailabilityStoreSettings } from '@app/contracts'
 import { describe, expect, it, test } from 'vitest'
 import {
+  bookingBarSubtitle,
   createStaffBookingDraft,
   desiredTimes,
   hasUnsavedBookingInput,
@@ -452,4 +453,28 @@ describe('unsaved booking input', () => {
     })
     expect(hasUnsavedBookingInput(done)).toBe(false)
   })
+})
+
+/* ------------------------------------------------------------------ *
+ * バーの副題（承認済みモック BOOK-REPEAT / EX-UPLOAD-FAILED）
+ * ------------------------------------------------------------------ */
+
+test('復唱の面のバーは店舗名と最終確認を名乗る', () => {
+  expect(bookingBarSubtitle('recital', '銀座店', undefined)).toBe('銀座店 · 最終確認')
+})
+
+test('成立後のバーは確認ではなく取れた予約番号を名乗る', () => {
+  // モック EX-UPLOAD-FAILED の副題は `銀座店 · 予約 EY-0828-1142`。成立した後も
+  // `最終確認` のままだと、まだ確定していない面に見える。
+  expect(bookingBarSubtitle('complete', '銀座店', 'EY-0828-1142')).toBe(
+    '銀座店 · 予約 EY-0828-1142',
+  )
+})
+
+test('成立したのに予約番号が届いていないときは番号を騙らない', () => {
+  expect(bookingBarSubtitle('complete', '銀座店', undefined)).toBe('銀座店 · 最終確認')
+})
+
+test('入力途中の面はバーに副題を持たない（チップが日時を名乗る）', () => {
+  expect(bookingBarSubtitle('time', '銀座店', undefined)).toBeUndefined()
 })

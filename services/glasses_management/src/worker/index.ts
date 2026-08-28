@@ -4869,6 +4869,16 @@ async function purposeNameLookup(c: AppContext, storeId: string): Promise<Map<st
   return new Map(rows.map((row) => [row.id, row.name]))
 }
 
+/** 保存は JSON 文字列。壊れていても一覧ごと落とさず、目的が無いものとして扱う。 */
+function parseReservationPurposeIds(row: { purposeIdsJson: string }): string[] {
+  try {
+    const ids: unknown = JSON.parse(row.purposeIdsJson)
+    return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : []
+  } catch {
+    return []
+  }
+}
+
 function reservationPurposeNames(
   row: typeof reservations.$inferSelect,
   names: Map<string, string>,
@@ -5130,6 +5140,12 @@ async function readReceptionHistory(
         actorId: row.actorId,
         requiresAttention,
         recordingStatus: 'none',
+        /*
+         * 一覧の 2 行目に出す「いつ来るのか・何をしに来るのか」。予約はすでに
+         * ここで読んであるので、画面が記録 1 件ずつ予約を引き直さずに済む。
+         */
+        startAt: reservation?.startAt ?? null,
+        purposeIds: reservation === undefined ? [] : parseReservationPurposeIds(reservation),
       }),
     ]
   })

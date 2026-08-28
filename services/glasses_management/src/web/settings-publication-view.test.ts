@@ -217,19 +217,19 @@ test('impact groups keep every checked kind, blocking first, named without colou
 
 test('the public slot and ledger effects are stated as a signed delta', () => {
   const summary = impactSummary(report())
-  expect(summary.slotLabel).toBe('公開枠 42件 → 38件（-4件）')
-  expect(summary.ledgerLabel).toBe('影響する台帳 18件')
+  expect(summary.slotLabel).toBe('42件 → 38件（-4件）')
+  expect(summary.ledgerLabel).toBe('18件')
 })
 
 test('a growing slot count reads as a positive delta and an unchanged one as ±0', () => {
   const grow = impactSummary(
     report({ publicSlots: { date: '2026-08-27', publishedCount: 38, draftCount: 42 } }),
   )
-  expect(grow.slotLabel).toBe('公開枠 38件 → 42件（+4件）')
+  expect(grow.slotLabel).toBe('38件 → 42件（+4件）')
   const same = impactSummary(
     report({ publicSlots: { date: '2026-08-27', publishedCount: 42, draftCount: 42 } }),
   )
-  expect(same.slotLabel).toBe('公開枠 42件 → 42件（±0件）')
+  expect(same.slotLabel).toBe('42件 → 42件（±0件）')
 })
 
 /* ---------------- ブロッキング解消 (UC-EYEX-165, AC-EYEX-109) ---------------- */
@@ -317,10 +317,11 @@ test('the result states version, targets, applied and failed counts and both eff
   const view = publicationView(publication())
   expect(view.statusLabel).toBe('一部失敗')
   expect(view.versionId).toBe('00000000-0000-4000-8000-000000000041')
-  expect(view.appliedLabel).toBe('成功 12店舗')
-  expect(view.failedLabel).toBe('失敗 1店舗')
-  expect(view.webSlotLabel).toBe('Web公開枠 428件 → 402件（-26件）')
-  expect(view.ledgerLabel).toBe('予約台帳 13件反映')
+  expect(view.appliedCount).toBe(12)
+  expect(view.failedCount).toBe(1)
+  expect(view.slotCountLabel).toBe('公開枠 402件')
+  expect(view.webConfirmLabel).toBe('Web予約 12/13')
+  expect(view.ledgerConfirmLabel).toBe('予約台帳 12/13')
   expect(view.executedLabel).toBe('実行日時 2026年8月26日 18:00')
   expect(view.scheduledLabel).toBe('公開予定 即時')
 })

@@ -7,7 +7,11 @@
  * DOM. Nothing here reads the clock, the network or storage.
  */
 
-import type { AvailabilityBusinessHours, AvailabilityPurpose } from '@app/contracts'
+import type {
+  AvailabilityBusinessHours,
+  AvailabilityPurpose,
+  SettingsImpactReport,
+} from '@app/contracts'
 
 export type SettingsStepId =
   | 'store-hours'
@@ -311,4 +315,78 @@ export function formatSlashDate(date: string): string {
   const match = ISO_DATE.exec(date)
   if (!match) return date
   return `${Number(match[2])}/${Number(match[3])}`
+}
+
+/* ------------------------------------------------------------------ *
+ * 工程ごとの「影響」（承認済みモックの `.preview` / `.preview.warning`）
+ * ------------------------------------------------------------------ */
+
+/**
+ * 工程の下に続く影響の面。
+ *
+ * なぜ工程ごとに出すのか: モックは工程 1・3・4 に `.preview` を置いている。
+ * 影響を工程 6 まで見せないと、5 工程ぶん編集したあとで初めて「公開できない」
+ * と知ることになり、どの編集が原因かを辿り直すはめになる。
+ *
+ * 報告が無いあいだは何も出さない。影響の有無は推測できるものではなく、
+ * 「たぶん無い」を白い面で断言すると、あるものを無いと読ませる。
+ */
+export type StepImpact = {
+  /** 面の名前。太字の 1 行目にもなる（モックの `<b>`）。 */
+  label: string
+  body: string
+  tone: 'plain' | 'caution'
+}
+
+export function stepImpact(
+  step: SettingsStepId,
+  report: SettingsImpactReport | undefined,
+): StepImpact | undefined {
+  if (report === undefined) return undefined
+  if (step === 'store-hours')
+    return {
+      label: '影響',
+      body: `公開中のWeb枠${String(report.publicSlots.publishedCount)}件を再確認します。`,
+      tone: 'plain',
+    }
+  if (step === 'staff-skills') {
+    const messages = report.items
+      .filter((item) => item.kind === 'missing_staff_skill')
+      .map((item) => item.message)
+    if (messages.length === 0) return undefined
+    return { label: '影響', body: messages.join('　'), tone: 'caution' }
+  }
+  if (step === 'equipment') {
+    /* 設備の工程で見せるのは「代わりを当てるか連絡するか」を決める件数だけ。 */
+    const blocking = report.items.filter(
+      (item) => item.severity === 'blocking' && item.resolution === null,
+    ).length
+    if (blocking === 0) return undefined
+    return {
+      label: `影響予約 ${String(blocking)}件`,
+      body: '代替設備の割当または顧客連絡が必要です。',
+      tone: 'caution',
+    }
+  }
+  return undefined
+}
+
+/**
+ * 工程の見出しの右端（モックの `.title .push`）に出る「下書き保存 14:32」。
+ *
+ * 日付ではなく時刻だけを出す。この面は「いま編集しているものが、いつ保存
+ * されたか」を確かめるためのもので、モックもそう書いている。保存が一度も
+ * 無いあいだは何も言わない（`未保存` は状態の面が持つ語で、ここには無い）。
+ */
+export function draftSavedAtLabel(savedAt: string | undefined): string | undefined {
+  if (savedAt === undefined) return undefined
+  const at = new Date(savedAt)
+  if (Number.isNaN(at.getTime())) return undefined
+  const jst = new Intl.DateTimeFormat('ja-JP', {
+    timeZone: 'Asia/Tokyo',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(at)
+  return `下書き保存 ${jst}`
 }

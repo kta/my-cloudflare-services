@@ -334,6 +334,11 @@ export function StaffWorkspace({
       attentionNotes: permissions?.includes('attention.read') ?? false,
     }
     const recordingPermissions = { playRecording: mayReadRecording }
+    /*
+     * 主利用店舗を名前で言うための対応表。名簿に無い店舗 id を選択中の店舗名へ
+     * 落とすと、他店のお客様が「うちの常連」に見えてしまう。
+     */
+    const storeNames = Object.fromEntries(stores.map((store) => [store.id, store.name]))
     const renderScreen = (location: StaffLocation) => {
       const selected = controller.snapshot().selectedStore
       const audioSrc = (recordingId: string) =>
@@ -382,6 +387,7 @@ export function StaffWorkspace({
               {...common}
               today={today}
               permissions={recordingPermissions}
+              storeNames={storeNames}
               // A reception event and its recording are joined by the
               // reservation when there is one, and by the reception session
               // when the reception was discarded (AC-EYEX-89).
@@ -505,7 +511,17 @@ export function StaffWorkspace({
       <App
         sharedTerminalController={sharedTerminal}
         storeSwitchController={controller}
-        accessibleStores={stores}
+        /*
+         * 切替シートの副題（`営業中 · 警告2件`）は、切り替えてよいかを押す前に
+         * 読ませるためのもの。件数はアラートの取得ですでに分かっているので、
+         * 選択中の店舗にだけ載せる。他店舗の件数は取りに行っていないので
+         * 付けない（0 件と未取得を混ぜない）。
+         */
+        accessibleStores={stores.map((store) =>
+          notifications !== undefined && store.id === controller.snapshot().selectedStore.id
+            ? { ...store, openAlerts: notifications.openAlerts }
+            : store,
+        )}
         navigation={navigation}
         today={today}
         notifications={notifications}

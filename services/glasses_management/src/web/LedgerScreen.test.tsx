@@ -376,7 +376,8 @@ test('refuses a stale save and compares the latest content with this terminal’
   const conflict = await screen.findByRole('region', { name: '別の端末で先に更新されています' })
   expect(within(conflict).getByText('最新の内容')).toBeInTheDocument()
   expect(within(conflict).getByText('この端末の入力')).toBeInTheDocument()
-  expect(within(conflict).getByText(/版 4/)).toBeInTheDocument()
+  // 版番号ではなく、いま保存されている値そのものを並べる（AC-EYEX-110）。
+  expect(within(conflict).queryByText(/版 4/)).not.toBeInTheDocument()
 
   fireEvent.click(within(conflict).getByRole('button', { name: '最新内容へ再適用' }))
 
@@ -415,4 +416,42 @@ test('reports a failed ledger load with a recovery instruction', async () => {
   expect(await screen.findByRole('alert')).toHaveTextContent(
     '台帳を読み込めませんでした。通信を確認してもう一度お試しください。',
   )
+})
+
+/*
+ * 承認済みモック `#conflict` の「最新の内容」は、版番号ではなく **いま保存されて
+ * いる値** と **誰がいつ更新したか** を並べる。版番号だけでは「何が違うのか」を
+ * 読めないので、409 が運んでくる `latest` / `updatedBy` / `updatedAt`
+ * （契約 `VersionConflict`）をそのまま出す。
+ */
+test('the conflict shows the stored values and who updated them, not a version number (AC-EYEX-110)', async () => {
+  const api = mockApi(
+    () => json([walkin()]),
+    () =>
+      json(
+        {
+          error: 'version_conflict',
+          currentVersion: 4,
+          latest: [
+            { label: '状態', value: '接客中' },
+            { label: 'お客様', value: '顧客未登録' },
+          ],
+          updatedBy: '銀座店 受付iPad',
+          updatedAt: '2026-08-27T05:31:00.000Z',
+        },
+        409,
+      ),
+    () => json([walkin({ version: 4 })]),
+  )
+  renderLedger(api)
+
+  fireEvent.click(await screen.findByRole('button', { name: /ウォークイン 3/ }))
+  fireEvent.click(screen.getByRole('button', { name: '退店として記録する' }))
+
+  const conflict = await screen.findByRole('region', { name: '別の端末で先に更新されています' })
+  expect(within(conflict).getByText('状態 接客中')).toBeInTheDocument()
+  expect(within(conflict).getByText('お客様 顧客未登録')).toBeInTheDocument()
+  expect(within(conflict).getByText('更新者: 銀座店 受付iPad 14:31')).toBeInTheDocument()
+  // 版番号は操作者の判断材料ではないので、面には出さない。
+  expect(within(conflict).queryByText(/版 4/)).not.toBeInTheDocument()
 })

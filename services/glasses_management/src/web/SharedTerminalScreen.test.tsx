@@ -102,6 +102,29 @@ test('モックの3枚のカードを同じ文言で出す (DEVICE-LIST)', async
   )
 })
 
+test('無操作ロックの設定が渡されなくても、登録済み端末の値で答える (DEVICE-LIST)', async () => {
+  /*
+   * 実アプリはこの面へ `idleLockSeconds` を渡していない（設定 API がまだ無い）。
+   * 承認済みモックのカードは `既定 2分` という事実を必ず持っているので、登録済み
+   * 端末が実際に使っている無操作ロック時間から答える。推測ではなく、この面が
+   * すでに受け取っているデータである。
+   */
+  const api = vi.fn(async () => jsonResponse([registerDesk]))
+  renderScreen(api)
+
+  expect(await screen.findByRole('region', { name: '無操作ロック' })).toHaveTextContent('既定 2分')
+})
+
+test('端末ごとに無操作ロックが違うときは既定を名乗らない (DEVICE-LIST)', async () => {
+  // 値が割れているのに 1 つを「既定」と書くと、もう一方の端末について嘘になる。
+  const api = vi.fn(async () =>
+    jsonResponse([registerDesk, { ...receptionDesk, idleTimeoutSeconds: 300 }]),
+  )
+  renderScreen(api)
+
+  expect(await screen.findByRole('region', { name: '無操作ロック' })).not.toHaveTextContent('既定')
+})
+
 test('共有iPadを登録するとトークンを一度だけ警告付きで表示し、保存しない (UC-EYEX-131, UC-EYEX-150)', async () => {
   const token = 'x'.repeat(48)
   const api = vi.fn(async (_input: string, init?: RequestInit) => {
@@ -202,11 +225,11 @@ test('店舗上書きが無い場合は組織既定を適用中と示す (UC-EYE
 /*
  * モック `DEVICE-LIST` の無操作ロックは `既定 2分` のように、分かっている事実
  * だけを書いている。「未取得 / この画面から取得できません」はモックの語彙に
- * 無い失敗文言なので、値が来ていないあいだは値を書かない（推測した既定値を
+ * 無い失敗文言なので、値が分からないあいだは値を書かない（推測した既定値を
  * 描かないという意図は、黙ることでも同じように守れる）。
  */
-test('無操作ロック時間が渡されないときは値を書かない (UC-EYEX-152)', async () => {
-  const api = vi.fn(async () => jsonResponse([registerDesk]))
+test('無操作ロック時間が分からないときは値を書かない (UC-EYEX-152)', async () => {
+  const api = vi.fn(async () => jsonResponse([]))
   renderScreen(api)
 
   const section = await screen.findByRole('region', { name: '無操作ロック' })

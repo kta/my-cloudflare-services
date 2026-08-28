@@ -604,8 +604,8 @@ test('影響確認は競合予約・Web公開枠・技能不足・設備不足�
   const impact = region.getByRole('region', { name: '影響確認' })
 
   // AC-EYEX-66 / UC-EYEX-115: 公開予定枠数と台帳件数。
-  await expect(impact.getByText('公開枠 42件 → 38件（-4件）')).toBeVisible()
-  await expect(impact.getByText('影響する台帳 18件')).toBeVisible()
+  await expect(impact.getByText('42件 → 38件（-4件）')).toBeVisible()
+  await expect(impact.getByText('18件')).toBeVisible()
   await expect(impact.getByText('確認日時 2026年8月26日 18:06')).toBeVisible()
 
   // AC-EYEX-46: 既存予約の競合が予約単位で並ぶ。

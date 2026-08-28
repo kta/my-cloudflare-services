@@ -415,3 +415,23 @@ export function toReservationCreate(
     ...(draft.handoffNote.trim() ? { handoffNote: draft.handoffNote.trim() } : {}),
   }
 }
+
+/**
+ * バーの副題（承認済みモック `BOOK-REPEAT` / `EX-UPLOAD-FAILED`）。
+ *
+ * 入力の途中はバーの右のチップが日時と目的を名乗るので、副題は持たない。
+ * 復唱は「読み上げて確かめる面」なので `最終確認`、成立した後は確認では
+ * なく取れた予約そのものを名乗る（モックの `銀座店 · 予約 EY-0828-1142`）。
+ * 番号が届いていないうちに `予約 …` と書くと、無い番号を騙ることになるので
+ * 確認の語に留める。
+ */
+export function bookingBarSubtitle(
+  step: StaffBookingStep,
+  storeName: string,
+  reservationNumber: string | undefined,
+): string | undefined {
+  if (step === 'complete' && reservationNumber !== undefined)
+    return `${storeName} · 予約 ${reservationNumber}`
+  if (step === 'recital' || step === 'complete') return `${storeName} · 最終確認`
+  return undefined
+}

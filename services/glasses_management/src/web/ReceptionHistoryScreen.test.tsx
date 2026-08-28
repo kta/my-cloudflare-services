@@ -17,7 +17,12 @@ const walkin = {
   entityType: 'walkin' as const,
   entityId: '00000000-0000-4000-8000-000000000901',
   reservationId: null,
-  customerName: null,
+  /*
+   * ウォークインでも名前欄は空にならない。サーバー（`readReceptionHistory`）が
+   * 受付連番から `ウォークイン 006` を組み立てて返すので、フィクスチャも
+   * それに合わせる。
+   */
+  customerName: 'ウォークイン 006',
   customerPhone: null,
   reservationNumber: null,
   actorId: '山田',
@@ -131,6 +136,18 @@ function renderScreen(
     const url = String(input)
     calls.push({ url, init })
     if (url.includes('/availability/settings')) return jsonResponse(availabilitySettings)
+    if (url.includes('/customers?'))
+      return jsonResponse([
+        {
+          id: '00000000-0000-4000-8000-000000000030',
+          name: '田中 花子',
+          kana: 'タナカ ハナコ',
+          phone: '090-1234-5678',
+          email: null,
+          primaryStoreId: STORE_ID,
+          visitCount: 4,
+        },
+      ])
     if (url.endsWith('/history')) return jsonResponse([])
     if (url.includes('/reservations/')) return jsonResponse(reservation)
     return jsonResponse(entries)
@@ -300,7 +317,7 @@ test('names the detail rows as the approved mock does', async () => {
   fireEvent.click(within(list).getByRole('button', { name: /田中 花子/ }))
   const detail = await screen.findByRole('region', { name: '受付イベント詳細' })
   expect(within(detail).getByText('来店')).toBeInTheDocument()
-  expect(await within(detail).findByText('2026年8月28日 11:00')).toBeInTheDocument()
+  expect(await within(detail).findByText('8月28日（金）11:00')).toBeInTheDocument()
   expect(within(detail).getByText('目的')).toBeInTheDocument()
   expect(within(detail).getByText('視力測定・新調相談')).toBeInTheDocument()
   expect(within(detail).getByText('受付経路')).toBeInTheDocument()
@@ -387,7 +404,7 @@ test('hides the recording from staff without playback permission', async () => {
 // AC-EYEX-56: an empty day says so rather than showing an empty panel.
 test('says so when there is no reception history for the day', async () => {
   renderScreen([])
-  expect(await screen.findByText('条件に一致する受付履歴はありません。')).toBeInTheDocument()
+  expect(await screen.findByText('条件に一致する受付履歴はありません')).toBeInTheDocument()
 })
 
 // AC-EYEX-60 / UC-EYEX-032: the recording shown belongs to the selected event,
@@ -500,7 +517,7 @@ test('renders the detail head and the approved 1.15fr / .85fr card grid', async 
 // exception-states-approved.html `#empty`: 空表示は回復操作を必ず連れてくる。
 test('offers the approved recovery action when no event matches', async () => {
   const { calls } = renderScreen([])
-  expect(await screen.findByText('条件に一致する受付履歴はありません。')).toBeInTheDocument()
+  expect(await screen.findByText('条件に一致する受付履歴はありません')).toBeInTheDocument()
   expect(
     screen.getByText('検索語またはフィルターを変更してください。履歴自体は削除されていません。'),
   ).toBeInTheDocument()
@@ -552,4 +569,54 @@ test('does not leave the iPad録音 heading behind when playback is not permitte
   fireEvent.click(within(list).getByRole('button', { name: /田中 花子/ }))
   const detail = await screen.findByRole('region', { name: '受付イベント詳細' })
   expect(within(detail).queryByText('iPad録音')).not.toBeInTheDocument()
+})
+
+/*
+ * 承認済みモック `reception-history-approved.html` の一覧。記録の 2 行目は
+ * 「いつ来るのか・何をしに来るのか」で、経路と受付者ではない（経路は右肩の
+ * チップが、受付者は開いた記録の見出しが、それぞれすでに言っている）。
+ */
+test('a list row says when the customer is due and what for, not the route (AC-EYEX-56)', async () => {
+  renderScreen([
+    {
+      ...phoneBooking,
+      startAt: '2026-08-28T02:00:00.000Z', // 8/28 11:00 JST
+      purposeIds: ['00000000-0000-4000-8000-000000000020'],
+    },
+  ])
+  const list = await screen.findByRole('region', { name: '受付履歴' })
+  const row = (await within(list).findAllByRole('button'))[0]
+  expect(row?.textContent).toContain('8/28 11:00 · 視力測定・新調相談')
+  expect(row?.textContent).not.toContain('電話・店頭 · 鈴木')
+})
+
+/* 予約を持たない受付（ウォークイン）は、来店予定ではなく誰の受付かを言う。 */
+test('a walk-in row says the customer is not on record yet (AC-EYEX-56)', async () => {
+  renderScreen([walkin])
+  const list = await screen.findByRole('region', { name: '受付履歴' })
+  const row = (await within(list).findAllByRole('button'))[0]
+  expect(row?.textContent).toContain('ウォークイン 006を受付')
+  expect(row?.textContent).toContain('顧客未登録 · 山田')
+})
+
+/* モックの顧客カードは敬称つきで、来店回数と主利用店まで名乗る。 */
+test('the customer card addresses the customer politely and shows their visits (AC-EYEX-57)', async () => {
+  renderScreen(allEntries)
+  const list = await screen.findByRole('region', { name: '受付履歴' })
+  fireEvent.click(within(list).getByRole('button', { name: /田中 花子/ }))
+  const detail = await screen.findByRole('region', { name: '受付イベント詳細' })
+  await waitFor(() => expect(detail.textContent).toContain('田中 花子 様'))
+  await waitFor(() => expect(detail.textContent).toContain('4回来店 · 主利用店 銀座店'))
+})
+
+/*
+ * モックの「来店」は `8月28日（金）11:00`。曜日まで言うのは、電話口で
+ * 「金曜の11時ですね」と読み上げる面だからで、年は同じ行の見出しが持っている。
+ */
+test('来店 names the weekday, as the approved mock does (AC-EYEX-57)', async () => {
+  renderScreen(allEntries)
+  const list = await screen.findByRole('region', { name: '受付履歴' })
+  fireEvent.click(within(list).getByRole('button', { name: /田中 花子/ }))
+  const detail = await screen.findByRole('region', { name: '受付イベント詳細' })
+  await waitFor(() => expect(detail.textContent).toContain('8月28日（金）11:00'))
 })

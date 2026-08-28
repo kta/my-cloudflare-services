@@ -1,4 +1,9 @@
-import { AvailabilityStoreSettings, LedgerEntry, type ReceptionProgress } from '@app/contracts'
+import {
+  AvailabilityStoreSettings,
+  LedgerEntry,
+  type ReceptionProgress,
+  VersionConflict,
+} from '@app/contracts'
 import { type ReactNode, useCallback, useEffect, useState } from 'react'
 import { barPrimaryAction } from './app-chrome'
 import { Action } from './design/controls'
@@ -63,16 +68,23 @@ const CANCEL_CONFIRMATION = '取り消す'
 /** Shown only when the name join has not answered; never a raw id. */
 const UNKNOWN_NAME = '名称未取得'
 
+/** JST の壁時計 `10:50`。日本に夏時間は無いので +09:00 の固定加算で足りる。 */
+function jstClock(instant: string): string {
+  const shifted = new Date(new Date(instant).getTime() + 9 * 60 * 60 * 1000).toISOString()
+  // 先頭の 0 は落とす。モックの `9:58` と同じ読み方にする。
+  return `${Number(shifted.slice(11, 13))}:${shifted.slice(14, 16)}`
+}
+
 function waitMinutes(entry: LedgerEntry, now: string): number | undefined {
   if (entry.waitStartedAt === null) return undefined
   const elapsed = new Date(now).getTime() - new Date(entry.waitStartedAt).getTime()
   return elapsed < 0 ? 0 : Math.floor(elapsed / 60_000)
 }
 
-function conflictVersion(payload: unknown): number | undefined {
-  if (typeof payload !== 'object' || payload === null) return undefined
-  const version = (payload as Record<string, unknown>).currentVersion
-  return typeof version === 'number' ? version : undefined
+/* 台帳と同じ 409 の読み方。版番号だけを拾って、最新の値と更新者を捨てない。 */
+function parseConflict(payload: unknown): VersionConflict | undefined {
+  const parsed = VersionConflict.safeParse(payload)
+  return parsed.success ? parsed.data : undefined
 }
 
 type Attempt = { send: (version: number) => Promise<Response>; describe: string }
@@ -82,7 +94,7 @@ export function JourneyScreen({ storeId, storeName, api, date, now }: JourneyScr
   const [staffNames, setStaffNames] = useState<Map<string, string>>(new Map())
   const [loadFailed, setLoadFailed] = useState(false)
   const [selectedId, setSelectedId] = useState<string>()
-  const [conflict, setConflict] = useState<{ attempt: Attempt; currentVersion: number }>()
+  const [conflict, setConflict] = useState<{ attempt: Attempt; latest: VersionConflict }>()
   const [stage, setStage] = useState<ReceptionProgress>('waiting')
   const [staffId, setStaffId] = useState('')
   const [equipmentId, setEquipmentId] = useState('')
@@ -160,9 +172,9 @@ export function JourneyScreen({ storeId, storeName, api, date, now }: JourneyScr
   const run = async (attempt: Attempt, version: number) => {
     const response = await attempt.send(version)
     if (response.status === 409) {
-      const latest = conflictVersion(await response.json().catch(() => undefined))
+      const latest = parseConflict(await response.json().catch(() => undefined))
       await load()
-      if (latest !== undefined) setConflict({ attempt, currentVersion: latest })
+      if (latest !== undefined) setConflict({ attempt, latest })
       return
     }
     setConflict(undefined)
@@ -225,6 +237,7 @@ export function JourneyScreen({ storeId, storeName, api, date, now }: JourneyScr
     const started = entry.progress !== null && entry.progress !== 'waiting'
     const minutes = waitMinutes(entry, now)
     const staffName = staffNameOf(entry)
+    const receivedAt = entry.waitStartedAt === null ? undefined : jstClock(entry.waitStartedAt)
     const identity: JourneyCell = {
       children: (
         <button
@@ -254,7 +267,13 @@ export function JourneyScreen({ storeId, storeName, api, date, now }: JourneyScr
             false,
             <>
               <span className="block">{column.done}</span>
-              {index === 0 && staffName && <span className="block">{staffName}</span>}
+              {/* 受付の工程だけは「いつ・誰が」を並べる（モックの `9:58 山田`）。
+                  名前だけだと、さっきのことか 1 時間前のことかが読めない。 */}
+              {index === 0 && (receivedAt !== undefined || staffName) && (
+                <span className="block">
+                  {[receivedAt, staffName].filter((part) => part !== undefined).join(' ')}
+                </span>
+              )}
             </>,
           )
         if (index === current)
@@ -295,11 +314,11 @@ export function JourneyScreen({ storeId, storeName, api, date, now }: JourneyScr
 
       {conflict && (
         <ConflictPanel
-          currentVersion={conflict.currentVersion}
+          latest={conflict.latest}
           input={conflict.attempt.describe}
           onDiscard={() => setConflict(undefined)}
           onReapply={() => {
-            void run(conflict.attempt, conflict.currentVersion)
+            void run(conflict.attempt, conflict.latest.currentVersion)
           }}
         />
       )}
