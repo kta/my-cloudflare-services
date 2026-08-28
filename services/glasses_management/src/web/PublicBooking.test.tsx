@@ -110,6 +110,15 @@ test('starts the approved public flow by selecting a published store and its pur
   fireEvent.click(screen.getByRole('button', { name: 'この内容で予約する' }))
   expect(await screen.findByRole('heading', { name: '予約を承りました' })).toBeInTheDocument()
   expect(await screen.findByText(/EY-0001/)).toBeInTheDocument()
+  /*
+   * 承認済みモック `WEB-COMPLETE` の完了画面は、予約番号・日時・店舗名の 3 行と
+   * 「予約を変更・取り消す」だけ。店舗の電話番号は AC-EYEX-94 が求める面
+   * （本人確認に失敗したとき）のものであって、完了の面のものではない。変更・
+   * 取消の手順もすぐ上のボタンが示しており、同じことを文でも言うと押しどころが
+   * 埋もれる。
+   */
+  expect(document.body.textContent).not.toContain('お問い合わせ')
+  expect(document.body.textContent).not.toContain('管理コードで行えます')
   fireEvent.click(screen.getByRole('button', { name: '予約を変更・取り消す' }))
   expect(await screen.findByRole('heading', { name: '本人確認コードを入力' })).toBeInTheDocument()
   fireEvent.change(screen.getByLabelText('会社発行の管理コード'), {
@@ -478,3 +487,4 @@ test('日時の工程は生の ISO を出さず、候補を日本語で並べる
   expect(screen.queryByLabelText('ご希望の日')).toBeNull()
   expect(container.textContent).not.toContain('2026-09-01')
 })
+

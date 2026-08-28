@@ -549,14 +549,16 @@ export function PublicBooking({
             )}
             {draft.date && draft.startTime && japaneseSlotLabel(draft.date, draft.startTime)}
             <br />
+            {/*
+             * 店舗の電話番号はここに出さない。AC-EYEX-94 が連絡先を求めるのは
+             * 本人確認に失敗した面であって、完了の面ではない。変更・取消の
+             * 手順も、すぐ下のボタンが示している——同じことを文でも言うと
+             * 押しどころが埋もれる（承認済みモック `WEB-COMPLETE` も 3 行と
+             * 1 つの操作だけである）。
+             */}
             {detail.name}
-            <br />
-            お問い合わせ {detail.contactPhone}
           </PhoneSummary>
           <PhoneButton onClick={openManagement}>予約を変更・取り消す</PhoneButton>
-          <p>
-            <small>変更・取消は、会社発行の管理コードで行えます。</small>
-          </p>
         </PhoneBody>
       </PhoneScreen>
     )
