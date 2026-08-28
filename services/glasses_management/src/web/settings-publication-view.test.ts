@@ -431,3 +431,14 @@ test('a publication that has not applied anywhere yet names no version number', 
   // 採番はまだ決まっていない。分かっていない番号を作り出さず、名乗りだけ出す。
   expect(view.versionLabel).toBe('公開結果')
 })
+
+/*
+ * 公開結果の見出しの下は、モックでは `2026年8月26日 18:00 · 実行者 山田 ·
+ * 承認者 佐藤` である。実行した日時に「実行日時」と札を付けず、その場で公開
+ * したことを「公開予定 即時」と言い直しもしない——結果の面はもう起きたことを
+ * 語る面で、予定の話はここにはない。
+ */
+test('公開結果の実行の行は、日時をそのまま名乗る', () => {
+  const view = publicationView(publication())
+  expect(view.executedLine).toBe('2026年8月26日 18:00')
+})

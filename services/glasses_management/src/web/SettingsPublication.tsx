@@ -486,9 +486,9 @@ export function SettingsPublication({
              */}
             <p>
               {[
-                result.executedLabel,
+                result.executedLine,
                 ...(resultVersion === undefined ? [] : [`実行者 ${resultVersion.publishedBy}`]),
-                result.scheduledLabel,
+                ...(result.scheduledLine === undefined ? [] : [result.scheduledLine]),
               ].join(' · ')}
             </p>
           </div>
@@ -523,8 +523,6 @@ export function SettingsPublication({
         {/* 失敗した店舗は 1 店舗 1 行。まとめの数字だけにしない。 */}
         {result.failed.length > 0 && (
           <section aria-label="失敗した店舗">
-            {/* 再試行が何店舗に当たるのかを、押す前に語で出す。 */}
-            <Line>{`再試行対象 ${result.retryStoreIds.length}店舗`}</Line>
             {result.failed.map((target) => (
               <AdminRow key={target.storeId} tone="error" label={storeLabel(target.storeId)}>
                 <b>{storeLabel(target.storeId)}</b>

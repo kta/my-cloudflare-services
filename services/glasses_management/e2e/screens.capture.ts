@@ -2699,6 +2699,12 @@ async function captureAnalyticsScreen(browser: Browser) {
   await visible(page.getByRole('heading', { name: '店舗運用の分析' }))
   await page.getByLabel('対象日').fill('2026-08-27')
   await page.getByText('対象件数 214件').waitFor({ state: 'visible' })
+  /* モックの分析は「待ち時間」の面（`中央値 8分40秒` と時間帯の柱）。既定の
+     「予約と来店」で撮ると、同じ画面の別の観点を並べて比べることになる。 */
+  await page
+    .getByRole('navigation', { name: '画面の一覧' })
+    .getByRole('button', { name: '待ち時間' })
+    .click()
   await shot(page, 'ANALYTICS', 'default', 'ipad-landscape')
   await page.context().close()
 }

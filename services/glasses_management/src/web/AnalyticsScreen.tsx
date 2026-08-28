@@ -448,8 +448,10 @@ export function AnalyticsScreen({ storeId, api, permissions, today, navigate }: 
                 <section aria-label={`${view.label} の分布`} className="mt-4.5">
                   <h2 className="my-0 text-h3">{view.label}</h2>
                   <VizNote>{view.definition}</VizNote>
-                  <p className="my-0 text-viz-body">{view.summaryText}</p>
-                  <VizNote>{view.sampleCountText}</VizNote>
+                  {/* モックは代表値を見出しの大きさで立て、散らばりと件数を
+                      その下へ小さく添える（`中央値  8分40秒`）。 */}
+                  <p className="my-0 font-bold text-figure text-pine">{view.medianText}</p>
+                  <VizNote>{`${view.spreadText}　${view.sampleCountText}`}</VizNote>
                   {view.suppressionNote && <VizNote>{view.suppressionNote}</VizNote>}
                   {/*
                    * 分布の柱は「多い/少ない」であって良し悪しではない。一番高い

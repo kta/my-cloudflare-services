@@ -286,8 +286,11 @@ test('wait time is shown as a distribution, not only an average', async () => {
   renderScreen(api)
   await openSection('待ち時間')
   const region = await screen.findByRole('region', { name: '受付から接客開始まで の分布' })
+  /* 代表値は見出しの大きさで立て、散らばりはその下へ添える（モックの
+     `中央値  8分40秒`）。平均だけで読ませないことは変わらない。 */
+  expect(within(region).getByText('中央値 8分')).toBeTruthy()
   expect(
-    within(region).getByText('中央値 8分 / 平均 9.2分 / 90パーセンタイル 18分 / 最大 32分'),
+    within(region).getByText(/平均 9.2分 · 90パーセンタイル 18分 · 最大 32分/),
   ).toBeTruthy()
   // Every bar carries its own label and count, so the chart never depends on colour.
   expect(within(region).getByText('0〜5分')).toBeTruthy()

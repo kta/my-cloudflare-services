@@ -311,6 +311,20 @@ export type PublicationView = {
   statusTone: 'success' | 'warning' | 'danger' | 'neutral'
   scheduledLabel: string
   executedLabel: string
+  /**
+   * 公開結果の見出しの下に置く実行の日時。
+   *
+   * `executedLabel` は予定と並べて読む面（一覧・工程6）のための札付きの語で、
+   * 結果の面はもう起きたことだけを語るので札を外す（モックは
+   * `2026年8月26日 18:00 · 実行者 山田 · 承認者 佐藤`）。
+   */
+  executedLine: string
+  /**
+   * 結果の面に添える公開予定。その場で公開したときは持たない——「即時」は
+   * 実行の日時が既に言っていることで、結果の面に予定の話を残す意味がない。
+   * 予約したまま未実行の版だけが、いつ公開されるのかをここで名乗る。
+   */
+  scheduledLine: string | undefined
   /** 見出しの名乗り。人が読む採番で、保存用の UUID は含めない。 */
   versionLabel: string
   /** 成功した店舗数（モックは 28px で立てる）。 */
@@ -364,6 +378,12 @@ export function publicationView(publication: SettingsPublication): PublicationVi
       publication.executedAt === null
         ? '実行日時 未実行'
         : `実行日時 ${formatJstInstant(publication.executedAt)}`,
+    executedLine:
+      publication.executedAt === null ? '未実行' : formatJstInstant(publication.executedAt),
+    scheduledLine:
+      publication.scheduledForJst === null
+        ? undefined
+        : `公開予定 ${formatJstWallClock(publication.scheduledForJst)}`,
     appliedCount: publication.appliedCount,
     failedCount: publication.failedCount,
     slotCountLabel: `公開枠 ${String(effect.publishedSlotCount)}件`,

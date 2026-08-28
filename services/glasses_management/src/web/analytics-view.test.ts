@@ -434,3 +434,14 @@ test('alert conditions are named for the administrator who configures them', () 
   expect(alertConditionLabel('recording_save_failure')).toBe('録音の保存失敗')
   expect(alertConditionLabel('settings_contradiction')).toBe('設定の矛盾')
 })
+
+/*
+ * 承認済みモックの待ち時間は `中央値  8分40秒` を大きく立て、平均・90 パーセン
+ * タイル・最大はその下に小さく添える。4 つを同じ大きさで `/` 繋ぎにすると、
+ * どれを先に読めばよいかが決まらず、分布の代表値が文字列に埋もれる。
+ */
+test('分布は中央値を見出しに立て、残りを下へ添える', () => {
+  const view = distributionView(distribution())
+  expect(view.medianText).toBe('中央値 8分')
+  expect(view.spreadText).toBe('平均 9.2分 · 90パーセンタイル 18分 · 最大 32分')
+})

@@ -493,7 +493,7 @@ test('公開結果は人が読む版の採番・対象店舗・反映件数・�
   expect(within(result).getByText('丸の内店 · 視力測定機が停止中')).toBeTruthy()
   expect(within(result).getByText('Web予約 12/13')).toBeTruthy()
   expect(within(result).getByText('予約台帳 12/13')).toBeTruthy()
-  expect(within(result).getByText(/実行日時 2026年8月26日 18:00/)).toBeTruthy()
+  expect(within(result).getByText(/2026年8月26日 18:00/)).toBeTruthy()
   expect(within(result).getByText('一部失敗')).toBeTruthy()
 })
 
@@ -530,7 +530,6 @@ test('再試行は失敗店舗だけを対象にし、成功済み店舗へ再�
   expect(within(failed).queryByText(OTHER_STORE)).toBeNull()
   expect(within(failed).getByText('視力測定機が停止中')).toBeTruthy()
   expect(within(failed).queryByText(STORE_ID)).toBeNull()
-  expect(screen.getByText('再試行対象 1店舗')).toBeTruthy()
 
   fireEvent.click(within(failed).getByRole('button', { name: 'この店舗だけ再試行' }))
   await waitFor(() => {

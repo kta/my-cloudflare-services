@@ -243,6 +243,10 @@ export type DistributionView = {
   suppressionNote: string | undefined
   sampleCountText: string
   summaryText: string
+  /** 代表値。モックはここだけを見出しの大きさで立てる。 */
+  medianText: string
+  /** 散らばり。代表値の下に小さく添える。 */
+  spreadText: string
   rows: DistributionRow[]
 }
 
@@ -261,6 +265,22 @@ export function distributionView(distribution: AnalyticsStageDistribution): Dist
     distribution.maxMinutes === null
       ? HIDDEN
       : `中央値 ${distribution.medianMinutes}分 / 平均 ${distribution.averageMinutes}分 / 90パーセンタイル ${distribution.p90Minutes}分 / 最大 ${distribution.maxMinutes}分`
+  /*
+   * モックは代表値（中央値）を見出しの大きさで立て、散らばりはその下に小さく
+   * 添える。4 つを同じ大きさで `/` 繋ぎにすると、どれを先に読めばよいかが
+   * 決まらず、分布の代表値が文字列に埋もれる。
+   */
+  const medianText =
+    hidden || distribution.medianMinutes === null
+      ? HIDDEN
+      : `中央値 ${distribution.medianMinutes}分`
+  const spreadText =
+    hidden ||
+    distribution.averageMinutes === null ||
+    distribution.p90Minutes === null ||
+    distribution.maxMinutes === null
+      ? HIDDEN
+      : `平均 ${distribution.averageMinutes}分 · 90パーセンタイル ${distribution.p90Minutes}分 · 最大 ${distribution.maxMinutes}分`
   return {
     stage: distribution.stage,
     label: distribution.label,
@@ -269,6 +289,8 @@ export function distributionView(distribution: AnalyticsStageDistribution): Dist
     suppressionNote: suppressionNote(distribution.suppressionReason),
     sampleCountText: hidden ? HIDDEN : `対象${distribution.sampleCount}件`,
     summaryText,
+    medianText,
+    spreadText,
     rows: hidden
       ? []
       : distribution.buckets.map((bucket) => ({
