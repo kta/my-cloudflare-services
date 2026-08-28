@@ -3,55 +3,58 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>EYEX予約 — トップ</title>
+<title>EYEX予約 — トップ（共有端末）</title>
 <link rel="stylesheet" href="../assets/eyex.css">
 <style>
-  .home { display: grid; grid-template-columns: 1fr 380px; gap: 56px; padding: 44px 56px 0; }
-  .hero { display: grid; gap: 20px; align-content: start; }
-  .hero .big {
-    display: flex; align-items: center; gap: 22px;
-    min-height: 128px; padding: 0 32px;
-    border: 1px solid var(--line-strong); border-radius: var(--r-l);
-    background: var(--surface); text-align: left;
-    font: 700 28px var(--sans); color: var(--ink);
+  /* 主操作は2つだけ。右と下が空いているのは正しい状態なので、埋めない。 */
+  .home {
+    height: 100%;
+    display: grid;
+    align-content: center;
+    justify-content: start;
+    gap: 24px;
+    padding: 0 44px 124px;
   }
-  .hero .big small { display: block; font: 400 15px var(--sans); color: var(--ink-2); margin-top: 4px; }
-  .hero .big .ico {
+  .big {
+    width: 720px;
+    display: flex;
+    align-items: center;
+    gap: 22px;
+    min-height: 132px;
+    padding: 0 32px;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-l);
+    background: var(--surface);
+    text-align: left;
+    font: 700 28px var(--sans);
+    color: var(--ink);
+  }
+  .big small { display: block; font: 400 15px var(--sans); color: var(--ink-2); margin-top: 4px; }
+  .big .ico {
     flex: none; width: 64px; height: 64px; border-radius: 50%;
     background: var(--brand); color: #fff; display: grid; place-items: center; font-size: 28px;
   }
-  .hero .big.change .ico { background: var(--walkin); }
-  .quick { display: grid; align-content: start; padding-top: 6px; }
-  .quick a {
-    display: flex; align-items: center; gap: 16px;
-    min-height: 72px; padding: 0 8px;
-    border-bottom: 1px solid var(--line);
-    color: var(--ink); text-decoration: none; font-size: 19px; font-weight: 600;
-  }
-  .quick a:first-child { border-top: 1px solid var(--line); }
-  .quick .ico { width: 32px; text-align: center; font-size: 20px; color: var(--brand); }
-  .quick .chev { margin-left: auto; color: var(--ink-3); font-size: 16px; }
-  .days { position: absolute; left: 56px; right: 56px; bottom: 26px; }
-  .days .m { font-size: 14px; color: var(--ink-2); margin-bottom: 8px; }
-  .days .strip { display: grid; grid-template-columns: repeat(8, 1fr); gap: 10px; }
+  .big.change .ico { background: var(--walkin); }
+
+  /* 日付の帯は画面の下辺に置く。 */
+  .days { position: absolute; left: 44px; right: 44px; bottom: 44px; }
+  .days .month { margin: 0 0 16px; font-size: 14px; color: var(--ink-2); }
+  .strip { display: grid; grid-template-columns: repeat(8, 1fr); gap: 12px; }
   .day {
     min-height: 76px; border: 1px solid var(--line-strong); border-radius: var(--r-m);
     background: var(--surface); display: grid; place-content: center; text-align: center;
-    font: 600 24px var(--sans); color: var(--ink); padding: 6px 0;
+    font: 600 22px var(--sans); color: var(--ink);
   }
   .day small { display: block; font: 600 12px var(--sans); color: var(--ink-2); }
   .day.on { border: 3px solid var(--brand); background: var(--brand-tint); color: var(--brand-dark); }
-  .day.on small { color: var(--brand-dark); }
-  .day.sun small, .day.sun { color: var(--alert); }
-  .day.cal { font-size: 15px; font-weight: 600; color: var(--brand); }
-  .terminal { position: absolute; left: 56px; bottom: 4px; font-size: 12px; color: var(--ink-2); }
-  .ver { position: absolute; right: 56px; bottom: 4px; font-size: 12px; color: var(--ink-3); }
+  .day.sun, .day.sun small { color: var(--alert); }
+  .day.cal { font-size: 14px; color: var(--brand); }
 </style>
 </head>
 <body>
 <div class="caption">
-  <h1>トップ</h1>
-  <p>電話が鳴ってから予約を取り始めるまでを最短にする。主操作2つを左、日常の参照を右、日付の移動を下に固定する。</p>
+  <h1>トップ（レジ横の共有端末）</h1>
+  <p>電話が鳴ってから予約を取り始めるまでの判断を減らす面。主操作は2つだけに絞り、行き先は左のサイドバーが持つ。</p>
 </div>
 
 <main class="device" id="screen">
@@ -61,43 +64,50 @@
     <button class="homebtn" aria-label="トップへ">⌂</button>
     <div class="storename">EYEX 銀座店<small>営業中　10:00–19:00</small></div>
     <div class="barbtns">
-      <button class="barbtn"><b>お知らせ</b><span class="badge">2</span></button>
-      <button class="barbtn"><b>アラート</b><span class="badge">1</span></button>
-      <button class="barbtn"><b>ヘルプ</b></button>
-      <button class="barbtn"><b>設定</b></button>
+      <button class="barbtn"><b>お知らせ</b><span class="badge">3</span></button>
     </div>
   </header>
 
   <div class="body">
-    <div class="home">
-      <div class="hero">
-        <button class="big"><span class="ico" aria-hidden="true">☎</span><span>新しい予約を取る<small>お電話・ご来店のお客様</small></span></button>
-        <button class="big change"><span class="ico" aria-hidden="true">✎</span><span>予約を変更する<small>日時・内容の変更、取り消し</small></span></button>
-      </div>
-      <nav class="quick" aria-label="よく使う画面">
-        <a href="#"><span class="ico" aria-hidden="true">▤</span>予約台帳<span class="chev">›</span></a>
-        <a href="#"><span class="ico" aria-hidden="true">◷</span>来店受付<span class="chev">›</span></a>
-        <a href="#"><span class="ico" aria-hidden="true">⌕</span>予約を検索<span class="chev">›</span></a>
-        <a href="#"><span class="ico" aria-hidden="true">☷</span>受付履歴<span class="chev">›</span></a>
-        <a href="#"><span class="ico" aria-hidden="true">☺</span>顧客台帳<span class="chev">›</span></a>
+    <div class="shell">
+      <nav class="sidenav" aria-label="画面の切り替え">
+        <button class="navtoggle" aria-label="サイドバーをたたむ">たたむ</button>
+        <button class="nav-item on" data-icon="home">トップ</button>
+        <button class="new">予約を取る</button>
+        <button class="nav-item" data-icon="ledger">予約台帳</button>
+        <button class="nav-item" data-icon="reception">来店受付</button>
+        <button class="nav-item" data-icon="search">予約を検索</button>
+        <button class="nav-item" data-icon="history">受付履歴</button>
+        <button class="nav-item" data-icon="customer">顧客台帳</button>
+        <div class="group">お店の運用</div>
+        <button class="nav-item" data-icon="analytics">分析</button>
+        <button class="nav-item" data-icon="settings">設定</button>
+        <div class="foot">銀座店 レジ横iPad<br>共有で使っています</div>
       </nav>
-    </div>
 
-    <div class="days">
-      <div class="m">2026年 8月</div>
-      <div class="strip">
-        <button class="day"><small>月</small>24</button>
-        <button class="day"><small>火</small>25</button>
-        <button class="day"><small>水</small>26</button>
-        <button class="day on"><small>木</small>27</button>
-        <button class="day"><small>金</small>28</button>
-        <button class="day"><small>土</small>29</button>
-        <button class="day sun"><small>日</small>30</button>
-        <button class="day cal">カレンダー<br>から選ぶ</button>
+      <div class="content">
+        <div class="inner">
+          <div class="home">
+            <button class="big"><span class="ico" aria-hidden="true">☎</span><span>新しい予約を取る<small>お電話・ご来店のお客様</small></span></button>
+            <button class="big change"><span class="ico" aria-hidden="true">✎</span><span>予約を変更する<small>日時・内容の変更、取り消し</small></span></button>
+          </div>
+
+          <div class="days">
+            <p class="month">2026年 8月</p>
+            <div class="strip">
+              <button class="day"><small>月</small>24</button>
+              <button class="day"><small>火</small>25</button>
+              <button class="day"><small>水</small>26</button>
+              <button class="day on"><small>木</small>27</button>
+              <button class="day"><small>金</small>28</button>
+              <button class="day"><small>土</small>29</button>
+              <button class="day sun"><small>日</small>30</button>
+              <button class="day cal">カレンダー<br>から選ぶ</button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
-    <div class="terminal">この端末：銀座店 レジ横iPad（共有）／操作者は業務開始で切り替えます</div>
-    <div class="ver">Ver 1.0</div>
   </div>
 </main>
 </body>

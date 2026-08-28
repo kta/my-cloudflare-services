@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EYEX予約 — 新規予約 1/5 お日にちとお時間</title>
+<link rel="stylesheet" href="../assets/eyex.css">
+<style>
+  .flow { display: grid; grid-template-columns: 1fr 372px; height: 100%; }
+  .main { padding: 36px 44px; overflow: hidden; }
+  .side { border-left: 1px solid var(--line); background: var(--surface); padding: 36px 28px; }
+  .qblock + .qblock { margin-top: 44px; }
+  .cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; }
+  .cal .wd { text-align: center; font-size: 12px; color: var(--ink-2); }
+  .cal .d {
+    min-height: 58px; border: 1px solid var(--line-strong); border-radius: var(--r-s);
+    background: var(--surface); font: 600 18px var(--sans); color: var(--ink);
+  }
+  .cal .d.on { border: 3px solid var(--brand); background: var(--brand-tint); color: var(--brand-dark); }
+  .cal .d.off { background: var(--surface-2); color: var(--ink-3); }
+  .cal .d small { display: block; font-size: 10px; font-weight: 400; color: var(--ink-2); }
+  .times { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+  .t {
+    min-height: 72px; border: 1px solid var(--line-strong); border-radius: var(--r-m);
+    background: var(--surface); font: 600 19px var(--sans); color: var(--ink);
+  }
+  .t small { display: block; font: 400 11px var(--sans); color: var(--ink-2); }
+  .t.on { border: 3px solid var(--brand); background: var(--brand-tint); color: var(--brand-dark); }
+  .t:disabled { background: var(--surface-2); color: var(--ink-3); }
+  .sum dt { font-size: 12px; color: var(--ink-2); margin-top: 22px; }
+  .sum dd { margin: 2px 0 0; font-size: 17px; font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="caption">
+  <h1>新規予約 1/5　お日にちとお時間</h1>
+  <p>電話で最初に聞く順（日 → 時間）のまま1画面に置く。受付中は右下で録音していることを常に見せる。</p>
+</div>
+
+<main class="device" id="screen">
+  <div class="statusbar"><span>11:08</span><span>EYEX 銀座店</span><span>Wi‑Fi　100%</span></div>
+
+  <header class="appbar">
+    <button class="homebtn" aria-label="トップへ">⌂</button>
+    <div class="storename">EYEX 銀座店<small>新しい予約を取る</small></div>
+    <div class="barbtns"><button class="barbtn"><b>やめる</b></button></div>
+  </header>
+
+  <div class="body">
+    <div class="flow">
+      <section class="main">
+        <div class="qblock">
+          <div class="ask">
+            <span class="bubble" aria-hidden="true"></span>
+            <div><h2>お日にちはいつがよろしいですか？</h2><p>2026年8月　　※ 定休日は火曜日です</p></div>
+          </div>
+          <div class="cal">
+            <div class="wd">月</div><div class="wd">火</div><div class="wd">水</div><div class="wd">木</div>
+            <div class="wd">金</div><div class="wd">土</div><div class="wd">日</div>
+            <button class="d">24</button>
+            <button class="d off">25<small>定休</small></button>
+            <button class="d">26</button>
+            <button class="d on">27<small>本日</small></button>
+            <button class="d">28</button>
+            <button class="d">29</button>
+            <button class="d">30</button>
+            <button class="d">31</button>
+            <button class="d off">1<small>定休</small></button>
+            <button class="d">2</button>
+            <button class="d">3</button>
+            <button class="d">4</button>
+            <button class="d">5</button>
+            <button class="d">6</button>
+          </div>
+        </div>
+
+        <div class="qblock">
+          <div class="ask">
+            <span class="bubble" aria-hidden="true"></span>
+            <div><h2>お時間は何時ごろがよろしいですか？</h2><p>受け付けられる時刻だけを出しています。目的を伺ったあとに、もう一度確かめます。</p></div>
+          </div>
+          <div class="times">
+            <button class="t">10:00<small>あと2枠</small></button>
+            <button class="t">10:30<small>あと1枠</small></button>
+            <button class="t on">11:00<small>あと2枠</small></button>
+            <button class="t" disabled>11:30<small>満席</small></button>
+            <button class="t">13:00<small>あと3枠</small></button>
+            <button class="t">13:30<small>あと3枠</small></button>
+            <button class="t">14:00<small>あと1枠</small></button>
+            <button class="t" disabled>14:30<small>満席</small></button>
+          </div>
+        </div>
+      </section>
+
+      <aside class="side">
+        <h3 style="margin:0 0 4px;font-size:15px">ここまでのご予約</h3>
+        <dl class="sum" style="margin:0">
+          <dt>ご来店日</dt><dd>2026年8月27日（木）</dd>
+          <dt>ご来店時刻</dt><dd>11:00</dd>
+          <dt>ご来店の目的</dt><dd class="muted" style="font-weight:400">このあと伺います</dd>
+          <dt>お客様</dt><dd class="muted" style="font-weight:400">このあと伺います</dd>
+        </dl>
+        <p class="small muted" style="margin-top:32px">所要時間はご来店の目的を伺ってから決まります。</p>
+      </aside>
+    </div>
+  </div>
+
+  <footer class="stepbar">
+    <button class="back" aria-label="前へ戻る">‹</button>
+    <div class="steps">
+      <span class="step on">1　日時</span><span class="step-sep">›</span>
+      <span class="step">2　ご来店の目的</span><span class="step-sep">›</span>
+      <span class="step">3　担当と場所</span><span class="step-sep">›</span>
+      <span class="step">4　お客様</span><span class="step-sep">›</span>
+      <span class="step">5　ご確認</span>
+    </div>
+    <div class="rec">
+      <span class="dot" aria-hidden="true"></span>
+      録音中
+      <span class="meter" aria-hidden="true">
+        <i style="height:6px"></i><i style="height:12px"></i><i style="height:18px"></i>
+        <i style="height:9px"></i><i style="height:14px"></i><i style="height:5px"></i>
+      </span>
+      <span class="time">01:08</span>
+    </div>
+    <button class="fab" aria-label="次へ進む">›</button>
+  </footer>
+</main>
+</body>
+</html>

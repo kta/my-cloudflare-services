@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EYEX予約 — 予約台帳（担当者別）</title>
+<link rel="stylesheet" href="../assets/eyex.css">
+<style>
+  /* 10:00 から 30分刻みで 14 枠（10:00–17:00）。左の名前列は 170px 固定。 */
+  .tt-grid { grid-template-columns: 170px repeat(14, 1fr); }
+  /* 行は画面の高さいっぱいに広げる。最終行（お待ち）だけは帯なので低くする。 */
+  .tt-grid.fill { height: 100%; grid-template-rows: 34px repeat(4, 1fr) 88px; }
+  .tt-head.time { justify-content: flex-start; }
+  /* 現在 11:08 = 開始から68分 / 全420分 */
+  .nowline { left: calc(170px + (100% - 170px) * 0.1619); }
+  /* 30分の狭い帯は姓だけを置く。語の途中で折り返さない。 */
+  .appt.narrow { word-break: keep-all; }
+  .appt.narrow b { font-size: 13px; }
+  /* 出どころは色だけに頼らず、短い文字を添える。 */
+  .appt .src { display: block; font-weight: 400; color: var(--ink-2); }
+</style>
+</head>
+<body>
+<div class="caption">
+  <h1>予約台帳（担当者別）</h1>
+  <p>縦が担当者、横が時間。30分ごとの薄い線と1時間ごとの線を背景に通し、空いている枠を置き場所として読めるようにした。</p>
+</div>
+
+<main class="device" id="screen">
+  <div class="statusbar"><span>11:08</span><span>EYEX 銀座店</span><span>Wi‑Fi　100%</span></div>
+
+  <header class="appbar">
+    <button class="homebtn" aria-label="トップへ">⌂</button>
+    <div class="storename">EYEX 銀座店<small>予約台帳</small></div>
+    <div class="datepill">
+      <button aria-label="前の日">‹</button>
+      <span>2026年8月27日（木）</span>
+      <span class="today">本日</span>
+      <button aria-label="次の日">›</button>
+    </div>
+    <div class="barbtns"><button class="barbtn"><b>お知らせ</b><span class="badge">3</span></button></div>
+  </header>
+
+  <div class="body">
+    <div class="shell rail">
+      <nav class="sidenav rail" aria-label="画面の切り替え">
+        <button class="navtoggle" aria-label="サイドバーをひらく">ひらく</button>
+        <button class="new">＋ 予約を取る</button>
+        <button class="nav-item on" data-icon="ledger">予約台帳</button>
+        <button class="nav-item" data-icon="reception">来店受付</button>
+        <button class="nav-item" data-icon="search">予約を検索</button>
+        <button class="nav-item" data-icon="history">受付履歴</button>
+        <button class="nav-item" data-icon="customer">顧客台帳</button>
+        <div class="group">お店の運用</div>
+        <button class="nav-item" data-icon="analytics">分析</button>
+        <button class="nav-item" data-icon="settings">設定</button>
+        <div class="foot">銀座店 レジ横iPad<br>共有で使っています</div>
+      </nav>
+
+      <div class="content">
+        <div class="toolbar">
+    <div class="segmented" role="group" aria-label="台帳の並べ方">
+      <button class="on">担当者</button>
+      <button>設備・場所</button>
+    </div>
+    <div class="segmented" role="group" aria-label="表示のかたち">
+      <button class="on">タイムテーブル</button>
+      <button>予約リスト</button>
+    </div>
+          <button class="btn" style="min-height:40px;padding:0 14px">絞り込み</button>
+          <span class="nowchip right"><i aria-hidden="true"></i>現在 11:08</span>
+        </div>
+
+        <div class="inner">
+          <div class="tt">
+            <div class="tt-bg" style="--label:170px;--slots:14;--hours:7;--headh:34px"></div>
+            <div class="nowline"></div>
+            <div class="tt-grid fill">
+        <div class="tt-head">担当者</div>
+        <div class="tt-head time">10:00</div><div class="tt-head time">10:30</div>
+        <div class="tt-head time">11:00</div><div class="tt-head time">11:30</div>
+        <div class="tt-head time">12:00</div><div class="tt-head time">12:30</div>
+        <div class="tt-head time">13:00</div><div class="tt-head time">13:30</div>
+        <div class="tt-head time">14:00</div><div class="tt-head time">14:30</div>
+        <div class="tt-head time">15:00</div><div class="tt-head time">15:30</div>
+        <div class="tt-head time">16:00</div><div class="tt-head time">16:30</div>
+
+        <div class="tt-name">佐藤 美咲<small>視力測定・加工</small></div>
+        <div class="tt-cell" style="grid-column:span 2"></div>
+        <div class="tt-cell" style="grid-column:span 2"><div class="appt"><b>田中 花子 様 <span class="visits many">4回目</span></b>新調相談・視力測定</div></div>
+        <div class="tt-cell" style="grid-column:span 2"></div>
+        <div class="tt-cell" style="grid-column:span 2"><div class="appt busy">休憩</div></div>
+        <div class="tt-cell"><div class="appt narrow"><b>松本 様</b></div></div>
+        <div class="tt-cell" style="grid-column:span 5"></div>
+
+        <div class="tt-name">高橋 健<small>フィッティング</small></div>
+        <div class="tt-cell"><div class="appt narrow"><b>伊藤 様</b></div></div>
+        <div class="tt-cell" style="grid-column:span 5"></div>
+        <div class="tt-cell" style="grid-column:span 2"><div class="appt"><b>佐々木 亮 様 <span class="visits many">3回目</span></b>フィッティング</div></div>
+        <div class="tt-cell" style="grid-column:span 6"></div>
+
+        <div class="tt-name">中村 彩<small>販売・受付</small></div>
+        <div class="tt-cell"></div>
+        <div class="tt-cell" style="grid-column:span 2"><div class="appt web"><b>山口 真央 様 <span class="visits first">初めて</span></b>視力測定<span class="src">Web予約</span></div></div>
+        <div class="tt-cell" style="grid-column:span 7"></div>
+        <div class="tt-cell" style="grid-column:span 2"><div class="appt"><b>川上 恵 様 <span class="visits first">初めて</span></b>新調相談</div></div>
+        <div class="tt-cell" style="grid-column:span 2"></div>
+
+        <div class="tt-name">担当が未定<small>あとで決める</small></div>
+        <div class="tt-cell" style="grid-column:span 6"></div>
+        <div class="tt-cell" style="grid-column:span 2"><div class="appt alert"><b>相川 みどり 様 <span class="visits">2回目</span></b>担当が未定</div></div>
+        <div class="tt-cell" style="grid-column:span 6"></div>
+
+        <div class="tt-name" style="background:var(--walkin-tint)">ご来店お待ち<small>2名</small></div>
+        <div class="tt-cell" style="grid-column:span 14">
+          <div class="appt walkin"><b>ウォークイン 004　受付 11:02　お待ち 6分</b>フレームの相談</div>
+        </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+</body>
+</html>

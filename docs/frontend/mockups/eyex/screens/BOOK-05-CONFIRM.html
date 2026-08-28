@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EYEX予約 — 新規予約 5/5 ご確認（復唱）</title>
+<link rel="stylesheet" href="../assets/eyex.css">
+<style>
+  .flow { display: grid; grid-template-columns: 1fr 372px; height: 100%; }
+  .main { padding: 36px 44px; overflow: hidden; }
+  /* 右下の録音の印が重ならないよう、下に場所を空けておく。 */
+  .side { border-left: 1px solid var(--line); background: var(--surface); padding: 36px 28px; }
+
+  /* 復唱する文。声に出す単位で改行し、聞き違えやすい言葉を濃くする。 */
+  .say { margin-top: 24px; padding: 30px 32px; }
+  .say p { margin: 0; font-size: 24px; line-height: 2; }
+  .say b { font-weight: 700; color: var(--brand-dark); }
+
+  .fixlabel { margin: 32px 0 12px; font-size: 13px; font-weight: 600; color: var(--ink-2); }
+  .fixrow { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .fixrow .btn { font-size: 15px; padding: 0 10px; }
+
+  .sum dt { font-size: 12px; color: var(--ink-2); margin-top: 24px; }
+  .sum dt:first-of-type { margin-top: 0; }
+  .sum dd { margin: 2px 0 0; font-size: 17px; font-weight: 600; }
+  .sum dd small { display: block; font-size: 13px; font-weight: 400; color: var(--ink-2); }
+
+  .rec-float { right: 20px; bottom: 20px; }
+  .rec-float .dot { width: 14px; height: 14px; border-radius: 50%; background: var(--alert); flex: none; }
+  .rec-float b { font-size: 15px; color: var(--alert); }
+  .rec-float b .tm { font-family: var(--mono); margin-left: 10px; }
+</style>
+</head>
+<body>
+<div class="caption">
+  <h1>新規予約 5/5　ご確認（復唱）</h1>
+  <p>確定の前に、スタッフが読み上げる文をそのまま大きく出す。言い直しがあった箇所だけへ戻れるようにする。</p>
+</div>
+
+<main class="device" id="screen">
+  <div class="statusbar"><span>11:11</span><span>EYEX 銀座店</span><span>Wi‑Fi　100%</span></div>
+
+  <header class="appbar">
+    <button class="homebtn" aria-label="トップへ">⌂</button>
+    <div class="storename">EYEX 銀座店<small>新しい予約を取る</small></div>
+    <div class="barbtns"><button class="barbtn"><b>やめる</b></button></div>
+  </header>
+
+  <div class="body">
+    <div class="flow">
+      <section class="main">
+        <div class="ask">
+          <span class="bubble" aria-hidden="true"></span>
+          <div>
+            <h2>この文をそのまま読み上げます</h2>
+            <p>お客様の「はい」を伺ってから確定してください。</p>
+          </div>
+        </div>
+
+        <div class="card say">
+          <p>
+            <b>8月27日、木曜日の午前11時</b>に、<b>EYEX 銀座店</b>で、<br>
+            <b>視力測定とメガネの新調</b>のご相談を承りました。<br>
+            所要時間は<b>約60分</b>です。<br>
+            <b>田中花子</b>様、お電話番号は<b>090-1234-5678</b>で<br>
+            お間違いないでしょうか？
+          </p>
+        </div>
+
+        <p class="fixlabel">言い直しがあった箇所だけ直せます</p>
+        <div class="fixrow">
+          <button class="btn">日にちと時刻</button>
+          <button class="btn">ご来店の目的</button>
+          <button class="btn">担当と場所</button>
+          <button class="btn">お名前と番号</button>
+        </div>
+      </section>
+
+      <aside class="side">
+        <h3 style="margin:0 0 4px;font-size:15px">確保する内容</h3>
+        <dl class="sum" style="margin:0">
+          <dt>担当</dt><dd>佐藤 美咲<small>視力測定・加工</small></dd>
+          <dt>設備と場所</dt><dd>視力測定機 A<small>相談カウンター 2</small></dd>
+          <dt>所要</dt><dd>60分<small>11:00 〜 12:00</small></dd>
+          <dt>仮の押さえ</dt><dd>11:18 まで</dd>
+        </dl>
+        <p class="small" style="margin-top:32px"><span class="tag brand">3つとも空いています</span></p>
+      </aside>
+    </div>
+
+    <div class="rec-float" role="status">
+      <span class="dot" aria-hidden="true"></span>
+      <b>録音中<span class="tm">03:12</span></b>
+      <span class="meter" aria-hidden="true">
+        <i style="height:7px"></i><i style="height:14px"></i><i style="height:20px"></i>
+        <i style="height:11px"></i><i style="height:16px"></i><i style="height:6px"></i>
+      </span>
+    </div>
+  </div>
+
+  <footer class="stepbar">
+    <button class="back" aria-label="前へ戻る">‹</button>
+    <div class="steps">
+      <span class="step done">1　日時</span><span class="step-sep">›</span>
+      <span class="step done">2　ご来店の目的</span><span class="step-sep">›</span>
+      <span class="step done">3　担当と場所</span><span class="step-sep">›</span>
+      <span class="step done">4　お客様</span><span class="step-sep">›</span>
+      <span class="step on">5　ご確認</span>
+    </div>
+    <button class="btn primary big right">復唱を終えて予約を確定する</button>
+  </footer>
+</main>
+</body>
+</html>

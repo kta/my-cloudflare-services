@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EYEX予約 — 新規予約 3/5 担当を決める（先約と重なっている）</title>
+<link rel="stylesheet" href="../assets/eyex.css">
+<style>
+  /* 10:00 から 30分刻みで 8 枠（10:00–14:00）。左の名前列は 170px。 */
+  .tt-grid { grid-template-columns: 170px repeat(8, 1fr); }
+  .tt-head.time { justify-content: flex-start; }
+  .split { grid-template-columns: 1fr 330px; }
+  .side {
+    border-left: 1px solid var(--line); background: var(--surface);
+    padding: 28px 24px; display: flex; flex-direction: column;
+  }
+  .toolbar h2 { font-size: 17px; white-space: nowrap; }
+  /* 重ねて置いた「いまのご予約」。先約の上に少しずらして乗せる。 */
+  /* 重ねた帯がセルの外へ少しはみ出して見えるよう、この列だけ切り取りを外す。 */
+  .tt-cell.stackcell { overflow: visible; }
+  .stack { position: relative; height: 100%; }
+  .stack .over {
+    position: absolute; left: 22px; right: -16px; top: 22px; bottom: 8px; z-index: 3;
+  }
+  /* 承れない担当に添える文字 */
+  .na { display: grid; place-content: center; height: 100%; font-size: 12px; color: var(--ink-2); }
+  .cand { display: grid; gap: 10px; margin-top: 10px; }
+  .cand button {
+    display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 0 14px;
+    border: 1px solid var(--line-strong); border-radius: var(--r-m);
+    background: var(--surface); font: 600 16px var(--sans); color: var(--ink); text-align: left;
+  }
+  .cand button { white-space: nowrap; }
+  .cand button small { display: block; font: 400 12px var(--sans); color: var(--ink-2); white-space: normal; }
+  .cand .who { flex: none; width: 4.5em; }
+</style>
+</head>
+<body>
+<div class="caption">
+  <h1>新規予約 3/5　担当を決める（先約と重なっている）</h1>
+  <p>ご希望の時刻は決まっているので、決めるのは担当だけ。置いたご予約は指でつかんで動かせる。先約に重なると、その場で警告と代わりの担当を出す。</p>
+</div>
+
+<main class="device" id="screen">
+  <div class="statusbar"><span>11:08</span><span>EYEX 銀座店</span><span>Wi‑Fi　100%</span></div>
+
+  <header class="appbar">
+    <button class="homebtn" aria-label="トップへ">⌂</button>
+    <div class="storename">EYEX 銀座店<small>新しい予約を取る</small></div>
+    <div class="barbtns"><button class="barbtn"><b>やめる</b></button></div>
+  </header>
+
+  <div class="toolbar">
+    <h2>8月27日（木）　11:00–12:00（60分）</h2>
+    <span class="tag brand">メガネを新しく作る</span>
+    <div class="legend right">
+      <span><i style="background:var(--alert-tint);border:2px solid var(--alert)"></i>いま置いているご予約</span>
+      <span><i style="background:var(--busy)"></i>先約</span>
+    </div>
+  </div>
+
+  <div class="body">
+    <div class="split">
+      <div class="tt">
+        <div class="tt-bg" style="--label:170px;--slots:8;--hours:4;--headh:34px"></div>
+        <div class="tt-grid fill" style="--rows:4;--headh:34px">
+          <div class="tt-head">担当者</div>
+          <div class="tt-head time">10:00</div><div class="tt-head time">10:30</div>
+          <div class="tt-head time">11:00</div><div class="tt-head time">11:30</div>
+          <div class="tt-head time">12:00</div><div class="tt-head time">12:30</div>
+          <div class="tt-head time">13:00</div><div class="tt-head time">13:30</div>
+
+          <div class="tt-name">佐藤 美咲<small>視力測定・加工</small></div>
+          <div class="tt-cell" style="grid-column:span 2"></div>
+          <div class="tt-cell stackcell" style="grid-column:span 2">
+            <div class="stack">
+              <div class="appt under"><b>田中 花子 様</b>先約 11:00–12:00</div>
+              <div class="appt clash over">
+                <span class="grip" aria-hidden="true"><i></i><i></i></span><b>このご予約</b>
+                重なっています
+              </div>
+            </div>
+          </div>
+          <div class="tt-cell" style="grid-column:span 2"></div>
+          <div class="tt-cell" style="grid-column:span 2"><div class="appt busy"><b>休憩</b>13:00–14:00</div></div>
+
+          <div class="tt-name">小林 学<small>視力測定</small></div>
+          <div class="tt-cell" style="grid-column:span 2"></div>
+          <div class="tt-cell" style="grid-column:span 2"><div class="appt pick">ここに置けます</div></div>
+          <div class="tt-cell" style="grid-column:span 2"><div class="appt busy"><b>休憩</b>12:00–13:00</div></div>
+          <div class="tt-cell" style="grid-column:span 2"></div>
+
+          <div class="tt-name">中村 彩<small>販売・受付</small></div>
+          <div class="tt-cell"></div>
+          <div class="tt-cell" style="grid-column:span 2"><div class="appt busy"><b>山口 様</b>Web予約</div></div>
+          <div class="tt-cell"></div>
+          <div class="tt-cell" style="grid-column:span 2"><div class="appt pick">12:00 なら置けます</div></div>
+          <div class="tt-cell" style="grid-column:span 2"></div>
+
+          <div class="tt-name">高橋 健<small>フィッティング</small></div>
+          <div class="tt-cell"><div class="appt busy"><b>伊藤 様</b>調整</div></div>
+          <div class="tt-cell off" style="grid-column:span 5"><div class="na">この用件は承れません</div></div>
+          <div class="tt-cell" style="grid-column:span 2"><div class="appt busy"><b>佐々木 様</b>フィッティング</div></div>
+        </div>
+      </div>
+
+      <aside class="side">
+        <div class="card warn">
+          <b>佐藤 美咲 に 11:00 の先約があります</b>
+          <p class="small" style="margin:6px 0 0">このままでは二重のご予約になります。担当を変えるか、時間をずらしてください。</p>
+        </div>
+
+        <h3 style="margin:26px 0 0;font-size:15px">同じ 11:00 で受けられる担当</h3>
+        <div class="cand">
+          <button><span class="who">小林 学</span><small>視力測定　11:00–12:00 が空いています</small></button>
+          <button><span class="who">中村 彩</span><small>販売・受付　12:00 からなら空いています</small></button>
+        </div>
+
+        <p class="small muted" style="margin-top:26px">ご予約は指でつかんで、ほかの担当や時刻へそのまま動かせます。</p>
+        <button class="btn" style="width:100%;margin-top:auto">担当はあとで決める</button>
+      </aside>
+    </div>
+  </div>
+
+  <footer class="stepbar">
+    <button class="back" aria-label="前へ戻る">‹</button>
+    <div class="steps">
+      <span class="step done">1　日時</span><span class="step-sep">›</span>
+      <span class="step done">2　ご来店の目的</span><span class="step-sep">›</span>
+      <span class="step on">3　担当と場所</span><span class="step-sep">›</span>
+      <span class="step">4　お客様</span><span class="step-sep">›</span>
+      <span class="step">5　ご確認</span>
+    </div>
+    <div class="rec">
+      <span class="dot" aria-hidden="true"></span>
+      録音中
+      <span class="meter" aria-hidden="true">
+        <i style="height:9px"></i><i style="height:16px"></i><i style="height:6px"></i>
+        <i style="height:14px"></i><i style="height:11px"></i><i style="height:18px"></i>
+      </span>
+      <span class="time">02:34</span>
+    </div>
+    <button class="fab" aria-label="次へ進む" disabled>›</button>
+  </footer>
+</main>
+</body>
+</html>

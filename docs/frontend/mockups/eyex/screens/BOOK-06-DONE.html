@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EYEX予約 — 予約が取れた</title>
+<link rel="stylesheet" href="../assets/eyex.css">
+<style>
+  .done { display: grid; grid-template-columns: 1fr 372px; height: 100%; }
+  .col { min-height: 0; overflow: hidden; padding: 40px 44px; }
+  .col.right { border-left: 1px solid var(--line); background: var(--surface); padding: 40px 28px; }
+
+  .head { display: flex; align-items: center; gap: 20px; }
+  .head .mark {
+    flex: none; width: 78px; height: 78px; border-radius: 50%;
+    background: var(--brand); color: var(--on-brand);
+    display: grid; place-items: center; font-size: 38px;
+  }
+  .head h2 { margin: 0; font-size: 30px; }
+  .head .no { margin: 4px 0 0; font-size: 15px; color: var(--ink-2); }
+  .head .no b { font: 700 22px var(--mono); color: var(--ink); margin-left: 8px; }
+
+  .sum { display: grid; grid-template-columns: 1fr 1fr; gap: 0 32px; margin: 40px 0 0; }
+  .sum dt { font-size: 12px; color: var(--ink-2); margin-top: 28px; }
+  .sum dt:first-of-type, .sum dt:nth-of-type(2) { margin-top: 0; }
+  .sum dd { margin: 2px 0 0; font-size: 19px; font-weight: 600; }
+  .sum dd small { display: block; font-weight: 400; font-size: 13px; color: var(--ink-2); }
+
+  .nextrow { display: flex; gap: 14px; margin-top: 40px; }
+
+  .talk { display: flex; gap: 12px; align-items: flex-start; padding: 18px 0; border-bottom: 1px solid var(--line); }
+  .talk:last-of-type { border-bottom: 0; }
+  .talk .ck {
+    flex: none; width: 24px; height: 24px; border-radius: var(--r-s);
+    background: var(--brand-tint); border: 1px solid var(--brand-line);
+    color: var(--brand-dark); display: grid; place-items: center; font-size: 14px; font-weight: 700;
+  }
+  .talk p { margin: 0; font-size: 15px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<div class="caption">
+  <h1>予約が取れた</h1>
+  <p>取れたことを一目で伝え、番号・内容・お客様にお伝えすることを同じ面に置く。次の一手（続けて取る／台帳）で終わらせる。</p>
+</div>
+
+<main class="device" id="screen">
+  <div class="statusbar"><span>11:12</span><span>EYEX 銀座店</span><span>Wi‑Fi　100%</span></div>
+
+  <header class="appbar">
+    <button class="homebtn" aria-label="トップへ">⌂</button>
+    <div class="storename">EYEX 銀座店<small>新しい予約を取る</small></div>
+    <div class="barbtns">
+      <button class="barbtn"><b>予約台帳</b></button>
+      <button class="barbtn"><b>トップへ戻る</b></button>
+    </div>
+  </header>
+
+  <div class="body">
+    <div class="done">
+      <section class="col">
+        <div class="head">
+          <span class="mark" aria-hidden="true">✓</span>
+          <div>
+            <h2>ご予約を承りました</h2>
+            <p class="no">予約番号<b>EY-2608-0142</b></p>
+          </div>
+        </div>
+
+        <dl class="sum">
+          <dt>ご来店日時</dt>
+          <dt>ご来店の目的</dt>
+          <dd>8月27日（木）11:00 〜 12:00</dd>
+          <dd>メガネを新しく作る<small>約60分</small></dd>
+          <dt>お客様</dt>
+          <dt>担当と場所</dt>
+          <dd>田中 花子 様<small>090-1234-5678</small></dd>
+          <dd>佐藤 美咲<small>相談カウンター 2</small></dd>
+        </dl>
+
+        <div class="nextrow">
+          <button class="btn primary big">続けて予約を取る</button>
+          <button class="btn big">台帳で見る</button>
+        </div>
+      </section>
+
+      <aside class="col right">
+        <h3 style="margin:0 0 4px;font-size:15px">お客様にお伝えすること</h3>
+        <div class="talk"><span class="ck" aria-hidden="true">✓</span><p>10分前、10:50 ごろのお越しでお願いします</p></div>
+        <div class="talk"><span class="ck" aria-hidden="true">✓</span><p>今お使いのメガネをお持ちください</p></div>
+        <div class="talk"><span class="ck" aria-hidden="true">✓</span><p>ご変更・お取り消しはお電話で承ります</p></div>
+        <p class="small muted" style="margin-top:32px">控えは 090-1234-5678 へお送りしました。</p>
+      </aside>
+    </div>
+  </div>
+</main>
+</body>
+</html>

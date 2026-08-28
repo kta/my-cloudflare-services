@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EYEX予約 — 設定・営業日</title>
+<link rel="stylesheet" href="../assets/eyex.css">
+<style>
+  /* 行き先は左のサイドバーが持つ。設定の項目は薄い第2の一覧にして、緑は1本に保つ。 */
+  .set { height: 100%; display: grid; grid-template-columns: 236px 1fr; }
+  .sidebar {
+    padding: 4px 10px 0; background: var(--surface-2); color: var(--ink);
+    border-right: 1px solid var(--line);
+  }
+  .sidebar .sgroup { padding: 3px 12px 0; font-size: 11px; line-height: 13px; color: var(--ink-2); opacity: 1; }
+  .sidebar .sitem {
+    min-height: 44px; padding: 0 12px; border-radius: 8px;
+    font-size: 14px; color: var(--ink); text-decoration: none;
+  }
+  .sidebar .sitem.on { background: var(--brand); color: var(--on-brand); font-weight: 700; }
+  .setmain { min-width: 0; display: flex; flex-direction: column; }
+  .setbar {
+    height: 56px; flex: none; display: grid; grid-template-columns: 1fr auto 1fr;
+    align-items: center; padding: 0 20px;
+    background: var(--surface); border-bottom: 1px solid var(--line);
+  }
+  .setbar h2 { margin: 0; font-size: 17px; text-align: center; }
+  .setbar .l { justify-self: start; }
+  .setbar .r { justify-self: end; display: flex; align-items: center; gap: 10px; }
+  .setbar .btn { min-height: 44px; padding: 0 16px; font-size: 15px; }
+  .setbody { flex: 1; min-height: 0; overflow: hidden; padding: 32px 40px; }
+  .groupname { margin: 32px 2px 12px; }
+  .topline { display: flex; align-items: center; gap: 14px; }
+  .topline .groupname { margin: 0; }
+  .months { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; margin-top: 16px; }
+  .mcard { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-l); padding: 14px 14px 16px; }
+  .mcard h3 { margin: 0 0 10px; font-size: 15px; }
+  .mgrid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; justify-items: center; }
+  .mgrid .wd { font-size: 11px; color: var(--ink-2); line-height: 18px; }
+  .d {
+    width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--brand-line);
+    background: var(--brand-tint); color: var(--brand-dark);
+    font: 600 14px var(--sans); display: grid; place-content: center; line-height: 1.1;
+  }
+  .d small { display: block; font-size: 11px; font-weight: 600; }
+  .d.off { background: var(--busy); border-color: var(--line-strong); color: var(--ink-2); }
+  .d.today { border: 3px solid var(--brand); }
+  .d.blank { border: 0; background: transparent; }
+  .li { display: flex; align-items: center; gap: 16px; }
+  .li .val { margin-left: auto; color: var(--ink-2); }
+  .li .chev { color: var(--ink-3); }
+</style>
+</head>
+<body>
+<div class="caption">
+  <h1>設定 — 営業日</h1>
+  <p>定休日と臨時のお休みを、月のカレンダーの上で1日ずつ切り替える。2か月を並べて、先の予定まで見ながら決められるようにする。</p>
+</div>
+
+<main class="device" id="screen">
+  <div class="statusbar"><span>11:08</span><span>EYEX 銀座店</span><span>Wi‑Fi　100%</span></div>
+
+  <header class="appbar">
+    <button class="homebtn" aria-label="トップへ">⌂</button>
+    <div class="storename">EYEX 銀座店<small>設定</small></div>
+    <div class="barbtns"><button class="barbtn"><b>お知らせ</b><span class="badge">3</span></button></div>
+  </header>
+
+  <div class="body">
+    <div class="shell rail">
+      <nav class="sidenav rail" aria-label="画面の切り替え">
+        <button class="navtoggle" aria-label="サイドバーをたたむ">たたむ</button>
+        <button class="new">＋ 予約を取る</button>
+        <button class="nav-item" data-icon="ledger">予約台帳</button>
+        <button class="nav-item" data-icon="reception">来店受付</button>
+        <button class="nav-item" data-icon="search">予約を検索</button>
+        <button class="nav-item" data-icon="history">受付履歴</button>
+        <button class="nav-item" data-icon="customer">顧客台帳</button>
+        <div class="group">お店の運用</div>
+        <button class="nav-item" data-icon="analytics">分析</button>
+        <button class="nav-item on" data-icon="settings">設定</button>
+        <div class="foot">銀座店 レジ横iPad<br>共有で使っています</div>
+      </nav>
+
+      <div class="content">
+        <div class="inner">
+          <div class="set">
+            <nav class="sidebar" aria-label="設定の項目">
+              <div class="sgroup">店舗の設定</div>
+              <a class="sitem" href="#">店舗の情報</a>
+              <a class="sitem on" href="#" aria-current="page">営業日</a>
+              <a class="sitem" href="#">営業時間</a>
+              <a class="sitem" href="#">ご来店の目的</a>
+              <a class="sitem" href="#">スタッフと技能</a>
+              <a class="sitem" href="#">設備と点検</a>
+              <a class="sitem" href="#">予約のきまり</a>
+              <div class="sgroup">Web予約</div>
+              <a class="sitem" href="#">公開</a>
+              <a class="sitem" href="#">受付できる時間</a>
+              <a class="sitem" href="#">お知らせ文</a>
+              <div class="sgroup">顧客台帳</div>
+              <a class="sitem" href="#">項目</a>
+              <a class="sitem" href="#">注意ごと</a>
+              <div class="sgroup">端末とスタッフ</div>
+              <a class="sitem" href="#">端末の登録</a>
+              <a class="sitem" href="#">PINと自動ロック</a>
+              <div class="sgroup">全般</div>
+              <a class="sitem" href="#">通知・印刷</a>
+            </nav>
+
+            <section class="setmain">
+              <div class="setbar">
+                <button class="btn quiet l">キャンセル</button>
+                <h2>営業日</h2>
+                <div class="r">
+                  <span class="tag">未保存の変更 1件</span>
+                  <button class="btn primary">保存</button>
+                </div>
+              </div>
+
+              <div class="setbody">
+                <div class="topline">
+                  <div class="groupname">丸をおすと、営業日とお休みが入れ替わります。</div>
+                  <span class="right small" style="font-weight:600">この店舗で予約を受け付ける</span>
+                  <span class="toggle on" aria-hidden="true"></span>
+                </div>
+
+                <div class="months">
+                  <div class="mcard">
+                    <h3>2026年 8月</h3>
+                    <div class="mgrid">
+                      <span class="wd">月</span><span class="wd">火</span><span class="wd">水</span><span class="wd">木</span><span class="wd">金</span><span class="wd">土</span><span class="wd">日</span>
+                      <span class="d blank" aria-hidden="true"></span><span class="d blank" aria-hidden="true"></span><span class="d blank" aria-hidden="true"></span><span class="d blank" aria-hidden="true"></span><span class="d blank" aria-hidden="true"></span><button class="d" aria-label="1日・営業">1</button><button class="d" aria-label="2日・営業">2</button>
+                      <button class="d" aria-label="3日・営業">3</button><button class="d off" aria-label="4日・定休">4<small>休</small></button><button class="d" aria-label="5日・営業">5</button><button class="d" aria-label="6日・営業">6</button><button class="d" aria-label="7日・営業">7</button><button class="d" aria-label="8日・営業">8</button><button class="d" aria-label="9日・営業">9</button>
+                      <button class="d" aria-label="10日・営業">10</button><button class="d off" aria-label="11日・定休">11<small>休</small></button><button class="d" aria-label="12日・営業">12</button><button class="d" aria-label="13日・営業">13</button><button class="d" aria-label="14日・営業">14</button><button class="d" aria-label="15日・営業">15</button><button class="d" aria-label="16日・営業">16</button>
+                      <button class="d" aria-label="17日・営業">17</button><button class="d off" aria-label="18日・定休">18<small>休</small></button><button class="d" aria-label="19日・営業">19</button><button class="d" aria-label="20日・営業">20</button><button class="d" aria-label="21日・営業">21</button><button class="d" aria-label="22日・営業">22</button><button class="d" aria-label="23日・営業">23</button>
+                      <button class="d" aria-label="24日・営業">24</button><button class="d off" aria-label="25日・定休">25<small>休</small></button><button class="d" aria-label="26日・営業">26</button><button class="d today" aria-label="27日・営業・本日">27</button><button class="d" aria-label="28日・営業">28</button><button class="d" aria-label="29日・営業">29</button><button class="d" aria-label="30日・営業">30</button>
+                      <button class="d" aria-label="31日・営業">31</button><span class="d blank" aria-hidden="true"></span><span class="d blank" aria-hidden="true"></span><span class="d blank" aria-hidden="true"></span><span class="d blank" aria-hidden="true"></span><span class="d blank" aria-hidden="true"></span><span class="d blank" aria-hidden="true"></span>
+                    </div>
+                  </div>
+                  <div class="mcard">
+                    <h3>2026年 9月</h3>
+                    <div class="mgrid">
+                      <span class="wd">月</span><span class="wd">火</span><span class="wd">水</span><span class="wd">木</span><span class="wd">金</span><span class="wd">土</span><span class="wd">日</span>
+                      <span class="d blank" aria-hidden="true"></span><button class="d off" aria-label="1日・定休">1<small>休</small></button><button class="d" aria-label="2日・営業">2</button><button class="d" aria-label="3日・営業">3</button><button class="d" aria-label="4日・営業">4</button><button class="d" aria-label="5日・営業">5</button><button class="d" aria-label="6日・営業">6</button>
+                      <button class="d" aria-label="7日・営業">7</button><button class="d off" aria-label="8日・定休">8<small>休</small></button><button class="d" aria-label="9日・営業">9</button><button class="d" aria-label="10日・営業">10</button><button class="d" aria-label="11日・営業">11</button><button class="d" aria-label="12日・営業">12</button><button class="d" aria-label="13日・営業">13</button>
+                      <button class="d" aria-label="14日・営業">14</button><button class="d off" aria-label="15日・定休">15<small>休</small></button><button class="d" aria-label="16日・営業">16</button><button class="d" aria-label="17日・営業">17</button><button class="d" aria-label="18日・営業">18</button><button class="d" aria-label="19日・営業">19</button><button class="d" aria-label="20日・営業">20</button>
+                      <button class="d" aria-label="21日・営業">21</button><button class="d off" aria-label="22日・定休">22<small>休</small></button><button class="d" aria-label="23日・営業">23</button><button class="d" aria-label="24日・営業">24</button><button class="d" aria-label="25日・営業">25</button><button class="d" aria-label="26日・営業">26</button><button class="d" aria-label="27日・営業">27</button>
+                      <button class="d" aria-label="28日・営業">28</button><button class="d off" aria-label="29日・定休">29<small>休</small></button><button class="d off" aria-label="30日・臨時のお休み">30<small>休</small></button><span class="d blank" aria-hidden="true"></span><span class="d blank" aria-hidden="true"></span><span class="d blank" aria-hidden="true"></span><span class="d blank" aria-hidden="true"></span>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="groupname">まとめて決める</div>
+                <div class="lines">
+                  <div class="li"><span>毎週のお休み</span><span class="val">火曜日</span><span class="chev" aria-hidden="true">›</span></div>
+                  <div class="li"><span>臨時のお休み</span><span class="val">9月30日（水）　棚卸しのため</span><span class="chev" aria-hidden="true">›</span></div>
+                </div>
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+</body>
+</html>

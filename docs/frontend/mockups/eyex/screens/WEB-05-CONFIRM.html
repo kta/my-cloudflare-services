@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EYEX予約 — Web予約 5/6 ご確認</title>
+<link rel="stylesheet" href="../assets/eyex.css">
+<style>
+  .ask h2 { font-size: 20px; }
+  .ask p { font-size: 13px; }
+  .ask .bubble { width: 18px; height: 15px; margin-top: 6px; }
+  .wrap { padding: 32px 28px 120px; }
+  .kv { margin-top: 28px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-m); overflow: hidden; }
+  .kv .r { display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  .kv .r:last-child { border-bottom: 0; }
+  .kv dt { flex: none; width: 66px; font-size: 13px; color: var(--ink-2); }
+  .kv dd { flex: 1; margin: 0; font-size: 16px; font-weight: 600; }
+  .kv dd small { display: block; font-size: 13px; font-weight: 400; color: var(--ink-2); }
+  .kv .edit { flex: none; color: var(--brand); font-size: 13px; font-weight: 600; }
+  .kv .r.head { background: var(--brand-tint); }
+  .kv .r.head dd { color: var(--brand-dark); }
+  .sticky { left: 28px; right: 28px; bottom: 32px; }
+  .sticky .btn { width: 100%; }
+</style>
+</head>
+<body>
+<div class="caption">
+  <h1>Web予約 5/6　ご確認</h1>
+  <p>送信の前に、当日おいでいただく日時と連絡先をひと目で読み返せるようにする。直したい行はその場から戻れる。</p>
+</div>
+
+<main class="phone" id="screen">
+  <div class="statusbar"><span>11:14</span><span></span><span>Wi‑Fi　86%</span></div>
+
+  <header class="appbar">
+    <button class="homebtn" aria-label="前の画面へ戻る">‹</button>
+    <div class="storename">EYEX 銀座店<small>ステップ 5 / 6　ご確認</small></div>
+  </header>
+
+  <div class="webprogress" role="img" aria-label="全6ステップのうち5つ目です">
+    <i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i>
+  </div>
+
+  <div class="body">
+    <div class="wrap">
+      <div class="ask">
+        <span class="bubble" aria-hidden="true"></span>
+        <div>
+          <h2>この内容でお間違いないですか</h2>
+          <p>まだ確定していません。</p>
+        </div>
+      </div>
+
+      <dl class="kv">
+        <div class="r head">
+          <dt>ご来店</dt>
+          <dd>8月29日（土）11:00</dd>
+          <span class="edit">変更</span>
+        </div>
+        <div class="r">
+          <dt>店舗</dt>
+          <dd>EYEX 銀座店</dd>
+          <span class="edit">変更</span>
+        </div>
+        <div class="r">
+          <dt>ご用件</dt>
+          <dd>メガネを新しく作る<small>約60分</small></dd>
+          <span class="edit">変更</span>
+        </div>
+        <div class="r">
+          <dt>お名前</dt>
+          <dd>山口 真央 様</dd>
+          <span class="edit">変更</span>
+        </div>
+        <div class="r">
+          <dt>ご連絡先</dt>
+          <dd>080-2345-6789<small>m.yamaguchi@example.jp</small></dd>
+          <span class="edit">変更</span>
+        </div>
+      </dl>
+    </div>
+
+    <div class="sticky">
+      <button class="btn primary big">この内容で予約する</button>
+    </div>
+  </div>
+</main>
+</body>
+</html>

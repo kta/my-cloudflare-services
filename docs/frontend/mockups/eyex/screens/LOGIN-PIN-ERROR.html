@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EYEX予約 — 暗証番号が違うとき</title>
+<link rel="stylesheet" href="../assets/eyex.css">
+<style>
+  .pinwrap { display: grid; grid-template-columns: 1fr 420px; height: 100%; }
+  .left { padding: 40px 44px; display: flex; flex-direction: column; min-height: 0; }
+  .padwrap {
+    border-left: 1px solid var(--line); background: var(--surface);
+    padding: 40px 24px; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 22px;
+  }
+  .who { display: flex; align-items: center; gap: 16px; margin-top: 30px; }
+  .who .av {
+    flex: none; width: 56px; height: 56px; border-radius: 50%;
+    background: var(--brand); color: var(--on-brand);
+    display: grid; place-items: center; font: 700 23px var(--sans);
+  }
+  .who .nm { font-size: 18px; font-weight: 700; }
+  .who .nm small { display: block; margin-top: 3px; font: 400 13px var(--sans); color: var(--ink-2); }
+  .pinblock { margin-top: 32px; }
+  .pins { margin-top: 10px; }
+  .tries { display: flex; gap: 8px; align-items: center; margin-top: 14px; }
+  .tries i { width: 30px; height: 10px; border-radius: 5px; background: var(--busy); display: inline-block; }
+  .tries i.used { background: var(--alert); }
+  .bottom { margin-top: auto; display: flex; align-items: center; gap: 12px; }
+</style>
+</head>
+<body>
+<div class="caption">
+  <h1>暗証番号が違うとき</h1>
+  <p>間違いを責めず、あと何回試せるか・続けて間違えたらどうなるか・誰に頼めば直せるかを同じ面に出す。</p>
+</div>
+
+<main class="device" id="screen">
+  <div class="statusbar"><span>9:42</span><span>EYEX 銀座店</span><span>Wi‑Fi　100%</span></div>
+
+  <header class="appbar">
+    <div class="storename">EYEX 銀座店<small>業務を始める　個人の端末</small></div>
+    <div class="barbtns">
+      <button class="barbtn"><b>やめる</b></button>
+    </div>
+  </header>
+
+  <div class="body">
+    <div class="pinwrap">
+      <section class="left">
+        <div class="card warn">
+          <h2 style="font-size:20px;margin:0">暗証番号が違います。あと2回お試しいただけます</h2>
+          <p class="small" style="margin:6px 0 0">3回続くと、30秒お待ちいただきます。</p>
+          <div class="tries" aria-label="お試しの残り　3回のうち1回を使いました">
+            <i class="used" aria-hidden="true"></i><i aria-hidden="true"></i><i aria-hidden="true"></i>
+          </div>
+        </div>
+
+        <div class="who">
+          <span class="av" aria-hidden="true">佐</span>
+          <span class="nm">佐藤 美咲<small>視力測定・加工　／　本日の勤務 10:00–19:00</small></span>
+        </div>
+
+        <div class="pinblock">
+          <span class="label" id="lbl-pin" style="color:var(--alert)">暗証番号　はじめから打ち直してください</span>
+          <div class="pins" role="group" aria-labelledby="lbl-pin" aria-label="暗証番号　入力は消えました">
+            <i class="err"></i><i class="err"></i><i class="err"></i><i class="err"></i><i class="err"></i><i class="err"></i>
+          </div>
+        </div>
+
+        <div class="bottom">
+          <button class="btn primary">店長に暗証番号の再設定を頼む</button>
+          <button class="btn">別のスタッフを選ぶ</button>
+        </div>
+      </section>
+
+      <aside class="padwrap">
+        <div class="keypad" role="group" aria-label="暗証番号のテンキー">
+          <button class="key">1</button><button class="key">2</button><button class="key">3</button>
+          <button class="key">4</button><button class="key">5</button><button class="key">6</button>
+          <button class="key">7</button><button class="key">8</button><button class="key">9</button>
+          <button class="key wide">削除</button>
+          <button class="key">0</button>
+          <button class="key wide go" disabled>確定</button>
+        </div>
+        <p class="small muted" style="margin:0">4桁まで打つと「確定」を押せます</p>
+      </aside>
+    </div>
+  </div>
+</main>
+</body>
+</html>
