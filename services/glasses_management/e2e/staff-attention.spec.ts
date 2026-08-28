@@ -1,4 +1,6 @@
 import { expect, type Page, test } from '@playwright/test'
+import { openNote, openNoteWithText } from './notes'
+import { choosePickerOption } from './picker'
 
 /*
  * EYEX スタッフ端末の「注意事項の権限設定」「監査イベント」「顧客の統合・誤関連解除」の E2E。
@@ -318,21 +320,25 @@ test('注意事項の権限は5操作それぞれのロールと適用元を出�
   await expect(rows).toHaveCount(5)
   const originRow = rows.nth(4)
   await expect(originRow.getByRole('rowheader')).toHaveText('適用元')
+  /*
+   * 選択はネイティブの `<select>` ではなくトークンで組んだ引き金なので、
+   * 今の値は `value` ではなく引き金の字が名乗る。
+   */
   const expected = [
-    ['閲覧', 'staff', '組織共通'],
-    ['登録', 'staff', '組織共通'],
-    ['公開', 'store_manager', '組織共通'],
-    ['改訂', 'store_manager', '店舗上書き'],
-    ['非表示化', 'store_manager', '組織共通'],
+    ['閲覧', 'スタッフ以上', '組織共通'],
+    ['登録', 'スタッフ以上', '組織共通'],
+    ['公開', '店舗管理者以上', '組織共通'],
+    ['改訂', '店舗管理者以上', '店舗上書き'],
+    ['非表示化', '店舗管理者以上', '組織共通'],
   ]
   for (const [index, row] of expected.entries()) {
     const [label = '', role = '', origin = ''] = row
-    await expect(page.getByLabel(`${label}に必要なロール`)).toHaveValue(role)
+    await expect(page.getByLabel(`${label}に必要なロール`)).toHaveText(role)
     // 適用元は行ごとに違う。列の並びは契約の順序（閲覧・登録・公開・改訂・非表示化）。
     await expect(originRow.getByRole('cell').nth(index)).toHaveText(origin)
   }
   // 新規組織の初期値はこの並びそのもの (UC-EYEX-148)。
-  await expect(page.getByLabel('設定範囲')).toHaveValue('organization')
+  await expect(page.getByRole('combobox', { name: '設定範囲' })).toHaveText('組織共通値')
 
   // 入力時の案内は契約データとして届き、記録する/記録しないの両方が出る (UC-EYEX-144)。
   const guidance = page.getByRole('region', { name: '入力時の案内' })
@@ -340,15 +346,15 @@ test('注意事項の権限は5操作それぞれのロールと適用元を出�
   await expect(guidance).toContainText('記録しない: 人格評価・憶測・差別につながる属性')
 
   // 組織共通と店舗上書きのどちらを書くかを選べる (UC-EYEX-139)。
-  await page.getByLabel('設定範囲').selectOption('store')
+  await choosePickerOption(page, '設定範囲', '店舗上書き')
   await expect(page.getByLabel('店舗ごとの上書きを許可する')).toBeChecked()
 
   // 公開方式は即時公開と管理者確認後の 2 択 (UC-EYEX-141)。
-  await expect(page.getByLabel('公開方式')).toHaveValue('review_required')
-  await page.getByLabel('公開方式').selectOption('immediate')
+  await expect(page.getByLabel('公開方式')).toHaveText('管理者確認後に公開')
+  await choosePickerOption(page, '公開方式', '即時公開')
 
   // ロールを操作ごとに変えて保存できる (UC-EYEX-140)。
-  await page.getByLabel('公開に必要なロール').selectOption('organization_admin')
+  await choosePickerOption(page, '公開に必要なロール', '本部管理者以上')
   await page.getByRole('button', { name: '設定を保存する' }).click()
   await expect(page.getByText('設定を保存しました。')).toBeVisible()
 
@@ -381,8 +387,8 @@ test('共有範囲の変更は影響件数を見せ、承認するまで適用�
   await mockStaffApi(page, mocks)
   await openAttentionSettings(page)
 
-  await expect(page.getByLabel('共有範囲', { exact: true })).toHaveValue('permitted_stores')
-  await page.getByLabel('共有範囲', { exact: true }).selectOption('chain')
+  await expect(page.getByLabel('共有範囲', { exact: true })).toHaveText('権限のある店舗')
+  await choosePickerOption(page, '共有範囲', 'チェーン全体')
   await page.getByRole('button', { name: '設定を保存する' }).click()
 
   // 既存情報がどこからどこへ何件動くかを、変更の前に言い切る (AC-EYEX-118)。
@@ -404,7 +410,7 @@ test('共有範囲の変更は影響件数を見せ、承認するまで適用�
   // キャンセルすると設定は元のまま（UC-EYEX-142）。
   await dialog.getByRole('button', { name: 'キャンセル' }).click()
   await expect(dialog).toHaveCount(0)
-  await expect(page.getByLabel('共有範囲', { exact: true })).toHaveValue('permitted_stores')
+  await expect(page.getByLabel('共有範囲', { exact: true })).toHaveText('権限のある店舗')
   expect(
     mocks.requests.some(
       (entry) => entry.method === 'PUT' && entry.url.endsWith('/attention-settings'),
@@ -412,7 +418,7 @@ test('共有範囲の変更は影響件数を見せ、承認するまで適用�
   ).toBe(false)
 
   // 承認して初めて、見た件数を添えて適用される。
-  await page.getByLabel('共有範囲', { exact: true }).selectOption('chain')
+  await choosePickerOption(page, '共有範囲', 'チェーン全体')
   await page.getByRole('button', { name: '設定を保存する' }).click()
   await page
     .getByRole('dialog', { name: '共有範囲の変更を確認' })
@@ -425,7 +431,7 @@ test('共有範囲の変更は影響件数を見せ、承認するまで適用�
   const sent = JSON.parse(put?.body ?? '{}') as Record<string, unknown>
   expect(sent.sharingScope).toBe('chain')
   expect(sent.acknowledgedAffectedNoteCount).toBe(12)
-  await expect(page.getByLabel('共有範囲', { exact: true })).toHaveValue('chain')
+  await expect(page.getByLabel('共有範囲', { exact: true })).toHaveText('チェーン全体')
 })
 
 // @e2e-covers UC-EYEX-156 AC-EYEX-103
@@ -440,8 +446,8 @@ test('監査記録に残せなかった管理操作は成立させず、入力�
   await mockStaffApi(page, mocks)
   await openAttentionSettings(page)
 
-  await page.getByLabel('公開方式').selectOption('immediate')
-  await page.getByLabel('公開に必要なロール').selectOption('organization_admin')
+  await choosePickerOption(page, '公開方式', '即時公開')
+  await choosePickerOption(page, '公開に必要なロール', '本部管理者以上')
   await page.getByRole('button', { name: '設定を保存する' }).click()
 
   // 成立していないことを言い切り、入力はそのまま残す (AC-EYEX-103)。
@@ -451,8 +457,8 @@ test('監査記録に残せなかった管理操作は成立させず、入力�
     ),
   ).toBeVisible()
   await expect(page.getByText('設定を保存しました。')).toHaveCount(0)
-  await expect(page.getByLabel('公開方式')).toHaveValue('immediate')
-  await expect(page.getByLabel('公開に必要なロール')).toHaveValue('organization_admin')
+  await expect(page.getByLabel('公開方式')).toHaveText('即時公開')
+  await expect(page.getByLabel('公開に必要なロール')).toHaveText('本部管理者以上')
 
   // 再試行の手段がその場にある。監査が書けるようになれば同じ入力で成立する。
   failNext = false
@@ -518,13 +524,17 @@ test('監査イベントは期間・操作・主体種別・対象で絞り込�
   await table.getByRole('button', { name: '詳細' }).first().click()
   const detail = page.getByRole('region', { name: '監査イベント詳細' })
   await expect(detail).toContainText('correlation_id: corr-abc-123')
-  await expect(detail).toContainText('actor_type: user')
+  // 主体種別は生の値ではなく語で読ませる（`user` は「個人」）。
+  await expect(detail).toContainText('actor_type: 個人')
   await expect(detail).toContainText('actor: user-yamada')
-  // 変更前後は同じ鍵で並べて突き合わせる。
-  await expect(detail.getByRole('region', { name: '変更前' })).toContainText(
-    'status pending_review',
-  )
-  await expect(detail.getByRole('region', { name: '変更後' })).toContainText('status published')
+  /*
+   * 変更前後は同じ鍵で並べて突き合わせる。値は生の列値ではなく語で読ませる
+   * （`pending_review` は「確認待ち」）ので、そのまま語で確かめる。
+   */
+  await expect(detail.getByRole('region', { name: '変更前' })).toContainText('確認待ち')
+  await expect(detail.getByRole('region', { name: '変更前' })).toContainText('version 1')
+  await expect(detail.getByRole('region', { name: '変更後' })).toContainText('公開済み')
+  await expect(detail.getByRole('region', { name: '変更後' })).toContainText('version 2')
 
   // 権限の外は検索できず、その旨だけが返る。
   await page.getByRole('button', { name: '監査を検索', exact: true }).click()
@@ -905,9 +915,8 @@ test('確認待ちで登録された注意事項は公開権限の無いスタ�
   // 同じ API 応答でも、公開権限を持つ権限者には確認待ちが 4 項目つきで見える。
   mocks.permissions = [...REVIEWER_PERMISSIONS]
   await openAttentionReview(page)
-  const waiting = page
-    .getByRole('article')
-    .filter({ hasText: '来店時に強い日差しで頭痛を訴えられた。' })
+  // 柱の行を辿って目当ての 1 件を本文へ出す（本文は 1 件だけを持つ）。
+  const waiting = await openNoteWithText(page, '来店時に強い日差しで頭痛を訴えられた。')
   await expect(waiting).toHaveAttribute('aria-label', /注意事項 確認待ち 版1/)
   await expect(waiting).toContainText('発生日時')
   await expect(waiting).toContainText('2026年8月20日 14:30')
@@ -925,7 +934,7 @@ test('公開・差戻し・却下はいずれも理由を求め、理由が無�
   await mockNoteApi(page, mocks)
   await openAttentionReview(page)
 
-  const waiting = page.getByRole('article', { name: /注意事項 確認待ち 版1/ })
+  const waiting = await openNote(page, /注意事項 確認待ち 版1/)
   const reviews = () => mocks.requests.filter((entry) => entry.url.endsWith('/review'))
 
   // 判断の 3 つはモックの文言（公開する / 差戻し / 却下）。
@@ -955,7 +964,7 @@ test('改訂は公開済みの版を上書きせず新しい版を公開し、�
   await mockNoteApi(page, mocks)
   await openAttentionReview(page)
 
-  const published = page.getByRole('article', { name: /注意事項 公開済み 版1/ })
+  const published = await openNote(page, /注意事項 公開済み 版1/)
   await published.getByRole('button', { name: '改訂する' }).click()
   const dialog = page.getByRole('dialog', { name: '注意事項を改訂' })
   // 上書きしないことを、改訂する前に言い切る (UC-EYEX-145)。
@@ -974,7 +983,7 @@ test('改訂は公開済みの版を上書きせず新しい版を公開し、�
   })
 
   // 新しい版が公開され、行は増えず版が上がる (AC-EYEX-86)。
-  const revised = page.getByRole('article', { name: /注意事項 公開済み 版2/ })
+  const revised = await openNote(page, /注意事項 公開済み 版2/)
   await expect(revised).toContainText('鼻あての金属で肌が荒れやすい。樹脂パッドへ交換済み。')
   await expect(page.getByRole('article', { name: /注意事項 公開済み 版1/ })).toHaveCount(0)
 
@@ -1012,7 +1021,7 @@ test('別の権限者が改訂した後に古い版から公開しようとす�
   await mockNoteApi(page, mocks)
   await openAttentionReview(page)
 
-  const waiting = page.getByRole('article', { name: /注意事項 確認待ち 版1/ })
+  const waiting = await openNote(page, /注意事項 確認待ち 版1/)
   await waiting.getByLabel('確認の理由').fill('本人申告で裏が取れたため')
   await waiting.getByRole('button', { name: '公開する' }).click()
 
@@ -1048,7 +1057,7 @@ test('注意事項に削除の手段は無く、非表示化だけが理由つ�
   // 削除は画面のどこにも無い (UC-EYEX-146)。
   await expect(page.getByRole('button', { name: /削除/ })).toHaveCount(0)
 
-  const published = page.getByRole('article', { name: /注意事項 公開済み 版1/ })
+  const published = await openNote(page, /注意事項 公開済み 版1/)
   await published.getByRole('button', { name: '非表示にする' }).click()
   const dialog = page.getByRole('dialog', { name: '注意事項を非表示にする' })
   await expect(dialog).toContainText('記録は削除されません。')
@@ -1069,7 +1078,7 @@ test('注意事項に削除の手段は無く、非表示化だけが理由つ�
   })
 
   // 行は消えず、状態が変わるだけ。過去の版もそのまま辿れる。
-  const hidden = page.getByRole('article', { name: /注意事項 非表示 版2/ })
+  const hidden = await openNote(page, /注意事項 非表示 版2/)
   await expect(hidden).toContainText('鼻あての金属で肌が荒れやすい。')
   await expect(hidden.getByRole('button', { name: '過去の版を見る' })).toBeVisible()
   await expect(page.getByRole('button', { name: /削除/ })).toHaveCount(0)

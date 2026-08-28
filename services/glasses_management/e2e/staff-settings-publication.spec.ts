@@ -1,4 +1,5 @@
 import { expect, type Page, test } from '@playwright/test'
+import { choosePickerOption } from './picker'
 
 /*
  * EYEX スタッフ端末「店舗設定ガイド」第6工程（影響確認と公開）の E2E。
@@ -511,9 +512,10 @@ async function mockPublicationApi(page: Page, initial: Partial<Mock> = {}): Prom
  * ホーム → 緑帯「設定」→ 工程6「影響確認と公開」。
  *
  * 面の行き来は緑帯と左サイドバーに集約された。設定ガイドへの入口はホームの
- * 緑帯にしかないので、そこから入って工程レール（`navigation[設定の工程]`）で
- * 第6工程を開く。第6工程は自分の見出しを持つだけで、区画の名前はガイド全体の
- * `店舗設定` のままなので、以降のスコープはその面に切る。
+ * 緑帯にしかないので、そこから入って工程を選ぶ。6 工程は iPad 幅では左の柱
+ * （`画面の一覧`）の節、SP 幅では本文頭のレール（`設定の工程`）に出るので、
+ * 出ている方の並びから読み上げ名で名指す。第6工程は自分の見出しを持つだけで、
+ * 区画の名前はガイド全体の `店舗設定` のままなので、以降のスコープはその面に切る。
  */
 async function openImpactStep(page: Page) {
   await page.setViewportSize(VIEWPORT)
@@ -522,17 +524,14 @@ async function openImpactStep(page: Page) {
   await page.getByRole('banner').getByRole('button', { name: '設定', exact: true }).click()
   const region = page.getByRole('region', { name: '店舗設定' })
   await expect(region).toBeVisible()
-  await page
-    .getByRole('navigation', { name: '設定の工程' })
-    .getByRole('button', { name: /^工程6 影響確認と公開/ })
-    .click()
+  await goToStep(page, /^工程6 影響確認と公開/)
   await expect(region.getByRole('heading', { name: '影響を確認して公開' })).toBeVisible()
   return region
 }
 
-/** 工程レールで工程を選び直す。ガイド全体の保存は第6工程には無い。 */
+/** 工程を選び直す。ガイド全体の保存は第6工程には無い。 */
 async function goToStep(page: Page, name: RegExp) {
-  await page.getByRole('navigation', { name: '設定の工程' }).getByRole('button', { name }).click()
+  await page.getByRole('navigation').getByRole('button', { name }).first().click()
 }
 
 // @e2e-covers UC-EYEX-095 UC-EYEX-096 UC-EYEX-159 AC-EYEX-45
@@ -685,7 +684,7 @@ test('未解消の競合予約がある間は公開できず、代替資源割�
   for (const kind of kinds) {
     await conflicts.getByRole('button', { name: '解消を記録' }).first().click()
     const dialog = page.getByRole('dialog', { name: '影響予約の解消を記録' })
-    await dialog.getByLabel('対応').selectOption(kind.value)
+    await choosePickerOption(dialog, '対応', kind.label)
     await dialog.getByLabel('メモ').fill(kind.note)
     await dialog.getByRole('button', { name: '記録する' }).click()
     await expect(dialog).toBeHidden()
@@ -737,14 +736,25 @@ test('JSTで指定した公開予約は、実行前に再検証・日時変更�
   // AC-EYEX-105: 予定日時・対象店舗・版が読める。JSTの 00:00 が UTC 往復でずれない。
   const result = region.getByRole('region', { name: '公開結果' })
   await expect(result.getByText('公開予約', { exact: true })).toBeVisible()
-  await expect(result.getByText(`版 ${versionId}`)).toBeVisible()
+  /*
+   * 版は人が読む採番（`第N版`）で名乗る。`versionId` は保存用の UUID なので
+   * 画面には出さない。まだどの店舗にも当たっていない公開予約は番号を持た
+   * ないので、ここでは面の名乗りだけが出る。対象店舗は要求の本文で確かめる。
+   */
+  await expect(result.getByRole('heading', { name: '公開結果' })).toBeVisible()
   await expect(result.getByText('公開予定 2099年1月1日 00:00')).toBeVisible()
   await expect(result.getByText('実行日時 未実行')).toBeVisible()
 
-  // UC-EYEX-161: 実行前の再検証。
+  /*
+   * UC-EYEX-161: 実行前の再検証。公開すると面は結果へ移るので、再検証は工程6へ
+   * 戻って行う（影響確認は工程6の持ち物で、結果の面は結果だけを持つ）。
+   */
   const before = mock.impactRequests
+  await goToStep(page, /^工程6 影響確認と公開/)
   await region.getByRole('button', { name: '影響を再確認' }).click()
   await expect.poll(() => mock.impactRequests).toBe(before + 1)
+  // 結果の面へ戻る。柱の「公開結果」が到達経路である。
+  await page.getByRole('navigation').getByRole('button', { name: '公開結果' }).first().click()
 
   // UC-EYEX-161: 公開予定の変更。
   await result.getByRole('button', { name: '公開予定を変更' }).click()
@@ -776,7 +786,8 @@ test('公開結果は版ID・対象店舗・成功件数・失敗件数とWeb枠
 
   const result = region.getByRole('region', { name: '公開結果' })
   await expect(result.getByText('完了', { exact: true })).toBeVisible()
-  await expect(result.getByText(`版 ${versionId}`)).toBeVisible()
+  // 版は人が読む採番で名乗る（UUID の `versionId` は画面に出さない）。
+  await expect(result.getByRole('heading', { name: '第4版の公開結果' })).toBeVisible()
   await expect(result.getByText('成功 2店舗')).toBeVisible()
   await expect(result.getByText('失敗 0店舗')).toBeVisible()
   await expect(result.getByText('Web公開枠 428件 → 402件（-26件）')).toBeVisible()
@@ -843,9 +854,11 @@ test('部分失敗の再試行は失敗店舗だけを対象とし、成功済�
 
   const result = region.getByRole('region', { name: '公開結果' })
   await expect(result.getByText('一部失敗', { exact: true })).toBeVisible()
-  await expect(
-    region.getByRole('region', { name: '警告' }).getByText('1店舗で公開が失敗しました'),
-  ).toBeVisible()
+  /*
+   * 公開すると面は結果へ移る（工程6に留まると折り返しの下に結果が隠れる）。
+   * 失敗が何店舗かは、その面の「失敗」の枚と失敗した店舗の行が語で持つ。
+   */
+  await expect(result.getByText('失敗 1店舗')).toBeVisible()
 
   // AC-EYEX-107: 再試行対象は失敗店舗だけで、成功済み店舗は入らない。
   const failedGroup = result.getByRole('region', { name: '失敗した店舗' })

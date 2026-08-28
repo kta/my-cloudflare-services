@@ -172,11 +172,16 @@ export function GuideLayout({
   usePublishedSections(sections, onSelectSection)
 
   if (sections !== undefined)
+    /*
+     * ステッパーは送る面の外に置く。本文と同じ箱に入れると、本文を送った分だけ
+     * 一緒に上へ抜けてしまい、SP で「ヘッダー直下に固定」を満たせない
+     * （AC-EYEX-72）。
+     */
     return (
-      <section className="min-h-0 flex-1 overflow-auto px-8.5 py-6.5">
+      <div className="flex min-h-0 flex-1 flex-col">
         {stepper}
-        {children}
-      </section>
+        <section className="min-h-0 flex-1 overflow-auto px-8.5 py-6.5">{children}</section>
+      </div>
     )
 
   return (

@@ -370,6 +370,43 @@ export function SettingsPublication({
   }
 
   /*
+   * 公開予定の変更の幕。工程6と公開結果の両方から開く。結果の面にだけ
+   * 「公開予定を変更」の押しどころがあるのに幕が工程6にしか無いと、押しても
+   * 何も起きない（UC-EYEX-161）。
+   */
+  const rescheduleModal = rescheduling ? (
+    <Modal title="公開予定の変更" titleId={rescheduleTitleId}>
+      <TextField
+        id="reschedule-input"
+        label="新しい公開日時（JST）"
+        error={scheduleMessage}
+        value={scheduleInput}
+        placeholder="2026-08-30T18:00"
+        onChange={(event) => {
+          setScheduleInput(event.target.value)
+          setScheduleMessage(undefined)
+        }}
+      />
+      <Actions gap={2.5} mt={4}>
+        <Action onClick={() => setRescheduling(false)}>やめる</Action>
+        <Action
+          variant="primary"
+          onClick={() => {
+            const message = scheduleError(scheduleInput, today)
+            if (message !== undefined) {
+              setScheduleMessage(message)
+              return
+            }
+            void patchPublication({ scheduledForJst: scheduleInput })
+          }}
+        >
+          この日時に変更
+        </Action>
+      </Actions>
+    </Modal>
+  ) : null
+
+  /*
    * 承認済みモック `operations-approved.html#publish-result` — 全幅の独立した面。
    *
    *   .content{padding:24px 30px}（節ナビを持たないので幅いっぱい）
@@ -468,6 +505,7 @@ export function SettingsPublication({
             </Action>
           </Actions>
         )}
+        {rescheduleModal}
       </section>
     )
   }
@@ -766,37 +804,7 @@ export function SettingsPublication({
         </Modal>
       )}
 
-      {rescheduling && (
-        <Modal title="公開予定の変更" titleId={rescheduleTitleId}>
-          <TextField
-            id="reschedule-input"
-            label="新しい公開日時（JST）"
-            error={scheduleMessage}
-            value={scheduleInput}
-            placeholder="2026-08-30T18:00"
-            onChange={(event) => {
-              setScheduleInput(event.target.value)
-              setScheduleMessage(undefined)
-            }}
-          />
-          <Actions gap={2.5} mt={4}>
-            <Action onClick={() => setRescheduling(false)}>やめる</Action>
-            <Action
-              variant="primary"
-              onClick={() => {
-                const message = scheduleError(scheduleInput, today)
-                if (message !== undefined) {
-                  setScheduleMessage(message)
-                  return
-                }
-                void patchPublication({ scheduledForJst: scheduleInput })
-              }}
-            >
-              この日時に変更
-            </Action>
-          </Actions>
-        </Modal>
-      )}
+      {rescheduleModal}
     </>
   )
 }

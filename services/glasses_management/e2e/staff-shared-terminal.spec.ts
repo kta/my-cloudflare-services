@@ -1,4 +1,5 @@
 import { expect, type Page, test } from '@playwright/test'
+import { openNote } from './notes'
 
 /*
  * EYEX「完全共有 iPad」のライフサイクル E2E。
@@ -896,7 +897,8 @@ test('共有iPadは注意事項を確認待ちで登録できるが、公開・�
   expect(grantedBefore(mocks, mocks.sent.indexOf(published[0] as Sent))).toBe(true)
 
   // 3. 改訂も同じ扱い。PIN が通るまで改訂要求は送られない。
-  const publishedNote = page.getByRole('article', { name: '注意事項 公開済み 版1' })
+  // 本文は柱で選んだ 1 件だけを持つので、改訂する版を柱から開く。
+  const publishedNote = await openNote(page, '注意事項 公開済み 版1')
   await publishedNote.getByRole('button', { name: '改訂する' }).click()
   const revision = page.getByRole('dialog', { name: '注意事項を改訂' })
   await revision

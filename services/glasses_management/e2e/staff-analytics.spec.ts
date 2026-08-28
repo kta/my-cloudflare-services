@@ -565,10 +565,14 @@ async function openAdmin(page: Page, label: string) {
 
 /**
  * 分析は「観点」をひとつ選んで掘り下げる面になった。指標・分布・離脱は観点ごとに
- * 別の段に出るので、確かめたいものの観点へ移ってから読む。
+ * 別の段に出るので、確かめたいものの観点へ移ってから読む。観点は 2 本目の柱では
+ * なく、全画面共通の柱の「分析」の下の節として並ぶ。
  */
 async function openSection(page: Page, label: string) {
-  await page.getByRole('navigation', { name: '指標' }).getByRole('button', { name: label }).click()
+  await page
+    .getByRole('navigation', { name: '画面の一覧' })
+    .getByRole('button', { name: label, exact: true })
+    .click()
 }
 
 async function openAnalytics(page: Page) {
@@ -1079,7 +1083,11 @@ test('お知らせとアラートは詳細で発生理由・対象・発生時�
   await expect(row).toContainText('未対応')
 
   // 種別で絞り込める。
-  await page.getByLabel('種別').selectOption('alert')
+  // 種別は `<select>` ではなく押しボタンの並び。既定の選択肢が名前を兼ねる。
+  await page
+    .getByRole('group', { name: '種別' })
+    .getByRole('button', { name: 'アラートのみ' })
+    .click()
   await expect(page.getByRole('button', { name: /営業時間の設定が矛盾しています/ })).toHaveCount(0)
   await expect(page.getByRole('button', { name: /録音の保存に失敗しました/ })).toBeVisible()
 

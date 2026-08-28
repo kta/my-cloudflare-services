@@ -113,7 +113,7 @@ test('allows a customer to book and manage only the verified reservation on a 37
   await page.getByLabel('会社発行の管理コード').fill('ABCD-1234')
   await page.getByRole('button', { name: '予約を表示する' }).click()
   await page.getByRole('button', { name: '予約日時を変更する' }).click()
-  await page.getByLabel('変更後の日').fill('2026-09-01')
+  // 変更先は日付欄ではなく空き枠の並びから選ぶ（`type="date"` は使わない）。
   await page.getByRole('button', { name: '9月1日（火）10:00' }).click()
   await expect(page.getByText('予約を変更しました。')).toBeVisible()
   await page.getByRole('button', { name: '予約を取り消す' }).click()

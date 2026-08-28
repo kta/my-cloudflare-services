@@ -1,4 +1,5 @@
 import { expect, type Page, test } from '@playwright/test'
+import { choosePickerOption } from './picker'
 
 /*
  * EYEX スタッフ端末の「店舗設定ガイド」と「共有iPad（端末とセキュリティ）」の E2E。
@@ -250,9 +251,16 @@ async function openSettings(page: Page, viewport = VIEWPORT) {
   await page.goto('/')
   await expect(page.getByRole('navigation', { name: '主操作' })).toBeVisible()
   await page.getByRole('banner').getByRole('button', { name: '設定', exact: true }).click()
-  await expect(
-    sidebar(page).getByRole('button', { name: '設定ガイド', exact: true }),
-  ).toHaveAttribute('aria-current', 'page')
+  /*
+   * 到達の合図は幅で変わる。iPad 幅は柱の行き先が現在地（`page`）として光る。
+   * SP 幅では柱を畳むので柱そのものが出ておらず、代わりに工程レールが出る。
+   * どちらも「設定の面に着いた」ことを、本文の中身に依らずに言える印である。
+   */
+  if (viewport.width < 768) await expect(stepRail(page).getByRole('button').first()).toBeVisible()
+  else
+    await expect(
+      sidebar(page).getByRole('button', { name: '設定ガイド', exact: true }),
+    ).toHaveAttribute('aria-current', 'page')
   return page.getByRole('region', { name: '店舗設定' })
 }
 
@@ -429,7 +437,7 @@ test('営業時間・臨時営業・受付停止を設定でき、受付停止�
   await expect(exceptionRows.first()).toContainText('2026-09-23')
   await expect(exceptionRows.first()).toContainText('休業')
   await hours.getByLabel('日付').fill('2026-10-12')
-  await hours.getByLabel('区分').selectOption('open')
+  await choosePickerOption(hours, '区分', '臨時営業')
   await hours.getByLabel('理由').fill('祝日営業')
   await hours.getByRole('button', { name: '臨時設定を追加' }).click()
   await expect(exceptionRows).toHaveCount(2)
@@ -441,7 +449,7 @@ test('営業時間・臨時営業・受付停止を設定でき、受付停止�
   await expect(hours).toContainText(
     '受付停止は新しいWeb予約だけを止めます。既存予約は取り消されません。',
   )
-  await hours.getByLabel('受付状態').selectOption('paused')
+  await choosePickerOption(hours, '受付状態', '受付停止')
 
   await screen.getByRole('button', { name: '設定を保存' }).click()
   await expect(screen.getByText('設定を保存しました。')).toBeVisible()
@@ -620,24 +628,22 @@ test('Web予約工程は公開状態から期限後の案内までを一覧し�
   // 予約可能日数、直前受付期限、変更・取消期限、期限後の案内が一枚に並ぶ。
   const panel = screen.getByRole('region', { name: 'Web予約設定' })
   /*
-   * 値が取れている欄だけが並ぶ。Web予約の公開設定 API はまだ無いので、
-   * それに依る欄（公開状態・受付終了・公開する来店目的）はこの時点では出ない。
+   * 値が取れている欄だけが並ぶ。Web予約の公開設定・受付条件の API はまだ無いので、
+   * それに依る欄（公開状態・受付終了・公開する来店目的・予約可能期間・
+   * 直前受付期限・変更・取消期限・期限後の案内）はこの時点では出ない。
+   * 出るのは営業時間から導ける受付時間だけである。
    */
-  for (const term of [
-    '受付時間',
-    '予約可能期間',
-    '直前受付期限',
-    '変更・取消期限',
-    '期限後の案内',
-  ]) {
-    await expect(panel).toContainText(term)
+  await expect(panel).toContainText('受付時間')
+  for (const term of ['予約可能期間', '直前受付期限', '変更・取消期限', '期限後の案内']) {
+    await expect(panel).not.toContainText(term)
   }
   // UC-EYEX-112: 受付曜日と時間帯は営業時間から実際に導出される（火曜は休業日なので
   // 月–土 でひとまとまりに読め、日曜だけ別の時間帯として並ぶ）。
   await expect(panel).toContainText('月–土 10:00–19:00')
   await expect(panel).toContainText('日 10:00–18:00')
-  // 公開状態・公開期間・公開する来店目的は API 未提供。推測も「未取得」の
-  // 書き足しもせず、欄ごと出さないうえで、取れていないことを 1 か所で言う。
+  // 公開状態・公開期間・公開する来店目的・受付条件は API 未提供。推測も
+  // 「未取得」の書き足しもせず、欄ごと出さないうえで、取れていないことを
+  // 1 か所で言う。
   await expect(panel).not.toContainText('未取得')
   await expect(panel).not.toContainText('公開状態')
   await expect(panel).toContainText('Web予約の公開設定はまだ取得できていません。')
@@ -857,11 +863,13 @@ test('日常業務はPINを求めず、管理操作は本人確認を要求し�
     '本人確認後にPIN再設定を開始できます。PINそのものは管理者にも表示されません。この操作は管理コンソールで行います。',
   )
 
-  // UC-EYEX-152: 無操作ロック時間はこの画面の管轄外。既定値を推測せず 未取得 と言い、
+  // UC-EYEX-152: 無操作ロック時間はこの画面の管轄外。値が来ていないあいだは
+  // 既定値を推測せず何も名乗らず（「未取得」もモックに無い失敗文言なので書かない）、
   // 変更もこの面では実行しない。
   const idle = page.getByRole('region', { name: '無操作ロック' })
-  await expect(idle).toContainText('未取得')
-  await expect(idle).toContainText('無操作ロック時間はこの画面から取得できません。')
+  await expect(idle).not.toContainText('未取得')
+  // 推測した時間（`既定 2分` のような分の表記）を一切描かない。
+  await expect(idle).not.toContainText('分')
   await idle.getByRole('button', { name: '変更' }).click()
   await expect(idle).toContainText('無操作ロック時間の変更はこの操作は管理コンソールで行います。')
 })

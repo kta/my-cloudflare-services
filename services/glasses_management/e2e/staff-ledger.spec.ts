@@ -1,5 +1,6 @@
 import type { LedgerEntry, ReceptionHistoryEntry, Store } from '@app/contracts'
 import { expect, type Page, test } from '@playwright/test'
+import { choosePickerOption } from './picker'
 
 /**
  * Staff-side journeys: the daily ledger, walk-in reception and the in-store
@@ -329,7 +330,8 @@ test('receives a walk-in without customer details and links it to an existing cu
   // 面の行き来は全画面共通の左サイドバー 1 本に集約されたので、そこから来店受付へ。
   const sidebar = page.getByRole('navigation', { name: '画面の一覧' })
   await sidebar.getByRole('button', { name: '来店受付', exact: true }).click()
-  await page.getByRole('main').getByRole('button', { name: '＋ 店頭のお客様を受付' }).click()
+  // 受付の主操作は緑帯へ移った（面の主操作は帯が持つ）。
+  await page.getByRole('banner').getByRole('button', { name: '＋ 店頭のお客様を受付' }).click()
   await sidebar.getByRole('button', { name: '予約台帳', exact: true }).click()
   const card = page.getByRole('button', { name: /ウォークイン 11:00/ })
   await expect(card).toBeVisible()
@@ -450,17 +452,23 @@ test('runs the in-store journey: arrival, stage handover and colour-free waiting
     .click()
   await expect(page.getByRole('heading', { name: '銀座店の来店受付' })).toBeVisible()
 
-  // UC-EYEX-053 / AC-EYEX-26: the warning is legible as words, not as a colour.
-  const warnings = page.getByRole('region', { name: '注意が必要なお客様' })
-  await expect(warnings.getByText('長時間待機')).toBeVisible()
-  await expect(
-    warnings.getByText('30分以上お待ちです。担当者を割り当ててご案内してください。'),
-  ).toBeVisible()
-  await expect(warnings.getByText('担当不在')).toBeVisible()
-  await expect(warnings.getByText('担当者が割り当てられていません。')).toBeVisible()
+  /*
+   * UC-EYEX-053 / AC-EYEX-26: 注意は色ではなく言葉で読める。並びの中では短い語
+   * （`長時間待機` / `担当不在`）が客の行に付き、理由の全文は選んだ 1 件の面が
+   * 受け持つ（専用の一覧を別に持たず、注意はその客の居る場所に出る）。
+   */
+  const board = page.getByRole('grid', { name: '接客の進み具合' })
+  const waitingCustomer = board.getByRole('button', { name: /ウォークイン/ })
+  await expect(waitingCustomer).toContainText('長時間待機')
+  await expect(waitingCustomer).toContainText('担当不在')
+  await waitingCustomer.click()
+  const waitingPanel = page.getByRole('region', { name: '選択中のお客様' })
+  await expect(waitingPanel).toContainText(
+    '30分以上お待ちです。担当者を割り当ててご案内してください。',
+  )
+  await expect(waitingPanel).toContainText('担当者が割り当てられていません。')
 
   // UC-EYEX-051: record an arrival, then a no-show and a cancellation.
-  const board = page.getByRole('grid', { name: '接客の進み具合' })
   await board.getByRole('button', { name: /佐藤 陽子/ }).click()
   const panel = page.getByRole('region', { name: '選択中のお客様' })
   await panel.getByRole('button', { name: '来店済みとして記録する' }).click()
@@ -469,7 +477,7 @@ test('runs the in-store journey: arrival, stage handover and colour-free waiting
   // UC-EYEX-052 / AC-EYEX-25: stage, assignee, equipment and handover note are
   // saved together and reappear on the board.
   await board.getByRole('button', { name: /佐藤 陽子/ }).click()
-  await panel.getByLabel('店内工程').selectOption('service_in_progress')
+  await choosePickerOption(panel, '店内工程', '接客中')
   await panel.getByLabel('担当者ID').fill(staffMemberId)
   await panel.getByLabel('設備ID').fill(equipmentId)
   await panel.getByLabel('次のご案内').fill('レンズ度数の確認へご案内')

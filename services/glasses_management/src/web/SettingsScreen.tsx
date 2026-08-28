@@ -7,6 +7,7 @@ import {
   type StorePermission,
   type WebBookingPublication,
 } from '@app/contracts'
+import { cn } from '@app/ui'
 import { Fragment, type ReactNode, useEffect, useState } from 'react'
 import { barOverlay } from './app-chrome'
 import { Action, Actions, FilterLine } from './design/controls'
@@ -473,12 +474,40 @@ export function SettingsScreen({
    * ものがここしか無い。
    */
   const stepper = (
-    <nav aria-label="設定の工程" className="md:hidden">
+    <nav
+      aria-label="設定の工程"
+      /*
+       * 柱を畳む幅では、行き先も工程も本文の上に居ない。6 工程をここへ並べない
+       * と、SP では「今どこか」しか読めず、他の工程へ移る手が消える（AC-EYEX-72）。
+       * 折り返す 3 列にして、横に送らせない。
+       */
+      className="shrink-0 border-line border-b bg-side px-3 py-2 md:hidden"
+    >
       <p className="my-0 flex items-baseline justify-between gap-2 text-note">
         <span className="font-bold text-pine">{summary.headline}</span>
         <span>{summary.remainingLabel}</span>
       </p>
       <p className="my-0 text-note">{`現在の状態: ${summary.stateLabel}`}</p>
+      <div className="mt-1 grid grid-cols-3 gap-1">
+        {stepSections.map((section) => (
+          <button
+            key={section.name}
+            type="button"
+            aria-label={section.name}
+            aria-current={section.current && !resultOpen ? 'step' : undefined}
+            onClick={() => selectSection(section.label)}
+            className={cn(
+              // 指で押す列なので 44px を割らない。字面は柱と同じ番号（か ✓）と工程名。
+              'min-h-11 min-w-0 rounded-ctl px-1 py-1 text-left font-sans text-note',
+              section.current && !resultOpen
+                ? 'bg-surface font-bold text-pine'
+                : 'bg-transparent text-ink',
+            )}
+          >
+            {section.label}
+          </button>
+        ))}
+      </div>
     </nav>
   )
 
