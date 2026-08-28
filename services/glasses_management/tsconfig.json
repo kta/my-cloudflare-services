@@ -6,6 +6,7 @@
   "include": [
     "src/worker",
     "test",
+    "e2e",
     "drizzle.config.ts",
     "playwright.config.ts",
     "vite.config.ts",

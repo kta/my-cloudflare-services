@@ -1,318 +1,163 @@
+/**
+ * テナント分離（絶対ルール 6: 全 DB クエリを organization_id でスコープ）。
+ *
+ * foundation.integration.test.ts が代表フローを見るのに対し、ここは
+ * 「他テナントのデータに手が届く経路が本当に無いか」を、複数テナント・
+ * 偽装入力・組織の未同期／無効化の遷移で潰す。
+ *
+ * D1 はテストファイル内で共有されるので、組織 id は毎回ユニークに作る。
+ */
 import { env, SELF } from 'cloudflare:test'
-import { signAccessToken } from '@app/shared'
 import { describe, expect, it } from 'vitest'
+import {
+  authed,
+  BASE,
+  INTERNAL_HEADERS,
+  JSON_HEADERS,
+  orgId,
+  syncOrganization,
+  tokenFor,
+} from './helpers'
 
-const BASE = 'https://glasses-management.test'
-const JWT_SECRET = 'dev-jwt-secret-change-me'
-const JSON_HEADERS = { 'content-type': 'application/json' }
-const INTERNAL = { ...JSON_HEADERS, 'x-internal-key': 'dev-internal-key' }
+const NOW = '2026-08-27T02:08:00.000Z'
 
-const uuid = () => crypto.randomUUID()
-
-async function tokenFor(org: string, role: 'admin' | 'staff' = 'staff') {
-  return signAccessToken({ sub: uuid(), org, email: `${uuid()}@example.test`, role }, JWT_SECRET)
+/** 店舗を D1 へ直に置く（P0 には店舗の作成 API がまだ無い）。 */
+async function seedStore(org: string, name: string, slug: string): Promise<string> {
+  const id = crypto.randomUUID()
+  await env.DB.prepare(
+    'INSERT INTO stores (id, organization_id, name, slug, phone, address, access_note, is_active, created_at) VALUES (?,?,?,?,?,?,?,?,?)',
+  )
+    .bind(id, org, name, slug, '', '', '', '1', NOW)
+    .run()
+  return id
 }
 
-async function syncOrganization(id: string) {
-  const organization = {
-    id,
-    name: `Organization ${id.slice(0, 8)}`,
-    plan: 'free',
-    isDisabled: false,
-    createdAt: new Date('2026-08-26T00:00:00.000Z').toISOString(),
-  }
-  const response = await SELF.fetch(`${BASE}/api/internal/organizations/sync`, {
-    method: 'POST',
-    headers: INTERNAL,
-    body: JSON.stringify(organization),
-  })
-  expect(response.status).toBe(200)
-}
-
-async function syncStore(input: {
-  id: string
-  organizationId: string
-  name: string
-  slug: string
-}) {
-  const response = await SELF.fetch(`${BASE}/api/internal/stores/sync`, {
-    method: 'POST',
-    headers: INTERNAL,
-    body: JSON.stringify({
-      ...input,
-      isActive: true,
-      createdAt: new Date('2026-08-26T00:00:00.000Z').toISOString(),
-    }),
-  })
-  expect(response.status).toBe(200)
-}
-
-async function syncMembership(input: {
-  id: string
-  organizationId: string
-  storeId: string
-  userId: string
-  permissions?: string[]
-}) {
-  const response = await SELF.fetch(`${BASE}/api/internal/store-memberships/sync`, {
-    method: 'POST',
-    headers: INTERNAL,
-    body: JSON.stringify({
-      ...input,
-      permissions: input.permissions ?? ['store.read', 'store.manage'],
-      createdAt: new Date('2026-08-26T00:00:00.000Z').toISOString(),
-    }),
-  })
-  expect(response.status).toBe(200)
-}
-
-function auth(token: string, init: RequestInit = {}): RequestInit {
+async function listStores(token: string) {
+  const res = await SELF.fetch(`${BASE}/api/staff/stores`, { headers: authed(token) })
   return {
-    ...init,
-    headers: {
-      ...JSON_HEADERS,
-      ...(init.headers ?? {}),
-      authorization: `Bearer ${token}`,
-    },
+    status: res.status,
+    stores: (await res.json().catch(() => [])) as Array<{ id: string; name: string }>,
   }
 }
 
-describe('organization and store tenant isolation', () => {
-  it('lists only stores belonging to the JWT organization across three tenants', async () => {
-    const organizations = [uuid(), uuid(), uuid()]
-    await Promise.all(organizations.map(syncOrganization))
-    const stores = organizations.map((organizationId, index) => ({
-      id: uuid(),
-      organizationId,
-      name: `Store ${index + 1}`,
-      slug: `store-${index + 1}-${uuid().slice(0, 8)}`,
-    }))
-    await Promise.all(stores.map(syncStore))
+describe('複数テナントの相互不可視', () => {
+  it('3 テナントが同時に店舗を持っても、各自の店舗しか見えない', async () => {
+    const [a, b, c] = [orgId(), orgId(), orgId()]
+    const [ta, tb, tc] = await Promise.all([tokenFor(a), tokenFor(b), tokenFor(c)])
 
-    const tokens = await Promise.all(organizations.map((id) => tokenFor(id, 'admin')))
-    const responses = await Promise.all(
-      tokens.map((token) => SELF.fetch(`${BASE}/api/staff/stores`, auth(token))),
-    )
-    const bodies = await Promise.all(
-      responses.map(
-        (response) => response.json() as Promise<Array<{ id: string; organizationId: string }>>,
-      ),
-    )
+    await seedStore(a, 'EYEX 銀座店', `ginza-${crypto.randomUUID().slice(0, 8)}`)
+    await seedStore(a, 'EYEX 丸の内店', `marunouchi-${crypto.randomUUID().slice(0, 8)}`)
+    await seedStore(b, 'B 新宿店', `shinjuku-${crypto.randomUUID().slice(0, 8)}`)
+    await seedStore(c, 'C 渋谷店', `shibuya-${crypto.randomUUID().slice(0, 8)}`)
 
-    for (let i = 0; i < organizations.length; i += 1) {
-      expect(bodies[i]).toHaveLength(1)
-      expect(bodies[i]?.[0]?.organizationId).toBe(organizations[i])
-      expect(bodies[i]?.[0]?.id).toBe(stores[i]?.id)
-    }
-
-    const detail = await SELF.fetch(
-      `${BASE}/api/staff/stores/${stores[0]?.id}`,
-      auth(tokens[0] as string),
-    )
-    expect(detail.status).toBe(200)
-    await expect(detail.json()).resolves.toMatchObject({ id: stores[0]?.id })
-    await env.DB.prepare("UPDATE stores SET is_active = '0' WHERE id = ?").bind(stores[0]?.id).run()
-    const inactiveDetail = await SELF.fetch(
-      `${BASE}/api/staff/stores/${stores[0]?.id}`,
-      auth(tokens[0] as string),
-    )
-    expect(inactiveDetail.status).toBe(403)
+    const [ra, rb, rc] = await Promise.all([listStores(ta), listStores(tb), listStores(tc)])
+    expect(ra.stores.map((s) => s.name).sort()).toEqual(['EYEX 丸の内店', 'EYEX 銀座店'])
+    expect(rb.stores.map((s) => s.name)).toEqual(['B 新宿店'])
+    expect(rc.stores.map((s) => s.name)).toEqual(['C 渋谷店'])
   })
 
-  it('uses the JWT organization for writes even when the request body is spoofed', async () => {
-    const owner = uuid()
-    const victim = uuid()
-    await Promise.all([syncOrganization(owner), syncOrganization(victim)])
-    const ownerStore = {
-      id: uuid(),
-      organizationId: owner,
-      name: 'Owner store',
-      slug: `owner-${uuid()}`,
-    }
-    const victimStore = {
-      id: uuid(),
-      organizationId: victim,
-      name: 'Victim store',
-      slug: `victim-${uuid()}`,
-    }
-    await Promise.all([syncStore(ownerStore), syncStore(victimStore)])
+  it('同じ slug を別テナントが使っても衝突せず、互いに見えない', async () => {
+    const [a, b] = [orgId(), orgId()]
+    const [ta, tb] = await Promise.all([tokenFor(a), tokenFor(b)])
+    await seedStore(a, 'A の銀座店', 'ginza')
+    await seedStore(b, 'B の銀座店', 'ginza')
 
-    const ownerSubject = uuid()
-    const ownerToken = await signAccessToken(
-      { sub: ownerSubject, org: owner, email: `${uuid()}@example.test`, role: 'staff' },
-      JWT_SECRET,
-    )
-    await syncMembership({
-      id: uuid(),
-      organizationId: owner,
-      storeId: ownerStore.id,
-      userId: ownerSubject,
-    })
+    expect((await listStores(ta)).stores.map((s) => s.name)).toEqual(['A の銀座店'])
+    expect((await listStores(tb)).stores.map((s) => s.name)).toEqual(['B の銀座店'])
+  })
+})
 
-    const crossTenantRead = await SELF.fetch(
-      `${BASE}/api/staff/stores/${victimStore.id}`,
-      auth(ownerToken),
-    )
-    expect(crossTenantRead.status).toBe(403)
+describe('入力による偽装が効かない', () => {
+  it('クエリで他テナントの organizationId を指定しても自分の店舗しか返らない', async () => {
+    const [a, b] = [orgId(), orgId()]
+    const ta = await tokenFor(a)
+    await tokenFor(b)
+    await seedStore(a, 'A 店', `a-${crypto.randomUUID().slice(0, 8)}`)
+    await seedStore(b, 'B 店', `b-${crypto.randomUUID().slice(0, 8)}`)
 
-    // Reservation read/history routes must derive their organization and
-    // selected-store scope solely from the JWT and membership.
-    const crossTenantReservations = await SELF.fetch(
-      `${BASE}/api/staff/stores/${victimStore.id}/reservations`,
-      auth(ownerToken),
+    const res = await SELF.fetch(
+      `${BASE}/api/staff/stores?organizationId=${encodeURIComponent(b)}`,
+      { headers: authed(ta) },
     )
-    expect(crossTenantReservations.status).toBe(403)
-    const crossTenantHistory = await SELF.fetch(
-      `${BASE}/api/staff/stores/${victimStore.id}/reservations/${uuid()}/history`,
-      auth(ownerToken),
-    )
-    expect(crossTenantHistory.status).toBe(403)
-    const crossTenantNoShow = await SELF.fetch(
-      `${BASE}/api/staff/stores/${victimStore.id}/reservations/${uuid()}/no-show`,
-      auth(ownerToken, { method: 'POST', body: JSON.stringify({ version: 1 }) }),
-    )
-    expect(crossTenantNoShow.status).toBe(403)
+    const stores = (await res.json()) as Array<{ name: string }>
+    expect(stores.map((s) => s.name)).toEqual(['A 店'])
+  })
 
-    const spoofedUpdate = await SELF.fetch(
-      `${BASE}/api/staff/stores/${ownerStore.id}`,
-      auth(ownerToken, {
-        method: 'PATCH',
-        body: JSON.stringify({ organizationId: victim, name: 'Updated owner store' }),
+  it('担当店舗の同期に他テナントの id を混ぜても、その organizationId のまま隔離される', async () => {
+    const [a, b] = [orgId(), orgId()]
+    const ta = await tokenFor(a)
+    await tokenFor(b)
+    const storeOfB = await seedStore(b, 'B 店', `b-${crypto.randomUUID().slice(0, 8)}`)
+
+    const res = await SELF.fetch(`${BASE}/api/internal/store-memberships/sync`, {
+      method: 'POST',
+      headers: INTERNAL_HEADERS,
+      body: JSON.stringify({
+        id: crypto.randomUUID(),
+        organizationId: b,
+        storeId: storeOfB,
+        userId: 'user-1',
+        permissions: ['store.read'],
+        createdAt: NOW,
       }),
-    )
-    // StorePatch is strict: an organizationId supplied by the caller is
-    // rejected before the write, rather than being used as an authorization
-    // input. Either behavior prevents tenant crossing; 400 is the API's
-    // documented unknown-key response.
-    expect(spoofedUpdate.status).toBe(400)
-    const unchanged = await SELF.fetch(
-      `${BASE}/api/staff/stores/${ownerStore.id}`,
-      auth(ownerToken),
-    )
-    await expect(unchanged.json()).resolves.toMatchObject({
-      organizationId: owner,
-      name: ownerStore.name,
     })
+    expect(res.status).toBe(200)
+    // A のトークンでは B の店舗は依然として見えない
+    expect((await listStores(ta)).stores).toEqual([])
+  })
+})
 
-    const update = await SELF.fetch(
-      `${BASE}/api/staff/stores/${ownerStore.id}`,
-      auth(ownerToken, {
-        method: 'PATCH',
-        body: JSON.stringify({ name: 'Updated owner store' }),
-      }),
-    )
-    expect(update.status).toBe(200)
-    await expect(update.json()).resolves.toMatchObject({
-      organizationId: owner,
-      name: 'Updated owner store',
-    })
-    const keepActive = await SELF.fetch(
-      `${BASE}/api/staff/stores/${ownerStore.id}`,
-      auth(ownerToken, { method: 'PATCH', body: JSON.stringify({ isActive: true }) }),
-    )
-    expect(keepActive.status).toBe(200)
-    const deactivate = await SELF.fetch(
-      `${BASE}/api/staff/stores/${ownerStore.id}`,
-      auth(ownerToken, { method: 'PATCH', body: JSON.stringify({ isActive: false }) }),
-    )
-    expect(deactivate.status).toBe(200)
-    await expect(deactivate.json()).resolves.toMatchObject({ isActive: false })
+describe('組織の同期状態による遷移', () => {
+  it('未同期は 503（再試行できる）、同期後は 200、無効化で 403、再有効化で 200 に戻る', async () => {
+    const org = orgId()
+    // dev グラントを使わず、同期行が無い状態のトークンを作る
+    const token = await tokenFor(orgId()).then(() => tokenFor(org))
+    // dev グラントは同期行を作ってしまうので、いったん消してから未同期を確かめる
+    await env.DB.prepare('DELETE FROM organizations WHERE id = ?').bind(org).run()
 
-    const victimToken = await tokenFor(victim, 'admin')
-    const victimStores = await SELF.fetch(`${BASE}/api/staff/stores`, auth(victimToken))
-    await expect(victimStores.json()).resolves.toEqual([
-      expect.objectContaining({ id: victimStore.id, organizationId: victim }),
-    ])
+    expect((await listStores(token)).status).toBe(503)
+
+    expect((await syncOrganization({ id: org, revision: 1 })).status).toBe(200)
+    expect((await listStores(token)).status).toBe(200)
+
+    expect((await syncOrganization({ id: org, isDisabled: true, revision: 2 })).status).toBe(200)
+    expect((await listStores(token)).status).toBe(403)
+
+    expect((await syncOrganization({ id: org, isDisabled: false, revision: 3 })).status).toBe(200)
+    expect((await listStores(token)).status).toBe(200)
   })
 
-  it('requires a membership permission for staff and does not leak a forbidden store', async () => {
-    const org = uuid()
-    await syncOrganization(org)
-    const store = {
-      id: uuid(),
-      organizationId: org,
-      name: 'Restricted store',
-      slug: `restricted-${uuid()}`,
-    }
-    await syncStore(store)
-    const subject = uuid()
-    const token = await signAccessToken(
-      { sub: subject, org, email: `${uuid()}@example.test`, role: 'staff' },
-      JWT_SECRET,
-    )
-    await syncMembership({
-      id: uuid(),
-      organizationId: org,
-      storeId: store.id,
-      userId: subject,
-      permissions: [],
+  it('未同期の 503 と 無効化の 403 は取り違えない', async () => {
+    const org = orgId()
+    const token = await tokenFor(org)
+    await env.DB.prepare('DELETE FROM organizations WHERE id = ?').bind(org).run()
+    const missing = await SELF.fetch(`${BASE}/api/staff/stores`, { headers: authed(token) })
+    expect(missing.status).toBe(503)
+    expect(await missing.json()).toMatchObject({ error: 'not_synced' })
+
+    await syncOrganization({ id: org, isDisabled: true, revision: 1 })
+    const disabled = await SELF.fetch(`${BASE}/api/staff/stores`, { headers: authed(token) })
+    expect(disabled.status).toBe(403)
+    expect(await disabled.json()).toMatchObject({ error: 'org_disabled' })
+  })
+})
+
+describe('内部 API は組織を越えて配れるが、業務 API は越えられない', () => {
+  it('共有鍵の一覧は全組織を返す（admin の日次照合のため）', async () => {
+    const org = orgId()
+    await syncOrganization({ id: org, name: 'EYEX 照合用', revision: 1 })
+    const res = await SELF.fetch(`${BASE}/api/internal/organizations`, {
+      headers: INTERNAL_HEADERS,
     })
-
-    const list = await SELF.fetch(`${BASE}/api/staff/stores`, auth(token))
-    expect(list.status).toBe(200)
-    await expect(list.json()).resolves.toEqual([])
-
-    const detail = await SELF.fetch(`${BASE}/api/staff/stores/${store.id}`, auth(token))
-    expect(detail.status).toBe(403)
-
-    const forbiddenUpdate = await SELF.fetch(
-      `${BASE}/api/staff/stores/${store.id}`,
-      auth(token, { method: 'PATCH', body: JSON.stringify({ name: 'must not update' }) }),
-    )
-    expect(forbiddenUpdate.status).toBe(403)
-
-    await env.DB.prepare("UPDATE store_memberships SET permissions = '{not-json' WHERE user_id = ?")
-      .bind(subject)
-      .run()
-    const malformed = await SELF.fetch(`${BASE}/api/staff/stores`, auth(token))
-    expect(malformed.status).toBe(200)
-    await expect(malformed.json()).resolves.toEqual([])
-
-    await env.DB.prepare(
-      'UPDATE store_memberships SET permissions = \'["unknown.permission"]\' WHERE user_id = ?',
-    )
-      .bind(subject)
-      .run()
-    const unknownPermission = await SELF.fetch(`${BASE}/api/staff/stores`, auth(token))
-    expect(unknownPermission.status).toBe(200)
-    await expect(unknownPermission.json()).resolves.toEqual([])
+    const rows = (await res.json()) as Array<{ id: string }>
+    expect(rows.some((r) => r.id === org)).toBe(true)
   })
 
-  it('upserts a membership by organization, store, and user instead of duplicating it when its source id changes', async () => {
-    const organizationId = uuid()
-    await syncOrganization(organizationId)
-    const store = {
-      id: uuid(),
-      organizationId,
-      name: 'Membership store',
-      slug: `membership-${uuid()}`,
-    }
-    await syncStore(store)
-    const userId = uuid()
-
-    await syncMembership({
-      id: uuid(),
-      organizationId,
-      storeId: store.id,
-      userId,
-      permissions: ['store.read'],
+  it('テナントのトークンではその一覧に触れない', async () => {
+    const token = await tokenFor(orgId())
+    const res = await SELF.fetch(`${BASE}/api/internal/organizations`, {
+      headers: { ...JSON_HEADERS, authorization: `Bearer ${token}` },
     })
-    await syncMembership({
-      id: uuid(),
-      organizationId,
-      storeId: store.id,
-      userId,
-      permissions: ['store.manage'],
-    })
-
-    const rows = await env.DB.prepare(
-      `SELECT id, permissions
-       FROM store_memberships
-       WHERE organization_id = ? AND store_id = ? AND user_id = ?`,
-    )
-      .bind(organizationId, store.id, userId)
-      .all<{ id: string; permissions: string }>()
-    expect(rows.results).toHaveLength(1)
-    expect(rows.results[0]?.permissions).toBe('["store.manage"]')
+    expect(res.status).toBe(401)
   })
 })

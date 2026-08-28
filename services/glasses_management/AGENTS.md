@@ -1,43 +1,70 @@
-# glasses_management エージェント指示
+# services/glasses_management — EYEX予約
 
-このファイルはルート `AGENTS.md` を継承し、このサービス固有の規約を定める。
+ルート [`AGENTS.md`](../../AGENTS.md) の規約に加えて、このサービスで作業するときはこれを守る。
 
-## 役割
+## このサービスが持っているもの
 
-`glasses_management` は EYEX 予約ドメインの同一オリジン SPA/API Worker と専用 D1/R2/KV
-を所有する。`admin` が認証・組織の正であり、組織同期は canonical id と単調増加 revision をそのまま受ける。到着順が逆転した古い snapshot は適用しない。認証プロキシも admin 境界を利用する。
-旧予約モックは廃止済みであり、このサービスへコードを持ち込まない。
+眼鏡店チェーン **EYEX** の予約・来店受付・顧客・録音・設定・分析と、お客様向け Web 予約。
+1 Worker が **業務 SPA（iPad 横向き）+ お客様向け Web 予約（スマートフォン）+ API** を同一オリジンで配る。
 
-## 構成と入口
+| 種別 | binding | 実体 |
+|---|---|---|
+| D1 | `DB` | `glasses_management`（このドメインの正本） |
+| KV | `SHORT_LIVED` | 冪等キー・短命な下書き。**正本にしない** |
+| R2 | `RECORDINGS` | 受付録音の本体。**非公開。ダウンロード URL を出さない** |
+| service | `NOTIFIER` | 予約確定メール等の同期送信（Queues は使わない） |
 
-| 場所 | 責務 |
+**持っていないもの**: 利用者・組織・認証（`admin` が正本）、メール配送そのもの（`notifier`）。
+admin からは service binding で `POST /api/internal/organizations/sync` と
+`POST /api/internal/store-memberships/sync` に押し込まれる。**cross-D1 JOIN はしない。**
+
+## 設計の正本
+
+| 何を決めるとき | 読むもの |
 |---|---|
-| `src/worker/index.ts` | Hono route chain と公開 health endpoint |
-| `src/web/main.tsx` / `App.tsx` | 同一 Worker から配信する React SPA shell |
-| `test/` | Workers integration tests |
-| `wrangler.jsonc` | D1、R2 (`RECORDINGS`)、KV (`SHORT_LIVED`)、assets 設定 |
+| 見た目 | `docs/frontend/mockups/eyex/`（68画面の HTML と PNG）。**PNG を実際に見てから書く** |
+| 色・寸法 | `packages/ui/src/theme.css` のセマンティックトークンだけ。モックの生 hex を貼らない |
+| 業務要件 | `specs/glasses_management/design/01-requirements.md` |
+| 状態遷移 | `design/02-domain-model.md` |
+| テーブル | `design/03-data-model.md` |
+| API | `design/04-api.md` |
+| 画面と遷移 | `design/05-screen-flow.md` |
+| ユースケース | `design/06-use-cases.md` |
+| 非機能 | `design/07-nfr.md` |
+| 作業分解 | `docs/superpowers/plans/2026-08-28-glasses-management-rebuild.md` |
 
-## 非交渉の境界
+## このサービスで必ず書くテスト
 
-- 業務行は JWT の `org` による `organization_id` scope を必ず適用する（後続 API 含む）。
-- API 契約は `packages/contracts/src/glasses_management.ts` の Zod 単一ソースとする。
-- `admin` が組織・認証の源泉であり、このサービスは同期コピーだけを持つ。組織 ID は admin の canonical 形式（非 UUID を含む）を保持する。
-- 録音本体は非公開 R2、短期状態は `SHORT_LIVED` KV に置く。通知はこのタスクでは実装しない。
-- SPA/API は同一 origin を維持し、CORS や別 API origin を追加しない。
-- 色、font、radius は `@app/ui` と `theme.css` のセマンティック token 経由だけを使う。
+| 変えたもの | 足すテスト |
+|---|---|
+| ルート | `test/permissions.test.ts` の表に 1 行（未認証 / staff / admin / 期限切れ / 別 secret / 未知パス） |
+| ドメインのクエリ・書き込み | `test/tenant-isolation.test.ts`（3 テナント・偽装入力・未同期 503 と無効化 403 の遷移） |
+| Zod 契約 | `packages/contracts/test/glasses_management.contract.test.ts`（境界値と unknown key） |
+| スキーマ | `test/schema.test.ts`（index の名前と対象列・FK が無いこと）→ `db:generate` |
+| 空き枠・保持期限・JST の判定 | `test/*.time.test.ts`。**時刻は引数で注入する。`Date.now()` に依存したテストを書かない** |
+| Worker のフロー | `test/*.integration.test.ts`（D1 の結果・status・notifier の成功と失敗） |
+| 画面 | `src/web/**/*.test.tsx` を**先に失敗させてから**実装し、`test:web` と e2e を回す |
+| Approved な UC/AC | `e2e/*.spec.ts` に `// @e2e-covers <ID>` を 1 対 1 で付ける |
 
-## コマンド
+カバレッジ下限: Worker 側 80%（4 指標）、web 側 60%（4 指標）。**閾値を下げたり広く除外したりしない。**
+
+## やってはいけない
+
+- 全 D1 クエリから `organization_id` のスコープを外す。店舗業務は `store_id` も併せて絞る。
+- 他店舗の空き枠を横断検索・一覧比較・候補提示する（店舗を切り替えてから操作する設計）。
+- 録音本体のダウンロード URL を出す。R2 は非公開のまま Worker が仲介する。
+- 最低保持期間（成立予約 30 日 / 破棄受付 24 時間）より前に録音を消す。
+- 監査イベントを更新・削除する（追記専用）。
+- Queues / Durable Objects など Workers Paid が要るものを設計に入れる。
+- Tailwind の既定パレット（`bg-blue-500`）や任意値（`p-[13px]`・`text-[#hex]`）を書く。
+
+## よく使うコマンド
 
 ```sh
-pnpm --filter @app/glasses_management dev
-pnpm --filter @app/glasses_management build
-pnpm --filter @app/glasses_management typecheck
-pnpm --filter @app/glasses_management test
-pnpm --filter @app/glasses_management test:web
-pnpm --filter @app/glasses_management test:all
-pnpm --filter @app/glasses_management cf-typegen
+make dev/glasses_management                      # :5175 で SPA + API
+pnpm --filter @app/glasses_management db:generate      # スキーマ → migrations
+pnpm --filter @app/glasses_management db:migrate:local
+pnpm --filter @app/glasses_management test:all   # Worker + web
+pnpm --filter @app/glasses_management e2e        # Playwright（UI を変えたら必ず）
+pnpm check                                       # 完了の定義
 ```
-
-新しい route・業務挙動は、production code より先に対応テストを追加する。Worker coverage は
-各指標 80%以上、web coverage は各指標 60%以上を維持する。secret、deploy、push、commit は
-ルート規約に従う。

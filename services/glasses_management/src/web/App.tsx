@@ -1,465 +1,216 @@
-import { type ReactNode, useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import {
-  barFor,
-  barOverlay,
-  barPrimaryAction,
-  screenSections,
-  sidebarCurrentScreen,
-  sidebarFor,
-} from './app-chrome'
-import { AppBar, BarButton, BarPush, PlainBar, Screen, Wordmark } from './design/chrome'
-import { Action, SearchField } from './design/controls'
-import { SwitchOption, SwitchSheet } from './design/dialogs'
-import { ExceptionContent, FullScreenState } from './design/layouts'
-import { FailureNotice } from './design/notices'
-import {
-  AppSidebar,
-  SidebarGroup,
-  SidebarItem,
-  SidebarSection,
-  SidebarSections,
-} from './design/sidebar'
-import { Card } from './design/surfaces'
-import { bindSharedTerminalLifecycle, type createSharedTerminalController } from './shared-terminal'
-import type { createStaffNavigation, StaffLocation } from './staff-navigation'
-import {
-  type createStoreSwitchController,
-  filterStores,
-  type SelectedStore,
-  storeSwitchOptions,
-} from './store-switch'
+import type { Store } from '@app/contracts'
+import { auth } from '@app/shared'
+import { Button, Field, focusRing, focusRingOnPine, Notice, TextInput } from '@app/ui'
+import { type FormEvent, useCallback, useEffect, useState } from 'react'
+import { client } from './client'
+import { AppShell } from './shell/AppShell'
+import { RAIL_BY_DEFAULT } from './shell/destinations'
 
-/* 承認済みモックの `.bar button` — 透明・白文字・44px 角丸 8px。 */
+/*
+ * P0（基盤）の画面。承認済みモック docs/frontend/mockups/eyex/images/HOME.png の
+ * 骨格 —— 上のバー・左サイドバー・主操作 2 つ・下辺の日付の帯 —— をここで確立し、
+ * 以降のフェーズがこの器の中に画面を足していく。
+ *
+ * 引き算の決め（mockups/eyex/README.md）: 主役は 1 画面に 1 つ、白い箱は 3 枚まで、
+ * 説明文は 2 つまで。空いた場所を埋めるために要素を足さない。
+ */
 
-type SharedTerminalController = ReturnType<typeof createSharedTerminalController>
-const inactiveSharedTerminalSnapshot = { status: 'inactive' as const, dailyState: {} }
-
-type AppProps = {
-  sharedTerminalController?: SharedTerminalController
-  /*
-   * 例外・回復の面が呼ぶ出口。App は「どう見せるか」だけを持ち、再開・個人モード・
-   * 再登録が何をするかは呼び出し側の責務なので、注入で受ける。
-   */
-  onResumeSharedSession?: () => void
-  onStartPersonalMode?: () => void
-  onReregisterTerminal?: () => void
-  storeSwitchController?: ReturnType<typeof createStoreSwitchController>
-  accessibleStores?: SelectedStore[]
-  navigation?: ReturnType<typeof createStaffNavigation>
-  /** JST の当日。予約台帳タブが開く日をここから受け取る (時刻は注入する)。 */
-  today?: string
-  /**
-   * ヘッダーの件数 (UC-EYEX-007)。お知らせとアラートは決して合算しない。通知 API
-   * を読み終えるまでは undefined。0 件と推測せず、件数そのものを出さない
-   * （「未取得」と書くとモックに無い言葉が増え、0 件との読み分けも増える）。
-   */
-  notifications?: { unreadAnnouncements: number; openAlerts: number }
-  /**
-   * Rendering the screens is injected rather than imported so the workspace
-   * chrome — header, store picker, discard confirmation — can be tested without
-   * mounting every business screen and its API calls.
-   */
-  renderScreen?: (location: StaffLocation) => ReactNode
+export function App() {
+  const [org, setOrg] = useState(() => auth.getOrganization())
+  return org ? (
+    <Workspace
+      org={org}
+      onSignOut={() => {
+        auth.logout()
+        setOrg(null)
+      }}
+    />
+  ) : (
+    <StartWork onStarted={setOrg} />
+  )
 }
 
-export function App({
-  sharedTerminalController,
-  onResumeSharedSession,
-  onStartPersonalMode,
-  onReregisterTerminal,
-  storeSwitchController,
-  accessibleStores = [],
-  navigation,
-  today,
-  notifications,
-  renderScreen,
-}: AppProps) {
-  const snapshot = useSyncExternalStore(
-    (listener) => sharedTerminalController?.subscribe(listener) ?? (() => {}),
-    () => sharedTerminalController?.snapshot() ?? inactiveSharedTerminalSnapshot,
-    () => inactiveSharedTerminalSnapshot,
-  )
-  useEffect(() => {
-    if (!sharedTerminalController) return undefined
-    return bindSharedTerminalLifecycle(sharedTerminalController, document, window)
-  }, [sharedTerminalController])
-  const storeSnapshot = useSyncExternalStore(
-    (listener) => storeSwitchController?.subscribe(listener) ?? (() => {}),
-    () => storeSwitchController?.snapshot(),
-    () => undefined,
-  )
-  const location = useSyncExternalStore(
-    (listener) => navigation?.subscribe(listener) ?? (() => {}),
-    () => navigation?.snapshot(),
-    () => undefined,
-  )
-  /* 面が書いたバーの上書き（予約フローのチップと副題）。 */
-  /* 開いている面が書いた節。柱がその面の行き先の下へ入れる。 */
-  const sections = useSyncExternalStore(
-    screenSections.subscribe,
-    screenSections.snapshot,
-    screenSections.snapshot,
-  )
-  const overlay = useSyncExternalStore(
-    barOverlay.subscribe,
-    barOverlay.snapshot,
-    barOverlay.snapshot,
-  )
-  const [storePickerOpen, setStorePickerOpen] = useState(false)
-  /* 切替シートの絞り込み。シートを閉じるたびに捨てる（前回の入力を残さない）。 */
-  const [storeQuery, setStoreQuery] = useState('')
-  const [discardConfirmation, setDiscardConfirmation] = useState<
-    { fromStore: string; toStore: string } | undefined
-  >()
-  const [pendingAudit, setPendingAudit] = useState<
-    { fromStoreId: string; toStoreId: string } | undefined
-  >()
-  const [switchError, setSwitchError] = useState<string | undefined>()
-  const [isSwitching, setIsSwitching] = useState(false)
-  const switchInFlight = useRef(false)
+/** 業務開始。実運用では admin の認証に差し替わる（いまは dev グラント）。 */
+function StartWork({ onStarted }: { onStarted: (org: string) => void }) {
+  const [orgId, setOrgId] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
 
-  if (snapshot.status === 'locked' || snapshot.status === 'revoked') {
-    const revoked = snapshot.status === 'revoked'
-    /*
-     * 承認済みモック `exception-states-approved.html#shared-lock` のバーは、
-     * 「どの店舗の、どの端末か」を名乗る。失効した端末は店舗も端末名も信じられ
-     * ないので、モック `#session-revoked` どおり「共有iPad」とだけ言う。
-     */
-    const named = [storeSnapshot?.selectedStore.name, snapshot.terminalName]
-      .filter((part): part is string => part !== undefined && part !== '')
-      .join(' ')
-    const subtitle = revoked || named === '' ? '共有iPad' : `${named} · 完全共有`
-    // 無操作の秒数は端末の設定値。何分で伏せたのかを本文で名乗る。
-    const idleMinutes = Math.round((snapshot.idleTimeoutSeconds ?? 0) / 60)
-    return (
-      <Screen>
-        <PlainBar subtitle={subtitle} />
-        {revoked ? (
-          <FullScreenState glyph="!" title="この端末の利用は停止されています">
-            <p>
-              共有セッションが管理者によって失効されました。未送信の顧客情報や録音は送信されません。
-            </p>
-            {/* 失効した端末に残る道は再登録の 1 つだけ。業務へ戻る口は出さない。 */}
-            <Action size="roomy" variant="primary" onClick={onReregisterTerminal}>
-              端末を再登録する
-            </Action>
-          </FullScreenState>
-        ) : (
-          <FullScreenState glyph="●" title="顧客情報を隠しました">
-            <p>{`画面が非表示になったか、${idleMinutes}分間操作がなかったためロックしました。`}</p>
-            <Action size="roomy" variant="primary" onClick={onResumeSharedSession}>
-              業務を再開する
-            </Action>
-            {/* 個人モードは 1 段離す。共有端末では再開が既定で、これは選ぶもの。 */}
-            <p>
-              <Action size="roomy" onClick={onStartPersonalMode}>
-                個人モードで開始
-              </Action>
-            </p>
-          </FullScreenState>
-        )}
-      </Screen>
-    )
+  async function onSubmit(e: FormEvent) {
+    e.preventDefault()
+    if (!orgId.trim()) {
+      setError('お店のコードを入れてください。')
+      return
+    }
+    setBusy(true)
+    setError(null)
+    try {
+      await auth.login(orgId.trim())
+      onStarted(orgId.trim())
+    } catch {
+      setError('業務を始められませんでした。コードを確かめて、もう一度お試しください。')
+    } finally {
+      setBusy(false)
+    }
   }
-  if (storeSnapshot && storeSwitchController) {
-    const recordThenCommit = async (_fromStoreId: string, store: SelectedStore) => {
-      if (switchInFlight.current) return
-      switchInFlight.current = true
-      setIsSwitching(true)
-      try {
-        if (!(await storeSwitchController.switchAfterAudit(store)))
-          throw new Error('audit rejected')
-        // The previous store's screen and its parameters die with the switch;
-        // nothing crosses the store boundary (UC-EYEX-070, AC-EYEX-30).
-        navigation?.resetForStoreSwitch()
-        setStorePickerOpen(false)
-        setSwitchError(undefined)
-      } catch {
-        setSwitchError('店舗を切り替えられませんでした。通信を確認してもう一度お試しください。')
-      } finally {
-        switchInFlight.current = false
-        setIsSwitching(false)
-      }
-    }
-    const selectStore = (store: SelectedStore) => {
-      const fromStoreId = storeSnapshot.selectedStore.id
-      const result = storeSwitchController.prepareSwitch(store)
-      if (result.kind === 'confirm_discard') {
-        setDiscardConfirmation(result)
-        setPendingAudit({ fromStoreId, toStoreId: store.id })
-        setStorePickerOpen(false)
-      } else {
-        void recordThenCommit(fromStoreId, store)
-      }
-    }
-    const commitDiscard = () => {
-      if (pendingAudit) {
-        const nextStore = accessibleStores.find((store) => store.id === pendingAudit.toStoreId)
-        if (nextStore) void recordThenCommit(pendingAudit.fromStoreId, nextStore)
-      }
-      setDiscardConfirmation(undefined)
-      setPendingAudit(undefined)
-    }
-    /* 緑バーの中身は面ごとに違う。承認済みモックの実測は app-chrome が持つ。 */
-    const bar = barFor(location ?? { screen: 'home' }, storeSnapshot.selectedStore)
-    /*
-     * 予約フローは電話を受けている最中の面なので、別の面への動線を置かない
-     * （途中で移ると入力が消える）。ホームは主操作 2 枚を大きく見せる面で、
-     * モックどおり柱を持たない。
-     */
-    const showSidebar = location !== undefined && !['home', 'booking'].includes(location.screen)
-    return (
-      /* The workspace chrome is a banner landmark, not part of the screen's
-         main content: assistive tech and tests both need to tell "which store /
-         which admin surface" apart from "what this screen is about".
 
-         承認済みモック (`staff-approved.html` の `.bar` /
-         `HOME-DEFAULT--default--ipad-landscape.png` /
-         `LEDGER-DAY--walkin-now--ipad-landscape.png`) をそのまま再現する:
-         76px の pine バーは 1 本だけで、タブも主操作も副題も面ごとに入れ替わる
-         (`app-chrome.ts`)。2 本目の緑帯は作らない。 */
-      <Screen>
-        <AppBar variant={bar.kind === 'home' ? 'booking' : 'workspace'}>
-          {/* モックでは飾りに見えるが、店舗切替の入口はここしかない。 */}
-          <Wordmark
-            variant={bar.kind === 'home' ? 'booking' : 'workspace'}
-            /*
-             * 破棄確認の間は、どの店舗の入力を抱えたまま止まっているのかを
-             * 帯が名乗る（確認は業務クロムの上に重なるだけで、帯は残る）。
-             */
-            subtitle={
-              discardConfirmation
-                ? `${discardConfirmation.fromStore} · 入力中の予約あり`
-                : (overlay.subtitle ?? bar.subtitle)
-            }
-            onClick={() => {
-              setStoreQuery('')
-              setStorePickerOpen((open) => !open)
-            }}
-          />
-          {overlay.chip && (
-            <BarPush variant="booking">
-              <p className="rounded-ctl border border-on-pine px-4 py-2 font-bold font-sans text-body text-on-pine">
-                {overlay.chip}
-              </p>
-            </BarPush>
-          )}
-          {bar.primary && (
-            <BarPush>
-              <BarButton
-                on
-                onClick={() => {
-                  /* 面がその場での行いを書いているなら、移動ではなくそれを行う。 */
-                  const act = barPrimaryAction.snapshot()
-                  if (act) {
-                    act()
-                    return
-                  }
-                  navigation?.navigate(bar.primary?.to ?? { screen: 'home' })
-                }}
-              >
-                {bar.primary.label}
-              </BarButton>
-            </BarPush>
-          )}
-          {bar.kind === 'home' && (
-            <BarPush variant="booking">
-              <BarButton
-                outline
-                variant="booking"
-                onClick={() => navigation?.navigate({ screen: 'alerts' })}
-              >
-                {notifications ? `お知らせ ${notifications.unreadAnnouncements}件` : 'お知らせ'}
-              </BarButton>
-              <BarButton
-                outline
-                variant="booking"
-                onClick={() => navigation?.navigate({ screen: 'alerts' })}
-              >
-                {notifications ? `アラート ${notifications.openAlerts}件` : 'アラート'}
-              </BarButton>
-              <BarButton
-                outline
-                variant="booking"
-                onClick={() => navigation?.navigate({ screen: 'settings' })}
-              >
-                設定
-              </BarButton>
-            </BarPush>
-          )}
-        </AppBar>
-        {/*
-         * バーの下は「250px の柱 + 本文」の 2 列。柱は全画面共通で、行き先と、
-         * 開いている面の節を並べる。予約フローと例外の面は業務から離れる面
-         * なので柱を出さない（受付の途中で別の面へ移す動線を置かない）。
-         */}
-        <div className="flex min-h-0 flex-1">
-          {showSidebar && (
-            <AppSidebar>
-              {sidebarFor(today).map((group) => (
-                <SidebarGroup key={group.label} label={group.label}>
-                  {group.items.map((item) => {
-                    /* 柱に行き先を持たない面（注意事項の確認・予約の詳細）でも、
-                       親の行き先が現在地として光る。 */
-                    const current =
-                      location !== undefined && item.to.screen === sidebarCurrentScreen(location)
-                    return (
-                      <div key={item.label}>
-                        <SidebarItem
-                          current={current}
-                          onClick={() => navigation?.navigate(item.to)}
-                        >
-                          {item.label}
-                        </SidebarItem>
-                        {current && sections.length > 0 && (
-                          <SidebarSections>
-                            {sections.map((section) => (
-                              <SidebarSection
-                                key={section.label}
-                                current={section.current === true}
-                                onClick={
-                                  section.to !== undefined
-                                    ? () => navigation?.navigate(section.to as StaffLocation)
-                                    : section.selectable
-                                      ? () => screenSections.select(section.label)
-                                      : undefined
-                                }
-                                name={section.name}
-                              >
-                                {section.label}
-                              </SidebarSection>
-                            ))}
-                          </SidebarSections>
-                        )}
-                      </div>
-                    )
-                  })}
-                </SidebarGroup>
-              ))}
-            </AppSidebar>
-          )}
-          {/*
-           * 面は自分で列を作る（`Workspace` の 390px レールなど）。ここを縦の
-           * flex にしておかないと `flex-1` が効かず、地色の列がバーの下いっぱいに
-           * 伸びずに途中で切れる。
-           */}
-          <div className="flex min-h-0 flex-1 flex-col overflow-auto">
-            {switchError && (
-              <div className="p-5.5">
-                <FailureNotice>{switchError}</FailureNotice>
-              </div>
-            )}
-            {location && renderScreen ? (
-              renderScreen(location)
-            ) : (
-              <section className="p-5.5 font-sans text-body text-ink">
-                <h1>{`${storeSnapshot.selectedStore.name}の予約台帳`}</h1>
-                <Card className="mt-4.5">
-                  店舗を切り替えると、検索条件・選択中の予約・入力中の内容は引き継ぎません。
-                </Card>
-              </section>
-            )}
-          </div>
-        </div>
-        {storePickerOpen && (
-          /*
-           * 承認済みモック `store-switch-approved.html` の切替シート。幕は台帳を
-           * 消さず上に掛かるだけで、左へ寄せて「今どの店舗を見ていたか」を
-           * 残したまま切り替えさせる。
-           */
-          <SwitchSheet
-            title="作業する店舗を切り替える"
-            titleId="store-switch-title"
-            search={
-              <SearchField
-                label="店舗名で検索"
-                placeholder="店舗名で検索"
-                value={storeQuery}
-                onChange={setStoreQuery}
-              />
-            }
-            boundary="他店舗の空き枠はここに表示しません。切替後、その店舗の予約台帳で確認してください。"
-          >
-            {storeSwitchOptions(
-              filterStores(accessibleStores, storeQuery),
-              storeSnapshot.selectedStore.id,
-            ).map((option) => (
-              <SwitchOption
-                key={option.store.id}
-                name={option.store.name}
-                note={option.note}
-                state={option.state}
-                selected={option.selected}
-                suspended={option.suspended}
-                disabled={isSwitching}
-                onClick={() => selectStore(option.store)}
-              />
-            ))}
-          </SwitchSheet>
-        )}
-        {discardConfirmation && (
-          /*
-           * 承認済みモック `exception-states-approved.html#unsaved-store-switch`。
-           *
-           * 業務クロムごと差し替えず、その上に重ねる。差し替えると入力中の面
-           * (`BookingFlow`) が unmount され、この確認が守ると宣言した下書きが、
-           * 確認を出しただけで消えてしまう（さらに「未入力」に戻るので、以後の
-           * 切替では確認そのものが出なくなる）。判断が済むまで手前は塞ぐので、
-           * 幕は全面に敷き、店舗ピッカーは開く時点で閉じてある。
-           */
-          <div className="fixed inset-0 z-50 overflow-auto bg-paper">
-            <ExceptionContent dialogLabelledBy="unsaved-store-switch-title">
-              <h1 id="unsaved-store-switch-title">店舗を切り替える前に確認してください</h1>
-              {/*
-               * 失敗ではなく警告なので琥珀。design/layouts の Panel と同じ見た目だが、
-               * 読み上げでは「注意書き」と分かる必要があるので role を持たせる。
-               */}
-              <section
-                role="note"
-                aria-label={`${discardConfirmation.fromStore}で入力中の予約があります`}
-                className="mt-4.5 rounded-panel border border-amber-line bg-amber-soft p-6"
-              >
-                <b>{`${discardConfirmation.fromStore}で入力中の予約があります`}</b>
-                <p>{`入力内容と録音は${discardConfirmation.toStore}へ持ち越しません。`}</p>
-              </section>
-              <div className="mt-5 flex flex-wrap justify-end gap-3">
-                {/* 危険な方を既定にしない: 主操作は入力を守る側に置く。 */}
-                <Action
-                  size="roomy"
-                  variant="primary"
-                  onClick={() => {
-                    setDiscardConfirmation(undefined)
-                    setPendingAudit(undefined)
-                  }}
-                >
-                  {`${discardConfirmation.fromStore}で入力を続ける`}
-                </Action>
-                <Action
-                  size="roomy"
-                  variant="danger"
-                  disabled={isSwitching}
-                  onClick={commitDiscard}
-                >
-                  {`入力を破棄して${discardConfirmation.toStore}へ切り替える`}
-                </Action>
-              </div>
-            </ExceptionContent>
-          </div>
-        )}
-      </Screen>
-    )
-  }
-  /*
-   * 店舗も画面も注入されていないとき。業務のクロムを名乗れないので、例外・回復と
-   * 同じ全画面の姿で「まだ何も選ばれていない」ことだけを日本語で言う。英語の
-   * 開発メモを製品の面に出さない。
-   */
   return (
-    <Screen>
-      <PlainBar subtitle="店舗未選択" />
-      <FullScreenState glyph="●" title="作業する店舗が選ばれていません">
-        <p>店舗を選ぶと、その店舗の予約台帳から業務を始められます。</p>
-      </FullScreenState>
-    </Screen>
+    <main className="grid min-h-dvh place-items-center bg-paper px-6">
+      <form onSubmit={onSubmit} className="flex w-full max-w-md flex-col gap-6">
+        <div>
+          <h1 className="text-title font-bold text-ink">EYEX予約</h1>
+          <p className="mt-1 text-grid text-ink-muted">業務を始めます。</p>
+        </div>
+        <Field label="お店のコード" htmlFor="org" error={error}>
+          <TextInput
+            id="org"
+            value={orgId}
+            onChange={(e) => setOrgId(e.target.value)}
+            placeholder="例: eyex"
+            autoFocus
+          />
+        </Field>
+        <Button type="submit" disabled={busy}>
+          {busy ? '開いています…' : '業務を始める'}
+        </Button>
+      </form>
+    </main>
+  )
+}
+
+function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
+  const [current, setCurrent] = useState('home')
+  const [rail, setRail] = useState(false)
+  const [stores, setStores] = useState<Store[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    const res = await client.api.staff.stores.$get()
+    const status: number = res.status
+    if (status === 401) {
+      onSignOut()
+      return
+    }
+    if (status === 503) {
+      setError('お店の情報がまだ届いていません。しばらくしてからもう一度開いてください。')
+      return
+    }
+    if (!res.ok) {
+      setError('お店の情報を読み込めませんでした。画面を開き直してください。')
+      return
+    }
+    setStores(await res.json())
+  }, [onSignOut])
+
+  useEffect(() => {
+    load().catch(() => setError('通信できませんでした。画面を開き直してください。'))
+  }, [load])
+
+  function navigate(key: string) {
+    setCurrent(key)
+    setRail(RAIL_BY_DEFAULT.has(key))
+  }
+
+  const store = stores?.find((s) => s.isActive) ?? stores?.[0]
+
+  return (
+    <AppShell
+      storeName={store ? store.name : 'EYEX'}
+      storeSubline={current === 'home' ? '営業中　10:00–19:00' : ''}
+      current={current}
+      onNavigate={navigate}
+      rail={rail}
+      onToggleRail={() => setRail((v) => !v)}
+      terminalNote={[`${org} の端末`, '共有で使っています']}
+      barActions={
+        <button
+          type="button"
+          onClick={onSignOut}
+          className={`min-h-12 min-w-15 rounded-card px-2 text-lead font-semibold text-on-pine ${focusRingOnPine}`}
+        >
+          業務を終える
+        </button>
+      }
+    >
+      <div className="relative min-h-0 flex-1 overflow-hidden">
+        {error && (
+          <div className="px-11 pt-11">
+            <Notice>{error}</Notice>
+          </div>
+        )}
+        {current === 'home' ? (
+          <Home stores={stores} currentStoreId={store?.id} />
+        ) : (
+          <p className="p-11 text-body text-ink-muted">この画面はこれから作ります。</p>
+        )}
+      </div>
+    </AppShell>
+  )
+}
+
+function Home({ stores, currentStoreId }: { stores: Store[] | null; currentStoreId?: string }) {
+  const others = stores?.filter((s) => s.id !== currentStoreId) ?? []
+  return (
+    <div className="grid h-full content-center justify-start gap-6 pb-31 pl-11">
+      <PrimaryAction title="新しい予約を取る" note="お電話・ご来店のお客様" tone="pine" glyph="☎" />
+      <PrimaryAction
+        title="予約を変更する"
+        note="日時・内容の変更、取り消し"
+        tone="walkin"
+        glyph="✎"
+      />
+      <section aria-label="ほかのお店" className="mt-2">
+        {stores === null ? (
+          <p className="text-grid text-ink-muted">読み込んでいます…</p>
+        ) : stores.length === 0 ? (
+          <p className="text-grid text-ink-muted">お店がまだ登録されていません。</p>
+        ) : others.length > 0 ? (
+          <ul className="flex flex-wrap gap-2">
+            {others.map((s) => (
+              <li key={s.id}>
+                <button
+                  type="button"
+                  className={`min-h-11 rounded-full border border-line-strong bg-surface px-4 text-note font-semibold text-ink-muted ${focusRing}`}
+                >
+                  {s.name}へ切り替える
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </section>
+    </div>
+  )
+}
+
+function PrimaryAction({
+  title,
+  note,
+  tone,
+  glyph,
+}: {
+  title: string
+  note: string
+  tone: 'pine' | 'walkin'
+  glyph: string
+}) {
+  return (
+    <button
+      type="button"
+      className={`flex min-h-33 w-180 items-center gap-6 rounded-panel border border-line-strong bg-surface px-8 text-left ${focusRing}`}
+    >
+      <span
+        aria-hidden="true"
+        className={`grid size-16 shrink-0 place-items-center rounded-circle text-2xl text-on-pine ${
+          tone === 'pine' ? 'bg-pine' : 'bg-walkin'
+        }`}
+      >
+        {glyph}
+      </span>
+      <span>
+        <span className="block text-hero font-bold text-ink">{title}</span>
+        <span className="mt-1 block text-lead font-normal text-ink-muted">{note}</span>
+      </span>
+    </button>
   )
 }

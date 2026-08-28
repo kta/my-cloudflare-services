@@ -1,11 +1,6 @@
-# ローカル開発用の共有値。`.dev.vars` は make init が生成し、gitignore 対象です。
-# admin の INTERNAL_KEY / notifier の INTERNAL_KEY と同じ値にそろえること。
-# 本番ではリポジトリへ値を置かず、wrangler secret put で設定します。
+# ローカル開発用の dev 値。`make init` が .dev.vars にコピーする(.dev.vars は gitignore)。
+# 本番はこのファイルを使わない — `wrangler secret put` で設定する(docs/howto/deploy.md)。
 INTERNAL_KEY=dev-internal-key
-
-# admin の DOMAIN_AUTH_KEY と同じ、PIN 再認証 service binding 専用キー。
-ADMIN_DOMAIN_AUTH_KEY=dev-domain-auth-key
-
-# admin が発行した access token をこの Worker が検証するための共有署名鍵。
-# admin の JWT_SECRET と同じ値にそろえること。
 JWT_SECRET=dev-jwt-secret-change-me
+# credential 無しの dev トークングラント(/api/auth/token)を有効化。本番では設定しない(fail close)。
+AUTH_DEV_GRANT=true

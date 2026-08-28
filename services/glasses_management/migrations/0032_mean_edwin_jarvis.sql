@@ -1,1 +1,0 @@
-ALTER TABLE `shared_terminal_reauth_sessions` ADD `consumed_at` text;

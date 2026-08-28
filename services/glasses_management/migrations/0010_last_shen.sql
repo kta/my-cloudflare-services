@@ -1,1 +1,0 @@
-ALTER TABLE `reservations` ADD `progress_operation_id` text;

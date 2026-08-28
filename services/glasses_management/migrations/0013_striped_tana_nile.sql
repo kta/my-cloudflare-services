@@ -1,1 +1,0 @@
-ALTER TABLE `walkins` ADD `operation_id` text;

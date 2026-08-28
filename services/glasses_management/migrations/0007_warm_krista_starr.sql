@@ -1,1 +1,0 @@
-CREATE UNIQUE INDEX `customers_org_phone_unique_idx` ON `customers` (`organization_id`,`phone_normalized`);

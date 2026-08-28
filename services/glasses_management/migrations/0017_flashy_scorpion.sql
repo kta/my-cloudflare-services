@@ -1,1 +1,0 @@
-ALTER TABLE `shared_terminals` ADD `revocation_operation_id` text;

@@ -1,8 +1,8 @@
 import { defineConfig } from 'drizzle-kit'
 
-// Generate SQL into the same directory Wrangler applies to D1. Production
-// migrations are applied with `wrangler d1 migrations apply`, not Drizzle's
-// interactive migration runner.
+// Drizzle スキーマから ./migrations へ SQL を生成する。ここは wrangler の
+// `migrations_dir` と同じ場所で、適用は `wrangler d1 migrations apply` で行う
+// (`drizzle-kit migrate` は使わない)。local Miniflare と remote D1 が同じ列を持つ。
 export default defineConfig({
   dialect: 'sqlite',
   schema: './src/worker/db/schema.ts',

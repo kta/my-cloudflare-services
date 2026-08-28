@@ -1,1 +1,0 @@
-ALTER TABLE `web_booking_publications` ADD `public_services_json` text;
