@@ -691,3 +691,16 @@ test('公開結果は実行者と、版へ戻る 2 つの操作を持つ (承認
     ).toBe(true)
   })
 })
+
+/*
+ * 承認済みモック `#impact` は、4 枚の数 →「公開できません」→ 2 つの操作の順で
+ * 並び、競合の内訳はその下にある。内訳を操作より前に置くと、内訳が伸びたぶん
+ * 「公開する」が画面の外へ落ち、公開できるかどうかを確かめに来た人が操作に
+ * たどり着けない。
+ */
+test('公開の操作は競合の内訳より前に置く', async () => {
+  setup()
+  const publish = await screen.findByRole('button', { name: '公開する' })
+  const conflicts = await screen.findByRole('region', { name: '既存予約との競合' })
+  expect(publish.compareDocumentPosition(conflicts) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+})

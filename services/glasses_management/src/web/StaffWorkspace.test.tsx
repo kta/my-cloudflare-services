@@ -346,6 +346,12 @@ test('threads the shared-terminal id into the recording operations screen', asyn
       name: '録音運用',
     }),
   )
+  /* 録音の一覧は「保存・削除状態」の節にある（本文は選んだ節だけを見せる）。 */
+  fireEvent.click(
+    within(await screen.findByRole('navigation', { name: '画面の一覧' })).getByRole('button', {
+      name: '保存・削除状態',
+    }),
+  )
   fireEvent.click(await screen.findByRole('button', { name: '保全する' }))
   expect(await screen.findByRole('dialog')).toHaveTextContent('個人')
 })

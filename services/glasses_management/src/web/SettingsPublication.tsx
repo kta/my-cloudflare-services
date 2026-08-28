@@ -638,6 +638,38 @@ export function SettingsPublication({
                 {summary.blockedReason}
               </Preview>
             )}
+            {/*
+             * 操作は内訳より前に置く（モック `#impact` は 4 枚の数 →
+             * 「公開できません」→ 2 つの操作の順）。内訳を先にすると、内訳が
+             * 伸びたぶん「公開する」が画面の外へ落ちる。
+             */}
+            {canManage && (
+              <Actions gap={2.5} mt={4}>
+                {summary !== undefined && summary.unresolved.length > 0 && (
+                  <Action
+                    onClick={() => {
+                      const first = summary.unresolved[0]
+                      if (first === undefined) return
+                      openResolution(first.reservationId ?? '', first.message)
+                    }}
+                  >
+                    影響予約を解消
+                  </Action>
+                )}
+                <Action onClick={() => void loadImpact()}>影響を再確認</Action>
+                {/*
+                 * 押せないのは事実だが、押せない理由は上の警告面が持っている。
+                 * `aria-describedby` でその面へ結び付け、読み上げでも理由に届かせる。
+                 */}
+                <Action
+                  disabled={!canPublish}
+                  describedBy={summary?.blockedReason === undefined ? undefined : BLOCKED_REASON_ID}
+                  onClick={() => void publish()}
+                >
+                  公開する
+                </Action>
+              </Actions>
+            )}
             {summary.groups.map((group) => (
               <Preview key={group.kind} label={group.label}>
                 <b className="block">{group.label}</b>
@@ -680,34 +712,6 @@ export function SettingsPublication({
           </>
         )}
       </section>
-
-      {canManage && (
-        <Actions gap={2.5} mt={4}>
-          {summary !== undefined && summary.unresolved.length > 0 && (
-            <Action
-              onClick={() => {
-                const first = summary.unresolved[0]
-                if (first === undefined) return
-                openResolution(first.reservationId ?? '', first.message)
-              }}
-            >
-              影響予約を解消
-            </Action>
-          )}
-          <Action onClick={() => void loadImpact()}>影響を再確認</Action>
-          {/*
-           * 押せないのは事実だが、押せない理由は上の警告面が持っている。
-           * `aria-describedby` でその面へ結び付け、読み上げでも理由に届かせる。
-           */}
-          <Action
-            disabled={!canPublish}
-            describedBy={summary?.blockedReason === undefined ? undefined : BLOCKED_REASON_ID}
-            onClick={() => void publish()}
-          >
-            公開する
-          </Action>
-        </Actions>
-      )}
 
       {/* ---------------- 設定の状態と警告 ---------------- */}
       <Section label="設定の状態">

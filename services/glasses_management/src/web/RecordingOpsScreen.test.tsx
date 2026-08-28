@@ -1,5 +1,5 @@
 import type { Recording, StorePermission } from '@app/contracts'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { expect, test, vi } from 'vitest'
 import { screenSections } from './app-chrome'
 import { RecordingOpsScreen } from './RecordingOpsScreen'
@@ -108,8 +108,19 @@ function renderScreen(
 }
 
 /** UC-EYEX-154 / AC-EYEX-100 */
+/*
+ * 録音の一覧は「保存・削除状態」の節にある。本文は選んだ節のものだけを見せる
+ * ので、一覧を触るテストはここを通ってから始める（柱が押したときと同じ口）。
+ */
+function openList() {
+  act(() => {
+    screenSections.select('保存・削除状態')
+  })
+}
+
 test('保存中・失敗・保全中・削除予定・削除済みを区別して並べる', async () => {
   renderScreen(defaultRoutes([stored, failed, held]))
+  openList()
   for (const label of ['保存中', '保存済み', '失敗', '保全中', '削除予定', '削除済み']) {
     expect(await screen.findByRole('button', { name: label })).toBeInTheDocument()
   }
@@ -119,6 +130,7 @@ test('保存中・失敗・保全中・削除予定・削除済みを区別し�
 /** UC-EYEX-154 / AC-EYEX-100 */
 test('区分を選ぶとその状態だけを取得しなおす', async () => {
   const { calls } = renderScreen(defaultRoutes([stored, failed, held]))
+  openList()
   await screen.findByRole('button', { name: '失敗' })
   fireEvent.click(screen.getByRole('button', { name: '失敗' }))
   await waitFor(() => {
@@ -129,6 +141,7 @@ test('区分を選ぶとその状態だけを取得しなおす', async () => {
 /** AC-EYEX-100 */
 test('再試行できるのは失敗した録音だけ', async () => {
   const { calls } = renderScreen(defaultRoutes([stored, failed, held]))
+  openList()
   const failedRow = await screen.findByTestId(`recording-${FAILED_ID}`)
   expect(
     within(await screen.findByTestId(`recording-${STORED_ID}`)).queryByRole('button', {
@@ -155,6 +168,7 @@ test('再試行できるのは失敗した録音だけ', async () => {
 /** UC-EYEX-037 / AC-EYEX-15 */
 test('録音日時・録音者・長さを示し、再生・一時停止・シークができる', async () => {
   renderScreen(defaultRoutes([stored]))
+  openList()
   fireEvent.click(
     within(await screen.findByTestId(`recording-${STORED_ID}`)).getByRole('button', {
       name: '再生する',
@@ -172,6 +186,7 @@ test('録音日時・録音者・長さを示し、再生・一時停止・シ�
 /** UC-EYEX-129 / AC-EYEX-79 */
 test('画面のどこにもダウンロード操作を出さない', async () => {
   renderScreen(defaultRoutes([stored, failed, held]))
+  openList()
   fireEvent.click(
     within(await screen.findByTestId(`recording-${STORED_ID}`)).getByRole('button', {
       name: '再生する',
@@ -189,6 +204,7 @@ test('画面のどこにもダウンロード操作を出さない', async () =>
 /** UC-EYEX-128 / AC-EYEX-78, 101 */
 test('保全は理由が無ければ実行できない', async () => {
   const { calls } = renderScreen(defaultRoutes([stored]))
+  openList()
   fireEvent.click(
     within(await screen.findByTestId(`recording-${STORED_ID}`)).getByRole('button', {
       name: '保全する',
@@ -213,6 +229,7 @@ test('保全は理由が無ければ実行できない', async () => {
 /** UC-EYEX-128 / AC-EYEX-101 */
 test('保全解除も理由を必須とする', async () => {
   const { calls } = renderScreen(defaultRoutes([held]))
+  openList()
   fireEvent.click(
     within(await screen.findByTestId(`recording-${HELD_ID}`)).getByRole('button', {
       name: '保全を解除する',
@@ -238,6 +255,7 @@ test('保全解除も理由を必須とする', async () => {
 /** UC-EYEX-128 / AC-EYEX-101 */
 test('共有端末では個人再認証を終えるまで保全を送らない', async () => {
   const { calls } = renderScreen(defaultRoutes([stored]), { terminalId: TERMINAL_ID })
+  openList()
   fireEvent.click(
     within(await screen.findByTestId(`recording-${STORED_ID}`)).getByRole('button', {
       name: '保全する',
@@ -264,6 +282,7 @@ test('最低保持期限より前の削除は拒否され、最低保持期限�
     }
     return base(call)
   })
+  openList()
   fireEvent.click(
     within(await screen.findByTestId(`recording-${STORED_ID}`)).getByRole('button', {
       name: '削除する',
@@ -312,6 +331,7 @@ test('保存期間を変える権限が無ければ変更の口を出さない (
 /** 保全の個人再認証の本文は、モックの `録音の保全指定は…` と一字一句同じにする。 */
 test('保全の個人再認証はモックの文言で名乗る (REAUTH)', async () => {
   renderScreen(defaultRoutes([stored]), { terminalId: TERMINAL_ID })
+  openList()
   fireEvent.click(
     within(await screen.findByTestId(`recording-${STORED_ID}`)).getByRole('button', {
       name: '保全する',
@@ -369,6 +389,7 @@ test('最低値以上なら保存期間を送信する', async () => {
 /** UC-EYEX-127 / AC-EYEX-79 */
 test('録音を扱う権限が無ければ一覧も再生も出さず、承認済みの回復操作を出す', async () => {
   const { navigate } = renderScreen(defaultRoutes([stored]), { permissions: [] })
+  openList()
   const denied = await screen.findByRole('region', { name: '権限がありません' })
   expect(denied).toHaveTextContent('この設定を表示する権限がありません')
   expect(denied).toHaveTextContent(
@@ -382,6 +403,7 @@ test('録音を扱う権限が無ければ一覧も再生も出さず、承認�
 /** 承認済みモック `operations-approved.html#recording-ops` の骨格 */
 test('録音運用の節をモックどおりに出す', async () => {
   renderScreen(defaultRoutes([stored]))
+  openList()
   /* 節は面が描かず、全画面共通の柱へ渡す。面の側では渡した中身で確かめる。 */
   await screen.findByRole('heading', { name: '録音の保存期間' })
   expect(screenSections.snapshot().map((section) => section.label)).toEqual([
@@ -421,6 +443,7 @@ test('失敗と保全中は対応が必要としてモックの行で先に出�
 /** 閲覧のみのスタッフは再生できるが保全・削除・再試行は出さない (AC-EYEX-100, 101) */
 test('閲覧権限だけでは保全・解除・削除・再試行を出さない', async () => {
   renderScreen(defaultRoutes([stored, failed, held]), { permissions: ['recording.read'] })
+  openList()
   await screen.findByTestId(`recording-${STORED_ID}`)
   expect(screen.queryByRole('button', { name: '保全する' })).toBeNull()
   expect(screen.queryByRole('button', { name: '保全を解除する' })).toBeNull()
@@ -432,6 +455,7 @@ test('閲覧権限だけでは保全・解除・削除・再試行を出さな�
 test('操作面は44px以上で、ブラウザストレージへ何も書かない', async () => {
   const setItem = vi.spyOn(Storage.prototype, 'setItem')
   renderScreen(defaultRoutes([stored, failed, held]))
+  openList()
   await screen.findByTestId(`recording-${STORED_ID}`)
   for (const button of screen.getAllByRole('button')) {
     expect(button.className).toMatch(/min-h-1[12]/)
@@ -479,4 +503,23 @@ test('24 で割り切れない保存期間は時間のまま出す (RECORDING-OP
   expect(await screen.findByRole('region', { name: '破棄した受付' })).toHaveTextContent(
     '30時間保存',
   )
+})
+
+/*
+ * 承認済みモック `operations-approved.html#recording-ops` の柱は 3 つの節を持ち、
+ * 本文は選んだ節のものだけを見せる。3 つを縦に積むと、保存期間を確かめに来た
+ * 人の目の前に録音の一覧が続き、柱の節が「どこへ行く札」なのかも読めなくなる。
+ */
+test('本文は選んだ節のものだけを見せる', async () => {
+  renderScreen(defaultRoutes([stored]))
+  await screen.findByRole('region', { name: '対応が必要' })
+  expect(screen.queryByText('録音の状態で絞り込む')).toBeNull()
+
+  /* 節の列は面の中ではなく全画面共通の柱にある。面だけを描くテストからは、
+     柱が押したときと同じ口を叩いて選ぶ。 */
+  act(() => {
+    screenSections.select('保存・削除状態')
+  })
+  expect(await screen.findByText('録音の状態で絞り込む')).toBeInTheDocument()
+  expect(screen.queryByRole('region', { name: '対応が必要' })).toBeNull()
 })

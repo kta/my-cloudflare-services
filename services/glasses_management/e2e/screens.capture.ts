@@ -755,7 +755,9 @@ async function captureRecordingScreens(browser: Browser) {
       allRecordings,
     )
     await openRecordingOps(page)
-    await page.getByTestId(`recording-${failedId}`).waitFor({ state: 'visible' })
+    /* 本文は選んだ節のものだけを見せる。モックの面は「保存期間」の節なので、
+       一覧の行ではなく「対応が必要」の行が出るのを待つ。 */
+    await visible(page.getByRole('region', { name: '対応が必要' }))
     await shot(page, 'RECORDING-OPS', 'failure-hold', 'ipad-landscape')
     await page.context().close()
   }
@@ -2424,6 +2426,12 @@ async function captureSharedTerminalScreens(browser: Browser) {
       .click()
     const screen = page.getByRole('region', { name: '録音運用' })
     await screen.first().waitFor({ state: 'visible' })
+    /* 保全は録音の一覧から始まる。本文は選んだ節のものだけを見せるので、
+       まず「保存・削除状態」の節へ移る。 */
+    await page
+      .getByRole('navigation', { name: '画面の一覧' })
+      .getByRole('button', { name: '保存・削除状態' })
+      .click()
     await screen.getByRole('button', { name: '保全する' }).first().click()
     const reauth = page.getByRole('dialog', { name: '管理者として確認してください' })
     await visible(reauth)
