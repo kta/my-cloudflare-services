@@ -41,10 +41,14 @@ idempotency ID を検証するためだけに使う。production Worker にテ�
 
 ## 現在の基準線
 
-Approved かつ UC/AC を持つ spec は item feature のみである。`admin` の service spec と
+Approved かつ UC/AC を持つ spec は次の 3 本である。`admin` の service spec と
 infrastructure-only の文書には UC/AC がないため、分母には入らない（機械的な免除ではなく、
 そもそも product behavior を定義していない）。新しい production behavior は Approved spec
 に UC/AC を付け、この表と E2E mapping を同じ変更で追加する。
+
+`glasses_management` は 0 から作り直している最中で、P1 以降の feature spec は
+**`- ステータス: Draft` のまま置いてある**。Approved にした瞬間に E2E が必須になるので、
+そのフェーズの E2E が緑になってから Approved へ上げる（`specs/glasses_management/design/08-traceability.md`）。
 
 | Spec ID | Playwright scenario |
 |---|---|
@@ -53,6 +57,13 @@ infrastructure-only の文書には UC/AC がないため、分母には入ら�
 | AC-ITEM-03 | `services/example_service/e2e/smoke.spec.ts` — item API rejects empty and overlong titles |
 | AC-ITEM-04 | `services/example_service/e2e/smoke.spec.ts` — an organization cannot list an item created by another organization |
 | AC-ITEM-05 | `services/example_service/e2e/smoke.spec.ts` — service binding records an `item.created` job despite the local notifier's 418, while creation remains successful |
+| UC-ADMIN-USERS-01 | `services/admin/e2e/user-administration.spec.ts` — 本部管理者が利用者を検索し、権限差分を見て標準ロールと担当店舗を変更する |
+| UC-ADMIN-USERS-02 | `services/admin/e2e/user-administration.spec.ts` — 本人が個人PINを設定・変更し、管理者は本人確認後に再設定を開始できるがPINは見えない |
+| AC-FOUND-01 | `services/glasses_management/e2e/foundation.spec.ts` — お店のコードを入れて業務を始めると、上のバーに店名と営業状態が出る |
+| AC-FOUND-02 | `services/glasses_management/e2e/foundation.spec.ts` — サイドバーはつまみで細い柱にたため、もう一度押すと元に戻る |
+| AC-FOUND-03 | `services/glasses_management/e2e/foundation.spec.ts` — 店舗がまだ届いていないときは、その事実だけを出す |
+| AC-FOUND-04 | `services/glasses_management/e2e/foundation.spec.ts` — 業務を終えると業務開始の画面へ戻る |
+| AC-FOUND-05 | `services/glasses_management/e2e/foundation.spec.ts` — ヘルスチェックは認証なしで ok を返す |
 
 validator 自体は `scripts/check-e2e-traceability.test.mjs` で unit test する。通常の実行は次の
 とおり。
@@ -60,4 +71,6 @@ validator 自体は `scripts/check-e2e-traceability.test.mjs` で unit test す�
 ```sh
 pnpm run test:traceability
 pnpm --filter @app/example_service e2e
+pnpm --filter @app/admin e2e
+pnpm --filter @app/glasses_management e2e
 ```
