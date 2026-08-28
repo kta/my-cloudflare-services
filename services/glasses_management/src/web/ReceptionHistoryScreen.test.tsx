@@ -538,3 +538,18 @@ test('shows the approved permission-denied state with a way back', async () => {
   fireEvent.click(screen.getByRole('button', { name: '業務開始画面へ戻る' }))
   expect(navigate).toHaveBeenCalledWith({ screen: 'home' })
 })
+
+/*
+ * AC-EYEX-60: 権限が無いときは録音の面ごと出さない。見出し「iPad録音」だけが
+ * 残ると、何も無い見出しが宙に浮いたうえ「録音がある」ことを漏らしてしまう。
+ */
+test('does not leave the iPad録音 heading behind when playback is not permitted', async () => {
+  renderScreen(allEntries, {
+    recording: { state: 'processing' },
+    permissions: { playRecording: false },
+  })
+  const list = await screen.findByRole('region', { name: '受付履歴' })
+  fireEvent.click(within(list).getByRole('button', { name: /田中 花子/ }))
+  const detail = await screen.findByRole('region', { name: '受付イベント詳細' })
+  expect(within(detail).queryByText('iPad録音')).not.toBeInTheDocument()
+})

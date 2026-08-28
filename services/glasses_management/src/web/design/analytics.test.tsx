@@ -1,6 +1,6 @@
 import { render, screen, within } from '@testing-library/react'
 import { expect, test } from 'vitest'
-import { VizColumnChart } from './analytics'
+import { VizColumnChart, VizPeriodField, VizSegment } from './analytics'
 
 /*
  * 柱のグラフで「色だけが意味を持つ」ことを禁じるためのテスト。
@@ -68,4 +68,43 @@ test('抑制された柱は幅も高さも残さない', () => {
   const bar = screen.getByRole('figure', { name: '時間帯' }).querySelector('[data-bar]')
   expect((bar as HTMLElement).style.height).toBe('0%')
   expect((bar as HTMLElement).style.width).toBe('0%')
+})
+
+/*
+ * 分析面は一段小さい寸法体系で組まれているが、押せるものの当たり判定だけは
+ * 業務面と同じ 44px を割ってはいけない（iPad は指で触る端末である）。
+ * 字面はモックのままにしたいので、透明な余白と同じ幅の負のマージンで、
+ * 囲みが占める大きさを変えずに当たり判定だけを広げる。
+ */
+test('粒度の切り替えは字面を変えずに 44px の当たり判定を持つ', () => {
+  render(
+    <VizSegment
+      label="集計粒度"
+      options={[
+        { value: 'day', label: '日' },
+        { value: 'week', label: '週' },
+      ]}
+      value="day"
+      onChange={() => {}}
+    />,
+  )
+  for (const name of ['日', '週']) {
+    const button = screen.getByRole('button', { name })
+    expect(button.className).toContain('-m-2.5')
+    expect(button.className).toContain('p-2.5')
+    // 罫と塗りは内側の小さなピルが持つ。
+    const face = button.firstElementChild as HTMLElement
+    expect(face.className).toContain('rounded-ctl')
+  }
+})
+
+test('対象日の欄は 44px を割らない', () => {
+  render(<VizPeriodField id="d" label="対象日" value="2026-09-23" onChange={() => {}} />)
+  expect(screen.getByLabelText('対象日').className).toContain('min-h-11')
+})
+
+test('対象日は打った ISO を日本語で読み返す', () => {
+  render(<VizPeriodField id="d" label="対象日" value="2026-09-23" onChange={() => {}} />)
+  // 機械可読な値だけを帯に残さない（他の面と同じ「打つのは ISO、読むのは日本語」）。
+  expect(screen.getByText('9月23日（水）')).toBeVisible()
 })

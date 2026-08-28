@@ -1,6 +1,7 @@
 import type { LedgerEntry } from '@app/contracts'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { expect, type Mock, test, vi } from 'vitest'
+import { barPrimaryAction } from './app-chrome'
 import { JourneyScreen } from './JourneyScreen'
 import type { StaffApi } from './staff-screen'
 import { choosePickerOption } from './test/picker'
@@ -185,6 +186,17 @@ test('carries the next handover instruction in its own panel (JOURNEY-DEFAULT, A
   expect(handover).toHaveTextContent('測定機Aへご案内')
 })
 
+test('carries no second row of controls beside the heading (JOURNEY-DEFAULT)', async () => {
+  const api = mockApi(() => json([reservation()]))
+  renderJourney(api)
+
+  expect(await screen.findByRole('heading', { name: '接客の進み具合' })).toBeInTheDocument()
+  // 生の ISO 日付・台帳への行き先・緑バーと重複する受付は、いずれもモックに無い。
+  expect(screen.queryByText(DATE)).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: '予約台帳へ' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: '＋ 店頭のお客様を受付' })).not.toBeInTheDocument()
+})
+
 test('receives a customer standing in the shop as the primary action (UC-EYEX-047)', async () => {
   const api = mockApi(
     () => json([]),
@@ -193,7 +205,9 @@ test('receives a customer standing in the shop as the primary action (UC-EYEX-04
   )
   renderJourney(api)
 
-  fireEvent.click(await screen.findByRole('button', { name: '＋ 店頭のお客様を受付' }))
+  // 受付は緑バーの主操作である。面はその中身だけを書き、バーが押して実行する。
+  await waitFor(() => expect(barPrimaryAction.snapshot()).toBeDefined())
+  barPrimaryAction.snapshot()?.()
 
   await waitFor(() =>
     expect(api).toHaveBeenCalledWith(
@@ -344,14 +358,22 @@ test('states each warning in words, never by colour alone (UC-EYEX-053, AC-EYEX-
   )
   renderJourney(api)
 
-  const warnings = await screen.findByRole('region', { name: '注意が必要なお客様' })
-  expect(within(warnings).getByText('長時間待機')).toBeInTheDocument()
-  expect(within(warnings).getByText('担当不在')).toBeInTheDocument()
-  expect(within(warnings).getByText('設備停止')).toBeInTheDocument()
+  /*
+   * 注意は盤の外に赤い面を積むのではなく、そのお客様の行そのものが名乗る
+   * （モックに無い段を足すと盤が 1 画面に収まらなくなる）。理由の全文は
+   * 選んだときの右パネルが受け持つ。
+   */
+  const board = await screen.findByRole('grid', { name: '接客の進み具合' })
+  expect(screen.queryByRole('region', { name: '注意が必要なお客様' })).not.toBeInTheDocument()
+  expect(within(board).getByText('長時間待機')).toBeInTheDocument()
+  expect(within(board).getByText('担当不在')).toBeInTheDocument()
+  expect(within(board).getByText('設備停止')).toBeInTheDocument()
+
+  fireEvent.click(within(board).getByRole('button', { name: /田中 花子/ }))
+  const panel = await screen.findByRole('region', { name: '選択中のお客様' })
   expect(
-    within(warnings).getByText('待機時間が12分を超えています。次のご案内を確認してください。'),
+    within(panel).getByText('待機時間が12分を超えています。次のご案内を確認してください。'),
   ).toBeInTheDocument()
-  expect(within(warnings).getAllByText('田中 花子')).not.toHaveLength(0)
 })
 
 test('refuses a stale save and compares the latest content with this terminal’s input (UC-EYEX-172, UC-EYEX-173, AC-EYEX-110)', async () => {

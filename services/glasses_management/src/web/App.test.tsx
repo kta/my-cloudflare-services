@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { expect, test, vi } from 'vitest'
 import { App } from './App'
+import { barPrimaryAction } from './app-chrome'
 import { createSharedTerminalController } from './shared-terminal'
 import { createStaffNavigation } from './staff-navigation'
 import { createStoreSwitchController } from './store-switch'
@@ -426,6 +427,17 @@ test('予約フローのバーは業務タブも 予約を取る も出さない
 test('来店受付の主操作は予約ではなく店頭客の受付である', () => {
   const bar = renderChrome('journey')
   expect(bar.getByRole('button', { name: '＋ 店頭のお客様を受付' })).toBeVisible()
+})
+
+test('主操作がその面での行いなら、移動ではなくその行いを実行する', () => {
+  const bar = renderChrome('journey')
+  const received = vi.fn()
+  const release = barPrimaryAction.set(received)
+
+  fireEvent.click(bar.getByRole('button', { name: '＋ 店頭のお客様を受付' }))
+
+  expect(received).toHaveBeenCalledTimes(1)
+  release()
 })
 
 /* ------------------------------------------------------------------ *

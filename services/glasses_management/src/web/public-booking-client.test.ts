@@ -15,28 +15,23 @@ const store = {
 test('validates a published-store response and encodes the public availability query', async () => {
   const fetcher = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input)
-    if (url.includes('/slots?')) {
-      return Response.json({
-        date: '2026-09-01',
-        timezone: 'Asia/Tokyo',
-        durationMinutes: 60,
-        intervalMinutes: 30,
-        slots: [],
-      })
+    if (url.includes('/offers?')) {
+      return Response.json({ timezone: 'Asia/Tokyo', durationMinutes: 60, slots: [] })
     }
     return Response.json([store])
   })
   const api = createPublicBookingApi(fetcher)
 
   await expect(api.listStores()).resolves.toEqual([store])
+  // 候補枠は日付を渡さない（日付は入力ではなく走査の結果である）。
   await expect(
-    api.readSlots('ginza', '2026-09-01', [
+    api.readOffers('ginza', [
       '00000000-0000-4000-8000-000000000001',
       '00000000-0000-4000-8000-000000000002',
     ]),
-  ).resolves.toMatchObject({ date: '2026-09-01', slots: [] })
+  ).resolves.toMatchObject({ slots: [] })
   expect(String(fetcher.mock.calls[1]?.[0])).toBe(
-    '/api/public/stores/ginza/slots?date=2026-09-01&purposeIds=00000000-0000-4000-8000-000000000001%2C00000000-0000-4000-8000-000000000002',
+    '/api/public/stores/ginza/offers?purposeIds=00000000-0000-4000-8000-000000000001%2C00000000-0000-4000-8000-000000000002',
   )
 })
 

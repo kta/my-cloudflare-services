@@ -154,6 +154,7 @@ function NoteFields({
  */
 export function AttentionReviewScreen({
   storeId,
+  storeName,
   api,
   permissions,
   customerId,
@@ -182,6 +183,8 @@ export function AttentionReviewScreen({
   const [failure, setFailure] = useState<string>()
   const [retry, setRetry] = useState<() => void>()
   const [reauth, setReauth] = useState<{ action: ManagementAction; run: (grant: string) => void }>()
+  /* master-detail の右側。柱で選んだ 1 件だけを本文に出す。 */
+  const [openNoteId, setOpenNoteId] = useState<string>()
 
   useEffect(() => {
     if (!mayRead) return undefined
@@ -427,19 +430,43 @@ export function AttentionReviewScreen({
     left.status === right.status ? 0 : left.status === 'pending_review' ? -1 : 1,
   )
 
-  const pending = notes.filter((note) => note.status === 'pending_review')
+  /*
+   * 承認済みモックは master-detail。柱に読める注意事項の一覧を置き、本文には
+   * 選んだ 1 件だけを出す。全件を縦に連ねると、柱の並びと本文の並びが対応
+   * しなくなり、いま何を承認しようとしているのかが読めなくなる。
+   */
+  const labelFor = (note: AttentionNoteRecord, index: number) => {
+    const base = `${customerName} · ${relativeJstDay(note.occurredAt, today)}`
+    // 同じ日の 2 件は同じ名前になる。柱は名前で押されるので、重なる分だけ
+    // 版で区別する（先頭の 1 件はモックどおりの素の名前のまま残す）。
+    const duplicated = visible.some(
+      (other, otherIndex) =>
+        otherIndex < index &&
+        `${customerName} · ${relativeJstDay(other.occurredAt, today)}` === base,
+    )
+    return duplicated ? `${base}（版${note.version}）` : base
+  }
+  const labels = visible.map(labelFor)
+  const openNote = visible.find((note) => note.noteId === openNoteId) ?? visible[0]
+  const sections =
+    visible.length === 0
+      ? [{ label: customerName, current: true }]
+      : labels.map((label, index) => ({
+          label,
+          current: visible[index]?.noteId === openNote?.noteId,
+          selectable: true,
+        }))
+  const selectSection = (label: string) => {
+    const index = labels.indexOf(label)
+    const note = visible[index]
+    if (note) setOpenNoteId(note.noteId)
+  }
 
   return (
     /* 承認済みモック `operations-approved.html#attention-review` /
        `ATTENTION-REVIEW--pending--ipad-landscape.png`。 */
     <AdminSurface label="注意事項の確認">
-      <AdminLayout
-        /* 柱は全画面共通の 1 本。確認待ちの並びはそこへ渡す。 */
-        sections={(pending.length === 0
-          ? [customerName]
-          : pending.map((note) => `${customerName} · ${relativeJstDay(note.occurredAt, today)}`)
-        ).map((label, index) => ({ label, current: index === 0 }))}
-      >
+      <AdminLayout sections={sections} onSelectSection={selectSection}>
         <h1>注意事項を確認</h1>
 
         {success && <StatusNotice>{success}</StatusNotice>}
@@ -458,7 +485,7 @@ export function AttentionReviewScreen({
         )}
 
         {visible.length === 0 && <StatusNotice>表示できる注意事項はありません。</StatusNotice>}
-        {visible.map((note) => (
+        {(openNote === undefined ? [] : [openNote]).map((note) => (
           <article
             key={note.noteId}
             aria-label={`注意事項 ${noteStatusLabel(note.status)} 版${note.version}`}
@@ -700,7 +727,7 @@ export function AttentionReviewScreen({
       {reauth && sharedTerminal && (
         <ReauthPrompt
           storeId={storeId}
-          storeName={customerName}
+          storeName={storeName}
           api={api as StaffApi}
           navigate={() => {}}
           now=""

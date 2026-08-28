@@ -8,6 +8,7 @@ import {
   type WebBookingPublication,
 } from '@app/contracts'
 import { Fragment, type ReactNode, useEffect, useState } from 'react'
+import { barOverlay } from './app-chrome'
 import { Action, Actions, FilterLine } from './design/controls'
 import { CheckToggle, PickerField, TextField, ToggleFilter } from './design/forms'
 import { FullScreenState, GuideLayout } from './design/layouts'
@@ -98,8 +99,6 @@ function fromJstWallClock(value: string): string | null {
   const parsed = new Date(`${value}:00+09:00`)
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString()
 }
-
-const UNKNOWN = '未取得'
 
 /* 選択肢は描く場所ではなくここで組む。値は契約の文字列そのまま。 */
 const EXCEPTION_MODE_OPTIONS = [
@@ -209,6 +208,9 @@ type Draft = AvailabilityStoreSettings
  * 下書き・影響確認・Web予約公開の API はまだ無い。無いものは推測せず、
  * 未取得 / 準備中 として画面に出す。
  */
+/** 柱に出る「公開結果」の節の名前。工程の名前と重ならない 1 語で持つ。 */
+const RESULT_SECTION = '公開結果'
+
 export function SettingsScreen({
   storeId,
   storeName,
@@ -225,6 +227,11 @@ export function SettingsScreen({
   const canManage = permissions.includes('settings.manage')
   const [draft, setDraft] = useState<Draft>()
   const [current, setCurrent] = useState<SettingsStepId>(step ?? 'store-hours')
+  /*
+   * 公開結果は工程ではなく、承認済みモック `#publish-result` の全幅の独立した
+   * 面。工程 6 の下端に埋めると折り返しの下に隠れ、一部失敗に誰も気づかない。
+   */
+  const [resultOpen, setResultOpen] = useState(false)
   const [selectedPurposeId, setSelectedPurposeId] = useState<string>()
   const [error, setError] = useState<string>()
   const [saved, setSaved] = useState(false)
@@ -244,6 +251,15 @@ export function SettingsScreen({
   useEffect(() => {
     setWebDraft(webBooking)
   }, [webBooking])
+
+  /*
+   * 公開結果は独立した面なので、バーの副題もモックどおり `設定公開` に変わる
+   * （設定ガイドのままだと、工程の続きを見ているように読めてしまう）。
+   */
+  useEffect(() => {
+    barOverlay.set(resultOpen ? { subtitle: `${storeName} · 設定公開` } : {})
+    return () => barOverlay.set({})
+  }, [resultOpen, storeName])
 
   useEffect(() => {
     if (!canRead) return
@@ -324,7 +340,7 @@ export function SettingsScreen({
 
   /** 公開状態のひとことは、受付停止 > 公開中 > 予約公開 > 非公開 の順に読む。 */
   const publishStateLabel = !webDraft
-    ? UNKNOWN
+    ? undefined
     : webDraft.status === 'published'
       ? draft?.receptionStatus === 'paused'
         ? '受付停止'
@@ -333,12 +349,12 @@ export function SettingsScreen({
         ? `${shortDateTimeFormat.format(new Date(webDraft.startsAt))}に公開`
         : '非公開'
   const receptionEndLabel = !webDraft
-    ? UNKNOWN
+    ? undefined
     : webDraft.endsAt
       ? dateTimeFormat.format(new Date(webDraft.endsAt))
       : '設定なし'
   const publicPurposeLabel = !webDraft
-    ? UNKNOWN
+    ? undefined
     : (draft?.purposes ?? [])
         .filter((purpose) => webDraft.publicPurposeIds.includes(purpose.id))
         .map((purpose) => purpose.staffName)
@@ -419,7 +435,7 @@ export function SettingsScreen({
    * 柱に出る字はモックどおり番号か ✓ と工程名だけ。状態の語は読み上げの名前が
    * 持つ（色に頼らず語で伝える）。
    */
-  const sections = SETTINGS_STEPS.map((candidate) => {
+  const stepSections = SETTINGS_STEPS.map((candidate) => {
     const state = RAIL_STATE[states[candidate.id]]
     return {
       label: `${state === 'done' ? '✓' : candidate.number}\u3000${candidate.label}`,
@@ -428,10 +444,27 @@ export function SettingsScreen({
       selectable: true,
     }
   })
+  /*
+   * モックの `#publish-result` はバーに `設定一覧 / 公開結果 / 版履歴` の 3 本を
+   * 持つが、実アプリは行き先をすべて左の柱に集めている
+   * （`docs/frontend/REBUILD.md` の逸脱 1）。6 工程が `設定一覧` にあたるので、
+   * その下に `公開結果` を 1 行足して到達経路にする。
+   */
+  const sections = [
+    ...stepSections.map((section) => ({ ...section, current: section.current && !resultOpen })),
+    { label: RESULT_SECTION, name: '公開結果', current: resultOpen, selectable: true },
+  ]
   const selectSection = (label: string) => {
-    const index = sections.findIndex((section) => section.label === label)
+    if (label === RESULT_SECTION) {
+      setResultOpen(true)
+      return
+    }
+    const index = stepSections.findIndex((section) => section.label === label)
     const step = SETTINGS_STEPS[index]
-    if (step) goToStep(step.id)
+    if (step) {
+      setResultOpen(false)
+      goToStep(step.id)
+    }
   }
 
   /*
@@ -872,7 +905,10 @@ export function SettingsScreen({
   const maintenanceLines = (draft?.maintenance ?? []).flatMap((item) => {
     const equipment = draft?.equipment.find((row) => row.id === item.equipmentId)
     return [
-      `${equipment?.name ?? UNKNOWN} · ${formatSlashDate(item.date)} ${item.startTime}–${item.endTime}`,
+      /* 設備が見つからないときは名前を作らず、分かっている日時だけを書く。 */
+      equipment === undefined
+        ? `${formatSlashDate(item.date)} ${item.startTime}–${item.endTime}`
+        : `${equipment.name} · ${formatSlashDate(item.date)} ${item.startTime}–${item.endTime}`,
       item.reason,
     ]
   })
@@ -975,25 +1011,36 @@ export function SettingsScreen({
          * 「何がWebに出ているのか」が画面のどこにも残らない。
          */}
         <CardGrid columns={2} mt={4}>
-          <FieldCard title="公開状態">{publishStateLabel}</FieldCard>
-          <FieldCard title="受付終了">{receptionEndLabel}</FieldCard>
-          <FieldCard title="予約可能期間">
-            {webBookingRules ? `${webBookingRules.bookableDays}日先まで` : UNKNOWN}
-          </FieldCard>
-          <FieldCard title="直前受付期限">
-            {webBookingRules ? formatCutoff(webBookingRules.cutoffMinutes) : UNKNOWN}
-          </FieldCard>
-          <FieldCard title="変更・取消期限">
-            {webBookingRules ? webBookingRules.changeDeadline : UNKNOWN}
-          </FieldCard>
-          <FieldCard title="期限後の案内">
-            {webBookingRules ? webBookingRules.afterDeadlineGuidance : UNKNOWN}
-          </FieldCard>
-          <FieldCard title="公開する来店目的">{publicPurposeLabel}</FieldCard>
+          {/*
+           * 値がまだ取れていない欄は、欄ごと出さない。「未取得」はモックの語彙に
+           * 無いうえ、取れていないことは下の注意書きが 1 か所で言っている。
+           * 空の欄を並べると、設定されていないのか取れていないのかも読めない。
+           */}
+          {publishStateLabel !== undefined && (
+            <FieldCard title="公開状態">{publishStateLabel}</FieldCard>
+          )}
+          {receptionEndLabel !== undefined && (
+            <FieldCard title="受付終了">{receptionEndLabel}</FieldCard>
+          )}
+          {webBookingRules && (
+            <>
+              <FieldCard title="予約可能期間">{`${webBookingRules.bookableDays}日先まで`}</FieldCard>
+              <FieldCard title="直前受付期限">
+                {formatCutoff(webBookingRules.cutoffMinutes)}
+              </FieldCard>
+              <FieldCard title="変更・取消期限">{webBookingRules.changeDeadline}</FieldCard>
+              <FieldCard title="期限後の案内">{webBookingRules.afterDeadlineGuidance}</FieldCard>
+            </>
+          )}
+          {publicPurposeLabel !== undefined && (
+            <FieldCard title="公開する来店目的">{publicPurposeLabel}</FieldCard>
+          )}
           {/* 曜日を 7 行並べるとカードだけが縦に伸びる。工程1と同じ要約で読ませる。 */}
-          <FieldCard title="受付時間">
-            <Lines lines={hours ? hours.openLines : [UNKNOWN]} />
-          </FieldCard>
+          {hours && (
+            <FieldCard title="受付時間">
+              <Lines lines={hours.openLines} />
+            </FieldCard>
+          )}
         </CardGrid>
         {!webDraft && (
           <Preview tone="caution" label="Web予約の取得状態">
@@ -1066,9 +1113,14 @@ export function SettingsScreen({
         <b>店舗ページ</b>
         {'　'}店舗名、アクセス、電話番号、注意事項をプレビュー
         <span className="mt-2.5 block">{storeName}</span>
-        <span className="block">{webDraft ? webDraft.accessText : UNKNOWN}</span>
-        <span className="block">{webDraft ? webDraft.contactPhone : UNKNOWN}</span>
-        <span className="block">{webDraft ? webDraft.notice : UNKNOWN}</span>
+        {/* 取れていない行は出さない。分かっている店舗名だけを見せる。 */}
+        {webDraft && (
+          <>
+            <span className="block">{webDraft.accessText}</span>
+            <span className="block">{webDraft.contactPhone}</span>
+            <span className="block">{webDraft.notice}</span>
+          </>
+        )}
       </Preview>
     </>
   )
@@ -1093,7 +1145,7 @@ export function SettingsScreen({
     <section aria-label="店舗設定" className="flex min-h-full flex-col font-sans">
       <GuideLayout sections={sections} onSelectSection={selectSection} stepper={stepper}>
         {/* 第6工程は公開画面が自分の見出しを持つ（モックどおり見出しを重ねない）。 */}
-        {current !== 'impact' && (
+        {!resultOpen && current !== 'impact' && (
           <>
             <TitleRow
               push={originLabel === undefined ? undefined : <span>{`適用元: ${originLabel}`}</span>}
@@ -1120,17 +1172,22 @@ export function SettingsScreen({
           </>
         )}
 
-        {!canManage && <StatusNotice>設定を変更する権限がありません。</StatusNotice>}
-        {error && <FailureNotice>{error}</FailureNotice>}
-        {saved && <StatusNotice>設定を保存しました。</StatusNotice>}
-        {!draft && !error && <StatusNotice>読み込み中です。</StatusNotice>}
+        {!resultOpen && !canManage && <StatusNotice>設定を変更する権限がありません。</StatusNotice>}
+        {!resultOpen && error && <FailureNotice>{error}</FailureNotice>}
+        {!resultOpen && saved && <StatusNotice>設定を保存しました。</StatusNotice>}
+        {!resultOpen && !draft && !error && <StatusNotice>読み込み中です。</StatusNotice>}
 
-        {current === 'store-hours' && storeHours}
-        {current === 'purposes' && purposes}
-        {current === 'staff-skills' && staffSkills}
-        {current === 'equipment' && equipment}
-        {current === 'web-booking' && webBookingStep}
-        {draft && current === 'impact' && (
+        {!resultOpen && current === 'store-hours' && storeHours}
+        {!resultOpen && current === 'purposes' && purposes}
+        {!resultOpen && current === 'staff-skills' && staffSkills}
+        {!resultOpen && current === 'equipment' && equipment}
+        {!resultOpen && current === 'web-booking' && webBookingStep}
+        {/*
+         * 工程 6 と公開結果は同じ位置に置く。位置を変えると React が作り直し、
+         * 公開したばかりの結果が消えてしまう（結果は面が持つ状態で、取得の
+         * API を持たない）。
+         */}
+        {(resultOpen || (draft && current === 'impact')) && (
           <SettingsPublication
             storeId={storeId}
             storeName={storeName}
@@ -1139,10 +1196,14 @@ export function SettingsScreen({
             permissions={permissions}
             today={today}
             dirty={!saved}
+            view={resultOpen ? 'result' : 'guide'}
+            // 公開した直後は結果の面へ移す。工程 6 に留まると、折り返しの下に
+            // 結果が隠れて一部失敗を見落とす。
+            onPublished={() => setResultOpen(true)}
           />
         )}
 
-        {draft && current !== 'impact' && (
+        {!resultOpen && draft && current !== 'impact' && (
           <Actions gap={2.5} mt={4}>
             {canManage &&
               (editing ? (

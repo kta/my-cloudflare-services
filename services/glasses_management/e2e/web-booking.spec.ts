@@ -17,11 +17,10 @@ const detail = {
   businessHours: [{ dayOfWeek: 1, periods: [{ startTime: '10:00', endTime: '19:00' }] }],
   purposes: [{ id: purposeId, label: 'メガネを新しく作りたい', durationMinutes: 60 }],
 }
-const slots = {
-  date: '2026-09-01',
+/* 候補枠は日付を受け取らない。日付は顧客の入力ではなく走査の結果である。 */
+const offers = {
   timezone: 'Asia/Tokyo',
   durationMinutes: 60,
-  intervalMinutes: 30,
   slots: [
     {
       date: '2026-09-01',
@@ -35,7 +34,9 @@ const slots = {
 
 async function mockPublicApi(page: Page, booking: 'success' | 'conflict' | 'unknown') {
   await page.route('**/api/public/stores', (route) => route.fulfill({ json: [store] }))
-  await page.route('**/api/public/stores/ginza/slots?*', (route) => route.fulfill({ json: slots }))
+  await page.route('**/api/public/stores/ginza/offers?*', (route) =>
+    route.fulfill({ json: offers }),
+  )
   await page.route('**/api/public/stores/ginza', (route) => route.fulfill({ json: detail }))
   await page.route('**/api/public/stores/ginza/reservations', (route) => {
     if (booking === 'conflict')
@@ -85,7 +86,6 @@ async function reachConfirmation(page: Page) {
   // 来店目的と日時は「選ぶ」と「進む」が別操作（PublicBooking.tsx の 1/5・2/5 工程）。
   await page.getByRole('button', { name: /メガネを新しく作りたい.*約60分/ }).click()
   await page.getByRole('button', { name: '日時へ進む' }).click()
-  await page.getByLabel('ご希望の日').fill('2026-09-01')
   await page.getByRole('button', { name: '9月1日（火）10:00' }).click()
   await page.getByRole('button', { name: 'お客様情報へ進む' }).click()
   await page.getByLabel('お名前', { exact: true }).fill('田中花子')
@@ -129,7 +129,6 @@ test('retains the same-store booking input when the chosen slot conflicts', asyn
   // 来店目的と日時は「選ぶ」と「進む」が別操作（PublicBooking.tsx の 1/5・2/5 工程）。
   await page.getByRole('button', { name: /メガネを新しく作りたい.*約60分/ }).click()
   await page.getByRole('button', { name: '日時へ進む' }).click()
-  await page.getByLabel('ご希望の日').fill('2026-09-01')
   await page.getByRole('button', { name: '9月1日（火）10:00' }).click()
   await page.getByRole('button', { name: 'お客様情報へ進む' }).click()
   await page.getByLabel('お名前', { exact: true }).fill('田中花子')

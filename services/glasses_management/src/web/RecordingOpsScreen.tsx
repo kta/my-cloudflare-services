@@ -37,6 +37,8 @@ export type RecordingOpsScreenProps = StaffScreenProps & {
   organizationId: string
   /** 完全共有 iPad で開いているときだけ端末 id。保全・解除に個人再認証が要る。 */
   terminalId: string | null
+  /** 共有 iPad の名前。個人認証の面がバーで名乗る。 */
+  terminalName?: string
 }
 
 /** 保全・解除は共有端末では個人再認証を挟む (AC-EYEX-101)。 */
@@ -63,6 +65,7 @@ export function RecordingOpsScreen({
   permissions,
   organizationId,
   terminalId,
+  terminalName,
   navigate,
 }: RecordingOpsScreenProps) {
   const mayRead = permissions.includes('recording.read')
@@ -551,6 +554,7 @@ export function RecordingOpsScreen({
           navigate={navigate}
           now={now}
           terminalId={terminalId}
+          terminalName={terminalName}
           organizationId={organizationId}
           actionLabel={reauthFor.kind === 'hold' ? '録音の保全' : '録音の保全解除'}
           onGranted={(token) => {

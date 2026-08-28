@@ -331,7 +331,11 @@ export function LedgerScreen({ storeId, storeName, api, date, now }: LedgerScree
                 }
                 aria-pressed={view === 'staff'}
                 onClick={() => setView(view === 'staff' ? 'equipment' : 'staff')}
-                className="text-left text-ink focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-focus"
+                /*
+                 * 見出しセルの中に収まる形のまま、指で押せる大きさを保つ。
+                 * 字面はモックの一語だけだが、当たり判定はセル全体に広げる。
+                 */
+                className="-m-2 flex min-h-11 w-full items-center p-2 text-left text-ink focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-focus"
               >
                 {view === 'staff' ? '担当者' : '設備'}
               </button>

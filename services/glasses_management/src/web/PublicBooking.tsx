@@ -1,7 +1,7 @@
 import type {
-  PublicAvailabilityResponse,
   PublicBookingCreate,
   PublicBookingResult,
+  PublicOffersResponse,
   PublicReservationCancel,
   PublicReservationChange,
   PublicReservationChangeResult,
@@ -17,7 +17,6 @@ import {
   PhoneBody,
   PhoneButton,
   PhoneCard,
-  PhoneDateField,
   PhoneField,
   PhoneHead,
   PhoneInput,
@@ -36,11 +35,13 @@ import { PublicBookingRequestError } from './public-booking-client'
 export type PublicBookingApi = {
   listStores: () => Promise<PublicStoreSummary[]>
   readStore: (slug: string) => Promise<PublicStoreDetail>
-  readSlots: (
-    slug: string,
-    date: string,
-    purposeIds: string[],
-  ) => Promise<PublicAvailabilityResponse>
+  /*
+   * 候補枠は日付を受け取らない。承認済みモックの第 2 工程は「8月28日（金）
+   * 11:00」の既製のショートリストで、顧客に日付を打たせない（打たせると
+   * 最初の操作がカレンダー入力になり、候補が 1 日に閉じる）。日付は入力では
+   * なく走査の結果である。
+   */
+  readOffers: (slug: string, purposeIds: string[]) => Promise<PublicOffersResponse>
   createReservation: (
     slug: string,
     input: PublicBookingCreate,
@@ -99,6 +100,23 @@ function japaneseSlotLabel(date: string, startTime: string): string {
   return `${japaneseMonthDay(date)}${startTime}`
 }
 
+/** 保存されているインスタントを、承認済みモックと同じ「8月28日（金）11:00」へ。 */
+function formatJstSlot(instant: string): string {
+  const at = new Date(instant)
+  if (Number.isNaN(at.getTime())) return instant
+  const parts = new Intl.DateTimeFormat('ja-JP', {
+    timeZone: 'Asia/Tokyo',
+    month: 'numeric',
+    day: 'numeric',
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).formatToParts(at)
+  const value = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? ''
+  return `${value('month')}月${value('day')}日（${value('weekday')}）${value('hour')}:${value('minute')}`
+}
+
 function managementCodeErrorMessage(cause: unknown): string {
   if (
     !(cause instanceof PublicBookingRequestError) ||
@@ -135,8 +153,7 @@ export function PublicBooking({
   const [detail, setDetail] = useState<PublicStoreDetail>()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string>()
-  const [slotDate, setSlotDate] = useState('')
-  const [slots, setSlots] = useState<PublicAvailabilityResponse['slots']>([])
+  const [offers, setOffers] = useState<PublicOffersResponse['slots']>()
   const [customer, setCustomer] = useState<PublicBookingCreate['customer']>({
     name: '',
     kana: '',
@@ -154,8 +171,7 @@ export function PublicBooking({
     useState<PublicReservationVerificationResult>()
   const [managementError, setManagementError] = useState<string>()
   const [cancellationKey, setCancellationKey] = useState<string>()
-  const [changeDate, setChangeDate] = useState('')
-  const [changeSlots, setChangeSlots] = useState<PublicAvailabilityResponse['slots']>([])
+  const [changeSlots, setChangeSlots] = useState<PublicOffersResponse['slots']>()
   const [changeKey, setChangeKey] = useState<string>()
   const [managementSuccess, setManagementSuccess] = useState<string>()
   /** 選ぶことと進むことを分ける（承認済みモックの「日時へ進む」「お客様情報へ進む」）。 */
@@ -201,16 +217,23 @@ export function PublicBooking({
     if (store) void selectStore(store)
   }, [initialStoreSlug, stores, draft.store])
 
-  const loadSlots = async (date: string) => {
-    if (!draft.store || draft.purposeIds.length === 0) return
-    setSlotDate(date)
+  const loadOffers = async (store: { slug: string }, purposeIds: string[]) => {
     setError(undefined)
     try {
-      setSlots((await api.readSlots(draft.store.slug, date, draft.purposeIds)).slots)
+      setOffers((await api.readOffers(store.slug, purposeIds)).slots)
     } catch {
       setError('空き時間を読み込めませんでした。通信を確認してもう一度お試しください。')
     }
   }
+
+  /*
+   * 日時の工程に入ったら候補を読む。顧客の第 1 操作を日付入力にしないための
+   * 読み込みなので、面が開いた時点で走らせる（`readOffers` は日付を取らない）。
+   */
+  useEffect(() => {
+    if (draft.step !== 'datetime' || draft.store === undefined || offers !== undefined) return
+    void loadOffers(draft.store, draft.purposeIds)
+  }, [draft.step, draft.store, draft.purposeIds, offers])
 
   const confirmCustomer = () => {
     const confirmationKey = draft.confirmationKey ?? createConfirmationKey()
@@ -243,7 +266,7 @@ export function PublicBooking({
         setDraft((current) => publicBookingReducer(current, { type: 'booking_conflicted' }))
         // 埋まった枠は選び直す。選択済みのまま戻すと同じ枠を再送させてしまう。
         setPendingSlot(undefined)
-        void loadSlots(draft.date)
+        if (draft.store) void loadOffers(draft.store, draft.purposeIds)
         return
       }
       setDraft((current) => publicBookingReducer(current, { type: 'booking_result_unknown' }))
@@ -302,15 +325,10 @@ export function PublicBooking({
       setManagementError('予約を取り消せませんでした。期限または通信状態をご確認ください。')
     }
   }
-  const loadChangeSlots = async (date: string) => {
-    if (!verifiedReservation) return
-    setChangeDate(date)
+  const loadChangeOffers = async (reservation: PublicReservationVerificationResult) => {
     setManagementError(undefined)
     try {
-      setChangeSlots(
-        (await api.readSlots(verifiedReservation.storeSlug, date, verifiedReservation.purposeIds))
-          .slots,
-      )
+      setChangeSlots((await api.readOffers(reservation.storeSlug, reservation.purposeIds)).slots)
     } catch {
       setManagementError('空き時間を読み込めませんでした。通信を確認してもう一度お試しください。')
     }
@@ -399,7 +417,8 @@ export function PublicBooking({
           <PhoneSummary>
             予約番号 {reservationNumber}
             <br />
-            予約日時 {verifiedReservation.startAt}
+            {/* 保存されているのはインスタント。お客様には JST の日本語で読ませる。 */}
+            予約日時 {formatJstSlot(verifiedReservation.startAt)}
           </PhoneSummary>
           <p>
             <small>
@@ -424,8 +443,10 @@ export function PublicBooking({
           onClick={() => {
             setManagementError(undefined)
             setManagementSuccess(undefined)
-            setChangeSlots([])
+            setChangeSlots(undefined)
             setManagementMode('change')
+            // 変更でも日付は打たせない。候補を先に読んで並べる。
+            void loadChangeOffers(verifiedReservation)
           }}
         >
           予約日時を変更する
@@ -440,17 +461,19 @@ export function PublicBooking({
         <PhoneHead store="予約日時の変更" />
         <PhoneBody>
           <h1>変更後の日時を選ぶ</h1>
-          <PhoneDateField
-            label="変更後の日"
-            value={changeDate}
-            onChange={(next) => void loadChangeSlots(next)}
-          />
           {managementError && (
             <PhoneCard tone="error">
               <p role="alert">{managementError}</p>
             </PhoneCard>
           )}
-          {changeSlots.map((slot) => (
+          {changeSlots !== undefined && changeSlots.length === 0 && (
+            <PhoneCard>
+              <p role="status">
+                空いている日時が見つかりませんでした。お手数ですが店舗へお電話ください。
+              </p>
+            </PhoneCard>
+          )}
+          {(changeSlots ?? []).map((slot) => (
             <PhoneOption
               key={slot.startAt}
               onClick={() => void changeVerifiedReservation(slot.date, slot.startTime)}
@@ -670,11 +693,6 @@ export function PublicBooking({
               {selectedPurpose.label} · 約{selectedPurpose.durationMinutes}分
             </PhoneSummary>
           )}
-          <PhoneDateField
-            label="ご希望の日"
-            value={slotDate}
-            onChange={(next) => void loadSlots(next)}
-          />
           {draft.error === 'slot_unavailable' && (
             <PhoneCard tone="error">
               <p role="alert">
@@ -687,12 +705,14 @@ export function PublicBooking({
               <p role="alert">{error}</p>
             </PhoneCard>
           )}
-          {slotDate !== '' && slots.length === 0 && error === undefined && (
+          {offers !== undefined && offers.length === 0 && error === undefined && (
             <PhoneCard>
-              <p role="status">この日に空きはありません。別の日をお選びください。</p>
+              <p role="status">
+                空いている日時が見つかりませんでした。お手数ですが店舗へお電話ください。
+              </p>
             </PhoneCard>
           )}
-          {slots.map((slot) => (
+          {(offers ?? []).map((slot) => (
             <PhoneOption
               key={slot.startAt}
               selected={pendingSlot?.startAt === slot.startAt}

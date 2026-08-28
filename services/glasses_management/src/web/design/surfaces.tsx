@@ -223,15 +223,22 @@ export function CardGrid({
 /*
  * `.customer-top{grid-template-columns:repeat(3,1fr)}` — 3 枚組のカード。
  *
- * モックは 1176px の全幅に 390px の一覧列だけを置いていたが、実アプリは
- * 全画面共通の 250px の柱をさらに引くので、詳細列は 490px ほどしか残らない。
- * 3 等分すると 1 枚 150px となり、「タナカ ハナコ」「銀座店」のような短い値まで
- * 折り返す。入る枚数を幅から決め、和文を語の途中で折らない。
+ * 枚数を幅から決めさせない。実アプリは 250px の柱をさらに引くので、幅で
+ * 決めると 2 列へ落ち、「現在のメガネ」が段を下げて 3 枚組が読めなくなる。
+ * モックどおり必ず 3 列を保つ。
+ *
+ * `minmax(0,1fr)` の 0 は、格子の列が既定で「中身より狭くならない」ため。
+ * 長い和文が 1 列を押し広げて板をはみ出させるのを、ここで止める。
+ *
+ * 折り方は `auto-phrase`（文節の切れ目で折る）。`keep-all` は和文をどこでも
+ * 折らないので、板の右端から文字が溢れて切れる。それでも 1 列に収まらない長い
+ * 綴り（予約番号など）は `overflow-wrap:break-word` が最後の逃がしとして受ける
+ * （`anywhere` にすると列の最小幅まで縮められ、短い値まで割れてしまう）。
  */
 const CARD_COLUMNS: CSSProperties = {
-  gridTemplateColumns: 'repeat(auto-fit, minmax(228px, 1fr))',
-  // 和文は既定でどの文字の間でも折れる。名前や店舗名が語中で割れないようにする。
-  wordBreak: 'keep-all',
+  gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+  wordBreak: 'auto-phrase',
+  overflowWrap: 'break-word',
 }
 
 export function CardColumns({ children }: { children: ReactNode }) {

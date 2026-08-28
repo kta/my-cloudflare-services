@@ -42,11 +42,9 @@ test('starts the approved public flow by selecting a published store and its pur
   const api: PublicBookingApi = {
     listStores: async () => [store],
     readStore: async () => detail,
-    readSlots: async () => ({
-      date: '2026-09-01',
+    readOffers: async () => ({
       timezone: 'Asia/Tokyo',
       durationMinutes: 60,
-      intervalMinutes: 30,
       slots: [
         {
           date: '2026-09-01',
@@ -94,7 +92,6 @@ test('starts the approved public flow by selecting a published store and its pur
   expect(
     await screen.findByRole('heading', { name: 'ご希望の日時を選んでください' }),
   ).toBeInTheDocument()
-  fireEvent.change(screen.getByLabelText('ご希望の日'), { target: { value: '2026-09-01' } })
   fireEvent.click(await screen.findByRole('button', { name: '9月1日（火）10:00' }))
   fireEvent.click(screen.getByRole('button', { name: 'お客様情報へ進む' }))
   expect(
@@ -122,7 +119,6 @@ test('starts the approved public flow by selecting a published store and its pur
   expect(await screen.findByRole('heading', { name: '予約内容を確認しました' })).toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: '予約日時を変更する' }))
   expect(await screen.findByRole('heading', { name: '変更後の日時を選ぶ' })).toBeInTheDocument()
-  fireEvent.change(screen.getByLabelText('変更後の日'), { target: { value: '2026-09-01' } })
   fireEvent.click(await screen.findByRole('button', { name: '9月1日（火）10:00' }))
   expect(changeReservation).toHaveBeenCalledWith(
     '00000000-0000-4000-8000-000000000001',
@@ -149,11 +145,9 @@ test('checks the coarse result with the same confirmation key after the booking 
   const api: PublicBookingApi = {
     listStores: async () => [store],
     readStore: async () => detail,
-    readSlots: async () => ({
-      date: '2026-09-01',
+    readOffers: async () => ({
       timezone: 'Asia/Tokyo',
       durationMinutes: 60,
-      intervalMinutes: 30,
       slots: [
         {
           date: '2026-09-01',
@@ -190,7 +184,6 @@ test('checks the coarse result with the same confirmation key after the booking 
   fireEvent.click(await screen.findByRole('button', { name: '銀座店で予約を始める' }))
   fireEvent.click(await screen.findByRole('button', { name: /メガネを新しく作りたい.*約60分/ }))
   fireEvent.click(screen.getByRole('button', { name: '日時へ進む' }))
-  fireEvent.change(await screen.findByLabelText('ご希望の日'), { target: { value: '2026-09-01' } })
   fireEvent.click(await screen.findByRole('button', { name: '9月1日（火）10:00' }))
   fireEvent.click(screen.getByRole('button', { name: 'お客様情報へ進む' }))
   fireEvent.change(screen.getByLabelText('お名前'), { target: { value: '田中花子' } })
@@ -214,11 +207,9 @@ test('checks the coarse result with the same confirmation key after the booking 
 })
 
 test('keeps customer input and returns to same-store alternatives when confirmation conflicts', async () => {
-  const readSlots = vi.fn(async () => ({
-    date: '2026-09-01',
+  const readOffers = vi.fn(async () => ({
     timezone: 'Asia/Tokyo' as const,
     durationMinutes: 60,
-    intervalMinutes: 30,
     slots: [
       {
         date: '2026-09-01',
@@ -232,7 +223,7 @@ test('keeps customer input and returns to same-store alternatives when confirmat
   const api: PublicBookingApi = {
     listStores: async () => [store],
     readStore: async () => detail,
-    readSlots,
+    readOffers,
     createReservation: async () => {
       throw new PublicBookingRequestError(409)
     },
@@ -261,7 +252,6 @@ test('keeps customer input and returns to same-store alternatives when confirmat
   fireEvent.click(await screen.findByRole('button', { name: '銀座店で予約を始める' }))
   fireEvent.click(await screen.findByRole('button', { name: /メガネを新しく作りたい.*約60分/ }))
   fireEvent.click(screen.getByRole('button', { name: '日時へ進む' }))
-  fireEvent.change(await screen.findByLabelText('ご希望の日'), { target: { value: '2026-09-01' } })
   fireEvent.click(await screen.findByRole('button', { name: '9月1日（火）11:00' }))
   fireEvent.click(screen.getByRole('button', { name: 'お客様情報へ進む' }))
   fireEvent.change(screen.getByLabelText('お名前'), { target: { value: '田中花子' } })
@@ -282,18 +272,16 @@ test('keeps customer input and returns to same-store alternatives when confirmat
   fireEvent.click(screen.getByRole('button', { name: '9月1日（火）11:00' }))
   fireEvent.click(screen.getByRole('button', { name: 'お客様情報へ進む' }))
   expect(await screen.findByLabelText('お名前')).toHaveValue('田中花子')
-  expect(readSlots).toHaveBeenCalledTimes(2)
+  expect(readOffers).toHaveBeenCalledTimes(2)
 })
 
 test('顧客フローの各画面は承認済みモックの文言と工程表示を出す (web-booking-complete-approved.html)', async () => {
   const api: PublicBookingApi = {
     listStores: async () => [store],
     readStore: async () => detail,
-    readSlots: async () => ({
-      date: '2026-09-01',
+    readOffers: async () => ({
       timezone: 'Asia/Tokyo',
       durationMinutes: 60,
-      intervalMinutes: 30,
       slots: [
         {
           date: '2026-09-01',
@@ -348,7 +336,6 @@ test('顧客フローの各画面は承認済みモックの文言と工程表�
   // 日時: 工程 2 / 5、選択中の来店目的、曜日つきの枠。
   expect(screen.getByRole('progressbar', { name: '予約工程 2 / 5' })).toBeInTheDocument()
   expect(screen.getByText('メガネを新しく作りたい · 約60分')).toBeInTheDocument()
-  fireEvent.change(await screen.findByLabelText('ご希望の日'), { target: { value: '2026-09-01' } })
   fireEvent.click(await screen.findByRole('button', { name: '9月1日（火）10:00' }))
   fireEvent.click(screen.getByRole('button', { name: 'お客様情報へ進む' }))
 
@@ -379,11 +366,9 @@ test('顧客フローの主操作は本文の外（画面下端）に貼り付�
   const api: PublicBookingApi = {
     listStores: async () => [store],
     readStore: async () => detail,
-    readSlots: async () => ({
-      date: '2026-09-01',
+    readOffers: async () => ({
       timezone: 'Asia/Tokyo',
       durationMinutes: 60,
-      intervalMinutes: 30,
       slots: [
         {
           date: '2026-09-01',
@@ -431,4 +416,65 @@ test('顧客フローの主操作は本文の外（画面下端）に貼り付�
   expect(screen.getByRole('button', { name: /メガネを新しく作りたい/ })).toHaveClass('border-3')
   const toDatetime = screen.getByRole('button', { name: '日時へ進む' })
   expect(screen.getByRole('main')).not.toContainElement(toDatetime)
+})
+
+/*
+ * 顧客向けの面に機械可読な値を出さない。
+ *
+ * 日時の工程は承認済みモック（`#datetime`）どおり既製の候補を並べる面であり、
+ * 日付を打たせる欄は無い。欄を置くと顧客の第 1 操作がカレンダー入力になり、
+ * `2026-09-01` という保存用の書き方がそのまま顧客の画面に載る。
+ */
+test('日時の工程は生の ISO を出さず、候補を日本語で並べる', async () => {
+  const api: PublicBookingApi = {
+    listStores: async () => [store],
+    readStore: async () => detail,
+    readOffers: async () => ({
+      timezone: 'Asia/Tokyo',
+      durationMinutes: 60,
+      slots: [
+        {
+          date: '2026-09-01',
+          startTime: '10:00',
+          endTime: '11:00',
+          startAt: '2026-09-01T01:00:00.000Z',
+          endAt: '2026-09-01T02:00:00.000Z',
+        },
+      ],
+    }),
+    createReservation: async () => ({
+      reservationNumber: 'EY-0001',
+      managementCode: 'ABCD-1234',
+      emailStatus: 'sent',
+    }),
+    readReservationStatus: async () => ({ status: 'confirmed' }),
+    verifyReservation: async () => ({
+      reservationId: '00000000-0000-4000-8000-000000000001',
+      verificationToken: 'a'.repeat(32),
+      expiresAt: '2026-09-01T00:15:00.000Z',
+      version: 1,
+      startAt: '2026-09-01T01:00:00.000Z',
+      purposeIds: ['00000000-0000-4000-8000-000000000001'],
+      storeSlug: 'ginza',
+    }),
+    cancelReservation: async () => ({ status: 'cancelled', version: 2 }),
+    changeReservation: async () => ({
+      status: 'confirmed',
+      version: 2,
+      startAt: '2026-09-01T02:00:00.000Z',
+      endAt: '2026-09-01T03:00:00.000Z',
+      purposeIds: ['00000000-0000-4000-8000-000000000001'],
+    }),
+  }
+  const { container } = render(<PublicBooking api={api} />)
+
+  fireEvent.click(await screen.findByRole('button', { name: /銀座店.*店舗情報を見る/ }))
+  fireEvent.click(await screen.findByRole('button', { name: '銀座店で予約を始める' }))
+  fireEvent.click(await screen.findByRole('button', { name: /メガネを新しく作りたい.*約60分/ }))
+  fireEvent.click(screen.getByRole('button', { name: '日時へ進む' }))
+
+  expect(await screen.findByRole('button', { name: '9月1日（火）10:00' })).toBeInTheDocument()
+  // 日付を打たせる欄はモックに無い。置けば ISO がそのまま顧客の画面に載る。
+  expect(screen.queryByLabelText('ご希望の日')).toBeNull()
+  expect(container.textContent).not.toContain('2026-09-01')
 })

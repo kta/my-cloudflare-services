@@ -435,13 +435,18 @@ test.each([
   expect(within(region).queryByRole('button', { name: '再生' })).not.toBeInTheDocument()
 })
 
-// UC-EYEX-062: with no recording information at all the screen says so.
-test('shows 未取得 when no recording information is supplied', async () => {
+/*
+ * UC-EYEX-062: 録音の情報がまだ何も無いときは、そのことを説明文で言う。
+ * 状態の欄に「未取得」と書き足さない（モックの語彙に無く、同じことを二度
+ * 言うだけになる）。
+ */
+test('says the recording state is not loaded yet without inventing a state word', async () => {
   renderScreen(listResponse([tanaka]), { permissions: { playRecording: true } })
   searchFor('田中')
   fireEvent.click(await screen.findByRole('button', { name: /田中 花子/ }))
   const region = await screen.findByRole('region', { name: 'iPad録音' })
-  expect(within(region).getByText('未取得')).toBeInTheDocument()
+  expect(within(region).getByText('録音の状態をまだ取得できていません。')).toBeInTheDocument()
+  expect(region.textContent).not.toContain('未取得')
 })
 
 // AC-EYEX-15 / AC-EYEX-79: permitted staff get metadata and playback, never a download.

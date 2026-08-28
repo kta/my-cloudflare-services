@@ -1,9 +1,10 @@
 import { AvailabilityStoreSettings, LedgerEntry, type ReceptionProgress } from '@app/contracts'
 import { type ReactNode, useCallback, useEffect, useState } from 'react'
+import { barPrimaryAction } from './app-chrome'
 import { Action } from './design/controls'
 import { PickerField, TextAreaField, TextField } from './design/forms'
 import { JourneyBoard, type JourneyCell } from './design/ledger'
-import { Card, StatePill, TitleRow } from './design/surfaces'
+import { Card, StatePill } from './design/surfaces'
 import { ConflictPanel } from './LedgerScreen'
 import type { StaffScreenProps } from './staff-screen'
 
@@ -76,14 +77,7 @@ function conflictVersion(payload: unknown): number | undefined {
 
 type Attempt = { send: (version: number) => Promise<Response>; describe: string }
 
-export function JourneyScreen({
-  storeId,
-  storeName,
-  api,
-  navigate,
-  date,
-  now,
-}: JourneyScreenProps) {
+export function JourneyScreen({ storeId, storeName, api, date, now }: JourneyScreenProps) {
   const [entries, setEntries] = useState<LedgerEntry[]>([])
   const [staffNames, setStaffNames] = useState<Map<string, string>>(new Map())
   const [loadFailed, setLoadFailed] = useState(false)
@@ -113,6 +107,29 @@ export function JourneyScreen({
   useEffect(() => {
     void load().catch(() => setLoadFailed(true))
   }, [load])
+
+  /*
+   * 店頭のお客様の受付は、承認済みモックでは緑バーの主操作である。面の中に
+   * もう 1 枚同じボタンを置くと段が増え、同じ操作が 2 か所に見える。行いだけ
+   * をバーへ預け、面から出るときに取り下げる。
+   */
+  const receiveWalkin = useCallback(async () => {
+    const response = await api(`/api/staff/stores/${storeId}/walkins`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    })
+    if (response.ok) await load()
+    else setLoadFailed(true)
+  }, [api, load, storeId])
+
+  useEffect(
+    () =>
+      barPrimaryAction.set(() => {
+        void receiveWalkin().catch(() => setLoadFailed(true))
+      }),
+    [receiveWalkin],
+  )
 
   /* The board names the person handling each stage; an id would tell nobody. */
   useEffect(() => {
@@ -186,7 +203,6 @@ export function JourneyScreen({
     void run(attempt, entry.version)
   }
 
-  const warned = entries.filter((entry) => entry.warnings.length > 0)
   const handover = entries.find((entry) => entry.nextGuidance !== null)
 
   const stageIndexOf = (entry: LedgerEntry): number => {
@@ -220,6 +236,12 @@ export function JourneyScreen({
           <b>{entry.customerName}</b>
           {minutes !== undefined && <span>{`待ち${minutes}分`}</span>}
           {entry.entryType === 'walkin' && entry.customerId === null && <span>顧客未登録</span>}
+          {/* 注意は色ではなく言葉。理由の全文は選んだときの右パネルが受け持つ。 */}
+          {entry.warnings.map((warning) => (
+            <StatePill key={warning.code} tone="danger">
+              {WARNING_LABELS[warning.code]}
+            </StatePill>
+          ))}
         </button>
       ),
     }
@@ -282,61 +304,11 @@ export function JourneyScreen({
         />
       )}
 
-      {warned.length > 0 && (
-        <section aria-label="注意が必要なお客様" className="pb-3">
-          {warned.map((entry) => (
-            /* 警告は淡い赤地の面。理由は必ず文で添える（色だけでは伝えない）。 */
-            <Card key={entry.id} tone="attention" className="mt-2.5">
-              <b className="block">{entry.customerName}</b>
-              <ul>
-                {entry.warnings.map((warning) => (
-                  <li key={warning.code} className="mt-1.5 flex flex-wrap items-center gap-2.5">
-                    <StatePill tone="danger">{WARNING_LABELS[warning.code]}</StatePill>
-                    <span>{warning.message}</span>
-                  </li>
-                ))}
-              </ul>
-            </Card>
-          ))}
-        </section>
-      )}
-
       <div className="flex flex-wrap items-start gap-4">
         <section className="min-w-0 flex-1">
-          {/*
-           * モックの本文は見出し 1 行で始まる。日付と受付の操作はこの行の右端へ
-           * 寄せ、段を増やさない（帯を 2 本にすると盤が 1 画面に収まらなくなる）。
-           */}
-          <TitleRow
-            push={
-              <>
-                {/* 日付は数字なので等幅。和文はここに混ぜない。 */}
-                <p className="font-mono text-grid text-ink-muted">{date}</p>
-                <Action inset="tight" onClick={() => navigate({ screen: 'ledger', date })}>
-                  予約台帳へ
-                </Action>
-                <Action
-                  variant="primary"
-                  inset="tight"
-                  onClick={() => {
-                    void (async () => {
-                      const response = await api(`/api/staff/stores/${storeId}/walkins`, {
-                        method: 'POST',
-                        headers: { 'content-type': 'application/json' },
-                        body: '{}',
-                      })
-                      if (response.ok) await load()
-                      else setLoadFailed(true)
-                    })()
-                  }}
-                >
-                  ＋ 店頭のお客様を受付
-                </Action>
-              </>
-            }
-          >
-            <h1>接客の進み具合</h1>
-          </TitleRow>
+          {/* モックの本文は見出し 1 行で始まる。日付も行き先もここには置かない
+              （日付は緑バーの副題、行き先は左サイドバーが持つ）。 */}
+          <h1>接客の進み具合</h1>
           <JourneyBoard
             stages={['お客様', ...STAGE_COLUMNS.map((column) => column.label)]}
             rows={entries.map((entry) => row(entry))}
@@ -353,6 +325,13 @@ export function JourneyScreen({
           <section aria-label="選択中のお客様" className="w-80 shrink-0">
             <Card>
               <b className="block text-lead">{selected.customerName}</b>
+
+              {/* 警告は淡い赤地の面。理由は必ず文で添える（色だけでは伝えない）。 */}
+              {selected.warnings.map((warning) => (
+                <div key={warning.code} className="mt-2.5">
+                  <Card tone="attention">{warning.message}</Card>
+                </div>
+              ))}
 
               {selected.entryType === 'reservation' && (
                 <div className="mt-2.5 space-y-2.5 border-line border-b pb-3.5">

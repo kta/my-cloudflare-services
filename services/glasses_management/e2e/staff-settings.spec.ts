@@ -261,12 +261,30 @@ async function startEditing(screen: ReturnType<Page['getByRole']>) {
   await screen.getByRole('button', { name: '編集', exact: true }).click()
 }
 
+/**
+ * 工程の並び。
+ *
+ * iPad 幅では全画面共通の柱（`画面の一覧`）の中、設定ガイドの下に節として入る。
+ * SP 幅では柱を畳むので、本文先頭の専用レールが代わりを務める。どちらの幅でも
+ * 走るテストなので、出ている方を返す。
+ */
+/** SP 幅の専用レール。柱を畳む幅では、これが工程の並びを持つ。 */
 function stepRail(page: Page) {
   return page.getByRole('navigation', { name: '設定の工程' })
 }
 
+/** 工程のボタンだけを取る（柱では行き先が混ざるので、工程名で絞る）。 */
+function stepButtons(page: Page) {
+  return page
+    .getByRole('navigation')
+    .getByRole('button')
+    .filter({ hasText: /店舗と営業時間|来店目的|スタッフと技能|設備と点検|Web予約|影響確認と公開/ })
+}
+
 async function goToStep(page: Page, pattern: RegExp) {
-  await stepRail(page).getByRole('button', { name: pattern }).click()
+  // 工程は読み上げ名（`工程4 設備と点検 未完了`）で名指す。字面は `4　設備と点検`
+  // なので、`hasText` では状態語まで含む名前と噛み合わない。
+  await page.getByRole('navigation').getByRole('button', { name: pattern }).first().click()
 }
 
 // @e2e-covers AC-EYEX-40 AC-EYEX-41 AC-EYEX-47
@@ -280,7 +298,7 @@ test('設定ガイドは6工程を決まった順で並べ、状態を語で示�
   await expect(screen.getByRole('heading', { name: '店舗と営業時間', level: 1 })).toBeVisible()
 
   // AC-EYEX-40: 店舗と営業時間 → 来店目的 → スタッフと技能 → 設備と点検 → Web予約 → 影響確認と公開。
-  const steps = stepRail(page).getByRole('button')
+  const steps = stepButtons(page)
   await expect(steps).toHaveCount(6)
   // 設定が届く前は全工程が未完了なので、届いたことを待ってから状態の語を読む。
   await expect(steps.nth(1)).toHaveAttribute('aria-label', '工程2 来店目的 完了')
@@ -601,10 +619,11 @@ test('Web予約工程は公開状態から期限後の案内までを一覧し�
   // AC-EYEX-63 / UC-EYEX-109〜113: 公開状態、公開期間、公開する来店目的、受付時間、
   // 予約可能日数、直前受付期限、変更・取消期限、期限後の案内が一枚に並ぶ。
   const panel = screen.getByRole('region', { name: 'Web予約設定' })
+  /*
+   * 値が取れている欄だけが並ぶ。Web予約の公開設定 API はまだ無いので、
+   * それに依る欄（公開状態・受付終了・公開する来店目的）はこの時点では出ない。
+   */
   for (const term of [
-    '公開状態',
-    '受付終了',
-    '公開する来店目的',
     '受付時間',
     '予約可能期間',
     '直前受付期限',
@@ -617,8 +636,10 @@ test('Web予約工程は公開状態から期限後の案内までを一覧し�
   // 月–土 でひとまとまりに読め、日曜だけ別の時間帯として並ぶ）。
   await expect(panel).toContainText('月–土 10:00–19:00')
   await expect(panel).toContainText('日 10:00–18:00')
-  // 公開状態・公開期間・公開する来店目的・日数・期限は API 未提供なので推測せず 未取得。
-  await expect(panel).toContainText('未取得')
+  // 公開状態・公開期間・公開する来店目的は API 未提供。推測も「未取得」の
+  // 書き足しもせず、欄ごと出さないうえで、取れていないことを 1 か所で言う。
+  await expect(panel).not.toContainText('未取得')
+  await expect(panel).not.toContainText('公開状態')
   await expect(panel).toContainText('Web予約の公開設定はまだ取得できていません。')
 
   // UC-EYEX-114 / AC-EYEX-71: 同じ画面で顧客向けページをプレビューする。
@@ -642,7 +663,7 @@ test('settings.read がなければ設定は何も見えず、settings.manage �
     page.getByRole('region', { name: 'この設定を表示する権限がありません' }),
   ).toContainText('権限のある管理者に確認してください。設定の存在や内容はこれ以上表示しません。')
   await expect(screen).toHaveCount(0)
-  await expect(stepRail(page)).toHaveCount(0)
+  await expect(stepButtons(page)).toHaveCount(0)
   await expect(page.getByText('10:00–19:00')).toHaveCount(0)
   await expect(page.getByRole('button', { name: '設定を保存' })).toHaveCount(0)
 

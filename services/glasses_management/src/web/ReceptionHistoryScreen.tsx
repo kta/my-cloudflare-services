@@ -412,13 +412,22 @@ export function ReceptionHistoryScreen({
           <DetailLine label="目的" value={purposeLabel(booking, purposeNames)} />
           <DetailLine label="予約番号" value={selected.reservationNumber ?? '予約なし'} />
           <DetailLine label="受付経路" value={SOURCE_LABEL[selected.source]} />
-          <b className="mt-3.5 block">iPad録音</b>
-          <RecordingPanel
-            recording={resolveRecording?.(selected) ?? recording}
-            permissions={permissions}
-            frame="bare"
-            wave
-          />
+          {/*
+           * 見出しは面の中身と一緒に出す。権限が無いと `RecordingPanel` は
+           * 何も描かないので、見出しだけを外に置くと空の見出しが宙に浮き、
+           * 「録音がある」ことまで漏らしてしまう (AC-EYEX-60)。
+           */}
+          {permissions.playRecording && (
+            <>
+              <b className="mt-3.5 block">iPad録音</b>
+              <RecordingPanel
+                recording={resolveRecording?.(selected) ?? recording}
+                permissions={permissions}
+                frame="bare"
+                wave
+              />
+            </>
+          )}
         </Card>
         <Card>
           <b className="block">お客様</b>

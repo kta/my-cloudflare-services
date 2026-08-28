@@ -1,5 +1,6 @@
 import type { StorePermission } from '@app/contracts'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { useState } from 'react'
 import { afterEach, expect, test, vi } from 'vitest'
 import { SettingsPublication } from './SettingsPublication'
 
@@ -210,17 +211,28 @@ function setup(
     return jsonResponse({ error: 'unexpected' }, 500)
   })
   const navigate = vi.fn()
-  render(
-    <SettingsPublication
-      storeId={STORE_ID}
-      storeName="銀座店"
-      api={api as unknown as (i: RequestInfo | URL, init?: RequestInit) => Promise<Response>}
-      navigate={navigate}
-      permissions={options.permissions ?? ['settings.read', 'settings.manage']}
-      today={TODAY}
-      dirty={options.dirty ?? false}
-    />,
-  )
+  /*
+   * 公開結果は工程 6 の中ではなく独立した面に出る（承認済みモック
+   * `#publish-result`）。実アプリでは設定ガイドが公開の成功を受けて面を
+   * 移すので、テストの足場も同じ形で組む。
+   */
+  function Harness() {
+    const [view, setView] = useState<'guide' | 'result'>('guide')
+    return (
+      <SettingsPublication
+        storeId={STORE_ID}
+        storeName="銀座店"
+        api={api as unknown as (i: RequestInfo | URL, init?: RequestInit) => Promise<Response>}
+        navigate={navigate}
+        permissions={options.permissions ?? ['settings.read', 'settings.manage']}
+        today={TODAY}
+        dirty={options.dirty ?? false}
+        view={view}
+        onPublished={() => setView('result')}
+      />
+    )
+  }
+  render(<Harness />)
   return { api, calls, navigate }
 }
 
@@ -438,7 +450,7 @@ test('公開予定の取消はPATCHで送られる', async () => {
 
 /* ---------------- 公開結果と部分失敗 (UC-EYEX-162, 163, AC-EYEX-106, 107) ---------------- */
 
-test('公開結果は版ID・対象店舗・反映件数・失敗件数・Web枠と台帳の反映を出す', async () => {
+test('公開結果は人が読む版の採番・対象店舗・反映件数・失敗件数・Web枠と台帳の反映を出す', async () => {
   setup({
     handlers: (url, method) => {
       if (url.endsWith('/availability/draft/impact')) return jsonResponse(clearedImpact)
@@ -450,7 +462,9 @@ test('公開結果は版ID・対象店舗・反映件数・失敗件数・Web枠
   })
   fireEvent.click(await screen.findByRole('button', { name: '公開する' }))
   const result = await screen.findByRole('region', { name: '公開結果' })
-  expect(within(result).getByText(`版 ${VERSION_ID} の公開結果`)).toBeTruthy()
+  // 版は人が読む採番で名乗る。保存用の UUID は画面に出さない。
+  expect(within(result).getByText('第4版の公開結果')).toBeTruthy()
+  expect(result.textContent).not.toContain(VERSION_ID)
   expect(within(result).getByText('成功 12店舗')).toBeTruthy()
   expect(within(result).getByText('失敗 1店舗')).toBeTruthy()
   expect(within(result).getByText('Web公開枠 428件 → 402件（-26件）')).toBeTruthy()

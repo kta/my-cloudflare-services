@@ -19,6 +19,7 @@ function renderPrompt(
     administrative?: boolean
     onGranted?: (token: string) => void
     onCancelled?: () => void
+    terminalName?: string
   } = {},
 ) {
   const onGranted = overrides.onGranted ?? vi.fn()
@@ -33,6 +34,7 @@ function renderPrompt(
       terminalId={TERMINAL_ID}
       organizationId={ORGANIZATION_ID}
       actionLabel="録音の保全指定"
+      terminalName={overrides.terminalName}
       administrative={overrides.administrative ?? true}
       onGranted={onGranted}
       onCancelled={onCancelled}
@@ -252,4 +254,37 @@ test('管理操作だけが個人再認証を必要とする (UC-EYEX-137, AC-EY
   expect(requiresPersonalReauthentication('reservation_create')).toBe(false)
   expect(requiresPersonalReauthentication('attention_register')).toBe(false)
   expect(requiresPersonalReauthentication('customer_search')).toBe(false)
+})
+
+/*
+ * 承認済みモック `operations-approved.html#reauth` は、共有 iPad のクロムの上に
+ * 素の板を 1 枚置くだけの独立した面である。暗い幕は無く、バーは「どの店舗の、
+ * どの端末で」を名乗る。手前の運用面が透けて見えると、いま何の上で個人を
+ * 名乗り直しているのかが読めなくなる。
+ */
+test('共有iPadのクロムを持つ独立した面として出る（暗い幕もモーダルも重ねない）', () => {
+  const api = vi.fn()
+  renderPrompt(api, { terminalName: 'レジ横iPad' })
+
+  expect(screen.getByText('銀座店 レジ横iPad · 完全共有')).toBeInTheDocument()
+  const dialog = screen.getByRole('dialog', { name: /管理者として確認してください/ })
+  // 幕（`bg-ink/40` の全面）は置かない。
+  expect(document.querySelector('.bg-ink\\/40')).toBeNull()
+  expect(dialog.closest('[class*="fixed"]')).not.toBeNull()
+})
+
+/*
+ * モックの板は 個人PIN の 1 欄だけだが、実アプリは個人ログインIDも要る。
+ * PIN の伸長塩が `app:pin:<組織>:<個人>` で、誰の PIN かが決まらないと
+ * ブラウザ側で伸長値を作れないためで、サーバ側では解決できない（完全共有の
+ * iPad には個人セッションが無い）。契約 `SharedTerminalReauthenticationInput`
+ * も `userId` を必須にしている。欄はモックに寄せて 2 本までに留め、その 2 本が
+ * 増えていないことをここで縛る。逸脱の理由は `docs/frontend/REBUILD.md`。
+ */
+test('個人ログインIDと個人PINの 2 欄だけを持ち、欄を増やさない', () => {
+  renderPrompt(vi.fn())
+  expect(screen.getByLabelText('個人ログインID')).toBeInTheDocument()
+  expect(screen.getByLabelText('個人PIN')).toBeInTheDocument()
+  // PIN は password 欄なので role では数えられない。欄そのものを数える。
+  expect(document.querySelectorAll('input')).toHaveLength(2)
 })

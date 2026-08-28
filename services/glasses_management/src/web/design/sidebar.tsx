@@ -1,5 +1,5 @@
 import { cn } from '@app/ui'
-import type { ReactNode } from 'react'
+import { type ReactNode, useState } from 'react'
 
 /*
  * 全画面共通の左サイドバー。
@@ -14,19 +14,65 @@ import type { ReactNode } from 'react'
  * の `.side`）をそのまま全画面へ広げたものである。
  */
 
-/** 250px の柱。バーの下で、本文と横に並ぶ。 */
+/**
+ * 250px の柱。バーの下で、本文と横に並ぶ。
+ *
+ * 狭い画面では畳む。375px の端末で 250px を占めたままだと本文に 109px しか
+ * 残らず、和文が 1 行 1 文字に折れて読めなくなる。畳んだときは開く口だけを
+ * 残し、開くと本文の上に重なる（幅を奪い合わない）。
+ */
 export function AppSidebar({ children }: { children: ReactNode }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="min-h-11 shrink-0 border-line border-b bg-side px-4 text-left font-sans text-body text-ink md:hidden"
+      >
+        画面の一覧を開く
+      </button>
+      {open && (
+        <div className="fixed inset-0 z-20 bg-ink/40 md:hidden" role="presentation">
+          <nav
+            aria-label="画面の一覧（開いた状態）"
+            className="h-full w-62.5 overflow-auto bg-side p-3"
+          >
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              className="min-h-11 w-full rounded-ctl px-2.5 text-left font-sans text-body text-ink"
+            >
+              閉じる
+            </button>
+            {children}
+          </nav>
+        </div>
+      )}
+      <SidebarColumn>{children}</SidebarColumn>
+    </>
+  )
+}
+
+/** 広い画面で本文と横に並ぶ柱そのもの。 */
+function SidebarColumn({ children }: { children: ReactNode }) {
   return (
     <nav
       aria-label="画面の一覧"
+      // 狭い画面では畳む。上の引き出しが代わりを務める。
+      data-sidebar="column"
       /*
-       * 13 の行き先と、開いている面の節が iPad 横向き（814px、緑バーを引いて
-       * 738px）に収まらなければならない。18px の内側余白と 48px 行のままだと
-       * 行き先だけで 764px になり、末尾の「お知らせ」が常に切れる。48px は
-       * 運用面の 4 項目向けの寸法で、13 項目の柱には合っていないので、余白と
-       * 行高を詰めて全部を一度に見せる（`SidebarItem` / `SidebarSection`）。
+       * 13 の行き先は iPad 横向き（814px、緑バーを引いて 738px）に 44px 行のまま
+       * 収まる（12px の内側余白 + 群見出し 2 + 13 行 = 648px）。節を開いた分だけ
+       * 溢れるので、そこは柱を送らせる。行を 36px まで詰めれば全部映るが、iPad は
+       * 指で触る端末なので、押せるものが 44pt を割ると狙って押せなくなる。
+       * 映る量より押せることを採る。
        */
-      className="min-h-0 shrink-0 overflow-auto border-line border-r bg-side p-3"
+      /*
+       * 柱そのものは送らせない。13 の行き先は 44px 行のまま 648px で収まる。
+       * 入り切らないのは開いている面の節だけなので、送るのはそちら（`SidebarSections`）。
+       */
+      className="min-h-0 max-md:hidden shrink-0 overflow-hidden border-line border-r bg-side p-3"
       style={{ width: '250px' }}
     >
       {children}
@@ -60,9 +106,8 @@ export function SidebarItem({
       aria-current={current ? 'page' : undefined}
       onClick={onClick}
       className={cn(
-        // 36px 行。13 項目 + 節を 738px に収めるための寸法で、モックの 48px は
-        // 4 項目しか無い運用面の値だった。
-        'min-h-9 w-full whitespace-nowrap rounded-ctl px-2.5 py-1 text-left font-sans text-body',
+        // 44px 行。指で押す列なので、ここを下回らせない。
+        'min-h-11 w-full whitespace-nowrap rounded-ctl px-2.5 py-1 text-left font-sans text-body',
         current ? 'bg-surface font-bold text-pine' : 'bg-transparent text-ink',
       )}
     >
@@ -76,9 +121,14 @@ export function SidebarItem({
  *
  * 行き先の下に一段下げて置く。行き先と同じ見た目で並べると、押した先が別の面
  * なのか同じ面の絞り込みなのかが読めなくなる。
+ *
+ * 節はここだけを送らせる。13 の行き先（44px 行で 648px）は必ず全部見えていな
+ * ければならない——見えない行き先は「無い」のと同じで、それを無くすために柱を
+ * 作った。節が入り切らないときに送るのは節の側である。高さの上限 88px は、
+ * 738px から行き先 648px を引いた残りに収まる値。
  */
 export function SidebarSections({ children }: { children: ReactNode }) {
-  return <div className="border-line border-l-2 pl-2.5">{children}</div>
+  return <div className="max-h-22 overflow-auto border-line border-l-2 pl-2.5">{children}</div>
 }
 
 /** 節ひとつ。行き先より一段小さく、選択中は緑の太字にする。 */
@@ -97,13 +147,17 @@ export function SidebarSection({
   return (
     <button
       type="button"
-      aria-current={current ? 'true' : undefined}
+      /*
+       * 節は「その面の中でいまどこか」なので `step` と名乗る。`true` だと
+       * 読み上げが「現在の項目」としか言えず、行き先（`page`）との区別が付かない。
+       */
+      aria-current={current ? 'step' : undefined}
       aria-label={name}
       onClick={onClick}
       disabled={onClick === undefined}
       className={cn(
-        // 28px 行。節は行き先より一段小さく、開いている面の分だけ足される。
-        'min-h-7 w-full whitespace-nowrap rounded-ctl px-2.5 py-0.5 text-left font-sans text-note',
+        // 節も押せる列なので 44px を割らない。字面だけ一段小さくする。
+        'min-h-11 w-full whitespace-nowrap rounded-ctl px-2.5 py-1 text-left font-sans text-note',
         current ? 'font-bold text-pine' : 'text-ink-muted',
       )}
     >

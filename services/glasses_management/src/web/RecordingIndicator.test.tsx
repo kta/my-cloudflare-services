@@ -51,7 +51,7 @@ function renderUploadFailed(
   overrides: Partial<Parameters<typeof RecordingUploadFailedScreen>[0]> = {},
 ) {
   const props = {
-    upload: { attempt: 2, maxAttempts: 5, lastAttemptAt: '14:32' },
+    upload: { attempt: 2, maxAttempts: 5, lastAttemptAt: '2026-08-27T05:32:36.041Z' },
     onRetryUpload: vi.fn(),
     onOpenReservation: vi.fn(),
     ...overrides,
@@ -103,4 +103,16 @@ test('録音の状態も権限の結果もブラウザストレージへ書か�
   await waitFor(() => expect(props.onRetryUpload).toHaveBeenCalled())
   expect(local).not.toHaveBeenCalled()
   local.mockRestore()
+})
+
+/*
+ * 最終試行はミリ秒付きの UTC で保持されている。そのまま出すと
+ * `2026-08-27T23:51:36.041Z` が画面に載り、受付の人が読める形ではなくなる
+ * （承認済みモックは `14:32`）。機械可読な値は JST の時刻へ翻して出す。
+ */
+test('最終試行は JST の時刻で読める形にする', () => {
+  renderUploadFailed()
+  const panel = screen.getByRole('alert')
+  expect(panel).toHaveTextContent('最終試行 14:32')
+  expect(panel.textContent).not.toContain('2026-08-27T05:32:36.041Z')
 })

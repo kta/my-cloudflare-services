@@ -222,6 +222,32 @@ function createBarOverlay() {
 
 export const barOverlay = createBarOverlay()
 
+/**
+ * 緑バーの主操作が「移動」ではなく「その面での行い」であることがある。
+ * 来店受付の `＋ 店頭のお客様を受付` は、店頭に立っているお客様をその場で
+ * 起こす操作であって、来店受付へ移動する操作ではない（すでにその面にいる）。
+ *
+ * モックの主操作はバーの中にひとつだけなので、面の中にもう 1 枚同じボタンを
+ * 置くと段が増え、同じ操作が 2 か所に見える。何を行うかは面しか知らないので、
+ * overlay と同じく面が書き、バーは押された瞬間に読む（読むのが押した時だけ
+ * なので、購読も再描画も要らない）。
+ */
+function createBarPrimaryAction() {
+  let current: (() => void) | undefined
+  return {
+    snapshot: () => current,
+    /** 面が書く。戻り値を呼ぶと自分が書いたものだけを取り下げる。 */
+    set(next: () => void) {
+      current = next
+      return () => {
+        if (current === next) current = undefined
+      }
+    },
+  }
+}
+
+export const barPrimaryAction = createBarPrimaryAction()
+
 /* ------------------------------------------------------------------ *
  * 面からサイドバーへ書き込む節
  * ------------------------------------------------------------------ */

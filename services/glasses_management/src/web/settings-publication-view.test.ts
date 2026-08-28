@@ -403,3 +403,30 @@ test('a stale base version is refused with the latest version shown', () => {
   expect(versionConflictNotice({ error: 'draft_not_found' })).toBeUndefined()
   expect(versionConflictNotice(undefined)).toBeUndefined()
 })
+
+/*
+ * 版の名乗りは人が読む採番で出す。`versionId` は保存用の UUID であって、
+ * 画面に出しても「どの版か」を誰も読み取れない（承認済みモックは
+ * `settings-complete-approved.html#publish-result` で人が読む採番を出す）。
+ * 番号は反映済み店舗の `appliedVersion` が持っている。
+ */
+test('the result names the version with the human numbering, never the uuid', () => {
+  const view = publicationView(publication())
+  expect(view.versionLabel).toBe('第4版の公開結果')
+  expect(view.versionLabel).not.toContain(publication().versionId)
+})
+
+test('a publication that has not applied anywhere yet names no version number', () => {
+  const view = publicationView(
+    publication({
+      status: 'scheduled',
+      targets: publication().targets.map((target) => ({
+        ...target,
+        status: 'pending' as const,
+        appliedVersion: null,
+      })),
+    }),
+  )
+  // 採番はまだ決まっていない。分かっていない番号を作り出さず、名乗りだけ出す。
+  expect(view.versionLabel).toBe('公開結果')
+})

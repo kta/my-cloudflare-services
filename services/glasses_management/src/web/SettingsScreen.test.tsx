@@ -1,7 +1,7 @@
 import type { StorePermission } from '@app/contracts'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
-import { screenSections } from './app-chrome'
+import { barOverlay, screenSections } from './app-chrome'
 import { SettingsScreen } from './SettingsScreen'
 import { choosePickerOption } from './test/picker'
 
@@ -163,6 +163,8 @@ test('六工程が定められた順に表示され、Web予約は略されな�
       '工程4 設備と点検 完了',
       '工程5 Web予約 未完了',
       '工程6 影響確認と公開 未完了',
+      // 6 工程の下に、独立した公開結果の面への行き先が 1 行だけ続く。
+      '公開結果',
     ])
   })
   const steps = screenSections.snapshot()
@@ -458,12 +460,19 @@ test('Web予約の公開状態・公開期間・公開する来店目的はそ�
   ).toBeInTheDocument()
 })
 
-test('Web予約公開APIが未提供のあいだは未取得と明示する (AC-EYEX-63, 71)', async () => {
+/*
+ * 取れていない値は欄ごと出さない。「未取得」はモックの語彙に無い言葉で、
+ * 空の欄を 8 枚並べても「設定が無い」のか「取れていない」のかは読めない。
+ * 取れていないことは注意書きが 1 か所で言う。
+ */
+test('Web予約公開APIが未提供のあいだは取れていない欄を出さない (AC-EYEX-63, 71)', async () => {
   renderScreen(settingsApi())
   await openStep(/工程5 Web予約/)
 
   const web = screen.getByRole('region', { name: 'Web予約設定' })
-  expect(within(web).getAllByText('未取得').length).toBeGreaterThan(0)
+  expect(web.textContent).not.toContain('未取得')
+  expect(within(web).queryByText('公開状態')).toBeNull()
+  expect(within(web).queryByText('公開する来店目的')).toBeNull()
   expect(screen.getByText('Web予約の公開設定はまだ取得できていません。')).toBeInTheDocument()
 })
 
@@ -576,4 +585,26 @@ test('hands the sixth step to the publication surface instead of a placeholder',
 
   expect(await screen.findByRole('heading', { name: /影響を確認して公開/ })).toBeInTheDocument()
   expect(screen.queryByText('影響確認は準備中です')).not.toBeInTheDocument()
+})
+
+/*
+ * 承認済みモック `operations-approved.html#publish-result` は、工程 6 の下端に
+ * 埋もれた一節ではなく、全幅の独立した面である（バーの副題は `設定公開`）。
+ * 折り返しの下に埋めると、公開が一部失敗していても誰も気づかない。
+ */
+test('公開結果は柱から辿れる独立した面として出る (UC-EYEX-162)', async () => {
+  renderScreen(settingsApi())
+  await waitFor(() => {
+    expect(screenSections.snapshot().map((section) => section.label)).toContain('公開結果')
+  })
+  act(() => {
+    screenSections.select('公開結果')
+  })
+  // 工程の見出しも 6 工程の本文も消え、公開結果だけの面になる。
+  expect(await screen.findByRole('heading', { name: '公開結果' })).toBeInTheDocument()
+  expect(screen.queryByRole('heading', { name: '影響を確認して公開' })).toBeNull()
+  expect(screen.queryByRole('heading', { name: '店舗と営業時間' })).toBeNull()
+  // バーの副題はモックどおり `設定公開`。
+  expect(barOverlay.snapshot().subtitle).toBe('銀座店 · 設定公開')
+  expect(screenSections.snapshot().find((section) => section.current)?.label).toBe('公開結果')
 })

@@ -147,7 +147,10 @@ export function PickerField({
 }) {
   const [open, setOpen] = useState(false)
   const [active, setActive] = useState(0)
+  /** 板を引き金の上へ返すか。下端の欄で開くと viewport から出てしまうため。 */
+  const [flip, setFlip] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
 
   const selectedIndex = options.findIndex((option) => option.value === value)
   const selected = selectedIndex < 0 ? undefined : options[selectedIndex]
@@ -165,6 +168,19 @@ export function PickerField({
 
   const openAt = (index: number) => {
     setActive(index < 0 ? 0 : index)
+    /*
+     * 開く直前に、引き金の下に板が入るかを測る。入らないときだけ上へ返す。
+     * 常に下へ出すと、面の下端にある欄では候補が viewport の外に落ちて、
+     * 触れる候補が 1 つも無い板が開く。
+     */
+    const rect = triggerRef.current?.getBoundingClientRect()
+    if (rect === undefined) setFlip(false)
+    else {
+      // 候補 1 行は `min-h-11`（44px）。板の余白 8px を足して要る高さを見積もる。
+      const needed = options.length * 44 + 8
+      const below = window.innerHeight - rect.bottom
+      setFlip(below < needed && rect.top > below)
+    }
     setOpen(true)
   }
 
@@ -217,12 +233,13 @@ export function PickerField({
   const control = (
     <div ref={rootRef} className="relative">
       <button
+        ref={triggerRef}
         type="button"
         id={id}
         role="combobox"
         aria-haspopup="listbox"
         aria-expanded={open}
-        aria-controls={listId}
+        aria-controls={open ? listId : undefined}
         aria-activedescendant={open ? `${id}-option-${active}` : undefined}
         aria-label={hideLabel ? label : undefined}
         aria-invalid={describedBy(id, error) ? true : undefined}
@@ -234,6 +251,15 @@ export function PickerField({
           else openAt(selectedIndex)
         }}
         onKeyDown={onKeyDown}
+        /*
+         * 焦点が引き金を離れたら閉じる。mousedown だけを見ていると、Tab で
+         * 抜けたときに板が開いたまま残り、Escape の受け手（引き金）も居なく
+         * なって、閉じる手がマウスしか無くなる。焦点はこの引き金にしか
+         * 載らない（候補は `tabIndex={-1}` で、押し下げも打ち消している）。
+         */
+        onBlur={(event) => {
+          if (!rootRef.current?.contains(event.relatedTarget)) setOpen(false)
+        }}
         className={cn(CONTROL, 'text-left', className)}
       >
         {selected?.label ?? ''}
@@ -244,7 +270,10 @@ export function PickerField({
           // 引き金が名前を持つので、板は同じ名前を指し直すだけにする。
           aria-label={label}
           role="listbox"
-          className="absolute top-full left-0 z-10 mt-1 w-full overflow-hidden rounded-ctl border border-line bg-surface"
+          className={cn(
+            'absolute left-0 z-10 w-full overflow-hidden rounded-ctl border border-line bg-surface',
+            flip ? 'bottom-full mb-1' : 'top-full mt-1',
+          )}
         >
           {options.map((option, index) => {
             const on = option.value === value
@@ -461,13 +490,23 @@ export function CheckToggle({
       aria-labelledby={labelledBy}
       aria-disabled={disabled || undefined}
       onClick={disabled ? undefined : () => onChange?.(!checked)}
-      className={cn(
-        'flex size-6 shrink-0 items-center justify-center rounded-ctl border p-0 font-sans text-note',
-        checked ? 'border-pine bg-pine text-on-pine' : 'border-line bg-surface text-ink',
-      )}
+      /*
+       * iPad は指で触る端末なので、当たり判定は 44px を割らない。字面は
+       * モックのままの 24px にしたいので、外側に 10px の透明な余白を足し、
+       * 同じ幅の負のマージンで囲みへ食い込ませる（囲みが占める大きさは 24px
+       * のまま変わらない）。
+       */
+      className="-m-2.5 flex size-11 shrink-0 items-center justify-center p-2.5"
     >
-      {/* 入っていることは印の形でも示す（色だけに頼らない）。 */}
-      {checked ? '✓' : ''}
+      <span
+        className={cn(
+          'flex size-6 items-center justify-center rounded-ctl border font-sans text-note',
+          checked ? 'border-pine bg-pine text-on-pine' : 'border-line bg-surface text-ink',
+        )}
+      >
+        {/* 入っていることは印の形でも示す（色だけに頼らない）。 */}
+        {checked ? '✓' : ''}
+      </span>
     </button>
   )
 }

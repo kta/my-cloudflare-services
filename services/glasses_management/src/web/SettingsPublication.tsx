@@ -16,7 +16,15 @@ import { Action, Actions } from './design/controls'
 import { Modal } from './design/dialogs'
 import { PickerField, TextAreaField, TextField } from './design/forms'
 import { FailureNotice, StatusNotice } from './design/notices'
-import { Card, CardGrid, FieldCard, Preview, StatePill, TitleRow } from './design/surfaces'
+import {
+  AdminRow,
+  Card,
+  CardGrid,
+  FieldCard,
+  Preview,
+  StatePill,
+  TitleRow,
+} from './design/surfaces'
 import {
   diffRows,
   draftSaveState,
@@ -59,6 +67,15 @@ type Props = StaffScreenProps & {
    * ので、保存状態の真偽もそちらから渡す（AC-EYEX-45）。
    */
   dirty?: boolean
+  /**
+   * どちらの面として描くか。`guide` は設定ガイド工程 6「影響確認と公開」、
+   * `result` は承認済みモック `#publish-result` の全幅の独立した面。
+   * 公開結果を工程 6 の下端に埋めると、折り返しの下に隠れて一部失敗に
+   * 誰も気づかない（UC-EYEX-162, AC-EYEX-107）。
+   */
+  view?: 'guide' | 'result'
+  /** 公開が通ったことを親へ伝える。親は公開結果の面へ移す。 */
+  onPublished?: () => void
 }
 
 const RESOLUTION_OPTIONS: readonly SettingsConflictResolutionKind[] = [
@@ -116,6 +133,8 @@ export function SettingsPublication({
   permissions,
   today,
   dirty = false,
+  view = 'guide',
+  onPublished,
 }: Props) {
   const canRead = permissions.includes('settings.read')
   const canManage = permissions.includes('settings.manage')
@@ -266,7 +285,10 @@ export function SettingsPublication({
       return
     }
     const parsed = SettingsPublicationContract.safeParse(body)
-    if (parsed.success) setPublication(parsed.data)
+    if (parsed.success) {
+      setPublication(parsed.data)
+      onPublished?.()
+    }
   }
 
   const patchPublication = async (patch: { scheduledForJst?: string; status?: 'cancelled' }) => {
@@ -345,6 +367,109 @@ export function SettingsPublication({
     setResolving({ reservationId, message })
     setResolution('alternative_resource')
     setResolutionNote('')
+  }
+
+  /*
+   * 承認済みモック `operations-approved.html#publish-result` — 全幅の独立した面。
+   *
+   *   .content{padding:24px 30px}（節ナビを持たないので幅いっぱい）
+   *   .grid{grid-template-columns:repeat(3,1fr);gap:12px;margin-top:18px}
+   *   .card strong{font-size:28px}
+   *   .row.error{background:#fff0ed;border-color:#d4a299}
+   *
+   * 「12店舗成功」で終わらせず、失敗した店舗をそのまま行にして再試行を並べる。
+   * まとめだけを見せると、反映されていない店舗が翌日まで残る。
+   */
+  if (view === 'result') {
+    if (result === undefined)
+      return (
+        <>
+          <h1>公開結果</h1>
+          <StatusNotice>
+            まだ公開していません。設定ガイドの「影響確認と公開」から公開すると、ここに結果が出ます。
+          </StatusNotice>
+        </>
+      )
+    return (
+      <section aria-label="公開結果">
+        <TitleRow
+          gap={0}
+          push={
+            <StatePill tone={result.statusTone === 'danger' ? 'danger' : 'caution'}>
+              {result.statusLabel}
+            </StatePill>
+          }
+        >
+          <div>
+            {/* `.title h2{margin:0}` — 実行者・承認者の行がすぐ下に続く。 */}
+            <h1 className="my-0">{result.versionLabel}</h1>
+            <p>{`${result.executedLabel} · ${result.scheduledLabel}`}</p>
+          </div>
+        </TitleRow>
+
+        <CardGrid>
+          <FieldCard title="成功">{result.appliedLabel}</FieldCard>
+          <FieldCard title="失敗" tone={result.failed.length > 0 ? 'error' : 'plain'}>
+            {result.failedLabel}
+          </FieldCard>
+          <FieldCard title="反映確認">
+            {/* Web枠と台帳は別々に読ませる。1 行に繋ぐと、どちらが未反映
+                なのかを目で切り分けられない。 */}
+            <span className="block">{result.webSlotLabel}</span>
+            <span className="block">{result.ledgerLabel}</span>
+          </FieldCard>
+        </CardGrid>
+
+        {/* 失敗した店舗は 1 店舗 1 行。まとめの数字だけにしない。 */}
+        {result.failed.length > 0 && (
+          <section aria-label="失敗した店舗">
+            {/* 再試行が何店舗に当たるのかを、押す前に語で出す。 */}
+            <Line>{`再試行対象 ${result.retryStoreIds.length}店舗`}</Line>
+            {result.failed.map((target) => (
+              <AdminRow key={target.storeId} tone="error" label={target.storeId}>
+                <b>{target.storeId}</b>
+                <span>{target.failureReason ?? '理由不明'}</span>
+                <span>公開未反映</span>
+                {canManage && result.canRetry ? (
+                  <Action
+                    variant="primary"
+                    inset="tight"
+                    onClick={() => void postPublication('retry')}
+                  >
+                    この店舗だけ再試行
+                  </Action>
+                ) : (
+                  <span />
+                )}
+              </AdminRow>
+            ))}
+          </section>
+        )}
+
+        {result.applied.length > 0 && (
+          <Preview label="反映済みの店舗">
+            <b className="block">反映済みの店舗</b>
+            {result.applied.map((target) => (
+              <Line key={target.storeId}>
+                <span>{target.storeId}</span>
+                <span>{` ・ 第${target.appliedVersion ?? 0}版`}</span>
+              </Line>
+            ))}
+          </Preview>
+        )}
+
+        {canManage && (result.canCancel || result.canReschedule) && (
+          <Actions gap={2.5} mt={4}>
+            <Action onClick={() => setRescheduling(true)}>公開予定を変更</Action>
+            <Action onClick={() => void postPublication('run')}>今すぐ実行</Action>
+            {/* 破棄は既定の見た目にしない。 */}
+            <Action variant="danger" onClick={() => void patchPublication({ status: 'cancelled' })}>
+              公開予定を取消
+            </Action>
+          </Actions>
+        )}
+      </section>
+    )
   }
 
   return (
@@ -457,73 +582,6 @@ export function SettingsPublication({
             公開する
           </Action>
         </Actions>
-      )}
-
-      {/* ---------------- 公開結果（承認済みモック #publish-result） ---------------- */}
-      {result !== undefined && (
-        <Preview label="公開結果">
-          <b className="block">{`版 ${result.versionId} の公開結果`}</b>
-          <StatePill tone={result.statusTone === 'danger' ? 'danger' : 'caution'}>
-            {result.statusLabel}
-          </StatePill>
-          <Line>{`${result.executedLabel} · ${result.scheduledLabel}`}</Line>
-          <CardGrid mt={4}>
-            <FieldCard title="成功">{result.appliedLabel}</FieldCard>
-            <FieldCard title="失敗" tone={result.failed.length > 0 ? 'error' : 'plain'}>
-              {result.failedLabel}
-            </FieldCard>
-            <FieldCard title="反映確認">
-              {/* Web枠と台帳は別々に読ませる。1 行に繋ぐと、どちらが未反映
-                  なのかを目で切り分けられない。 */}
-              <span className="block">{result.webSlotLabel}</span>
-              <span className="block">{result.ledgerLabel}</span>
-            </FieldCard>
-          </CardGrid>
-          {result.applied.length > 0 && (
-            <Preview label="反映済みの店舗">
-              <b className="block">反映済みの店舗</b>
-              {result.applied.map((target) => (
-                <Line key={target.storeId}>
-                  <span>{target.storeId}</span>
-                  <span>{` ・ 第${target.appliedVersion ?? 0}版`}</span>
-                </Line>
-              ))}
-            </Preview>
-          )}
-          {result.failed.length > 0 && (
-            <Preview tone="attention" label="失敗した店舗">
-              <b className="block">失敗した店舗</b>
-              <Line>{`再試行対象 ${result.retryStoreIds.length}店舗`}</Line>
-              {result.failed.map((target) => (
-                <Line key={target.storeId}>
-                  <b>{target.storeId}</b>
-                  <span>{`　${target.failureReason ?? '理由不明'}`}</span>
-                  <span>{'　公開未反映'}</span>
-                </Line>
-              ))}
-              {canManage && result.canRetry && (
-                <Actions gap={2.5} mt={4}>
-                  <Action variant="primary" onClick={() => void postPublication('retry')}>
-                    この店舗だけ再試行
-                  </Action>
-                </Actions>
-              )}
-            </Preview>
-          )}
-          {canManage && (result.canCancel || result.canReschedule) && (
-            <Actions gap={2.5} mt={4}>
-              <Action onClick={() => setRescheduling(true)}>公開予定を変更</Action>
-              <Action onClick={() => void postPublication('run')}>今すぐ実行</Action>
-              {/* 破棄は既定の見た目にしない。 */}
-              <Action
-                variant="danger"
-                onClick={() => void patchPublication({ status: 'cancelled' })}
-              >
-                公開予定を取消
-              </Action>
-            </Actions>
-          )}
-        </Preview>
       )}
 
       {/* ---------------- 設定の状態と警告 ---------------- */}

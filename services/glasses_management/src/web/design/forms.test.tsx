@@ -109,3 +109,18 @@ test('入り切りの印は押せないとき値を変えない', () => {
   fireEvent.click(screen.getByRole('checkbox', { name: '営業日にする' }))
   expect(onChange).not.toHaveBeenCalled()
 })
+
+/*
+ * iPad は指で触る端末なので、印の当たり判定は 44px を割ってはいけない。
+ * 字面（24px の四角）はモックのままなので、外側に透明な余白を足し、同じ幅の
+ * 負のマージンで囲みへ食い込ませる。囲みが占める大きさは 24px のままになる。
+ */
+test('入り切りの印は 24px の姿のまま 44px の当たり判定を持つ', () => {
+  render(<CheckToggle label="営業日にする" checked onChange={() => {}} />)
+  const box = screen.getByRole('checkbox', { name: '営業日にする' })
+  expect(box.className).toContain('size-11')
+  expect(box.className).toContain('-m-2.5')
+  // 罫と塗りは内側の 24px の四角が持つ（当たり判定を広げても姿は変わらない）。
+  const face = box.firstElementChild as HTMLElement
+  expect(face.className).toContain('size-6')
+})

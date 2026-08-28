@@ -138,9 +138,11 @@ test('変更前後と相関IDを詳細で読める (UC-EYEX-155, AC-EYEX-102)', 
   // イベント本文と、変更前 / 変更後 の 2 枚。
   const detail = await screen.findByRole('region', { name: '監査イベント詳細' })
   expect(detail).toHaveTextContent('event: attention_note.published')
-  expect(detail).toHaveTextContent('actor_type: shared_terminal')
+  // 主体の種別と対象の種別は面の言葉で出す（記録の機械可読な名を素で出さない）。
+  expect(detail).toHaveTextContent('actor_type: 共有端末')
   expect(detail).toHaveTextContent('actor: 銀座店 レジ横iPad')
-  expect(detail).toHaveTextContent('target: attention_note EY-A-220')
+  expect(detail).toHaveTextContent('device: 銀座店 レジ横iPad')
+  expect(detail).toHaveTextContent('target: 注意事項 EY-A-220')
   expect(detail).toHaveTextContent('correlation_id: corr-6f82')
   expect(detail).toHaveTextContent('occurred_at: 2026年8月26日 17:42')
 
@@ -250,7 +252,7 @@ test('検索結果があれば先頭のイベントの詳細を既定で開く',
 
   const detail = await screen.findByRole('region', { name: '監査イベント詳細' })
   expect(detail).toHaveTextContent('event: attention_note.published')
-  expect(detail).toHaveTextContent('target: attention_note EY-A-220')
+  expect(detail).toHaveTextContent('target: 注意事項 EY-A-220')
 })
 
 /* --- 承認済みモック `operations-approved.html#audit` の骨格 ---------------- */

@@ -1,5 +1,5 @@
 import { ATTENTION_INPUT_GUIDANCE } from '@app/contracts'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import { AttentionReviewScreen } from './AttentionReviewScreen'
 import { screenSections } from './app-chrome'
@@ -135,6 +135,26 @@ function bodyOf(route: Route): unknown {
 
 function noteCard(name: string): HTMLElement {
   return screen.getByRole('article', { name })
+}
+
+/*
+ * master-detail なので、本文に出るのは柱で選んだ 1 件だけ。柱は全画面共通の
+ * 1 本（App が描く）なので、面の試験では節の名前で押して開く。
+ */
+async function openNote(name: string): Promise<HTMLElement> {
+  // 読み込みが終わるまで柱は「顧客名 1 行」のままなので、件が並ぶまで待つ。
+  await waitFor(() => {
+    expect(screen.getAllByRole('article').length).toBeGreaterThan(0)
+  })
+  for (const section of screenSections.snapshot()) {
+    act(() => {
+      screenSections.select(section.label)
+    })
+    // 選び直しは state の更新なので、描画が追いつくのを待ってから探す。
+    const card = await waitFor(() => noteCard(name), { timeout: 300 }).catch(() => null)
+    if (card) return card
+  }
+  return await waitFor(() => noteCard(name))
 }
 
 afterEach(() => {
@@ -274,7 +294,7 @@ test('公開済みの改訂は上書きせず新版を作り、過去版を読�
   )
   renderScreen(api)
 
-  const card = await waitFor(() => noteCard('注意事項 公開済み 版2'))
+  const card = await openNote('注意事項 公開済み 版2')
   fireEvent.click(within(card).getByRole('button', { name: '改訂する' }))
   const form = await screen.findByRole('dialog', { name: '注意事項を改訂' })
   expect(within(form).getByLabelText('発生した事実')).toHaveValue('説明を段階化すると納得された。')
@@ -318,7 +338,7 @@ test('古い版からの公開は拒否し、新旧差分を見せる (AC-EYEX-1
   )
   renderScreen(api)
 
-  const card = await waitFor(() => noteCard('注意事項 公開済み 版2'))
+  const card = await openNote('注意事項 公開済み 版2')
   fireEvent.click(within(card).getByRole('button', { name: '改訂する' }))
   const form = await screen.findByRole('dialog', { name: '注意事項を改訂' })
   fireEvent.click(within(form).getByRole('button', { name: '改訂版を公開する' }))
@@ -348,7 +368,7 @@ test('削除の代わりに理由付きで非表示化する (UC-EYEX-146)', asy
   )
   renderScreen(api)
 
-  const card = await waitFor(() => noteCard('注意事項 公開済み 版2'))
+  const card = await openNote('注意事項 公開済み 版2')
   expect(within(card).queryByRole('button', { name: '削除する' })).not.toBeInTheDocument()
   fireEvent.click(within(card).getByRole('button', { name: '非表示にする' }))
   const dialog = await screen.findByRole('dialog', { name: '注意事項を非表示にする' })
@@ -460,4 +480,35 @@ test('端末に注意事項を残さない (完全共有iPad)', async () => {
   await waitFor(() => noteCard('注意事項 確認待ち 版1'))
   fireEvent.change(screen.getByLabelText('根拠'), { target: { value: '接客記録' } })
   expect(setItem).not.toHaveBeenCalled()
+})
+
+/*
+ * 承認済みモック `operations-approved.html#attention-review` は master-detail。
+ * 左の柱に確認待ちの一覧を置き、本文には選んだ 1 件だけを出す。全件を縦に
+ * 連ねると、柱の並びと本文の並びが対応しなくなり、いま何を承認しようとして
+ * いるのかが読めなくなる（承認は取り返しがつかない）。
+ */
+test('柱の一覧から選んだ 1 件だけを本文に出す (master-detail)', async () => {
+  const { api } = createApi(defaultHandler)
+  renderScreen(api)
+
+  await waitFor(() => noteCard('注意事項 確認待ち 版1'))
+  // 本文は 1 件だけ。公開済みの版は柱から選ぶまで出さない。
+  expect(screen.getAllByRole('article')).toHaveLength(1)
+  expect(screen.queryByRole('article', { name: '注意事項 公開済み 版2' })).toBeNull()
+
+  // 柱の節は読める注意事項と 1 対 1 で、先頭が選択中。
+  const sections = screenSections.snapshot()
+  expect(sections).toHaveLength(2)
+  expect(sections[0]?.current).toBe(true)
+  expect(sections.every((section) => section.selectable === true)).toBe(true)
+
+  // 2 件目を選ぶと本文が入れ替わる。
+  const second = sections[1]?.label ?? ''
+  screenSections.select(second)
+  await waitFor(() => {
+    expect(screen.getByRole('article', { name: '注意事項 公開済み 版2' })).toBeInTheDocument()
+  })
+  expect(screen.getAllByRole('article')).toHaveLength(1)
+  expect(screenSections.snapshot()[1]?.current).toBe(true)
 })

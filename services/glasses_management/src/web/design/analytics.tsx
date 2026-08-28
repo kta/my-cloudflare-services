@@ -1,5 +1,6 @@
 import { cn } from '@app/ui'
 import type { CSSProperties, ReactNode } from 'react'
+import { formatIsoDateJa } from './forms'
 
 /*
  * 分析面（承認済みモック `analytics-approved.html`）の語彙。
@@ -264,14 +265,24 @@ export function VizSegment({
             type="button"
             aria-pressed={on}
             onClick={() => onChange(option.value)}
-            className={cn(
-              'rounded-ctl border px-2 py-1 text-viz-note',
-              on
-                ? 'border-viz-pine bg-viz-pine-soft font-bold text-viz-pine'
-                : 'border-viz-line bg-surface text-viz-ink',
-            )}
+            /*
+             * iPad は指で触る端末なので、当たり判定は 44px を割らない。ピルの
+             * 字面はモックのままにしたいので、押しボタン側は透明な余白だけを
+             * 持ち、同じ幅の負のマージンで囲みへ食い込ませる（帯が占める
+             * 大きさは 25×28px のまま変わらない）。
+             */
+            className="-m-2.5 flex items-center p-2.5"
           >
-            {option.label}
+            <span
+              className={cn(
+                'rounded-ctl border px-2 py-1 text-viz-note',
+                on
+                  ? 'border-viz-pine bg-viz-pine-soft font-bold text-viz-pine'
+                  : 'border-viz-line bg-surface text-viz-ink',
+              )}
+            >
+              {option.label}
+            </span>
           </button>
         )
       })}
@@ -295,19 +306,29 @@ export function VizPeriodField({
   value: string
   onChange: (next: string) => void
 }) {
+  // 打つのは ISO でも、読むのは日本語。生の `2026-08-28` だけを帯に残さない。
+  const readback = formatIsoDateJa(value)
   return (
-    <input
-      id={id}
-      type="text"
-      aria-label={label}
-      // 端末にテンキーを出す。日付は数字と区切りだけで打ち切れる。
-      inputMode="numeric"
-      autoComplete="off"
-      placeholder="2026-09-23"
-      value={value}
-      onChange={(event) => onChange(event.target.value)}
-      className="w-27 shrink-0 rounded-full border border-viz-pine-soft bg-viz-pine-soft px-2.25 py-1.5 text-center font-sans text-viz-note text-viz-pine"
-    />
+    <span className="flex shrink-0 items-center gap-2">
+      <input
+        id={id}
+        type="text"
+        aria-label={label}
+        // 端末にテンキーを出す。日付は数字と区切りだけで打ち切れる。
+        inputMode="numeric"
+        autoComplete="off"
+        placeholder="2026-09-23"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        /*
+         * 入力は押しボタンと違って「透明な余白＋負のマージン」で当たり判定だけを
+         * 広げられない（当たるのは欄そのものである）。指で狙える 44px まで背を
+         * 高くする。見出し帯は 58px あるので、収まりは変わらない。
+         */
+        className="min-h-11 w-27 shrink-0 rounded-full border border-viz-pine-soft bg-viz-pine-soft px-2.25 py-1.5 text-center font-sans text-viz-note text-viz-pine"
+      />
+      {readback !== undefined && <span className="text-viz-ink text-viz-note">{readback}</span>}
+    </span>
   )
 }
 

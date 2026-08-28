@@ -313,8 +313,12 @@ export function RecordingPanel({
   const [position, setPosition] = useState(0)
   if (!permissions.playRecording) return null
 
+  /*
+   * 状態の名乗り。まだ取得できていないときは何も名乗らない。「未取得」は
+   * モックの語彙に無いうえ、すぐ下の説明文が同じことを既に言っている。
+   */
   const stateLabel = !recording
-    ? '未取得'
+    ? undefined
     : recording.state === 'none'
       ? '録音なし'
       : recording.state === 'processing'
@@ -343,7 +347,11 @@ export function RecordingPanel({
        * モックの `.audio` は再生ボタンと 1 行の説明が並ぶだけ。実アプリは
        * 一時停止も要るので同じ行に足すが、行そのものは増やさない。
        */}
-      <div className="flex items-center gap-3">
+      {/*
+       * 狭い列（受付履歴の `.detailgrid` は 1.15fr）でも操作が縦に潰れないよう
+       * 折り返させる。潰れると「一時停止」が 1 文字ずつ縦に並んで読めなくなる。
+       */}
+      <div className="flex flex-wrap items-center gap-3">
         {available && (
           <>
             <button
@@ -373,11 +381,15 @@ export function RecordingPanel({
               <span>{formatDuration(available.durationSeconds)}</span>
             </>
           )}
-          <span aria-hidden="true"> · </span>
-          {/* 保存できていないことだけは色でも言う。他の状態は語だけで足りる。 */}
-          <span className={recording?.state === 'failed' ? 'text-danger' : undefined}>
-            {stateLabel}
-          </span>
+          {stateLabel !== undefined && (
+            <>
+              <span aria-hidden="true"> · </span>
+              {/* 保存できていないことだけは色でも言う。他の状態は語だけで足りる。 */}
+              <span className={recording?.state === 'failed' ? 'text-danger' : undefined}>
+                {stateLabel}
+              </span>
+            </>
+          )}
         </span>
       </div>
       {available && (

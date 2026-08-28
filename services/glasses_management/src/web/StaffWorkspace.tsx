@@ -485,6 +485,7 @@ export function StaffWorkspace({
               permissions={permissions ?? []}
               organizationId={organizationId}
               terminalId={terminalId}
+              terminalName={terminalSession?.name}
             />
           )
         case 'shared-terminals':

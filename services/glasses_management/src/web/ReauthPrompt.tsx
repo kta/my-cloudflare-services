@@ -1,11 +1,11 @@
 import { SharedTerminalReauthenticationIssue } from '@app/contracts'
 import { stretchPin } from '@app/shared'
 import { type KeyboardEvent, useEffect, useRef, useState } from 'react'
+import { AppBar, Wordmark } from './design/chrome'
 import { Action } from './design/controls'
-import { Modal } from './design/dialogs'
 import { TextField } from './design/forms'
 import { FailureNotice } from './design/notices'
-import { TitleRow } from './design/surfaces'
+import { Card, TitleRow } from './design/surfaces'
 import type { StaffScreenProps } from './staff-screen'
 
 /**
@@ -49,6 +49,11 @@ type Props = StaffScreenProps & {
   organizationId: string
   /** What the operator is about to do, shown so they can refuse an unexpected prompt. */
   actionLabel: string
+  /**
+   * 共有 iPad の名前（`レジ横iPad`）。バーが「どの店舗の、どの端末で」個人を
+   * 名乗り直しているのかを言うために要る。分からないときは端末名を伏せる。
+   */
+  terminalName?: string
   /** False for everyday work: the prompt then never appears (AC-EYEX-81). */
   administrative?: boolean
   onGranted: (token: string) => void
@@ -79,9 +84,11 @@ async function readError(response: Response): Promise<string> {
  */
 export function ReauthPrompt({
   api,
+  storeName,
   terminalId,
   organizationId,
   actionLabel,
+  terminalName,
   administrative = true,
   onGranted,
   onCancelled,
@@ -179,67 +186,105 @@ export function ReauthPrompt({
     }
   }
 
+  /*
+   * 承認済みモック `operations-approved.html#reauth` の副題は
+   * `銀座店 レジ横iPad · 完全共有`。端末名が分からないときも「完全共有の
+   * iPad で操作している」ことだけは必ず名乗る。
+   */
+  const subtitle = `${[storeName, terminalName].filter((part) => part !== '').join(' ')} · 完全共有`
+
   return (
     /*
-     * 承認済みモック `operations-approved.html#reauth` — 見出し・説明・個人PIN・
-     * 左右に割れる 2 ボタン。共有端末のまま個人を名乗り直させる面なので、
-     * 他所へ逃がす操作はここに置かない。
+     * 承認済みモック `operations-approved.html#reauth` — 共有 iPad のクロムの
+     * 上に素の板を 1 枚置くだけの独立した面。暗い幕もモーダルも重ねない。
+     *
+     *   .content{max-width:640px;margin:80px auto;padding:24px 30px}
+     *
+     * 手前の運用面を透かして見せないのは、個人を名乗り直す面が「今どの端末で
+     * 何をしようとしているか」だけを読ませる場だからである。背後の一覧が
+     * 見えていると、押しかけの PIN 入力と見分けが付かない。
      */
-    <Modal
-      dialogRef={dialogRef}
-      onKeyDown={trapFocus}
-      titleId="reauth-title"
-      title="管理者として確認してください"
-    >
-      <p>
-        {`${actionLabel}は個人認証が必要です。共有端末と認証した個人の両方を監査記録に残します。`}
-      </p>
-      {failure && <FailureNotice>{failure}</FailureNotice>}
-      <form
-        className="mt-3 flex flex-col gap-3"
-        onSubmit={(event) => {
-          event.preventDefault()
-          void submit()
-        }}
-      >
-        <TextField
-          id="reauth-user"
-          label="個人ログインID"
-          ref={firstFieldRef}
-          autoComplete="off"
-          value={userId}
-          onChange={(event) => setUserId(event.target.value)}
-        />
-        <TextField
-          id="reauth-pin"
-          label="個人PIN"
-          type="password"
-          inputMode="numeric"
-          autoComplete="off"
-          value={pin}
-          onChange={(event) => setPin(event.target.value)}
-        />
-        {/* モックは見出し行と同じ形で、引き返す側が左・続ける側が右端。 */}
-        <TitleRow
-          gap={0}
-          push={
-            <Action
-              variant="primary"
-              inset="tight"
-              disabled={submitting}
-              onClick={() => {
+    <div className="fixed inset-0 z-10 flex flex-col bg-paper font-sans text-body text-ink">
+      <AppBar>
+        <Wordmark subtitle={subtitle} />
+      </AppBar>
+      <main className="min-h-0 flex-1 overflow-auto">
+        {/*
+         * 個人を名乗り直すまで先へ進めない面なので、読み上げ上も dialog として
+         * 閉じた場に置く。role は見た目を持たないので画素は動かない。
+         */}
+        <div
+          ref={dialogRef}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="reauth-title"
+          onKeyDown={trapFocus}
+          className="mx-auto my-20 w-full max-w-160 px-7.5 py-6"
+        >
+          <Card>
+            <h1 id="reauth-title" className="mt-0">
+              管理者として確認してください
+            </h1>
+            <p>
+              {`${actionLabel}は個人認証が必要です。共有端末と認証した個人の両方を監査記録に残します。`}
+            </p>
+            {failure && <FailureNotice>{failure}</FailureNotice>}
+            <form
+              className="mt-3 flex flex-col gap-3"
+              onSubmit={(event) => {
+                event.preventDefault()
                 void submit()
               }}
             >
-              確認して続ける
-            </Action>
-          }
-        >
-          <Action inset="tight" onClick={onCancelled}>
-            キャンセル
-          </Action>
-        </TitleRow>
-      </form>
-    </Modal>
+              {/*
+               * モックはこの欄を持たないが、落とせない。PIN の伸長塩が
+               * `app:pin:<組織>:<個人>` なので、誰の PIN かが決まらないと
+               * ブラウザ側で伸長値を作れず、完全共有の iPad には個人セッションが
+               * 無いのでサーバ側でも解決できない。契約
+               * `SharedTerminalReauthenticationInput` も `userId` を必須にして
+               * いる。逸脱として `docs/frontend/REBUILD.md` に残す。
+               */}
+              <TextField
+                id="reauth-user"
+                label="個人ログインID"
+                ref={firstFieldRef}
+                autoComplete="off"
+                value={userId}
+                onChange={(event) => setUserId(event.target.value)}
+              />
+              <TextField
+                id="reauth-pin"
+                label="個人PIN"
+                type="password"
+                inputMode="numeric"
+                autoComplete="off"
+                value={pin}
+                onChange={(event) => setPin(event.target.value)}
+              />
+              {/* モックは見出し行と同じ形で、引き返す側が左・続ける側が右端。 */}
+              <TitleRow
+                gap={0}
+                push={
+                  <Action
+                    variant="primary"
+                    inset="tight"
+                    disabled={submitting}
+                    onClick={() => {
+                      void submit()
+                    }}
+                  >
+                    確認して続ける
+                  </Action>
+                }
+              >
+                <Action inset="tight" onClick={onCancelled}>
+                  キャンセル
+                </Action>
+              </TitleRow>
+            </form>
+          </Card>
+        </div>
+      </main>
+    </div>
   )
 }

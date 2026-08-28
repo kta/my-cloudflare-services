@@ -307,6 +307,8 @@ export type PublicationView = {
   statusTone: 'success' | 'warning' | 'danger' | 'neutral'
   scheduledLabel: string
   executedLabel: string
+  /** 見出しの名乗り。人が読む採番で、保存用の UUID は含めない。 */
+  versionLabel: string
   appliedLabel: string
   failedLabel: string
   webSlotLabel: string
@@ -324,9 +326,19 @@ export type PublicationView = {
 export function publicationView(publication: SettingsPublication): PublicationView {
   const failed = publication.targets.filter((target) => target.status === 'failed')
   const effect = publication.webSlotEffect
+  /*
+   * 人が読む採番。`versionId` は保存用の UUID なので画面には出さない。番号は
+   * 反映済みの店舗が `appliedVersion` として持っているので、そこから読む。
+   * まだどこにも反映していない公開は番号を持たないので、名乗りだけを出す。
+   */
+  const appliedVersions = publication.targets
+    .map((target) => target.appliedVersion)
+    .filter((version): version is number => version !== null)
+  const version = appliedVersions.length === 0 ? undefined : Math.max(...appliedVersions)
   return {
     id: publication.id,
     versionId: publication.versionId,
+    versionLabel: version === undefined ? '公開結果' : `第${String(version)}版の公開結果`,
     statusLabel: PUBLICATION_STATUS_LABEL[publication.status],
     statusTone:
       publication.status === 'completed'

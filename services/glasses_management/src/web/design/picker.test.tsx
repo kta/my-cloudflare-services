@@ -116,3 +116,40 @@ test('44px 以上のタップ目標を保つ', () => {
   for (const option of within_options(screen.getByRole('listbox')))
     expect(option.className).toContain('min-h-11')
 })
+
+test('焦点が引き金を離れたら閉じる（Tab で置き去りにしない）', () => {
+  render(
+    <>
+      <PickerField id="scope" label="設定範囲" value="organization" options={OPTIONS} />
+      <button type="button">次の操作</button>
+    </>,
+  )
+  const trigger = screen.getByRole('combobox', { name: '設定範囲' })
+  fireEvent.click(trigger)
+  expect(screen.getByRole('listbox')).toBeTruthy()
+  // Tab は焦点を移すだけで mousedown を起こさない。焦点が外れたまま板が
+  // 残ると、Escape の受け手（引き金）も居なくなり閉じる手が無くなる。
+  const next = screen.getByRole('button', { name: '次の操作' })
+  fireEvent.blur(trigger, { relatedTarget: next })
+  expect(screen.queryByRole('listbox')).toBeNull()
+})
+
+test('畳んでいる間は在りもしない板を指さない', () => {
+  render(<PickerField id="scope" label="設定範囲" value="store" options={OPTIONS} />)
+  const trigger = screen.getByRole('combobox', { name: '設定範囲' })
+  expect(trigger).not.toHaveAttribute('aria-controls')
+  fireEvent.click(trigger)
+  expect(trigger).toHaveAttribute('aria-controls', 'scope-listbox')
+})
+
+test('下端の欄では板を上へ返す', () => {
+  render(<PickerField id="scope" label="設定範囲" value="store" options={OPTIONS} />)
+  const trigger = screen.getByRole('combobox', { name: '設定範囲' })
+  // jsdom は配置を持たないので、引き金の位置だけを差し替えて画面の下端を作る。
+  trigger.getBoundingClientRect = () =>
+    ({ bottom: window.innerHeight - 8, top: window.innerHeight - 60 }) as DOMRect
+  fireEvent.click(trigger)
+  const listbox = screen.getByRole('listbox')
+  expect(listbox.className).toContain('bottom-full')
+  expect(listbox.className).not.toContain('top-full')
+})

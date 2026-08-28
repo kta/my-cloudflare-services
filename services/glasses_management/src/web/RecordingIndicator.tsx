@@ -2,6 +2,7 @@ import type { RecordingState } from '@app/contracts'
 import { cn, focusRing } from '@app/ui'
 import { FlowButton, RailSummary, RecordIndicator } from './design/booking'
 import { Action } from './design/controls'
+import { formatJstTime } from './ReservationSearchScreen'
 import { RECORDING_STATE_LABEL } from './recording'
 
 export type MicrophonePermissionResult = 'granted' | 'denied'
@@ -197,7 +198,7 @@ function ErrorPanel({ title, children }: { title: string; children: React.ReactN
       role="alert"
       className="rounded-card border border-danger-line bg-danger-soft p-6 text-ink"
     >
-      <p className="font-display font-semibold text-lg text-danger">{title}</p>
+      <p className="font-sans font-semibold text-lg text-danger">{title}</p>
       {children}
     </div>
   )
@@ -208,13 +209,14 @@ export function RecordingUploadFailedScreen({
   onRetryUpload,
   onOpenReservation,
 }: {
+  /** `lastAttemptAt` は保存されているインスタント。画面には JST の時刻で出す。 */
   upload: { attempt: number; maxAttempts: number; lastAttemptAt: string } | null
   onRetryUpload: () => void
   onOpenReservation: () => void
 }) {
   return (
     <section aria-label="予約は成立しました" className="mx-auto w-full max-w-4xl px-12 pt-10">
-      <h2 className="font-display font-semibold text-2xl text-ink">予約は成立しました</h2>
+      <h2 className="font-sans font-semibold text-2xl text-ink">予約は成立しました</h2>
       <div className="mt-6">
         <ErrorPanel title="録音を保存できていません">
           <p className="mt-3 font-sans text-base leading-relaxed">
@@ -222,7 +224,8 @@ export function RecordingUploadFailedScreen({
           </p>
           {upload && (
             <p className="mt-3 font-sans text-base">
-              再試行 {upload.attempt}/{upload.maxAttempts} · 最終試行 {upload.lastAttemptAt}
+              再試行 {upload.attempt}/{upload.maxAttempts} · 最終試行{' '}
+              {formatJstTime(upload.lastAttemptAt)}
             </p>
           )}
         </ErrorPanel>

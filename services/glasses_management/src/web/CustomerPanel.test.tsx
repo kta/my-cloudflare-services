@@ -492,3 +492,29 @@ test('opens the attention-note review for the chosen customer from the ledger', 
     customerName: hanako.name,
   })
 })
+
+/*
+ * 承認済みモック `.customer-top{grid-template-columns:repeat(3,1fr)}`。
+ * 柱を引いた幅でも 3 枚が横に並び続けること、そして和文が板からはみ出さない
+ * こと。自動の枚数決めに任せると 2 列へ落ち、「現在のメガネ」が段を下げる。
+ */
+test('現在の度数・最新メモ・現在のメガネ を 3 列のまま並べる', async () => {
+  render(
+    <CustomerPanel
+      {...staffProps(jsonApi([hanako]))}
+      mode="ledger"
+      onSelect={vi.fn()}
+      permissions={allowed}
+      detail={detail}
+    />,
+  )
+  await searchLedger('090-1234')
+  fireEvent.click(await screen.findByRole('button', { name: /田中 花子/ }))
+  const columns = screen
+    .getByRole('region', { name: '現在の度数' })
+    .closest('div[style*="grid-template-columns"]')
+  expect(columns).not.toBeNull()
+  expect(columns?.getAttribute('style')).toContain('repeat(3, minmax(0, 1fr))')
+  // `keep-all` は和文をどこでも折らないので、1 枚 156px の列からはみ出す。
+  expect(columns?.getAttribute('style')).not.toContain('keep-all')
+})

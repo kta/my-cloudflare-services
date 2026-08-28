@@ -1,5 +1,12 @@
 import { type ReactNode, useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { barFor, barOverlay, screenSections, sidebarCurrentScreen, sidebarFor } from './app-chrome'
+import {
+  barFor,
+  barOverlay,
+  barPrimaryAction,
+  screenSections,
+  sidebarCurrentScreen,
+  sidebarFor,
+} from './app-chrome'
 import { AppBar, BarButton, BarPush, PlainBar, Screen, Wordmark } from './design/chrome'
 import { Action, SearchField } from './design/controls'
 import { SwitchOption, SwitchSheet } from './design/dialogs'
@@ -241,7 +248,15 @@ export function App({
             <BarPush>
               <BarButton
                 on
-                onClick={() => navigation?.navigate(bar.primary?.to ?? { screen: 'home' })}
+                onClick={() => {
+                  /* 面がその場での行いを書いているなら、移動ではなくそれを行う。 */
+                  const act = barPrimaryAction.snapshot()
+                  if (act) {
+                    act()
+                    return
+                  }
+                  navigation?.navigate(bar.primary?.to ?? { screen: 'home' })
+                }}
               >
                 {bar.primary.label}
               </BarButton>

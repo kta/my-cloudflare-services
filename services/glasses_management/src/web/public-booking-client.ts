@@ -1,7 +1,7 @@
 import {
-  PublicAvailabilityResponse,
   type PublicBookingCreate,
   PublicBookingResult,
+  PublicOffersResponse,
   type PublicReservationCancel,
   type PublicReservationChange,
   PublicReservationChangeResult,
@@ -48,12 +48,13 @@ export function createPublicBookingApi(fetcher: Fetcher = fetch): PublicBookingA
       PublicStoreDetail.parse(
         await readJson(fetcher, `/api/public/stores/${encodeURIComponent(slug)}`),
       ),
-    readSlots: async (slug, date, purposeIds) => {
-      const query = new URLSearchParams({ date, purposeIds: purposeIds.join(',') })
-      return PublicAvailabilityResponse.parse(
+    readOffers: async (slug, purposeIds) => {
+      // 日付は渡さない。候補は複数日にまたがるので、日付は走査の結果である。
+      const query = new URLSearchParams({ purposeIds: purposeIds.join(',') })
+      return PublicOffersResponse.parse(
         await readJson(
           fetcher,
-          `/api/public/stores/${encodeURIComponent(slug)}/slots?${query.toString()}`,
+          `/api/public/stores/${encodeURIComponent(slug)}/offers?${query.toString()}`,
         ),
       )
     },

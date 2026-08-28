@@ -67,6 +67,29 @@ function actorTypeLabel(actorType: string): string {
   return ACTOR_TYPE_LABEL[actorType] ?? actorType
 }
 
+/*
+ * 対象の種別。記録には `attention_note` のような機械可読な名で入るが、監査を
+ * 読むのは人なので、面の言葉へ翻して出す（承認済みモックも `attention` と
+ * 人が読む語で書いている）。訳を持たない種別は記録の語のまま出す。作り話の
+ * 訳を当てるより、記録に無い言葉を足さないほうが監査として正しい。
+ */
+const ENTITY_TYPE_LABEL: Record<string, string> = {
+  attention_note: '注意事項',
+  attention_settings: '注意事項の設定',
+  customer: '顧客',
+  recording: '録音',
+  reservation: '予約',
+  settings_draft: '設定の下書き',
+  settings_publication: '設定の公開',
+  shared_terminal: '共有端末',
+  store: '店舗',
+  walkin: '来店受付',
+}
+
+function entityTypeLabel(entityType: string): string {
+  return ENTITY_TYPE_LABEL[entityType] ?? entityType
+}
+
 const FORBIDDEN = '権限のある範囲の監査イベントだけを表示できます。'
 const GENERIC_FAILURE = '監査イベントを読み込めませんでした。通信を確認してください。'
 
@@ -207,9 +230,13 @@ export function AuditSearchScreen({ storeId, storeName, api, permissions, naviga
               lines={[
                 `event: ${detail.action}`,
                 `store: ${storeName}`,
-                `actor_type: ${detail.actorType}`,
+                `actor_type: ${actorTypeLabel(detail.actorType)}`,
                 `actor: ${detail.actorId}`,
-                `target: ${detail.entityType} ${detail.entityId}`,
+                /* 共有端末の操作は「誰が」ではなく「どの端末で」が主体なので、
+                   モックと同じく端末の行として別に名乗る（承認済みモックの
+                   `device: 銀座店 レジ横iPad`）。個人の操作に端末の行は無い。 */
+                ...(detail.actorType === 'shared_terminal' ? [`device: ${detail.actorId}`] : []),
+                `target: ${entityTypeLabel(detail.entityType)} ${detail.entityId}`,
                 `correlation_id: ${detail.correlationId ?? 'なし'}`,
                 `occurred_at: ${formatJstInstant(detail.occurredAt)}`,
               ]}

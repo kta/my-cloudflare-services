@@ -1,6 +1,5 @@
 import { cn } from '@app/ui'
 import type { ReactNode } from 'react'
-import { formatIsoDateJa } from './forms'
 
 /*
  * 顧客向け Web 予約（スマートフォン）の語彙。
@@ -207,43 +206,6 @@ export function PhoneField({
         className={FIELD}
       />
     </label>
-  )
-}
-
-/**
- * 日付の欄（端末方言）。`type="date"` を使わないのは `design/forms` と同じ
- * 理由で、ブラウザ既定の書式（`mm/dd/yyyy`）と選択色が出るため。お客様が読む
- * 面なので、打った ISO は必ず日本語で読み返す。
- *
- * 読み下しは `<label>` の外に置く。中に入れると欄の名前が
- * 「ご希望の日 9月1日（火）」になり、何を入れる欄かが読めなくなる。
- */
-export function PhoneDateField({
-  label,
-  value,
-  onChange,
-}: {
-  label: string
-  value: string
-  onChange?: (next: string) => void
-}) {
-  const readback = formatIsoDateJa(value)
-  return (
-    <>
-      <label>
-        {label}
-        <input
-          value={value}
-          type="text"
-          inputMode="numeric"
-          autoComplete="off"
-          placeholder="2026-09-23"
-          onChange={(event) => onChange?.(event.target.value)}
-          className={FIELD}
-        />
-      </label>
-      {readback !== undefined && <small className="font-sans">{readback}</small>}
-    </>
   )
 }
 
