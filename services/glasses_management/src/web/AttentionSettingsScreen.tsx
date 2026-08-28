@@ -137,6 +137,12 @@ export function AttentionSettingsScreen({ storeId, api, permissions, navigate }:
   const mayManage = permissions.includes('settings.manage')
   const [settings, setSettings] = useState<AttentionSettings>()
   const [draft, setDraft] = useState<Draft>()
+  /*
+   * 既定は読み取り。承認済みモックの本文は許可表と 3 枚の読み取りカードだけで、
+   * 選択肢を開いたまま並べると、表がすでに言っていることを選択が言い直し、
+   * どれが「いまの値」でどれが「これから変える値」なのかが読めなくなる。
+   */
+  const [editing, setEditing] = useState(false)
   const [loadFailed, setLoadFailed] = useState(false)
   const [saved, setSaved] = useState(false)
   const [failure, setFailure] = useState<string>()
@@ -344,7 +350,7 @@ export function AttentionSettingsScreen({ storeId, api, permissions, navigate }:
                 <Card key={row.capability}>
                   <b>{row.label}</b>
                   <br />
-                  {mayManage ? (
+                  {mayManage && editing ? (
                     <PickerField
                       hideLabel
                       id={`attention-role-${row.capability}`}
@@ -374,7 +380,7 @@ export function AttentionSettingsScreen({ storeId, api, permissions, navigate }:
               <Card label="登録方式">
                 <b>登録方式</b>
                 <br />
-                {mayManage ? (
+                {mayManage && editing ? (
                   <PickerField
                     hideLabel
                     id="attention-review-mode"
@@ -392,7 +398,7 @@ export function AttentionSettingsScreen({ storeId, api, permissions, navigate }:
               <Card label="共有範囲の設定">
                 <b>共有範囲</b>
                 <br />
-                {mayManage ? (
+                {mayManage && editing ? (
                   <PickerField
                     hideLabel
                     id="attention-sharing-scope"
@@ -410,7 +416,7 @@ export function AttentionSettingsScreen({ storeId, api, permissions, navigate }:
               <Card label="設定範囲の選択">
                 <b>設定範囲</b>
                 <br />
-                {mayManage ? (
+                {mayManage && editing ? (
                   <PickerField
                     hideLabel
                     id="attention-scope"
@@ -454,16 +460,27 @@ export function AttentionSettingsScreen({ storeId, api, permissions, navigate }:
 
             {mayManage && (
               <Actions>
-                <Action
-                  variant="primary"
-                  inset="tight"
-                  disabled={submitting}
-                  onClick={() => {
-                    void save()
-                  }}
-                >
-                  設定を保存する
-                </Action>
+                {editing ? (
+                  <>
+                    <Action inset="tight" onClick={() => setEditing(false)}>
+                      変更をやめる
+                    </Action>
+                    <Action
+                      variant="primary"
+                      inset="tight"
+                      disabled={submitting}
+                      onClick={() => {
+                        void save()
+                      }}
+                    >
+                      設定を保存する
+                    </Action>
+                  </>
+                ) : (
+                  <Action inset="tight" onClick={() => setEditing(true)}>
+                    設定を変更
+                  </Action>
+                )}
               </Actions>
             )}
           </>

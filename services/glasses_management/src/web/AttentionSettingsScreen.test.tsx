@@ -69,9 +69,18 @@ afterEach(() => {
 })
 
 /** 承認済みモック `ATTENTION-PERMISSIONS--default--ipad-landscape.png` の権限表 */
+/*
+ * 設定の面は既定が読み取り。変える面へ入るのは明示的な操作なので、選択肢を
+ * 触るテストはここを通ってから始める。
+ */
+async function startEditing() {
+  fireEvent.click(await screen.findByRole('button', { name: '設定を変更' }))
+}
+
 test('ロール×操作の許可表をモックどおりに出す (UC-EYEX-140, AC-EYEX-84)', async () => {
   const { api } = createApi(() => jsonResponse(settings))
   renderScreen(api)
+  await startEditing()
 
   const table = await screen.findByRole('table', { name: '注意事項の権限' })
   const headers = within(table)
@@ -133,6 +142,7 @@ test('公開方式と能力ロールを組織共通として保存する (UC-EYE
       : jsonResponse(settings),
   )
   renderScreen(api)
+  await startEditing()
 
   choosePickerOption(await screen.findByRole('combobox', { name: '公開方式' }), '即時公開')
   choosePickerOption(
@@ -168,6 +178,7 @@ test('店舗上書きとして保存できる (UC-EYEX-139)', async () => {
       : jsonResponse(settings),
   )
   renderScreen(api)
+  await startEditing()
 
   choosePickerOption(await screen.findByRole('combobox', { name: '設定範囲' }), '店舗上書き')
   fireEvent.click(screen.getByRole('button', { name: '設定を保存する' }))
@@ -192,6 +203,7 @@ test('共有範囲の変更は影響件数を確認するまで適用しない (
     return jsonResponse(settings)
   })
   renderScreen(api)
+  await startEditing()
 
   choosePickerOption(await screen.findByRole('combobox', { name: '共有範囲' }), 'チェーン全体')
   fireEvent.click(screen.getByRole('button', { name: '設定を保存する' }))
@@ -230,6 +242,7 @@ test('影響確認をやめれば共有範囲は変わらない (AC-EYEX-118)', 
       : jsonResponse(settings),
   )
   renderScreen(api)
+  await startEditing()
 
   choosePickerOption(await screen.findByRole('combobox', { name: '共有範囲' }), 'チェーン全体')
   fireEvent.click(screen.getByRole('button', { name: '設定を保存する' }))
@@ -257,6 +270,7 @@ test('監査に残せない変更は成立させず、入力を保持して再�
       : jsonResponse({ ...settings, reviewMode: 'immediate' })
   })
   renderScreen(api)
+  await startEditing()
 
   choosePickerOption(await screen.findByRole('combobox', { name: '公開方式' }), '即時公開')
   fireEvent.click(screen.getByRole('button', { name: '設定を保存する' }))
@@ -301,6 +315,7 @@ test('端末に設定内容を残さない (完全共有iPad)', async () => {
   const setItem = vi.spyOn(Storage.prototype, 'setItem')
   const { api } = createApi(() => jsonResponse(settings))
   renderScreen(api)
+  await startEditing()
 
   await screen.findByRole('table', { name: '注意事項の権限' })
   choosePickerOption(screen.getByRole('combobox', { name: '公開方式' }), '即時公開')
@@ -316,6 +331,7 @@ test('端末に設定内容を残さない (完全共有iPad)', async () => {
 test('表と見出しの行に操作を置かず、右上は状態ピルのままにする (AC-EYEX-84)', async () => {
   const { api } = createApi(() => jsonResponse(settings))
   renderScreen(api)
+  await startEditing()
 
   const table = await screen.findByRole('table', { name: '注意事項の権限' })
   expect(within(table).queryAllByRole('combobox')).toHaveLength(0)
@@ -336,4 +352,23 @@ test('面のどこにもネイティブの select を置かない', async () => 
 
   await screen.findByRole('table', { name: '注意事項の権限' })
   expect(container.querySelector('select')).toBeNull()
+})
+
+/*
+ * 承認済みモック（`attention-permissions`）の本文は、許可表と 3 枚の読み取り
+ * カードだけである。権限がある人にも選択肢を開いたまま並べると、表がすでに
+ * 言っていることを 5 枚の選択が言い直し、どれが「いまの値」でどれが「これから
+ * 変える値」なのかが読めなくなる。変えるのは明示的に始める。
+ */
+test('既定は読み取り。変更は明示的に始める', async () => {
+  const { api } = createApi(() => jsonResponse(settings))
+  renderScreen(api)
+
+  await screen.findByRole('region', { name: '登録方式' })
+  expect(screen.queryByRole('combobox')).toBeNull()
+  expect(screen.queryByRole('button', { name: '設定を保存する' })).toBeNull()
+
+  fireEvent.click(screen.getByRole('button', { name: '設定を変更' }))
+  expect(screen.getAllByRole('combobox').length).toBeGreaterThan(0)
+  expect(screen.getByRole('button', { name: '設定を保存する' })).toBeInTheDocument()
 })

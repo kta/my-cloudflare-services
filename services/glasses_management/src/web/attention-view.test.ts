@@ -1,6 +1,7 @@
 import { ATTENTION_CAPABILITIES, ATTENTION_INPUT_GUIDANCE } from '@app/contracts'
 import { expect, test } from 'vitest'
 import {
+  formatJstDottedInstant,
   attentionActionLabel,
   attentionCapabilityRows,
   attentionMatrixRows,
@@ -307,4 +308,13 @@ test('待ち行列の見出しは今日と昨日だけ言葉にする (ATTENTION
   expect(relativeJstDay('2026-08-26T15:00:00.000Z', '2026-08-27')).toBe('本日')
   // 月跨ぎ
   expect(relativeJstDay('2026-07-31T05:00:00.000Z', '2026-08-01')).toBe('昨日')
+})
+
+/*
+ * 注意事項の「発生日時・根拠」は、承認済みモックでは `2026.08.25 15:10` と
+ * 点で区切る。同じ面の顧客台帳側の日付（`2026.02.10`）と書き方を揃えるためで、
+ * `2026年8月25日` の形にすると 3 枚組の狭い 1 枚で折り返す。
+ */
+test('発生日時は点で区切った日付と時刻で読む', () => {
+  expect(formatJstDottedInstant('2026-08-25T06:10:00.000Z')).toBe('2026.08.25 15:10')
 })

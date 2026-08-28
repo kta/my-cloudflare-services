@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react'
 import { ConflictCompare, PermissionDenied } from './admin-chrome'
 import {
   attentionActionLabel,
+  formatJstDottedInstant,
   formatJstInstant,
   instantToJstWallClock,
   jstWallClockToInstant,
@@ -507,7 +508,8 @@ export function AttentionReviewScreen({
               <Card label={`発生日時・根拠 版${note.version}`}>
                 <b>発生日時・根拠</b>
                 <br />
-                {formatJstInstant(note.occurredAt)}
+                {/* モックは `2026.08.25 15:10`。顧客台帳の日付と点の区切りで揃える。 */}
+                {formatJstDottedInstant(note.occurredAt)}
                 <br />
                 {note.basis}
               </Card>

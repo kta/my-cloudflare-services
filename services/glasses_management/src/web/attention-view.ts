@@ -298,6 +298,18 @@ export function formatJstInstant(instant: string): string {
   return `${dayFormat.format(at)} ${timeFormat.format(at)}`
 }
 
+/**
+ * `2026.08.25 15:10` — 承認済みモックの「発生日時・根拠」の書き方。
+ *
+ * 顧客台帳の日付（`2026.02.10`）と点の区切りで揃える。`2026年8月25日` の形は
+ * 3 枚組の狭い 1 枚で折り返し、時刻が次の行へ落ちて日時に見えなくなる。
+ */
+export function formatJstDottedInstant(instant: string): string {
+  const at = new Date(instant)
+  if (Number.isNaN(at.getTime())) return instant
+  return `${isoDayFormat.format(at).replaceAll('-', '.')} ${timeFormat.format(at)}`
+}
+
 const WALL_CLOCK = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/
 
 /**

@@ -177,7 +177,7 @@ test('確認待ちの待ち行列・3カード・公開前チェックを出す'
     '度数変更の説明中に不安を訴えられた。',
   )
   const basis = within(card).getByRole('region', { name: '発生日時・根拠 版1' })
-  expect(basis).toHaveTextContent('2026年8月25日 15:10')
+  expect(basis).toHaveTextContent('2026.08.25 15:10')
   expect(basis).toHaveTextContent('接客記録 EY-V-331')
   expect(within(card).getByRole('region', { name: '推奨対応 版1' })).toBeInTheDocument()
   expect(within(card).getByRole('region', { name: '公開前チェック' })).toHaveTextContent(
@@ -191,7 +191,7 @@ test('確認待ちを理由付きで公開できる (UC-EYEX-141, AC-EYEX-116)',
 
   const card = await waitFor(() => noteCard('注意事項 確認待ち 版1'))
   expect(card).toHaveTextContent('度数変更の説明中に不安を訴えられた。')
-  expect(card).toHaveTextContent('2026年8月25日 15:10')
+  expect(card).toHaveTextContent('2026.08.25 15:10')
   expect(card).toHaveTextContent('接客記録 EY-V-331')
 
   fireEvent.change(within(card).getByLabelText('確認の理由'), {
