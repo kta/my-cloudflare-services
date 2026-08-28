@@ -192,6 +192,7 @@ async function openAdmin(page: Page, label: string) {
 
 const examPurposeId = '33333333-3333-4333-8333-333333333333'
 const adjustPurposeId = '44444444-4444-4444-8444-444444444444'
+const pickupPurposeId = '77777777-7777-4777-8777-777777777777'
 const hanakoId = '55555555-5555-4555-8555-555555555555'
 const taroId = '66666666-6666-4666-8666-666666666666'
 
@@ -210,8 +211,23 @@ const bookingPurposes = [
   {
     id: adjustPurposeId,
     staffName: 'フィッティング',
-    customerLabel: 'かけ具合を調整したい',
+    /* モックの来店目的は「メガネを新しく作りたい／今のメガネを調整したい／
+       受け取りたい」の 3 つ。所要はモックの 20 分ではなく 30 分のままにする——
+       この目的は BOOK-PURPOSE-CONFLICT で 60 分と足して 90 分にし、13:30 に
+       入らないことを示す役目も持っており、20 分にすると入ってしまう。 */
+    customerLabel: '今のメガネを調整したい',
     durationMinutes: 30,
+    slotIntervalMinutes: 30,
+    isPublic: true,
+    requiredSkills: [],
+    requiredEquipment: [],
+    maxConcurrent: 2,
+  },
+  {
+    id: pickupPurposeId,
+    staffName: '受け取り',
+    customerLabel: '受け取りたい',
+    durationMinutes: 20,
     slotIntervalMinutes: 30,
     isPublic: true,
     requiredSkills: [],
@@ -401,7 +417,7 @@ async function captureBookingScreens(browser: Browser) {
 
     await page.getByRole('button', { name: '11:30', exact: true }).click()
     await page.getByRole('button', { name: /メガネを新しく作りたい/ }).click()
-    await page.getByRole('button', { name: /かけ具合を調整したい/ }).click()
+    await page.getByRole('button', { name: /今のメガネを調整したい/ }).click()
     await page.getByRole('button', { name: 'お客様情報へ進む' }).click()
     await visible(page.getByRole('heading', { name: 'お電話番号を伺えますか？' }))
     await page.getByLabel('お電話番号').fill('09012345678')
@@ -420,13 +436,15 @@ async function captureBookingScreens(browser: Browser) {
   // BOOK-PURPOSE-CONFLICT: 希望した 13:30 が所要時間つき再検証で落ちる。
   {
     const page = await newPage(browser, IPAD)
-    await mockBookingApi(page, { offered: ['10:00', '10:30', '11:30', '12:00'] })
+    /* モックの代替時刻は 10:00 / 11:00 / 13:30 の 3 つ。選んだ 13:30 は
+       入らない時刻なので、代替として出す 3 つの中には含めない。 */
+    await mockBookingApi(page, { offered: ['10:00', '11:00', '12:00'] })
     await openHome(page)
     await page.getByRole('button', { name: /新しい予約を取る/ }).click()
     await page.getByRole('button', { name: dayLabel(jstToday()) }).click()
     await page.getByRole('button', { name: '13:30', exact: true }).click()
     await page.getByRole('button', { name: /メガネを新しく作りたい/ }).click()
-    await page.getByRole('button', { name: /かけ具合を調整したい/ }).click()
+    await page.getByRole('button', { name: /今のメガネを調整したい/ }).click()
     await page.getByRole('button', { name: 'お客様情報へ進む' }).click()
     await page.getByText('13:30は90分の受付ができません').waitFor({ state: 'visible' })
     await shot(page, 'BOOK-PURPOSE-CONFLICT', 'resource-conflict', 'ipad-landscape')
@@ -442,7 +460,7 @@ async function captureBookingScreens(browser: Browser) {
     await page.getByRole('button', { name: dayLabel(jstToday()) }).click()
     await page.getByRole('button', { name: '11:30', exact: true }).click()
     await page.getByRole('button', { name: /メガネを新しく作りたい/ }).click()
-    await page.getByRole('button', { name: /かけ具合を調整したい/ }).click()
+    await page.getByRole('button', { name: /今のメガネを調整したい/ }).click()
     await page.getByRole('button', { name: 'お客様情報へ進む' }).click()
     await page.getByLabel('お電話番号').fill('090-1234')
     const options = page.getByRole('list', { name: '顧客候補' }).getByRole('button')
