@@ -111,19 +111,34 @@ function dotted(date: string): string {
 
 function PrescriptionLines({
   prescription,
+  origin = true,
 }: {
   prescription: CustomerDetail['pastPrescriptions'][number]
+  /*
+   * 出所（測定日・店舗・記録者）を添えるか。
+   *
+   * モックの「現在の度数」は 2 行だけで出所を載せていないが、AC-EYEX-24 は
+   * 現在値でも測定日・店舗・記録者を確かめられることを求めている。承認済みの
+   * 仕様が絵より強いので、現在の度数でも添えたままにする（この引数は過去の
+   * 度数の並びのために残す）。
+   */
+  origin?: boolean
 }) {
   return (
     <p>
-      R {prescription.rightSphere} / L {prescription.leftSphere} / PD{' '}
-      {prescription.pupillaryDistance}
-      {prescription.addPower !== null && ` / ADD ${prescription.addPower}`}
+      R {prescription.rightSphere} / L {prescription.leftSphere}
       <br />
-      <span className="text-ink-muted">
-        測定日 {dotted(prescription.measuredOn)}・店舗 {prescription.storeName}・記録者{' '}
-        {prescription.recordedBy}
-      </span>
+      PD {prescription.pupillaryDistance}
+      {prescription.addPower !== null && ` · ADD ${prescription.addPower}`}
+      {origin && (
+        <>
+          <br />
+          <span className="text-ink-muted">
+            測定日 {dotted(prescription.measuredOn)}・店舗 {prescription.storeName}・記録者{' '}
+            {prescription.recordedBy}
+          </span>
+        </>
+      )}
     </p>
   )
 }
@@ -442,17 +457,14 @@ export function CustomerPanel({
                     )}
                     {ownedGlasses.length > 0 && (
                       <Region label="現在のメガネ">
-                        <ul className="list-none">
-                          {ownedGlasses.map((glasses) => (
-                            <li key={`${glasses.label}-${glasses.purchasedOn}`}>
-                              {glasses.label}（{glasses.lensType}）
-                              <small className="text-ink-muted">
-                                {' '}
-                                {dotted(glasses.purchasedOn)}・{glasses.storeName}
-                              </small>
-                            </li>
-                          ))}
-                        </ul>
+                        {/*
+                         * モックは `遠近両用1本 · 近用1本` と数で要約する。1 本ずつ
+                         * 購入日と店舗を並べると、3 枚組の 1 枚が縦に伸びて隣の 2 枚と
+                         * 段が揃わなくなるうえ、この面で先に知りたいのは「いま何を
+                         * 使っているお客様か」であって、いつどこで買ったかではない
+                         * （それは来店履歴が持つ）。
+                         */}
+                        {summarizeGlasses(ownedGlasses)}
                       </Region>
                     )}
                   </CardColumns>
@@ -545,4 +557,16 @@ export function CustomerPanel({
       }
     />
   )
+}
+
+/**
+ * 持っているメガネを用途ごとの本数にまとめる（モックの `遠近両用1本 · 近用1本`）。
+ *
+ * 並びは持っている順のまま数える。用途の名前を並べ替えると、同じお客様でも
+ * 記録の入り方で行の見え方が変わってしまう。
+ */
+function summarizeGlasses(glasses: { lensType: string }[]): string {
+  const counts = new Map<string, number>()
+  for (const one of glasses) counts.set(one.lensType, (counts.get(one.lensType) ?? 0) + 1)
+  return [...counts].map(([lensType, count]) => `${lensType}${count}本`).join(' · ')
 }

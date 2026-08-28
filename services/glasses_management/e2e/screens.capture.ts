@@ -984,6 +984,19 @@ async function captureLedgerScreens(browser: Browser) {
     await openLedger(page)
     await shot(page, 'LEDGER-DAY', 'walkin-now', 'ipad-landscape')
 
+    /*
+     * 工程盤はモックどおり 2 行で撮る。台帳の 4 行をそのまま持ち越すと、
+     * 盤が「いま店にいる人」ではなく「今日の予約全部」を並べた表に見える。
+     * 引き継ぎも、モックと同じ「誰を・どこへ・何を確かめるか」の一文にする。
+     */
+    state.rows = [
+      ledgerBase({
+        customerName: '田中 花子',
+        nextGuidance: '田中様を視力測定機Aへ案内。前回度数との変化を確認してください。',
+      }),
+      walkinRow(),
+    ]
+
     /* 面の行き来は緑帯のタブではなく、全画面共通の左サイドバー 1 本に集約された。 */
     await page
       .getByRole('navigation', { name: '画面の一覧' })

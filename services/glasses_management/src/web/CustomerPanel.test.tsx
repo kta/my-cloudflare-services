@@ -319,7 +319,7 @@ test('keeps 現在度数 and 過去度数 in separate regions with 測定日・�
   expect(past).toHaveTextContent('山田 太郎')
 })
 
-test('現在のメガネと最新メモの日付も点で区切る (CUSTOMER-CURRENT)', async () => {
+test('最新メモの日付も点で区切る (CUSTOMER-CURRENT)', async () => {
   render(
     <CustomerPanel
       {...staffProps(jsonApi([hanako]))}
@@ -332,9 +332,11 @@ test('現在のメガネと最新メモの日付も点で区切る (CUSTOMER-CUR
   await searchLedger('090-1234')
   fireEvent.click(await screen.findByRole('button', { name: /田中 花子/ }))
 
-  const glasses = screen.getByRole('region', { name: '現在のメガネ' })
-  expect(glasses).toHaveTextContent('2026.02.10')
-  expect(glasses).not.toHaveTextContent('2026-02-10')
+  /* 現在のメガネは日付を持たない（用途ごとの本数だけを名乗る）。日付の書き方は
+     日付を出す面——最新メモと来店履歴——で確かめる。 */
+  const note = screen.getByRole('region', { name: '最新メモ' })
+  expect(note).toHaveTextContent('2026.05.18')
+  expect(note).not.toHaveTextContent('2026-05-18')
 })
 
 test('the ledger puts 現在情報 before 履歴 (AC-EYEX-16)', async () => {
@@ -617,4 +619,48 @@ test('顧客台帳の面はモックの並びで出る (CUSTOMER-CURRENT)', asyn
     if (next === undefined) continue
     expect(region.compareDocumentPosition(next) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   }
+})
+
+/*
+ * 承認済みモックの「現在のメガネ」は `遠近両用1本 · 近用1本` という数の要約で、
+ * 1 本ずつの購入日や店舗は並べていない。3 枚組の 1 枚に収まる分量で「いま何を
+ * 使っているお客様か」を先に言う面であり、本数より細かい話は来店履歴が持つ。
+ */
+test('現在のメガネは用途ごとの本数で要約する', async () => {
+  render(
+    <CustomerPanel
+      {...staffProps(jsonApi([hanako]))}
+      mode="ledger"
+      onSelect={vi.fn()}
+      permissions={allowed}
+      detail={detail}
+    />,
+  )
+  await searchLedger('090-1234')
+  fireEvent.click(await screen.findByRole('button', { name: /田中 花子/ }))
+  const region = await screen.findByRole('region', { name: '現在のメガネ' })
+  expect(region.textContent).toContain('遠近両用1本')
+  expect(region.textContent).not.toContain('メタルフレーム')
+})
+
+/*
+ * 承認済みモックの「現在の度数」は `R -2.25 / L -2.00` と `PD 62.0 · ADD +1.00`
+ * の 2 行に分かれている。1 行に繋ぐと、3 枚組の狭い 1 枚で語中に折れる。
+ * 出所（測定日・店舗・記録者）はモックに無いが AC-EYEX-24 が求めるので残す。
+ */
+test('現在の度数はモックと同じ 2 行に分ける', async () => {
+  render(
+    <CustomerPanel
+      {...staffProps(jsonApi([hanako]))}
+      mode="ledger"
+      onSelect={vi.fn()}
+      permissions={allowed}
+      detail={detail}
+    />,
+  )
+  await searchLedger('090-1234')
+  fireEvent.click(await screen.findByRole('button', { name: /田中 花子/ }))
+  const region = await screen.findByRole('region', { name: '現在の度数' })
+  expect(region.textContent).toContain('PD 62.0 · ADD')
+  expect(region.textContent).toContain('測定日')
 })
