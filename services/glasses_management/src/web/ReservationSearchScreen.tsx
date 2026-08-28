@@ -4,7 +4,7 @@ import {
   type Recording,
   Reservation,
 } from '@app/contracts'
-import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Action,
   Actions,
@@ -414,39 +414,12 @@ export function RecordingPanel({
               if (audioRef.current) audioRef.current.currentTime = next
             }}
           />
-          {/*
-           * 録音日時・録音者は、受付履歴では詳細の見出しが
-           * `2026年8月26日 14:18 · 受付者 鈴木` と既に言っている。同じ事実を
-           * 2 度書くと、どちらが本当かを読む側に確かめさせることになる。
-           * 見出しを持たない予約検索の面でだけ名乗る。
-           */}
-          {frame === 'card' && (
-            <small className="mt-1 block">
-              録音日時 <span>{formatJstDateTime(available.recordedAt)}</span>
-              <span aria-hidden="true"> · </span>
-              録音者 <span>{available.recordedBy}</span>
-              <span aria-hidden="true"> · </span>
-              長さ <span>{formatDuration(available.durationSeconds)}</span>
-            </small>
-          )}
         </>
       )}
       {available && wave && <Waveform />}
       {/* モックの `.audio small` — 持ち出せないことをどの状態でも言い続ける。 */}
       <small className="block">{note}</small>
     </section>
-  )
-}
-
-/**
- * カードの中の 1 行。モックの `.card` は `<b>` のあと `<br>` で行を継ぐだけで、
- * 段落は使っていない（`<p>` は上下 1em の余白を持つので高さが変わる）。
- */
-function CardRow({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <span className="mt-1 block">
-      <span className="text-ink-muted">{label}</span> {children}
-    </span>
   )
 }
 
@@ -788,7 +761,15 @@ export function ReservationSearchScreen({
                     <b>{`${reservation.customer.name} 様`}</b>
                     <br />
                     {formatJstRowDateTime(reservation.startAt)}
-                    {` · ${SOURCE_LABEL[reservation.source]} · ${STATUS_LABEL[reservation.status]}`}
+                    {/*
+                     * モックは日時と来店目的で並べる。経路は選んだあとの「状態」
+                     * カードが言い、状態は予約済みなら候補の全部に同じ語が並ぶ
+                     * だけで見分けの役に立たない。予約済みでないものだけは、
+                     * 選ぶ前に分かる必要があるので語を残す。
+                     */}
+                    {` · ${purposeText(reservation.purposeIds)}`}
+                    {reservation.status !== 'confirmed' &&
+                      ` · ${STATUS_LABEL[reservation.status]}`}
                     {/* 選択は 3px の緑枠で分かるが、色だけに頼らず語でも出す。 */}
                     {open && (
                       <>
@@ -810,19 +791,21 @@ export function ReservationSearchScreen({
               <section aria-label="予約詳細">
                 <h1>{formatJstHeading(selected.startAt)}</h1>
                 <CardColumns>
-                  <Card className="mt-2.5">
+                  {/*
+                   * モックの 3 枚組は見出しの下に値だけを 2 行置く。値ごとに札を
+                   * 付けると、カード見出しが既に言っている話を各行が言い直し、
+                   * 柱 250px を引いた幅では札と値が競り合って語中で折れる。
+                   * 来店日時は面の見出し、店舗はバーの副題がそれぞれ名乗っている。
+                   */}
+                  <Card label="予約内容" className="mt-2.5">
                     <b>予約内容</b>
-                    {/* 来店日時は面の見出しが名乗っている。ここで繰り返すと、
-                        承認済みモックが「予約内容」に置いている目的が押し出される。 */}
-                    <CardRow label="来店目的">{purposeText(selected.purposeIds)}</CardRow>
-                    <CardRow label="予約番号">{selected.reservationNumber}</CardRow>
-                    <CardRow label="店舗">{storeName}</CardRow>
+                    <span className="mt-1 block">{purposeText(selected.purposeIds)}</span>
+                    <span className="block">{selected.reservationNumber}</span>
                   </Card>
-                  <Card className="mt-2.5">
+                  <Card label="お客様" className="mt-2.5">
                     <b>お客様</b>
-                    <CardRow label="お名前">{`${selected.customer.name} 様`}</CardRow>
-                    <CardRow label="お客様かな">{selected.customer.kana}</CardRow>
-                    <CardRow label="電話番号">{selected.customer.phone}</CardRow>
+                    <span className="mt-1 block">{`${selected.customer.name} 様`}</span>
+                    <span className="block">{selected.customer.phone}</span>
                   </Card>
                   <Card className="mt-2.5">
                     <b>状態</b>

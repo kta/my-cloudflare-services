@@ -538,8 +538,10 @@ test('shows recording metadata and playback controls without any download contro
   expect(
     within(region).getByText('ダウンロードはできません。再生操作は監査されます。'),
   ).toBeInTheDocument()
-  expect(within(region).getByText('2026年8月20日 10:05')).toBeInTheDocument()
-  expect(within(region).getByText('鈴木')).toBeInTheDocument()
+  /* モックの `.audio` は再生の操作と 1 行の説明、そして持ち出せない旨だけ。
+     録音日時・録音者は載せない（監査に残るのは操作の側で、面の役目ではない）。 */
+  expect(region.textContent).not.toContain('録音日時')
+  expect(region.textContent).not.toContain('録音者')
   expect(within(region).getAllByText('03:12').length).toBeGreaterThan(0)
   const play = within(region).getByRole('button', { name: '再生' })
   expect(play.className).toContain('size-11')
@@ -829,4 +831,37 @@ test('shows the approved permission-denied state with a way back', async () => {
   expect(screen.queryByRole('region', { name: '検索結果' })).not.toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: '業務開始画面へ戻る' }))
   expect(navigate).toHaveBeenCalledWith({ screen: 'home' })
+})
+
+/*
+ * 承認済みモックの 3 枚組は、見出しの下に値だけを 2 行置く（`視力測定・新調相談`
+ * / `佐藤 美咲・測定機A` のように）。値ごとに「来店目的」「予約番号」と札を
+ * 付けると、カード見出しが既に言っている話を各行が言い直し、柱 250px を引いた
+ * 幅では札と値が競り合って語中で折れる。
+ */
+test('予約の 3 枚組は札を付けず値だけを並べる', async () => {
+  renderScreen(listResponse([tanaka]))
+  searchFor('田中')
+  fireEvent.click(await screen.findByRole('button', { name: /田中 花子/ }))
+  const detail = await screen.findByRole('region', { name: '予約内容' })
+  expect(detail.textContent).not.toContain('来店目的')
+  expect(detail.textContent).not.toContain('予約番号')
+  expect(detail.textContent).toContain('EY-')
+})
+
+/*
+ * 承認済みモックの候補は `8/27 11:00 · 新調相談` と、日時と来店目的で並ぶ。
+ * 経路と状態を出していたが、経路は選んだあとの「状態」カードが言い、状態は
+ * 予約済みなら候補の全部に同じ語が並ぶだけで見分けの役に立たない。取消など
+ * 予約済みでない予約だけは、選ぶ前に分かる必要があるので語を残す。
+ */
+test('候補は日時と来店目的で並べる', async () => {
+  renderScreen(listResponse([tanaka]))
+  searchFor('田中')
+  const row = await screen.findByRole('button', { name: /田中 花子/ })
+  /* 目的の名は店舗設定から引く。ここでは設定を返していないので、名が引けない
+     ときの控え（件数）で出る。確かめたいのは「経路と状態ではない」ことである。 */
+  expect(row.textContent).toContain('1件')
+  expect(row.textContent).not.toContain('電話・店頭')
+  expect(row.textContent).not.toContain('予約済み')
 })
