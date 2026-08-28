@@ -117,7 +117,7 @@ test('shows web, staff-taken and walk-in entries on one time axis with a text so
   expect(api).toHaveBeenCalledWith(`/api/staff/stores/${STORE_ID}/ledger?date=${DATE}`)
   const ledger = screen.getByRole('grid', { name: '予約台帳' })
   // 予約元は色ではなく文字で読める。セルはモックどおり「目的 · 予約元」の 1 行。
-  expect(within(ledger).getByText('視力測定 · 店頭・電話')).toBeInTheDocument()
+  expect(within(ledger).getByText('視力測定 · 電話')).toBeInTheDocument()
   expect(within(ledger).getByText('ウォークイン 3')).toBeInTheDocument()
   expect(within(ledger).getByRole('columnheader', { name: '10:00' })).toBeInTheDocument()
 })
@@ -479,4 +479,15 @@ test('版の衝突が解けるまで、台帳は出さない', async () => {
 
   fireEvent.click(screen.getByRole('button', { name: 'この入力を破棄' }))
   await waitFor(() => expect(screen.getByRole('grid', { name: '予約台帳' })).toBeInTheDocument())
+})
+
+/*
+ * 予約元の語は、台帳も受付履歴も同じにする。台帳だけ `店頭・電話` と長い語で
+ * 名乗ると、同じ予約が面によって違うものに見えるうえ、モックのセル
+ * （`新調相談・電話`）より 3 文字長くなって目的の名を押し出す。
+ */
+test('予約元は受付履歴と同じ語で名乗る', async () => {
+  renderLedger(mockApi(() => json([walkin()])))
+  await screen.findByRole('grid', { name: '予約台帳' })
+  expect(screen.queryByText(/店頭・電話/)).toBeNull()
 })

@@ -800,11 +800,12 @@ function ledgerBase(overrides: Partial<LedgerRow> = {}): LedgerRow {
   return {
     id: webReservationId,
     entryType: 'reservation',
-    source: 'web',
+    /* モックの台帳は 10:00 の「田中 花子／新調相談・電話」から始まる。 */
+    source: 'staff',
     status: 'confirmed',
     startAt: '2026-09-01T01:00:00.000Z',
     endAt: '2026-09-01T02:00:00.000Z',
-    customerName: '佐藤 陽子',
+    customerName: '田中 花子',
     customerId: ledgerCustomerId,
     /*
      * モックの工程盤（`JOURNEY-DEFAULT`）は「受付済み → 相談中 → 次にご案内」と
@@ -814,11 +815,11 @@ function ledgerBase(overrides: Partial<LedgerRow> = {}): LedgerRow {
     progress: 'service_in_progress',
     // JST 10:50 受付 → 現在 11:08 で「待ち18分」。モックと同じ読み。
     waitStartedAt: '2026-09-01T01:50:00.000Z',
-    assignedStaffId: ledgerStaffId,
+    assignedStaffId: ledgerStaffId2,
     assignedEquipmentIds: [ledgerEquipmentId],
     nextGuidance: '測定機A 11:30',
     // 予約行は purposeNames 必須（台帳セルの「目的 · 予約元」表示のため）。
-    purposeNames: ['視力測定'],
+    purposeNames: ['新調相談'],
     warnings: [],
     version: 1,
     ...overrides,
@@ -831,13 +832,14 @@ function phoneRow(): LedgerRow {
     source: 'staff',
     startAt: '2026-09-01T02:30:00.000Z',
     endAt: '2026-09-01T03:30:00.000Z',
-    customerName: '鈴木 一郎',
+    customerName: '松本 一郎',
     customerId: null,
     progress: null,
     waitStartedAt: null,
     nextGuidance: null,
-    assignedStaffId: ledgerStaffId,
+    assignedStaffId: ledgerStaffId2,
     assignedEquipmentIds: [ledgerEquipmentId],
+    purposeNames: ['調整'],
     version: 3,
   })
 }
@@ -854,8 +856,9 @@ function measuredRow(): LedgerRow {
     progress: null,
     waitStartedAt: null,
     nextGuidance: null,
-    assignedStaffId: ledgerStaffId2,
+    assignedStaffId: ledgerStaffId,
     assignedEquipmentIds: [],
+    purposeNames: ['視力測定'],
     version: 2,
   })
 }
@@ -902,17 +905,18 @@ async function mockLedgerApi(page: Page, state: LedgerState) {
       return route.fulfill({
         json: {
           ...availabilitySettings(ginzaId, bookingPurposes),
+          /* 台帳の行は担当者の並び順に立つ。モックは 佐藤 美咲 の行が先。 */
           staff: [
             {
-              id: ledgerStaffId,
-              name: '高橋 健',
+              id: ledgerStaffId2,
+              name: '佐藤 美咲',
               skills: ['refraction'],
               canBook: true,
               isActive: true,
             },
             {
-              id: ledgerStaffId2,
-              name: '佐藤 美咲',
+              id: ledgerStaffId,
+              name: '高橋 健',
               skills: ['refraction'],
               canBook: true,
               isActive: true,

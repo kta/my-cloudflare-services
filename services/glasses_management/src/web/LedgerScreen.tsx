@@ -39,8 +39,9 @@ type LedgerScreenProps = StaffScreenProps & {
   now: string
 }
 
+/* 受付履歴の記録の右肩と同じ語。同じ予約を面ごとに違う語で呼ばない。 */
 const SOURCE_LABELS = {
-  staff: '店頭・電話',
+  staff: '電話',
   web: 'Web予約',
   walkin: 'ウォークイン',
 } as const
