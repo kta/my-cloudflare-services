@@ -379,7 +379,12 @@ test('shows recording information and playback for permitted staff', async () =>
   const list = await screen.findByRole('region', { name: '受付履歴' })
   fireEvent.click(within(list).getByRole('button', { name: /田中 花子/ }))
   const region = await screen.findByRole('region', { name: 'iPad録音' })
-  expect(within(region).getByText('2026年8月27日 14:18')).toBeInTheDocument()
+  /*
+   * 録音日時・録音者は詳細の見出しがすでに `2026年8月26日 14:18 · 受付者 鈴木`
+   * と言っている。承認済みモックの受付履歴の録音は再生の操作と波形だけで、
+   * 同じ事実を 2 度書かない。
+   */
+  expect(region.textContent).not.toContain('録音日時')
   expect(within(region).getAllByText('03:12').length).toBeGreaterThan(0)
   expect(within(region).getByText('予約受付時の録音')).toBeInTheDocument()
   expect(within(region).getByRole('button', { name: '再生' })).toBeInTheDocument()
@@ -433,7 +438,9 @@ test('選択した受付イベントの録音だけを表示する', async () =>
 
   fireEvent.click(within(list).getByRole('button', { name: /田中 花子/ }))
   const region = await screen.findByRole('region', { name: 'iPad録音' })
-  expect(within(region).getByText('共有iPad')).toBeInTheDocument()
+  /* 選んだ受付の録音であることは、その録音の長さで見分ける（受付履歴の面は
+     録音者を名乗らない——詳細の見出しが受付者を既に言っている）。 */
+  expect(within(region).getByText('01:00')).toBeInTheDocument()
 })
 
 /* ------------------------------------------------------------------ *
@@ -619,4 +626,21 @@ test('来店 names the weekday, as the approved mock does (AC-EYEX-57)', async (
   fireEvent.click(within(list).getByRole('button', { name: /田中 花子/ }))
   const detail = await screen.findByRole('region', { name: '受付イベント詳細' })
   await waitFor(() => expect(detail.textContent).toContain('8月28日（金）11:00'))
+})
+
+/*
+ * 同じ受付を、同じ面の中で 2 つの語で呼ばない。
+ *
+ * 記録の右肩のチップは `電話`、詳細の `受付経路` は `電話・店頭` と名乗っていた。
+ * 承認済みモック（`reception-history-approved.html`）はどちらも `電話` である。
+ * 読む側は、違う語が並べば違うことを指していると読む。
+ */
+test('受付経路は記録のチップと同じ語で名乗る', async () => {
+  renderScreen(allEntries, { permissions: { playRecording: false } })
+  const list = await screen.findByRole('region', { name: '受付履歴' })
+  const entry = within(list).getByRole('button', { name: /田中 花子/ })
+  fireEvent.click(entry)
+  expect(within(entry).getByText('電話')).toBeInTheDocument()
+  expect(screen.getByText('受付経路').parentElement?.textContent).toContain('電話')
+  expect(screen.queryByText('電話・店頭')).not.toBeInTheDocument()
 })

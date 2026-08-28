@@ -97,6 +97,9 @@ function storeRow(id: string, name: string, slug: string, isActive = true) {
 const ginza = storeRow(ginzaId, '銀座店', 'ginza')
 const marunouchi = storeRow(marunouchiId, '丸の内店', 'marunouchi')
 const nihonbashi = storeRow(nihonbashiId, '日本橋店', 'nihonbashi', false)
+/* 承認済みモックの切替一覧は 4 店舗ある。3 店舗だと「受付停止の店も並ぶ」
+   ことと「選べる店が複数ある」ことを 1 行が兼ねてしまう。 */
+const shinjuku = storeRow('55555555-5555-4555-8555-555555555555', '新宿店', 'shinjuku', false)
 const stores = [ginza, marunouchi]
 
 const WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土'] as const
@@ -1478,7 +1481,26 @@ async function captureStoreSwitchScreens(browser: Browser) {
   {
     const page = await newPage(browser, IPAD)
     await mockStoreSwitchApi(page)
+    /*
+     * モックは予約台帳の上で切り替える（`store-switch-approved.html` の
+     * `.veil` は台帳の格子に重なっている）。ホームの上で撮ると、後ろが
+     * 行き先の一覧になり「どの店の何を見ているところか」が変わってしまう。
+     * 店舗の一覧はモックと同じ 4 店舗に差し替える（`mockStoreSwitchApi` の
+     * あとに足すと、Playwright は後から足した route を先に見る）。
+     */
+    await page.route('**/api/staff/stores', (route) =>
+      route.fulfill({ json: [ginza, marunouchi, nihonbashi, shinjuku] }),
+    )
+    /* 後ろの台帳が空だと、モックの「予定の入った台帳の上で切り替える」という
+       文脈が出ない。モックと同じ 2 件を置く。 */
+    await page.route('**/ledger?*', (route) => route.fulfill({ json: [ledgerBase(), phoneRow()] }))
+    await page.clock.setFixedTime(new Date(LEDGER_NOW))
     await openHome(page)
+    await page
+      .getByRole('button', { name: /の予約台帳$/ })
+      .first()
+      .click()
+    await visible(page.getByRole('heading', { name: '銀座店の予約台帳' }))
     await page.locator('header button').first().click()
     await visible(page.getByRole('dialog', { name: '作業する店舗を切り替える' }))
     await shot(page, 'STORE-SWITCH', 'default', 'ipad-landscape')

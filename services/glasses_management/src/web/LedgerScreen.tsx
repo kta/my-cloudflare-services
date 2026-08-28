@@ -315,7 +315,14 @@ export function LedgerScreen({ storeId, storeName, api, date, now }: LedgerScree
         </div>
       )}
 
-      {conflict && (
+      {/*
+       * 版の衝突は台帳の上に足す帯ではなく、面そのものにする
+       * （承認済みモック `exception-states-approved.html#conflict` はバーの下を
+       * 見出し・2 枚の突き合わせ・2 つの操作だけにしている）。後ろに台帳を
+       * 残すと、どちらの値が今の台帳なのかが読めないまま破棄か再適用かを
+       * 選ばせることになる。選び終わるまでは、選ぶための材料だけを出す。
+       */}
+      {conflict ? (
         <ConflictPanel
           latest={conflict.latest}
           input={conflict.attempt.describe}
@@ -324,226 +331,229 @@ export function LedgerScreen({ storeId, storeName, api, date, now }: LedgerScree
             void run(conflict.attempt, conflict.latest.currentVersion)
           }}
         />
-      )}
-
-      <div className="flex min-h-0 flex-1 flex-wrap items-start">
-        <section className="min-w-0 flex-1">
-          {/*
-           * 軸は 7 列しかないので iPad の幅に収まる。横スクロールは置かない——
-           * スクロールさせた時点で「1 日が 1 画面」という主題が失われる。
-           */}
-          <LedgerGrid
-            columns={columns}
-            lanes={grid}
-            now={line ? { label: `現在 ${line.time}`, ratio: line.ratio } : undefined}
-            heading={
-              /*
-               * モックの見出しセルは「担当者」の一語だけである。設備軸へ切り替える
-               * 口をツールバーとして 1 段足すのではなく、このセル自身を切り替え
-               * ボタンにして段を増やさない。
-               */
-              <button
-                type="button"
-                aria-label={
-                  view === 'staff'
-                    ? '担当者で見る（設備に切り替え）'
-                    : '設備で見る（担当者に切り替え）'
-                }
-                aria-pressed={view === 'staff'}
-                onClick={() => setView(view === 'staff' ? 'equipment' : 'staff')}
+      ) : (
+        <div className="flex min-h-0 flex-1 flex-wrap items-start">
+          <section className="min-w-0 flex-1">
+            {/*
+             * 軸は 7 列しかないので iPad の幅に収まる。横スクロールは置かない——
+             * スクロールさせた時点で「1 日が 1 画面」という主題が失われる。
+             */}
+            <LedgerGrid
+              columns={columns}
+              lanes={grid}
+              now={line ? { label: `現在 ${line.time}`, ratio: line.ratio } : undefined}
+              heading={
                 /*
-                 * 見出しセルの中に収まる形のまま、指で押せる大きさを保つ。
-                 * 字面はモックの一語だけだが、当たり判定はセル全体に広げる。
+                 * モックの見出しセルは「担当者」の一語だけである。設備軸へ切り替える
+                 * 口をツールバーとして 1 段足すのではなく、このセル自身を切り替え
+                 * ボタンにして段を増やさない。
                  */
-                className="-m-2 flex min-h-11 w-full items-center p-2 text-left text-ink focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-focus"
-              >
-                {view === 'staff' ? '担当者' : '設備'}
-              </button>
-            }
-          />
-          {offGrid.length > 0 && (
-            <div className="px-4 pb-4">
-              <h2 className="text-grid text-ink-muted">営業時間外の受付</h2>
-              <div className="flex flex-wrap gap-2">
-                {offGrid.map((entry) => (
-                  <button
-                    type="button"
-                    key={entry.id}
-                    aria-pressed={entry.id === selectedId}
-                    onClick={() => select(entry)}
-                    className="flex min-h-11 flex-col items-start gap-0.5 rounded-ctl border border-line bg-surface p-2 text-left text-grid text-ink focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-focus"
-                  >
-                    <span>{entry.customerName}</span>
-                    <span>{SOURCE_LABELS[entry.source]}</span>
-                    {entry.customerId === null && entry.entryType === 'walkin' && (
-                      <span>顧客未登録</span>
-                    )}
-                    {entry.progress !== null && <span>{PROGRESS_LABELS[entry.progress]}</span>}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-        </section>
-
-        {selected && (
-          /* 選択中の 1 件。モックの `.detail`（22px の内側）と同じ持ち方。 */
-          <section aria-label="選択中の予約" className="w-97.5 shrink-0 p-5.5">
-            <Card>
-              <b className="block text-lead">{selected.customerName}</b>
-              <p className="font-mono text-grid text-ink-muted">{timeRange(selected)}</p>
-              <div className="mt-2.5 flex flex-wrap gap-2 text-grid">
-                <StatePill>{SOURCE_LABELS[selected.source]}</StatePill>
-                <StatePill>
-                  {selected.entryType === 'reservation'
-                    ? RESERVATION_STATUS_LABELS[selected.status]
-                    : selected.status === 'active'
-                      ? '来店中'
-                      : '退店'}
-                </StatePill>
-                {selected.progress !== null && (
-                  <StatePill>{PROGRESS_LABELS[selected.progress]}</StatePill>
-                )}
-              </div>
-              {selected.nextGuidance && <p className="mt-2.5">{selected.nextGuidance}</p>}
-              {selected.warnings.map((warning) => (
-                /* 警告は色ではなく文で伝える。淡い赤地は文に添えるだけ。 */
-                <div key={warning.code} className="mt-2.5">
-                  <Card tone="attention">{warning.message}</Card>
-                </div>
-              ))}
-
-              {selected.entryType === 'walkin' && (
-                <div className="mt-3.5 space-y-3 border-line border-t pt-3.5">
-                  <Action
-                    className="w-full"
-                    onClick={() => {
-                      void run(
-                        {
-                          describe: '退店として記録',
-                          send: (version) =>
-                            patch(`/api/staff/stores/${storeId}/walkins/${selected.id}/progress`, {
-                              version,
-                              progress: 'departed',
-                            }),
-                        },
-                        selected.version,
-                      )
-                    }}
-                  >
-                    退店として記録する
-                  </Action>
-
-                  {selected.customerId === null && (
-                    <div className="space-y-3">
-                      <TextField
-                        id="walkin-search-name"
-                        value={searchName}
-                        onChange={(event) => setSearchName(event.target.value)}
-                        label="氏名で顧客を探す"
-                      />
-                      <Action
-                        className="w-full"
-                        onClick={() => {
-                          void (async () => {
-                            const response = await api(
-                              `/api/staff/stores/${storeId}/customers?name=${encodeURIComponent(searchName)}`,
-                            )
-                            if (!response.ok) {
-                              setLoadFailed(true)
-                              return
-                            }
-                            const parsed = CustomerCandidate.array().safeParse(
-                              await response.json(),
-                            )
-                            setCandidates(parsed.success ? parsed.data : [])
-                          })()
-                        }}
-                      >
-                        顧客を検索する
-                      </Action>
-                      {candidates?.length === 0 && (
-                        <p className="text-grid text-ink-muted">
-                          該当する顧客が見つかりません。新規顧客として登録してください。
-                        </p>
+                <button
+                  type="button"
+                  aria-label={
+                    view === 'staff'
+                      ? '担当者で見る（設備に切り替え）'
+                      : '設備で見る（担当者に切り替え）'
+                  }
+                  aria-pressed={view === 'staff'}
+                  onClick={() => setView(view === 'staff' ? 'equipment' : 'staff')}
+                  /*
+                   * 見出しセルの中に収まる形のまま、指で押せる大きさを保つ。
+                   * 字面はモックの一語だけだが、当たり判定はセル全体に広げる。
+                   */
+                  className="-m-2 flex min-h-11 w-full items-center p-2 text-left text-ink focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-focus"
+                >
+                  {view === 'staff' ? '担当者' : '設備'}
+                </button>
+              }
+            />
+            {offGrid.length > 0 && (
+              <div className="px-4 pb-4">
+                <h2 className="text-grid text-ink-muted">営業時間外の受付</h2>
+                <div className="flex flex-wrap gap-2">
+                  {offGrid.map((entry) => (
+                    <button
+                      type="button"
+                      key={entry.id}
+                      aria-pressed={entry.id === selectedId}
+                      onClick={() => select(entry)}
+                      className="flex min-h-11 flex-col items-start gap-0.5 rounded-ctl border border-line bg-surface p-2 text-left text-grid text-ink focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-focus"
+                    >
+                      <span>{entry.customerName}</span>
+                      <span>{SOURCE_LABELS[entry.source]}</span>
+                      {entry.customerId === null && entry.entryType === 'walkin' && (
+                        <span>顧客未登録</span>
                       )}
-                      {candidates?.map((candidate) => (
+                      {entry.progress !== null && <span>{PROGRESS_LABELS[entry.progress]}</span>}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </section>
+
+          {selected && (
+            /* 選択中の 1 件。モックの `.detail`（22px の内側）と同じ持ち方。 */
+            <section aria-label="選択中の予約" className="w-97.5 shrink-0 p-5.5">
+              <Card>
+                <b className="block text-lead">{selected.customerName}</b>
+                <p className="font-mono text-grid text-ink-muted">{timeRange(selected)}</p>
+                <div className="mt-2.5 flex flex-wrap gap-2 text-grid">
+                  <StatePill>{SOURCE_LABELS[selected.source]}</StatePill>
+                  <StatePill>
+                    {selected.entryType === 'reservation'
+                      ? RESERVATION_STATUS_LABELS[selected.status]
+                      : selected.status === 'active'
+                        ? '来店中'
+                        : '退店'}
+                  </StatePill>
+                  {selected.progress !== null && (
+                    <StatePill>{PROGRESS_LABELS[selected.progress]}</StatePill>
+                  )}
+                </div>
+                {selected.nextGuidance && <p className="mt-2.5">{selected.nextGuidance}</p>}
+                {selected.warnings.map((warning) => (
+                  /* 警告は色ではなく文で伝える。淡い赤地は文に添えるだけ。 */
+                  <div key={warning.code} className="mt-2.5">
+                    <Card tone="attention">{warning.message}</Card>
+                  </div>
+                ))}
+
+                {selected.entryType === 'walkin' && (
+                  <div className="mt-3.5 space-y-3 border-line border-t pt-3.5">
+                    <Action
+                      className="w-full"
+                      onClick={() => {
+                        void run(
+                          {
+                            describe: '退店として記録',
+                            send: (version) =>
+                              patch(
+                                `/api/staff/stores/${storeId}/walkins/${selected.id}/progress`,
+                                {
+                                  version,
+                                  progress: 'departed',
+                                },
+                              ),
+                          },
+                          selected.version,
+                        )
+                      }}
+                    >
+                      退店として記録する
+                    </Action>
+
+                    {selected.customerId === null && (
+                      <div className="space-y-3">
+                        <TextField
+                          id="walkin-search-name"
+                          value={searchName}
+                          onChange={(event) => setSearchName(event.target.value)}
+                          label="氏名で顧客を探す"
+                        />
                         <Action
-                          key={candidate.id}
                           className="w-full"
                           onClick={() => {
+                            void (async () => {
+                              const response = await api(
+                                `/api/staff/stores/${storeId}/customers?name=${encodeURIComponent(searchName)}`,
+                              )
+                              if (!response.ok) {
+                                setLoadFailed(true)
+                                return
+                              }
+                              const parsed = CustomerCandidate.array().safeParse(
+                                await response.json(),
+                              )
+                              setCandidates(parsed.success ? parsed.data : [])
+                            })()
+                          }}
+                        >
+                          顧客を検索する
+                        </Action>
+                        {candidates?.length === 0 && (
+                          <p className="text-grid text-ink-muted">
+                            該当する顧客が見つかりません。新規顧客として登録してください。
+                          </p>
+                        )}
+                        {candidates?.map((candidate) => (
+                          <Action
+                            key={candidate.id}
+                            className="w-full"
+                            onClick={() => {
+                              void run(
+                                {
+                                  describe: `顧客「${candidate.name}」と関連付け`,
+                                  send: (version) =>
+                                    patch(
+                                      `/api/staff/stores/${storeId}/walkins/${selected.id}/customer`,
+                                      { version, customerId: candidate.id },
+                                    ),
+                                },
+                                selected.version,
+                              )
+                            }}
+                          >
+                            {`${candidate.name} · ${candidate.phone}`}
+                          </Action>
+                        ))}
+                        <TextField
+                          id="walkin-new-name"
+                          value={newCustomer.name}
+                          onChange={(event) =>
+                            setNewCustomer({ ...newCustomer, name: event.target.value })
+                          }
+                          label="お名前"
+                        />
+                        <TextField
+                          id="walkin-new-kana"
+                          value={newCustomer.kana}
+                          onChange={(event) =>
+                            setNewCustomer({ ...newCustomer, kana: event.target.value })
+                          }
+                          label="フリガナ"
+                        />
+                        <TextField
+                          id="walkin-new-phone"
+                          value={newCustomer.phone}
+                          onChange={(event) =>
+                            setNewCustomer({ ...newCustomer, phone: event.target.value })
+                          }
+                          label="電話番号"
+                        />
+                        <Action
+                          variant="primary"
+                          className="w-full"
+                          onClick={() => {
+                            const customer = {
+                              name: newCustomer.name,
+                              kana: newCustomer.kana,
+                              phone: newCustomer.phone,
+                            }
                             void run(
                               {
-                                describe: `顧客「${candidate.name}」と関連付け`,
+                                describe: `新規顧客「${customer.name}」を登録して関連付け`,
                                 send: (version) =>
                                   patch(
                                     `/api/staff/stores/${storeId}/walkins/${selected.id}/customer`,
-                                    { version, customerId: candidate.id },
+                                    { version, customer },
                                   ),
                               },
                               selected.version,
                             )
                           }}
                         >
-                          {`${candidate.name} · ${candidate.phone}`}
+                          新規顧客として登録して関連付ける
                         </Action>
-                      ))}
-                      <TextField
-                        id="walkin-new-name"
-                        value={newCustomer.name}
-                        onChange={(event) =>
-                          setNewCustomer({ ...newCustomer, name: event.target.value })
-                        }
-                        label="お名前"
-                      />
-                      <TextField
-                        id="walkin-new-kana"
-                        value={newCustomer.kana}
-                        onChange={(event) =>
-                          setNewCustomer({ ...newCustomer, kana: event.target.value })
-                        }
-                        label="フリガナ"
-                      />
-                      <TextField
-                        id="walkin-new-phone"
-                        value={newCustomer.phone}
-                        onChange={(event) =>
-                          setNewCustomer({ ...newCustomer, phone: event.target.value })
-                        }
-                        label="電話番号"
-                      />
-                      <Action
-                        variant="primary"
-                        className="w-full"
-                        onClick={() => {
-                          const customer = {
-                            name: newCustomer.name,
-                            kana: newCustomer.kana,
-                            phone: newCustomer.phone,
-                          }
-                          void run(
-                            {
-                              describe: `新規顧客「${customer.name}」を登録して関連付け`,
-                              send: (version) =>
-                                patch(
-                                  `/api/staff/stores/${storeId}/walkins/${selected.id}/customer`,
-                                  { version, customer },
-                                ),
-                            },
-                            selected.version,
-                          )
-                        }}
-                      >
-                        新規顧客として登録して関連付ける
-                      </Action>
-                    </div>
-                  )}
-                </div>
-              )}
-            </Card>
-          </section>
-        )}
-      </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </Card>
+            </section>
+          )}
+        </div>
+      )}
     </main>
   )
 }

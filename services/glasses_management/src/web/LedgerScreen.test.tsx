@@ -455,3 +455,28 @@ test('the conflict shows the stored values and who updated them, not a version n
   // 版番号は操作者の判断材料ではないので、面には出さない。
   expect(within(conflict).queryByText(/版 4/)).not.toBeInTheDocument()
 })
+
+/*
+ * 版の衝突は、台帳の上に足す帯ではなく面そのものである。
+ *
+ * 承認済みモック（`exception-states-approved.html#conflict`）は、バーの下を
+ * 見出し・2 枚の突き合わせ・2 つの操作だけにしている。後ろに台帳を残すと、
+ * どちらの値が今の台帳なのかが読めないまま「破棄」か「再適用」かを選ばせる
+ * ことになる。選び終わるまでは、選ぶための材料だけを出す。
+ */
+test('版の衝突が解けるまで、台帳は出さない', async () => {
+  const api = mockApi(
+    () => json([walkin()]),
+    () => json({ error: 'version_conflict', currentVersion: 4 }, 409),
+    () => json([walkin({ version: 4 })]),
+  )
+  renderLedger(api)
+
+  fireEvent.click(await screen.findByRole('button', { name: /ウォークイン 3/ }))
+  fireEvent.click(screen.getByRole('button', { name: '退店として記録する' }))
+  await screen.findByRole('region', { name: '別の端末で先に更新されています' })
+  expect(screen.queryByRole('grid', { name: '予約台帳' })).not.toBeInTheDocument()
+
+  fireEvent.click(screen.getByRole('button', { name: 'この入力を破棄' }))
+  await waitFor(() => expect(screen.getByRole('grid', { name: '予約台帳' })).toBeInTheDocument())
+})

@@ -414,13 +414,21 @@ export function RecordingPanel({
               if (audioRef.current) audioRef.current.currentTime = next
             }}
           />
-          <small className="mt-1 block">
-            録音日時 <span>{formatJstDateTime(available.recordedAt)}</span>
-            <span aria-hidden="true"> · </span>
-            録音者 <span>{available.recordedBy}</span>
-            <span aria-hidden="true"> · </span>
-            長さ <span>{formatDuration(available.durationSeconds)}</span>
-          </small>
+          {/*
+           * 録音日時・録音者は、受付履歴では詳細の見出しが
+           * `2026年8月26日 14:18 · 受付者 鈴木` と既に言っている。同じ事実を
+           * 2 度書くと、どちらが本当かを読む側に確かめさせることになる。
+           * 見出しを持たない予約検索の面でだけ名乗る。
+           */}
+          {frame === 'card' && (
+            <small className="mt-1 block">
+              録音日時 <span>{formatJstDateTime(available.recordedAt)}</span>
+              <span aria-hidden="true"> · </span>
+              録音者 <span>{available.recordedBy}</span>
+              <span aria-hidden="true"> · </span>
+              長さ <span>{formatDuration(available.durationSeconds)}</span>
+            </small>
+          )}
         </>
       )}
       {available && wave && <Waveform />}

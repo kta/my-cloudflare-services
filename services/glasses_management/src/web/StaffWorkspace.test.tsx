@@ -299,7 +299,8 @@ test('reads the store recordings so a reception event can show its own recording
   fireEvent.click(screen.getByRole('button', { name: '受付履歴' }))
   fireEvent.click(await screen.findByRole('button', { name: /田中 花子/ }))
   const region = await screen.findByRole('region', { name: 'iPad録音' })
-  expect(region).toHaveTextContent('鈴木')
+  /* 受付履歴の録音は録音者を名乗らない（詳細の見出しが受付者を既に言う）。
+     その受付の録音が届いていることは、長さで確かめる。 */
   expect(region).toHaveTextContent('03:12')
 })
 

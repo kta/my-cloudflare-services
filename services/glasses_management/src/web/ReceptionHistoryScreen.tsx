@@ -24,7 +24,6 @@ import {
 } from './ReservationSearchScreen'
 import type { StaffApi, StaffScreenProps } from './staff-screen'
 
-const SOURCE_LABEL = { staff: '電話・店頭', web: 'Web予約', walkin: 'ウォークイン' } as const
 /**
  * 記録の右肩に出る狭い語（承認済みモックの `.source`）。
  *
@@ -461,7 +460,9 @@ export function ReceptionHistoryScreen({
           />
           <DetailLine label="目的" value={purposeLabel(booking, purposeNames)} />
           <DetailLine label="予約番号" value={selected.reservationNumber ?? '予約なし'} />
-          <DetailLine label="受付経路" value={SOURCE_LABEL[selected.source]} />
+          {/* 記録の右肩のチップと同じ語で名乗る。同じ受付を 1 つの面の中で
+              2 つの語で呼ぶと、違うことを指していると読まれる。 */}
+          <DetailLine label="受付経路" value={ROUTE_CHIP[selected.source]} />
           {/*
            * 見出しは面の中身と一緒に出す。権限が無いと `RecordingPanel` は
            * 何も描かないので、見出しだけを外に置くと空の見出しが宙に浮き、
