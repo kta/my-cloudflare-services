@@ -31,8 +31,15 @@ const OUT_DIR = '../../docs/frontend/screens'
  */
 const BASE_URL = process.env.SCREENS_BASE ?? 'http://localhost:4175'
 
-const IPAD = { width: 1180, height: 820 }
-const SP = { width: 375, height: 812 }
+/*
+ * 承認済みモックの端末の中身と同じ実寸で撮る。ここを実機の外枠込みの寸法に
+ * すると、基準画像と縦横が違って重ねられなくなる（比べられないものは
+ * 「似ている」で流れてしまう）。
+ */
+const IPAD = { width: 1176, height: 814 }
+/* 例外・回復の面だけモックの端末が低い。 */
+const IPAD_SHORT = { width: 1176, height: 742 }
+const SP = { width: 359, height: 744 }
 
 /* ------------------------------------------------------------------ *
  * 出力
@@ -150,8 +157,20 @@ async function openAdmin(page: Page, label: string) {
   await visible(page.getByRole('navigation', { name: '副操作' }))
   // ホームには柱が無い。緑帯の「設定」で設定ガイドへ入ると柱が現れる。
   await page.getByRole('button', { name: '設定', exact: true }).click()
-  const sidebar = page.getByRole('navigation', { name: '画面の一覧' })
-  await sidebar.getByRole('button', { name: destination, exact: true }).click()
+  /*
+   * 柱は狭い画面では畳まれ、開く口だけが残る。撮影は iPad と SP の両方で
+   * 走るので、畳まれていたら先に開く。
+   */
+  const opener = page.getByRole('button', { name: '画面の一覧を開く' })
+  if ((await opener.count()) > 0) await opener.click()
+  const sidebar = page.getByRole('navigation', { name: /^画面の一覧/ }).first()
+  await visible(sidebar)
+  /*
+   * 緑帯の「設定」が開くのは設定ガイドそのものなので、そこが行き先のときは
+   * もう着いている。柱の同じ名前を押しに行くと、選択中の行を待ち続けてしまう。
+   */
+  if (destination !== '設定ガイド')
+    await sidebar.getByRole('button', { name: destination, exact: true }).click()
 }
 
 /* ------------------------------------------------------------------ *
@@ -675,7 +694,7 @@ async function reachRecital(page: Page) {
 async function captureRecordingScreens(browser: Browser) {
   // EX-UPLOAD-FAILED: 予約は成立し、録音の保存だけが失敗した状態。
   {
-    const page = await newPage(browser, IPAD)
+    const page = await newPage(browser, IPAD_SHORT)
     await stubMicrophone(page, 'granted')
     await mockBookingRecordingApi(page, { recordingPostStatus: 503 })
     const indicator = await openBooking(page)
@@ -711,7 +730,7 @@ async function captureRecordingScreens(browser: Browser) {
 
   // EX-403: 録音を扱う権限が無い店舗。
   {
-    const page = await newPage(browser, IPAD)
+    const page = await newPage(browser, IPAD_SHORT)
     await mockRecordingOpsApi(page, ['store.read', 'reservation.read'], [])
     await openRecordingOps(page)
     await visible(page.getByRole('region', { name: '権限がありません' }))
@@ -884,7 +903,7 @@ async function captureLedgerScreens(browser: Browser) {
 
   // EX-CONFLICT: 別端末が先に更新した（版の衝突）。
   {
-    const page = await newPage(browser, IPAD)
+    const page = await newPage(browser, IPAD_SHORT)
     const state: LedgerState = { rows: [walkinRow()] }
     await mockLedgerApi(page, state)
     await openLedger(page)
@@ -1024,7 +1043,7 @@ async function captureSearchScreens(browser: Browser) {
 
   // EX-EMPTY: 検索結果 0 件。
   {
-    const page = await newPage(browser, IPAD)
+    const page = await newPage(browser, IPAD_SHORT)
     await mockSearchApi(page, { reservations: [] })
     await openHome(page)
     await page.getByRole('button', { name: '予約を検索', exact: true }).click()
@@ -1225,7 +1244,7 @@ async function captureStoreSwitchScreens(browser: Browser) {
 
   // EX-STORE-UNSAVED: 未保存入力があるまま切り替えようとしたときの確認。
   {
-    const page = await newPage(browser, IPAD)
+    const page = await newPage(browser, IPAD_SHORT)
     await mockStoreSwitchApi(page)
     await openHome(page)
     await page.getByRole('button', { name: /新しい予約を取る/ }).click()
@@ -1981,7 +2000,7 @@ async function openSharedTerminal(page: Page) {
 async function captureSharedTerminalScreens(browser: Browser) {
   // EX-SHARED-LOCK: 画面非表示で顧客情報を隠した状態。
   {
-    const page = await newPage(browser, IPAD)
+    const page = await newPage(browser, IPAD_SHORT)
     await page.clock.install()
     await mockSharedTerminalApi(page, [])
     await openSharedTerminal(page)
@@ -2018,7 +2037,7 @@ async function captureSharedTerminalScreens(browser: Browser) {
 
   // EX-SESSION-REVOKED: 遠隔失効された端末。
   {
-    const page = await newPage(browser, IPAD)
+    const page = await newPage(browser, IPAD_SHORT)
     await page.route('**/api/**', (route: Route) => {
       const url = new URL(route.request().url())
       if (url.pathname === '/api/auth/refresh')
@@ -2298,6 +2317,19 @@ const webSlots = {
 
 async function mockPublicApi(page: Page, booking: 'success' | 'unknown') {
   await page.route('**/api/public/stores', (route) => route.fulfill({ json: [webStore] }))
+  /*
+   * 候補枠。顧客に日付を打たせる欄は廃したので、日時の工程はこの API が返す
+   * 並びだけで進む（契約が「日付は入力ではなく走査の結果」と書いている）。
+   */
+  await page.route('**/api/public/stores/ginza/offers?*', (route) =>
+    route.fulfill({
+      json: {
+        timezone: webSlots.timezone,
+        durationMinutes: webSlots.durationMinutes,
+        slots: webSlots.slots,
+      },
+    }),
+  )
   await page.route('**/api/public/stores/ginza/slots?*', (route) =>
     route.fulfill({ json: webSlots }),
   )
@@ -2360,8 +2392,11 @@ async function captureWebScreens(browser: Browser) {
     await shot(page, 'WEB-PURPOSE', 'selected', 'sp')
 
     await page.getByRole('button', { name: '日時へ進む' }).click()
-    await page.getByLabel('ご希望の日').fill('2026-09-01')
-    /* 枠の名前は曜日込み（`japaneseSlotLabel`）。 */
+    /*
+     * 日付を打つ欄は廃した。顧客に機械可読な ISO を打たせるのはモックに無く、
+     * 契約も「日付は入力ではなく走査の結果」と書いている。候補が並ぶのを待つ。
+     * 枠の名前は曜日込み（`japaneseSlotLabel`）。
+     */
     await page.getByRole('button', { name: '9月1日（火）10:00' }).waitFor({ state: 'visible' })
     await page.getByRole('button', { name: '9月1日（火）10:00' }).click()
     await shot(page, 'WEB-DATETIME', 'selected', 'sp')
@@ -2398,7 +2433,6 @@ async function captureWebScreens(browser: Browser) {
     await page.getByRole('button', { name: '銀座店で予約を始める' }).click()
     await page.getByRole('button', { name: /メガネを新しく作りたい.*約60分/ }).click()
     await page.getByRole('button', { name: '日時へ進む' }).click()
-    await page.getByLabel('ご希望の日').fill('2026-09-01')
     await page.getByRole('button', { name: '9月1日（火）10:00' }).click()
     await page.getByRole('button', { name: 'お客様情報へ進む' }).click()
     await page.getByLabel('お名前', { exact: true }).fill('田中花子')
