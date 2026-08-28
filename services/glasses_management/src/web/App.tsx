@@ -207,6 +207,13 @@ export function App({
      * （途中で移ると入力が消える）。ホームは主操作 2 枚を大きく見せる面で、
      * モックどおり柱を持たない。
      */
+    /*
+     * 承認済みモックの例外・回復（`FullScreenState`）はバーの下に何も置かない。
+     * それでも柱は残す。モックには面ごとのタブがあり、そこから他の面へ行けた。
+     * 柱 1 本に集約したこの実装で柱まで畳むと、権限が無い・空である、と言われた
+     * 人がその面から他のどこへも行けなくなる（`docs/frontend/REBUILD.md` の
+     * 逸脱 1 の帰結）。
+     */
     const showSidebar = location !== undefined && !['home', 'booking'].includes(location.screen)
     return (
       /* The workspace chrome is a banner landmark, not part of the screen's

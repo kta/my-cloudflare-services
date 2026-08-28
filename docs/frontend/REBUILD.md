@@ -146,6 +146,12 @@ pnpm --filter @app/glasses_management exec vite --port 5199 --strictPort
 元から設定と運用の面が持っていた形（`operations-approved.html` の `.side`）を
 そのまま全画面へ広げたものである。
 
+例外・回復の面（`FullScreenState`）でも柱は残す。モックはそこでバーの下を
+空にしているが、モックには面ごとのタブがあり、そこから他の面へ行けた。柱 1 本に
+集約したこの実装で柱まで畳むと、「権限がありません」「まだありません」と言われた
+人がその面から他のどこへも行けなくなる。`EX-403` / `EX-EMPTY` の割合が 20% 台に
+残るのはこの逸脱の帰結であって、合わせ損ねではない。
+
 各面の中の節（`共有iPad` / `保存期間` など）は柱を 2 本立てず、開いている
 行き先の下へ一段下げて入れる（面が `AdminLayout` の `sections` へ渡し、
 `app-chrome.ts` の `screenSections` を経由して柱が読む）。
