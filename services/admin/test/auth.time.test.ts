@@ -65,6 +65,7 @@ async function seedUser(opts: { email: string; orgDisabled?: boolean } = { email
       plan: 'free',
       isDisabled: opts.orgDisabled ? '1' : '0',
       isOperator: '0',
+      syncRevision: 0,
       createdAt: iso(T0),
     })
   await db()
@@ -256,6 +257,7 @@ describe('招待の有効期限(72h)の境界', () => {
         plan: 'free',
         isDisabled: '0',
         isOperator: '0',
+        syncRevision: 0,
         createdAt: iso(T0),
       })
     await db()

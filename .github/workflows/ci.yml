@@ -8,7 +8,13 @@ on:
   # typecheck, and unit tests with coverage gates. e2e is opt-in only because it needs
   # Playwright browsers + workerd; run it on demand via this trigger, or locally
   # with `pnpm --filter <pkg> e2e`.
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      deploy_eyex_stack:
+        description: Deploy notifier → glasses_management → admin after Cloudflare IDs/secrets are configured
+        required: true
+        type: boolean
+        default: false
 
 # Least privilege: jobs authenticate to Cloudflare via the env secret, not the
 # GITHUB_TOKEN, so read is enough.
@@ -56,6 +62,7 @@ jobs:
         include:
           - { name: example_service, pkg: '@app/example_service', dir: services/example_service }
           - { name: admin, pkg: '@app/admin', dir: services/admin }
+          - { name: glasses_management, pkg: '@app/glasses_management', dir: services/glasses_management }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
@@ -76,33 +83,17 @@ jobs:
           path: ${{ matrix.dir }}/playwright-report/
           retention-days: 7
 
-  # Deploy admin on push to main. Set CLOUDFLARE_API_TOKEN (scoped:
-  # Workers Scripts/D1/KV Edit + Account Read) + CLOUDFLARE_ACCOUNT_ID as repo secrets.
-  # The service
-  # deploys its SPA and API together (one Worker), so no per-SPA API-origin
-  # variables are needed. Prerequisite: `terraform apply` (infra) before the
-  # first deploy.
-  deploy:
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    # e2e is not a gate here (manual-only). verify covers agent compatibility,
-    # lint, dependency audit, typecheck, and unit tests with coverage gates.
+  # Service bindings require the referenced Worker to exist before the caller
+  # can deploy. Keep this full EYEX dependency chain manual and serialized so
+  # a main push never attempts admin before glasses-management exists.
+  deploy-eyex-stack:
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy_eyex_stack == true
     needs: [verify]
     runs-on: ubuntu-latest
     environment: production
-    # Serialize deploys and never cancel one mid-migration/mid-upload.
     concurrency:
       group: deploy-production
       cancel-in-progress: false
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      # example_service is a template scaffold and is never deployed. Secrets
-      # are never committed: dev values live in each service's .dev.vars (local
-      # only); prod values are set once via `wrangler secret put` (deploy.md).
-      matrix:
-        include:
-          - { pkg: '@app/admin' }
-          - { pkg: '@app/glasses_reservation' }
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -114,7 +105,9 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # Apply remote D1 migrations before deploying code that expects the
-      # schema. No-op for Workers without a db:migrate:remote script.
-      - run: pnpm --filter ${{ matrix.pkg }} --if-present run db:migrate:remote
-      - run: pnpm --filter ${{ matrix.pkg }} run deploy
+      - name: Deploy notifier (no downstream bindings)
+        run: pnpm --filter @app/notifier run deploy
+      - name: Migrate and deploy glasses_management
+        run: pnpm --filter @app/glasses_management run db:migrate:remote && pnpm --filter @app/glasses_management run deploy
+      - name: Migrate and deploy admin (depends on glasses_management)
+        run: pnpm --filter @app/admin run db:migrate:remote && pnpm --filter @app/admin run deploy

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { hashStretched, stretchPassword, verifyStretched } from '../src/password'
+import { hashStretched, stretchPassword, stretchPin, verifyStretched } from '../src/password'
 
 // iterations はテスト高速化のため小さくする(本番は 600k)
 const ITER = 1000
@@ -49,5 +49,20 @@ describe('パスワード認証(クライアント stretch + サーバ pepper HM
     expect(await verifyStretched(stretched, PEPPER, 'md5$abc')).toBe(false)
     // prefix は正しいが base64 として不正(atob が throw する系)でも false
     expect(await verifyStretched(stretched, PEPPER, 'hmac$!!!not-base64!!!')).toBe(false)
+  })
+})
+
+describe('個人PIN stretch', () => {
+  it('4〜6桁の数字だけを受け付け、パスワードと別のPBKDF2 salt domainを使う', async () => {
+    await expect(stretchPin('123', 'org-1', 'user-1', ITER)).rejects.toThrow(
+      'PIN must be 4 to 6 digits',
+    )
+    await expect(stretchPin('1234567', 'org-1', 'user-1', ITER)).rejects.toThrow(
+      'PIN must be 4 to 6 digits',
+    )
+    const pin = await stretchPin('1234', 'org-1', 'user-1', ITER)
+    expect(pin).not.toBe(await stretchPassword('1234', 'user-1', ITER))
+    expect(pin).not.toBe(await stretchPin('1234', 'org-2', 'user-1', ITER))
+    expect(pin).not.toBe(await stretchPin('1234', 'org-1', 'user-2', ITER))
   })
 })

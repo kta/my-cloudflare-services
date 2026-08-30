@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EYEX予約 — 顧客台帳（一覧）</title>
+<link rel="stylesheet" href="../assets/eyex.css">
+<style>
+  /* 左のサイドバーが柱になったので、本文は 一覧（主役）＋ 選んだお客様の要約 の2本。
+     条件は上の絞り込みと一覧の上の検索欄に寄せた。 */
+  .split.two { grid-template-columns: 1fr 360px; }
+
+  /* 中央の一覧 */
+  .listpane { padding: 0; display: flex; flex-direction: column; }
+  .lhead { flex: none; padding: 16px 20px; border-bottom: 1px solid var(--line); }
+  .cols, .crow { display: grid; grid-template-columns: 220px 72px 132px 1fr; gap: 12px; align-items: center; padding: 0 20px; }
+  .cols {
+    height: 34px; flex: none; background: var(--surface-2);
+    border-bottom: 1px solid var(--line-strong); font-size: 12px; color: var(--ink-2);
+  }
+  .crow { height: 60px; border-bottom: 1px solid var(--line); background: var(--surface); }
+  .crow.on { background: var(--brand-tint); box-shadow: inset 4px 0 0 var(--brand); }
+  .crow .nm { font-size: 16px; font-weight: 600; line-height: 1.3; }
+  .crow .kn { font-size: 12px; color: var(--ink-2); line-height: 1.3; }
+  .crow .n { font: 600 16px var(--mono); }
+  .crow .lv { font-size: 13px; color: var(--ink-2); }
+  .crow .mm { font-size: 13px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .more { padding: 18px 20px 0; display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--ink-2); }
+
+  /* 右の要約 */
+  .sum { padding: 32px 28px; display: flex; flex-direction: column; }
+  .sum h3 { margin: 0; font-size: 21px; line-height: 1.25; }
+  .sum .kana { margin-top: 4px; font-size: 13px; color: var(--ink-2); }
+  .sum .lines { margin-top: 20px; }
+  .sum .lines > * { padding: 18px 0; }
+  .sum .k { display: block; font-size: 13px; color: var(--ink-2); }
+  .sum .v { display: block; margin-top: 4px; font-size: 17px; font-weight: 600; }
+  .sum .s { display: block; margin-top: 2px; font-size: 13px; color: var(--ink-2); }
+</style>
+</head>
+<body>
+<div class="caption">
+  <h1>顧客台帳（一覧）</h1>
+  <p>お名前があいまいでも、来店回数・最終来店・担当から手繰れるようにする。選ぶとすぐ右で度数と現在のメガネが読める。</p>
+</div>
+
+<main class="device" id="screen">
+  <div class="statusbar"><span>11:08</span><span>EYEX 銀座店</span><span>Wi‑Fi　100%</span></div>
+
+  <header class="appbar">
+    <button class="homebtn" aria-label="トップへ">⌂</button>
+    <div class="storename">EYEX 銀座店<small>顧客台帳</small></div>
+    <div class="barbtns"><button class="barbtn"><b>お知らせ</b><span class="badge">3</span></button></div>
+  </header>
+
+  <div class="body">
+    <div class="shell rail">
+      <nav class="sidenav rail" aria-label="画面の切り替え">
+        <button class="navtoggle" aria-label="サイドバーをたたむ">たたむ</button>
+        <button class="new">＋ 予約を取る</button>
+        <button class="nav-item" data-icon="ledger">予約台帳</button>
+        <button class="nav-item" data-icon="reception">来店受付</button>
+        <button class="nav-item" data-icon="search">予約を検索</button>
+        <button class="nav-item" data-icon="history">受付履歴</button>
+        <button class="nav-item on" data-icon="customer">顧客台帳</button>
+        <div class="group">お店の運用</div>
+        <button class="nav-item" data-icon="analytics">分析</button>
+        <button class="nav-item" data-icon="settings">設定</button>
+        <div class="foot">銀座店 レジ横iPad<br>共有で使っています</div>
+      </nav>
+
+      <div class="content">
+        <div class="toolbar">
+          <div class="segmented" role="group" aria-label="一覧の並べ方">
+            <button class="on">お名前順</button>
+            <button>ご来店の回数順</button>
+          </div>
+          <button class="btn" style="min-height:40px;padding:0 14px">絞り込み</button>
+          <span class="tag brand">ご来店 2〜4回</span>
+          <span class="small muted right">当てはまるお客様 42名</span>
+          <button class="btn primary" style="min-height:44px;padding:0 16px;font-size:15px">＋ 新しいお客様を登録</button>
+        </div>
+
+        <div class="inner">
+          <div class="split two">
+
+            <section class="pane plain listpane" aria-label="お客様の一覧">
+              <div class="lhead">
+                <div class="field empty"><span style="font-size:19px;margin-right:8px" aria-hidden="true">⌕</span>お名前・電話番号　一部でも探せます</div>
+              </div>
+
+              <div class="cols" aria-hidden="true">
+                <span>お名前</span><span>ご来店</span><span>最後のご来店</span><span>覚えておくこと</span>
+              </div>
+
+              <div class="crow"><span><span class="nm">相川 みどり 様</span><br><span class="kn">あいかわ みどり</span></span><span class="n">2回</span><span class="lv">2026年7月3日</span><span class="mm">調整の途中です</span></div>
+              <div class="crow"><span><span class="nm">青木 律子 様</span><br><span class="kn">あおき りつこ</span></span><span class="n">4回</span><span class="lv">2026年6月21日</span><span class="mm">遠近両用を長くお使い</span></div>
+              <div class="crow"><span><span class="nm">石井 孝 様</span><br><span class="kn">いしい たかし</span></span><span class="n">2回</span><span class="lv">2026年8月11日</span><span class="mm">2回目のご来店です</span></div>
+              <div class="crow"><span><span class="nm">伊藤 健 様</span><br><span class="kn">いとう けん</span></span><span class="n">2回</span><span class="lv">2026年8月27日</span><span class="mm">本日 10:00 に調整</span></div>
+              <div class="crow"><span><span class="nm">大森 千夏 様</span><br><span class="kn">おおもり ちなつ</span></span><span class="n">2回</span><span class="lv">2025年12月8日</span><span class="mm">まぶしさに弱い</span></div>
+              <div class="crow"><span><span class="nm">川上 恵 様</span><br><span class="kn">かわかみ めぐみ</span></span><span class="n">初</span><span class="lv">—</span><span class="mm">お子様の分もご一緒に</span></div>
+              <div class="crow"><span><span class="nm">木下 亮太 様</span><br><span class="kn">きのした りょうた</span></span><span class="n">2回</span><span class="lv">2026年2月14日</span><span class="mm">ご連絡先が未登録</span></div>
+              <div class="crow on" aria-current="true"><span><span class="nm">田中 花子 様</span><br><span class="kn">たなか はなこ</span></span><span class="n">4回</span><span class="lv">2026年5月12日</span><span class="mm">PC作業用・鼻パッド低め</span></div>
+
+              <div class="more">
+                <span>ほか 34名</span>
+                <button class="btn quiet right" style="min-height:44px;padding:0 8px;font-size:14px">続きを見る ›</button>
+              </div>
+            </section>
+
+            <aside class="pane plain last sum" aria-label="田中 花子 様の要約">
+              <div>
+                <h3>田中 花子 様</h3>
+                <div class="kana">たなか はなこ　／　G-01842</div>
+              </div>
+
+              <div class="lines">
+                <div>
+                  <span class="k">次のご予約</span>
+                  <span class="v">8月27日（木）11:00</span>
+                  <span class="s">新調相談・視力測定／担当 佐藤 美咲</span>
+                </div>
+                <div>
+                  <span class="k">いまの度数</span>
+                  <span class="v mono">R −2.25　／　L −2.00</span>
+                  <span class="s">2026年5月12日 測定／PD 62.0 mm</span>
+                </div>
+                <div>
+                  <span class="k">いまお使いのメガネ</span>
+                  <span class="v">2本</span>
+                  <span class="s">遠近両用（お出かけ用）・近用（PC作業用）</span>
+                </div>
+                <div>
+                  <span class="k">注意ごと</span>
+                  <span class="v" style="color:var(--alert)">金属アレルギー</span>
+                  <span class="s">フレームはチタン・樹脂から</span>
+                </div>
+              </div>
+
+              <div class="actions" style="margin-top:auto">
+                <button class="btn" style="flex:1;min-height:48px;font-size:15px">くわしく見る</button>
+                <button class="btn primary" style="flex:1;min-height:48px;font-size:15px">ご予約を取る</button>
+              </div>
+            </aside>
+
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+</body>
+</html>

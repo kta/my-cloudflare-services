@@ -19,7 +19,8 @@
 3. **TASKS** — チェックボックス列挙。**テストタスクを実装タスクより前に**。1 タスク ≤ 30 分目安。
 
 feature spec の先頭には status を必ず 1 行で置く。初期値は Draft、人間が WHAT を承認した後に
-Approved に変える。E2E traceability validator は Approved の `specs/**/spec.md` だけを対象にする。
+Approved に変える。後継 spec に置換されたら Superseded にし、履歴として残す。
+E2E traceability validator は Approved の `specs/**/spec.md` だけを対象にする。
 
 ```md
 - ステータス: Draft

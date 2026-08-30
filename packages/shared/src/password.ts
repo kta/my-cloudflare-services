@@ -65,6 +65,32 @@ export async function stretchPassword(
 }
 
 /**
+ * 共有端末の個人PIN用のクライアント側ストレッチング。
+ * パスワードと同じ値でも相互利用できないよう、テナントと利用者を含む別ドメインの
+ * saltを使う。PIN平文はこの関数の呼び出し元（ブラウザ）から出さない。
+ */
+export async function stretchPin(
+  pin: string,
+  organizationId: string,
+  userId: string,
+  iterations = DEFAULT_ITERATIONS,
+): Promise<string> {
+  if (!/^\d{4,6}$/.test(pin)) throw new RangeError('PIN must be 4 to 6 digits')
+  const key = await crypto.subtle.importKey('raw', enc.encode(pin), 'PBKDF2', false, ['deriveBits'])
+  const bits = await crypto.subtle.deriveBits(
+    {
+      name: 'PBKDF2',
+      hash: 'SHA-256',
+      salt: enc.encode(`app:pin:${organizationId}:${userId}`),
+      iterations,
+    },
+    key,
+    256,
+  )
+  return toBase64(bits)
+}
+
+/**
  * サーバ側: pepper で stretched を HMAC-SHA256 し、保存形式 `hmac$<base64>` を返す。
  * pepper は `wrangler secret put AUTH_PEPPER`。
  */

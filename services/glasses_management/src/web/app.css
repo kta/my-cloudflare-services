@@ -1,0 +1,6 @@
+@import "tailwindcss";
+@import "@app/ui/theme.css";
+
+/* Tailwind v4 は pnpm の symlink を辿らないので、共有 UI パッケージの中の
+ * クラス名も走査するように場所を教える。 */
+@source "../../../../packages/ui/src";

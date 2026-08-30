@@ -49,7 +49,7 @@ function ToastItem({ toast: t }: { toast: Toast }) {
         type="button"
         onClick={() => toast.dismiss(t.id)}
         aria-label="閉じる"
-        className="-mr-1 -mt-0.5 inline-flex size-6 flex-none items-center justify-center rounded-ctl font-mono text-base text-current opacity-70 hover:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber"
+        className="-mr-1 -mt-0.5 inline-flex size-6 flex-none items-center justify-center rounded-ctl font-mono text-base text-current opacity-70 hover:opacity-100 focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-focus"
       >
         ×
       </button>

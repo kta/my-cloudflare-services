@@ -13,6 +13,12 @@ notifications go through the notifier's sync send API instead (see `main.tf` and
 | **Terraform** (here) | D1 databases, KV namespaces, R2 bucket |
 | **Wrangler** (each `wrangler.jsonc`) | Worker code, bindings, cron triggers, secrets |
 
+The current stateful resources are:
+
+- `admin` D1 and `AUTH_RL` KV
+- `glasses_management` D1, `SHORT_LIVED` KV, and private `RECORDINGS` R2 bucket
+- `notifier` `DEDUPE` KV
+
 ## Usage
 > **Prereq**: a brand-new Cloudflare account must enable R2 once (dashboard → R2 →
 > accept terms) before `terraform apply`, or the `cloudflare_r2_bucket` resources fail.
@@ -25,8 +31,14 @@ terraform apply
 terraform output                       # ids to copy into wrangler.jsonc
 ```
 
-Then put the output ids into the matching `wrangler.jsonc` (`database_id`,
-KV `id`) and `wrangler deploy` each Worker.
+Then put the outputs `admin_d1_database_id`,
+`glasses_management_d1_database_id`,
+`auth_rl_kv_namespace_id`,
+`glasses_management_short_lived_kv_namespace_id`, and
+`notifier_dedupe_kv_namespace_id` into the matching `wrangler.jsonc`
+(`database_id` / KV `id`). Use the
+`glasses_management_recordings_bucket_name` output for the `RECORDINGS` R2
+binding, then deploy each Worker with Wrangler.
 
 ## State backend (R2)
 Uncomment the `backend "s3"` block in `versions.tf` and point it at an R2

@@ -12,7 +12,14 @@ const mappingPattern = new RegExp(
   `^[\\t ]*//\\s*@e2e-covers\\s+((?:${IDENTIFIER})(?:\\s+(?:${IDENTIFIER}))*)\\s*$`,
   'gm',
 )
-const statusPattern = /^[\t ]*-\s+(?:ステータス|Status):\s*(Draft|Approved)\s*$/mu
+/*
+ * A feature spec declares exactly one lifecycle status. Only `Approved`
+ * contributes identifiers to the mapping denominator; `Draft` is not yet
+ * binding and `Superseded` has been replaced by a successor spec but is kept
+ * in the repository as history. A retired spec must therefore neither demand
+ * E2E coverage nor make its identifiers mappable.
+ */
+const statusPattern = /^[\t ]*-\s+(?:ステータス|Status):\s*(Draft|Approved|Superseded)\b[^\n]*$/mu
 
 async function filesUnder(directory) {
   let entries
@@ -222,7 +229,7 @@ async function specificationIdentifiers(root) {
     const status = source.match(statusPattern)?.[1]
     if (!status) {
       errors.push(
-        `Feature spec ${displayPath} must declare \`- ステータス: Draft\` or \`- ステータス: Approved\`.`,
+        `Feature spec ${displayPath} must declare \`- ステータス: Draft\`, \`- ステータス: Approved\` or \`- ステータス: Superseded\`.`,
       )
       continue
     }

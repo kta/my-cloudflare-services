@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EYEX予約 — 来店受付ボード</title>
+<link rel="stylesheet" href="../assets/eyex.css">
+<style>
+  /* サイドバーをたたんだぶん横が広い。盤面の余白と列幅は詰めずに置く。 */
+  .board { height: 100%; padding: 28px 36px; }
+  .jgrid {
+    height: 100%; display: grid;
+    grid-template-columns: 220px repeat(6, 1fr);
+    grid-template-rows: 40px repeat(4, 1fr);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--r-l);
+    overflow: hidden;
+  }
+  .jhead {
+    display: flex; align-items: center; padding: 0 14px;
+    border-bottom: 1px solid var(--line-strong);
+    font-size: 13px; font-weight: 600; color: var(--ink-2);
+  }
+
+  /* 左のお客様欄 */
+  .jname {
+    display: flex; flex-direction: column; justify-content: center; gap: 3px;
+    padding: 0 16px;
+    border-right: 1px solid var(--line-strong);
+    border-bottom: 1px solid var(--line);
+  }
+  .jname .nm { display: flex; align-items: center; gap: 8px; }
+  .jname b { font-size: 16px; }
+  .jname > span { font-size: 13px; color: var(--ink-2); }
+  .jname.wait { background: var(--alert-tint); }
+
+  /* 工程のセル。何も起きていない工程は空のままにする。 */
+  .jc {
+    display: flex; flex-direction: column; justify-content: center; gap: 2px;
+    padding: 0 14px; border-bottom: 1px solid var(--line);
+  }
+  .jc .st { font-size: 13px; color: var(--ink-2); }
+  .jc b { font-size: 15px; font-weight: 600; }
+  .jc.doing { border-left: 4px solid var(--brand); padding-left: 10px; }
+  .jc.doing .st { color: var(--brand-dark); font-weight: 600; }
+  .jc.next { background: var(--brand-tint); }
+  .jc.next .st { color: var(--brand-dark); font-weight: 600; }
+  .jc.next b { color: var(--brand-dark); }
+  .jc.warn { background: var(--alert-tint); }
+  .jc.warn .st { color: var(--alert); font-weight: 600; }
+  .jc.warn b { color: var(--alert); }
+  .jgrid > *:nth-last-child(-n + 7) { border-bottom: 0; }
+</style>
+</head>
+<body>
+<div class="caption">
+  <h1>来店受付ボード</h1>
+  <p>ご来店中のお客様が、いまどの工程にいるかだけを1枚で見る。お待たせしている方が真っ先に目に入る。</p>
+</div>
+
+<main class="device" id="screen">
+  <div class="statusbar"><span>11:08</span><span>EYEX 銀座店</span><span>Wi‑Fi　100%</span></div>
+
+  <header class="appbar">
+    <button class="homebtn" aria-label="トップへ">⌂</button>
+    <div class="storename">EYEX 銀座店<small>来店受付</small></div>
+  </header>
+
+  <div class="body">
+    <div class="shell rail">
+      <nav class="sidenav rail" aria-label="画面の切り替え">
+        <button class="navtoggle" aria-label="サイドバーをたたむ">たたむ</button>
+        <button class="new">＋ 予約を取る</button>
+        <button class="nav-item" data-icon="ledger">予約台帳</button>
+        <button class="nav-item on" data-icon="reception">来店受付</button>
+        <button class="nav-item" data-icon="search">予約を検索</button>
+        <button class="nav-item" data-icon="history">受付履歴</button>
+        <button class="nav-item" data-icon="customer">顧客台帳</button>
+        <div class="group">お店の運用</div>
+        <button class="nav-item" data-icon="analytics">分析</button>
+        <button class="nav-item" data-icon="settings">設定</button>
+        <div class="foot">銀座店 レジ横iPad<br>共有で使っています</div>
+      </nav>
+
+      <div class="content">
+        <div class="toolbar">
+          <div class="segmented" role="group" aria-label="表示するお客様">
+            <button class="on">ご来店中</button>
+            <button>本日すべて</button>
+          </div>
+          <button class="btn primary" style="min-height:44px">＋ ご来店を受け付ける</button>
+          <div class="right small muted">2026年8月27日（木）　ご来店中 4名</div>
+        </div>
+
+        <div class="inner">
+          <div class="board">
+            <div class="jgrid" role="table" aria-label="来店受付ボード　お客様ごとの工程">
+              <div class="jhead">お客様</div>
+              <div class="jhead">受付</div>
+              <div class="jhead">ご相談</div>
+              <div class="jhead">フレーム選び</div>
+              <div class="jhead">視力測定</div>
+              <div class="jhead">レンズ・お会計</div>
+              <div class="jhead">お渡し</div>
+
+              <div class="jname">
+                <div class="nm"><b>田中 花子 様</b><span class="visits many">4回目</span></div>
+                <span>メガネを新しく作る</span>
+              </div>
+              <div class="jc"><span class="st">済みました</span><b>10:55</b></div>
+              <div class="jc"><span class="st">済みました</span><b>11:02</b></div>
+              <div class="jc doing"><span class="st">対応中</span><b>11:02〜</b></div>
+              <div class="jc next"><span class="st">次にやること</span><b>視力測定機 A</b></div>
+              <div class="jc"></div>
+              <div class="jc"></div>
+
+              <div class="jname wait">
+                <b>ウォークイン 003</b>
+                <span>フレームのご相談</span>
+              </div>
+              <div class="jc"><span class="st">済みました</span><b>10:50</b></div>
+              <div class="jc warn"><span class="st">お待たせ中</span><b>18分</b></div>
+              <div class="jc"></div>
+              <div class="jc"></div>
+              <div class="jc"></div>
+              <div class="jc"></div>
+
+              <div class="jname">
+                <div class="nm"><b>山口 真央 様</b><span class="visits first">初めて</span></div>
+                <span>視力測定だけ</span>
+              </div>
+              <div class="jc"><span class="st">済みました</span><b>10:58</b></div>
+              <div class="jc doing"><span class="st">対応中</span><b>11:02〜</b></div>
+              <div class="jc"></div>
+              <div class="jc next"><span class="st">次にやること</span><b>視力測定機 B</b></div>
+              <div class="jc"></div>
+              <div class="jc"></div>
+
+              <div class="jname">
+                <div class="nm"><b>伊藤 健 様</b><span class="visits">2回目</span></div>
+                <span>今のメガネを調整</span>
+              </div>
+              <div class="jc"><span class="st">済みました</span><b>10:42</b></div>
+              <div class="jc"><span class="st">済みました</span><b>10:52</b></div>
+              <div class="jc"></div>
+              <div class="jc"></div>
+              <div class="jc"><span class="st">済みました</span><b>11:01</b></div>
+              <div class="jc doing"><span class="st">対応中</span><b>11:04〜</b></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+</body>
+</html>

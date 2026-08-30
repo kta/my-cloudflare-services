@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EYEX予約 — 新規予約 2/5 ご来店の目的</title>
+<link rel="stylesheet" href="../assets/eyex.css">
+<style>
+  .flow { display: grid; grid-template-columns: 1fr 372px; height: 100%; }
+  .main { padding: 36px 44px; overflow: hidden; }
+  .side { border-left: 1px solid var(--line); background: var(--surface); padding: 36px 28px; }
+  .qblock + .qblock { margin-top: 44px; }
+  .choice.tall { min-height: 96px; }
+  .choice .picked {
+    display: block; margin-top: 6px; font: 600 12px var(--sans); color: var(--brand-dark);
+  }
+  .lab { margin: 0 0 12px; font-size: 15px; font-weight: 600; }
+  .durs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+  .dur {
+    min-height: 64px; border: 1px solid var(--line-strong); border-radius: var(--r-m);
+    background: var(--surface); color: var(--ink); font: 600 17px var(--sans);
+  }
+  .dur small { display: block; margin-top: 2px; font: 400 12px var(--sans); color: var(--ink-2); }
+  .dur.on { border: 3px solid var(--brand); background: var(--brand-tint); color: var(--brand-dark); }
+  .dur.on small { color: var(--brand-dark); }
+  .sum dt { font-size: 12px; color: var(--ink-2); margin-top: 22px; }
+  .sum dd { margin: 2px 0 0; font-size: 17px; font-weight: 600; }
+  .sum dd.wait { font-weight: 400; color: var(--ink-2); }
+</style>
+</head>
+<body>
+<div class="caption">
+  <h1>新規予約 2/5　ご来店の目的</h1>
+  <p>目的を押すだけで、所要時間と必要な設備が決まる。右のまとめがその場で変わり、その時間で受け付けられるかも同時に見せる。</p>
+</div>
+
+<main class="device" id="screen">
+  <div class="statusbar"><span>11:08</span><span>EYEX 銀座店</span><span>Wi‑Fi　100%</span></div>
+
+  <header class="appbar">
+    <button class="homebtn" aria-label="トップへ">⌂</button>
+    <div class="storename">EYEX 銀座店<small>新しい予約を取る</small></div>
+    <div class="barbtns"><button class="barbtn"><b>やめる</b></button></div>
+  </header>
+
+  <div class="body">
+    <div class="flow">
+      <section class="main">
+        <div class="qblock">
+          <div class="ask">
+            <span class="bubble" aria-hidden="true"></span>
+            <div>
+              <h2>本日はどのようなご用件でしょうか？</h2>
+              <p>ひとつ押してください。所要時間が決まります。</p>
+            </div>
+          </div>
+          <div class="choices c3" role="group" aria-label="ご来店の目的">
+            <button class="choice tall on" aria-pressed="true">メガネを新しく作る
+              <small>約60分</small>
+              <span class="picked">✓ 選んでいます</span>
+            </button>
+            <button class="choice tall" aria-pressed="false">今のメガネを調整したい
+              <small>約20分</small>
+            </button>
+            <button class="choice tall" aria-pressed="false">できあがりを受け取る
+              <small>約20分</small>
+            </button>
+            <button class="choice tall" aria-pressed="false">修理・部品交換
+              <small>約30分</small>
+            </button>
+            <button class="choice tall" aria-pressed="false">コンタクトの相談
+              <small>約40分</small>
+            </button>
+            <button class="choice tall" aria-pressed="false">視力測定だけ
+              <small>約30分</small>
+            </button>
+          </div>
+        </div>
+
+        <div class="qblock">
+          <h3 class="lab">お取りする時間</h3>
+          <div class="durs" role="group" aria-label="お取りする時間">
+            <button class="dur" aria-pressed="false">45分<small>短め</small></button>
+            <button class="dur on" aria-pressed="true">60分<small>標準</small></button>
+            <button class="dur" aria-pressed="false">75分<small>ゆっくり</small></button>
+            <button class="dur" aria-pressed="false">90分<small>じっくり</small></button>
+          </div>
+        </div>
+      </section>
+
+      <aside class="side">
+        <h3 style="margin:0 0 4px;font-size:15px">ここまでのご予約</h3>
+        <dl class="sum" style="margin:0">
+          <dt>ご来店日</dt><dd>2026年8月27日（木）</dd>
+          <dt>ご来店時刻</dt><dd>11:00</dd>
+          <dt>ご来店の目的</dt><dd>メガネを新しく作る</dd>
+          <dt>お客様</dt><dd class="wait">このあと伺います</dd>
+        </dl>
+        <p class="small muted" style="margin-top:32px">11:00–12:00 で受け付けられます。</p>
+      </aside>
+    </div>
+  </div>
+
+  <footer class="stepbar">
+    <button class="back" aria-label="前へ戻る">‹</button>
+    <div class="steps">
+      <span class="step done">1　日時</span><span class="step-sep">›</span>
+      <span class="step on">2　ご来店の目的</span><span class="step-sep">›</span>
+      <span class="step">3　担当と場所</span><span class="step-sep">›</span>
+      <span class="step">4　お客様</span><span class="step-sep">›</span>
+      <span class="step">5　ご確認</span>
+    </div>
+    <div class="rec">
+      <span class="dot" aria-hidden="true"></span>
+      録音中
+      <span class="meter" aria-hidden="true">
+        <i style="height:8px"></i><i style="height:15px"></i><i style="height:11px"></i>
+        <i style="height:19px"></i><i style="height:7px"></i><i style="height:13px"></i>
+      </span>
+      <span class="time">01:42</span>
+    </div>
+    <button class="fab" aria-label="次へ進む">›</button>
+  </footer>
+</main>
+</body>
+</html>

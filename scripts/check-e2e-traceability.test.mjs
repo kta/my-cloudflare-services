@@ -125,7 +125,37 @@ test('requires every feature spec to declare a status', async () => {
     },
     async (root) => {
       assert.deepEqual(await validateTraceability(root), [
-        'Feature spec specs/example/features/001/spec.md must declare `- ステータス: Draft` or `- ステータス: Approved`.',
+        'Feature spec specs/example/features/001/spec.md must declare `- ステータス: Draft`, `- ステータス: Approved` or `- ステータス: Superseded`.',
+        'Unknown E2E mapping AC-ITEM-01 in services/example/e2e/items.spec.ts.',
+      ])
+    },
+  )
+})
+
+test('accepts a Superseded spec and keeps its identifiers out of the denominator', async () => {
+  // A retired spec must stay readable in the repository without silently
+  // widening or narrowing the mapping denominator. Only Approved counts.
+  await withFixture(
+    {
+      'specs/example/features/001/spec.md':
+        '# Feature\n\n- ステータス: Superseded（`002-successor` により置換）\n\n- AC-ITEM-01: creates an item\n',
+      'services/example/e2e/items.spec.ts': `import { test } from '@playwright/test'\ntest('creates an item', async () => {})\n`,
+    },
+    async (root) => {
+      assert.deepEqual(await validateTraceability(root), [])
+    },
+  )
+})
+
+test('still rejects an E2E mapping onto a Superseded identifier', async () => {
+  await withFixture(
+    {
+      'specs/example/features/001/spec.md':
+        '# Feature\n\n- ステータス: Superseded\n\n- AC-ITEM-01: creates an item\n',
+      'services/example/e2e/items.spec.ts': mappedTest,
+    },
+    async (root) => {
+      assert.deepEqual(await validateTraceability(root), [
         'Unknown E2E mapping AC-ITEM-01 in services/example/e2e/items.spec.ts.',
       ])
     },

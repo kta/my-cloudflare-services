@@ -21,6 +21,7 @@
 | データの保存 | サービスごとに 1 つの D1（Cloudflare の SQLite） |
 | メール通知 | `notifier` サービス（Resend 経由。二重送信を防ぐ仕組み込み） |
 | 毎日のバックアップと監視 | `ops` サービス（R2 に世代保存＋容量/鮮度/死活の異常をメール通知） |
+| EYEX 眼鏡店の予約管理 | `glasses_management`（予約・来店受付・顧客・録音・Web予約） |
 | 見た目の一貫性 | デザイントークン単一ソース（`packages/ui`）+ 「AI っぽい見た目」を禁じるルール |
 | 壊れていないかの自動確認 | `pnpm check`（lint + 未使用依存 + 型 + Worker/web coverage + E2E traceability）。CI でも走る |
 
@@ -51,7 +52,8 @@ make dev/admin  # → http://localhost:5174 が管理コンソール
 
 ```sh
 make dev/example_service   # → http://localhost:5173 サンプルの業務画面
-make dev/all               # admin と example_service を同時に起動
+make dev/glasses_management # → http://localhost:5175 EYEX予約管理画面
+make dev/all               # admin / example_service / glasses_management / notifier を起動
 make check                 # 壊れていないか全部確認する（緑ならOK）
 make help                  # コマンド一覧
 ```
@@ -67,6 +69,7 @@ pnpm --filter @app/admin test          # admin Worker/unit test
 pnpm --filter @app/admin test:web      # admin React/jsdom test（4指標とも 60% 以上）
 pnpm --filter @app/admin test:all      # admin の Worker + web test
 pnpm --filter @app/example_service test:all
+pnpm --filter @app/glasses_management test:all
 pnpm --filter @app/admin exec vitest run --config vitest.web.config.ts -t "<test name>"
 pnpm run test:traceability              # Approved UC/AC の E2E mapping を検証
 pnpm --filter @app/example_service e2e  # UI/API を変えた service の Playwright
@@ -102,7 +105,7 @@ docs/howto/deploy.md に従って、順番に実行して。
 
 - 必要なリソース（D1 / KV / R2）の作成と、id の設定ファイルへの反映
 - secrets の生成と登録（値は私に見せず、必要なら実行時に聞いて）
-- notifier / admin / ops のデプロイ（example_service は雛形なのでデプロイしない）
+- notifier / admin / glasses_management / ops のデプロイ（example_service は雛形なのでデプロイしない）
 
 各ステップで実行したコマンドと結果を報告して。本番に反映する前には必ず確認を取って。
 ```

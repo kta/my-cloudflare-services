@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EYEX予約 — 予約を探す</title>
+<link rel="stylesheet" href="../assets/eyex.css">
+<style>
+  .pane.find { display: flex; flex-direction: column; padding: 32px 24px; }
+  .find h2 { margin: 0 0 20px; font-size: 17px; }
+  .find .f + .f { margin-top: 16px; }
+  .chips { display: flex; gap: 8px; margin-top: 24px; }
+  .chip {
+    min-height: 44px; padding: 0 14px;
+    border: 1px solid var(--line-strong); border-radius: var(--r-pill);
+    background: var(--surface); color: var(--ink-2); font: 600 14px var(--sans);
+  }
+  .chip.on { background: var(--brand); border-color: var(--brand); color: var(--on-brand); }
+  .found { margin: 26px 0 10px; font-size: 13px; color: var(--ink-2); }
+  .hit {
+    display: flex; align-items: center; gap: 12px; width: 100%;
+    min-height: 62px; padding: 10px 12px;
+    border: 1px solid var(--line); border-radius: var(--r-m);
+    background: var(--surface); font-family: inherit; text-align: left; color: var(--ink);
+  }
+  .hit + .hit { margin-top: 10px; }
+  .hit.on { border: 2px solid var(--brand); background: var(--brand-tint); padding: 9px 11px; }
+  .hit .when { flex: none; width: 74px; font: 600 12px/1.45 var(--mono); color: var(--ink-2); }
+  .hit.on .when { color: var(--brand-dark); }
+  .hit .who { min-width: 0; }
+  .hit .who b { display: block; font-size: 15px; }
+  .hit .who small { display: block; font-size: 12px; color: var(--ink-2); white-space: nowrap; }
+  .hit .tag { margin-left: auto; flex: none; }
+
+  .det { display: flex; flex-direction: column; height: 100%; padding: 36px 40px; }
+  .det .head { display: flex; align-items: center; gap: 12px; }
+  .det .head .no { font: 600 15px var(--mono); color: var(--ink-2); }
+  .when-big { margin: 14px 0 0; font-size: 26px; font-weight: 600; }
+  .when-big span { font-size: 15px; font-weight: 400; color: var(--ink-2); }
+  .facts { margin: 26px 0 0; }
+  .facts > div { display: flex; gap: 24px; align-items: baseline; }
+  .facts .k { flex: none; width: 128px; font-size: 13px; color: var(--ink-2); }
+  .facts .v { font-size: 17px; font-weight: 600; }
+  .facts .v span { font-size: 13px; font-weight: 400; color: var(--ink-2); }
+  .foot { margin-top: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 14px; padding-top: 24px; }
+  .foot > p { flex: 1 0 100%; }
+  .foot .actions { margin-left: auto; }
+  .foot .btn { white-space: nowrap; }
+</style>
+</head>
+<body>
+<div class="caption">
+  <h1>予約を探す</h1>
+  <p>お名前かお電話番号だけで目当ての1件にたどり着く。右で中身と受付の録音を確かめてから、変更か取り消しに進む。</p>
+</div>
+
+<main class="device" id="screen">
+  <div class="statusbar"><span>11:08</span><span>EYEX 銀座店</span><span>Wi‑Fi　100%</span></div>
+
+  <header class="appbar">
+    <button class="homebtn" aria-label="トップへ">⌂</button>
+    <div class="storename">EYEX 銀座店<small>予約を変更する</small></div>
+  </header>
+
+  <div class="body">
+    <div class="shell">
+      <nav class="sidenav" aria-label="画面の切り替え">
+        <button class="navtoggle" aria-label="サイドバーをたたむ">たたむ</button>
+        <button class="new">＋ 予約を取る</button>
+        <button class="nav-item" data-icon="ledger">予約台帳</button>
+        <button class="nav-item" data-icon="reception">来店受付</button>
+        <button class="nav-item on" data-icon="search">予約を検索</button>
+        <button class="nav-item" data-icon="history">受付履歴</button>
+        <button class="nav-item" data-icon="customer">顧客台帳</button>
+        <div class="group">お店の運用</div>
+        <button class="nav-item" data-icon="analytics">分析</button>
+        <button class="nav-item" data-icon="settings">設定</button>
+        <div class="foot">銀座店 レジ横iPad<br>共有で使っています</div>
+      </nav>
+
+      <div class="content">
+        <div class="inner">
+          <div class="split">
+            <section class="pane find">
+              <h2>お客様を伺って探します</h2>
+              <div class="f"><span class="label">お名前</span><div class="field on">田中</div></div>
+              <div class="f"><span class="label">お電話番号</span><div class="field empty">090‑1234‑5678</div></div>
+
+              <div class="chips" role="group" aria-label="絞り込み">
+                <button class="chip on">これから</button>
+                <button class="chip">今日</button>
+                <button class="chip">取消済み</button>
+              </div>
+
+              <p class="found">結果 4件</p>
+
+              <button class="hit on">
+                <span class="when">8/27（木）<br>11:00</span>
+                <span class="who"><b>田中 花子 様 <span class="visits many">4回目</span></b><small>メガネを新しく作る／佐藤 美咲</small></span>
+              </button>
+              <button class="hit">
+                <span class="when">8/27（木）<br>10:00</span>
+                <span class="who"><b>伊藤 健 様 <span class="visits">2回目</span></b><small>調整／高橋 健</small></span>
+              </button>
+              <button class="hit">
+                <span class="when">8/27（木）<br>11:00</span>
+                <span class="who"><b>山口 真央 様 <span class="visits first">初めて</span></b><small>視力測定だけ／中村 彩</small></span>
+              </button>
+              <button class="hit">
+                <span class="when">9/3（木）<br>10:30</span>
+                <span class="who"><b>田中 花子 様 <span class="visits many">4回目</span></b><small>受け取り／担当が未定</small></span>
+              </button>
+            </section>
+
+            <section class="pane plain last det">
+              <div class="head">
+                <span class="no">EY‑2608‑0142</span>
+                <span class="tag">お電話でのご予約</span>
+              </div>
+
+              <p class="when-big">8月27日（木）11:00–12:00　<span>所要 60分</span></p>
+
+              <div class="facts lines">
+                <div><span class="k">ご用件</span><span class="v">メガネを新しく作る <span>／視力測定を含みます</span></span></div>
+                <div><span class="k">お客様</span><span class="v">田中 花子 様 <span class="visits many">4回目</span> <span>／090‑1234‑5678</span></span></div>
+                <div><span class="k">担当と場所</span><span class="v">佐藤 美咲 <span>／視力測定機 A・相談カウンター 1</span></span></div>
+                <div><span class="k">受付のときの録音</span><span class="v"><button class="btn">録音を聞く　<span class="mono">03:12</span></button></span></div>
+              </div>
+
+              <div class="card note" style="margin-top:26px">
+                <h3>注意ごと　1件</h3>
+                <p style="margin:0">乱視が強めのため、視力測定にお時間がかかることがあります。</p>
+              </div>
+
+              <div class="foot">
+                <p class="small muted" style="margin:0">変更の内容は、お客様にお伝えしてから確定します。</p>
+                <div class="actions end right">
+                  <button class="btn primary">日時を変える</button>
+                  <button class="btn">担当・場所を変える</button>
+                  <button class="btn danger">取り消す</button>
+                </div>
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+</body>
+</html>

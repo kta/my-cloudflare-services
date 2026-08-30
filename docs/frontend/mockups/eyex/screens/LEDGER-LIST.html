@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EYEX予約 — 予約台帳（予約リスト）</title>
+<link rel="stylesheet" href="../assets/eyex.css">
+<style>
+  .filters { flex: none; height: 60px; display: flex; align-items: center; gap: 10px; padding: 0 32px;
+             background: var(--surface-2); border-bottom: 1px solid var(--line); }
+  .chip { min-height: 44px; padding: 0 16px; border: 1px solid var(--line-strong); border-radius: var(--r-pill);
+          background: var(--surface); color: var(--ink); font: 600 15px var(--sans); }
+  .chip.on { border: 2px solid var(--brand); background: var(--brand-tint); color: var(--brand-dark); }
+  .chip small { font-weight: 400; color: var(--ink-2); }
+  .chip.on small { color: var(--brand-dark); }
+
+  /* サイドバーのぶん本文が狭くなるので、列幅と間隔を詰め直す。 */
+  .list { padding: 26px 32px; }
+  .cols, .r { display: grid; grid-template-columns: 120px 96px 224px 1fr 140px;
+              gap: 16px; align-items: center; }
+  .cols { padding: 0 0 10px; font-size: 13px; color: var(--ink-2); }
+  /* 白い箱を並べず、罫線だけで区切る。 */
+  .r { min-height: 62px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .r.on { background: var(--brand-tint); box-shadow: 0 0 0 12px var(--brand-tint); border-radius: 2px; }
+  .r .tm { font: 700 18px var(--mono); }
+  .r .tm small { display: block; font: 400 12px var(--sans); color: var(--ink-2); }
+  /* お名前と来店回数はひとまとまり。回数はお名前のすぐ右に置く。 */
+  .r .nm { display: flex; align-items: center; gap: 8px; font-size: 17px; font-weight: 700; }
+  .r .cell { font-size: 15px; color: var(--ink-2); }
+  .act { min-height: 46px; width: 100%; padding: 0 6px; border: 1px solid var(--line-strong);
+         border-radius: var(--r-s); background: var(--surface); color: var(--ink); font: 600 14px var(--sans); }
+  .act.primary { background: var(--brand); border-color: var(--brand); color: var(--on-brand); }
+  .act.walkin { background: var(--walkin-tint); border-color: var(--walkin); color: var(--walkin); }
+  .act.web { background: var(--web-tint); border-color: var(--web); color: var(--web); }
+  .act.done { background: transparent; border-color: transparent; color: var(--ink-3); }
+  .more { margin: 24px 0 0; font-size: 14px; color: var(--ink-2); }
+</style>
+</head>
+<body>
+<div class="caption">
+  <h1>予約台帳（予約リスト）</h1>
+  <p>同じ日を時間順に読む。左端のボタンだけで受け付けが進む。</p>
+</div>
+
+<main class="device" id="screen">
+  <div class="statusbar"><span>11:08</span><span>EYEX 銀座店</span><span>Wi‑Fi　100%</span></div>
+
+  <header class="appbar">
+    <button class="homebtn" aria-label="トップへ">⌂</button>
+    <div class="storename">EYEX 銀座店<small>予約台帳</small></div>
+    <div class="datepill">
+      <button aria-label="前の日">‹</button>
+      <span>2026年8月27日（木）</span>
+      <span class="today">本日</span>
+      <button aria-label="次の日">›</button>
+    </div>
+    <div class="barbtns"><button class="barbtn"><b>お知らせ</b><span class="badge">3</span></button></div>
+  </header>
+
+  <div class="body">
+    <div class="shell">
+      <nav class="sidenav" aria-label="画面の切り替え">
+        <button class="navtoggle" aria-label="サイドバーをたたむ">たたむ</button>
+        <button class="new">＋ 予約を取る</button>
+        <button class="nav-item on" data-icon="ledger">予約台帳</button>
+        <button class="nav-item" data-icon="reception">来店受付</button>
+        <button class="nav-item" data-icon="search">予約を検索</button>
+        <button class="nav-item" data-icon="history">受付履歴</button>
+        <button class="nav-item" data-icon="customer">顧客台帳</button>
+        <div class="group">お店の運用</div>
+        <button class="nav-item" data-icon="analytics">分析</button>
+        <button class="nav-item" data-icon="settings">設定</button>
+        <div class="foot">銀座店 レジ横iPad<br>共有で使っています</div>
+      </nav>
+
+      <div class="content">
+        <div class="toolbar">
+          <div class="segmented" role="group" aria-label="台帳の並べ方">
+            <button class="on">担当者</button>
+            <button>設備・場所</button>
+          </div>
+          <div class="segmented" role="group" aria-label="表示のかたち">
+            <button>タイムテーブル</button>
+            <button class="on">予約リスト</button>
+          </div>
+          <button class="btn" style="min-height:40px;padding:0 14px">絞り込み</button>
+        </div>
+
+        <div class="filters" role="group" aria-label="表示する予約の絞り込み">
+          <button class="chip on">すべて <small>12件</small></button>
+          <button class="chip">これから <small>7件</small></button>
+          <button class="chip">確認待ち <small>1件</small></button>
+        </div>
+
+        <div class="inner">
+          <div class="list">
+            <div class="cols" aria-hidden="true">
+              <span>受け付け</span><span>時間</span><span>お客様</span><span>ご用件</span><span>担当</span>
+            </div>
+
+            <div class="r">
+              <button class="act done">受付済み</button>
+              <span class="tm">10:00<small>30分</small></span>
+              <span class="nm">伊藤 健 様<span class="visits">2回目</span></span>
+              <span class="cell">今のメガネを調整したい</span>
+              <span class="cell">高橋 健</span>
+            </div>
+
+            <div class="r">
+              <button class="act done">受付済み</button>
+              <span class="tm">10:30<small>60分</small></span>
+              <span class="nm">山口 真央 様<span class="visits first">初めて</span></span>
+              <span class="cell">視力測定だけ</span>
+              <span class="cell">中村 彩</span>
+            </div>
+
+            <div class="r on">
+              <button class="act primary">ご来店</button>
+              <span class="tm">11:00<small>60分</small></span>
+              <span class="nm">田中 花子 様<span class="visits many">4回目</span></span>
+              <span class="cell">メガネを新しく作る</span>
+              <span class="cell">佐藤 美咲</span>
+            </div>
+
+            <div class="r">
+              <button class="act done">受付済み</button>
+              <span class="tm">11:00<small>30分</small></span>
+              <span class="nm">ウォークイン 003</span>
+              <span class="cell">視力測定だけ</span>
+              <span class="cell">渡辺 由紀</span>
+            </div>
+
+            <div class="r">
+              <button class="act walkin">ご案内</button>
+              <span class="tm">11:02<small>受付</small></span>
+              <span class="nm">ウォークイン 004</span>
+              <span class="cell">メガネを新しく作る</span>
+              <span class="cell">決めてください</span>
+            </div>
+
+            <div class="r">
+              <button class="act web">内容を確認</button>
+              <span class="tm">13:00<small>20分</small></span>
+              <span class="nm">相川 みどり 様<span class="visits">2回目</span></span>
+              <span class="cell">今のメガネを調整したい</span>
+              <span class="cell">決めてください</span>
+            </div>
+
+            <div class="r">
+              <button class="act">ご来店</button>
+              <span class="tm">13:00<small>60分</small></span>
+              <span class="nm">佐々木 亮 様<span class="visits many">3回目</span></span>
+              <span class="cell">今のメガネを調整したい</span>
+              <span class="cell">高橋 健</span>
+            </div>
+
+            <p class="more">このあと 14:00 松本 一郎 様 ほか 5件。</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+</body>
+</html>

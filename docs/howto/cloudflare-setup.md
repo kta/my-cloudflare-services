@@ -69,7 +69,7 @@ pnpm --filter @app/example_service exec wrangler d1 create example_service
 | サービス | 項目 |
 |---|---|
 | admin | `d1_databases[0].database_id` / KV `AUTH_RL` の `id` |
-| example_service（＝フォーク後の自ドメインサービス） | `d1_databases[0].database_id` |
+| glasses_management | `d1_databases[0].database_id` / KV `SHORT_LIVED` の `id` / R2 `RECORDINGS` の `bucket_name` |
 | notifier | KV `DEDUPE` の `id` |
 | ops | `vars.CF_ACCOUNT_ID` / バックアップ対象の `*_DB_ID`（R2 バケットは TF が作成） |
 
@@ -85,6 +85,8 @@ echo -n "<値>" | pnpm --filter @app/admin exec wrangler secret put AUTH_PEPPER
 
 pnpm --filter @app/notifier run deploy
 pnpm --filter @app/admin run db:migrate:remote && pnpm --filter @app/admin run deploy
+# glasses_management は notifier/admin のデプロイ後に実行する
+pnpm --filter @app/glasses_management run db:migrate:remote && pnpm --filter @app/glasses_management run deploy
 # → https://admin.<your-subdomain>.workers.dev で管理コンソールが動く
 ```
 
@@ -92,7 +94,7 @@ pnpm --filter @app/admin run db:migrate:remote && pnpm --filter @app/admin run d
 
 - `INTERNAL_KEY` は service binding でつながる**全サービスで同一値**、`JWT_SECRET` は発行側(admin)と検証側(各ドメインサービス)で同一値、`AUTH_PEPPER` は **admin のみ**。
 - `AUTH_DEV_GRANT` は**本番に設定しない**（未設定 = dev グラント無効）。
-- notifier は `RESEND_API_KEY` 未設定かつ `MAIL_DEV_LOG` 未設定なら**送信が fail close（502）**。`MAIL_FROM` は Resend 検証済みドメインのアドレスに。
+- notifier は `RESEND_API_KEY` または `MAIL_FROM` が未設定なら**送信が fail close（502）**。`MAIL_FROM` は Resend 検証済みドメインのアドレスに。ローカルにも LogSender の代替経路はなく、設定が無い場合は本番と同じ fail-close になる。
 - example_service は雛形なので本番にデプロイしない（CI の deploy matrix 対象外）。
 
 ## 6. 費用の話

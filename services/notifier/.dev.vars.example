@@ -1,0 +1,6 @@
+# ローカル開発用。`make init` が .dev.vars にコピーする。
+# 本番では INTERNAL_KEY / RESEND_API_KEY を `wrangler secret put` で設定し、
+# MAIL_FROM は検証済みドメインの送信元として環境ごとに設定する。
+INTERNAL_KEY=dev-internal-key
+MAIL_FROM=
+RESEND_API_KEY=

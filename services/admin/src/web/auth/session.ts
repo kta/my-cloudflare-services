@@ -99,6 +99,28 @@ function jwtExpMs(token: string): number | null {
   }
 }
 
+/**
+ * 現在の access token のクレーム(検証はしない — 検証はサーバの仕事)。
+ * PIN のストレッチには organization と user が salt として必要なため、
+ * 画面側で自分自身の識別子を知る唯一の手段としてだけ使う。
+ */
+export function currentClaims(): { sub: string; org: string } | null {
+  if (!accessToken) return null
+  try {
+    const [, payload] = accessToken.split('.')
+    if (!payload) return null
+    const claims = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/'))) as {
+      sub?: string
+      org?: string
+    }
+    return typeof claims.sub === 'string' && typeof claims.org === 'string'
+      ? { sub: claims.sub, org: claims.org }
+      : null
+  } catch {
+    return null
+  }
+}
+
 export async function bootstrap(): Promise<boolean> {
   if (accessToken) return true
   if (await refresh()) return true

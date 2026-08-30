@@ -14,6 +14,17 @@ export default defineConfig({
           JWT_SECRET: 'dev-jwt-secret-change-me',
           AUTH_PEPPER: 'dev-auth-pepper-change-me',
           AUTH_DEV_GRANT: 'true',
+          INTERNAL_KEY: 'dev-internal-key',
+          DOMAIN_AUTH_KEY: 'dev-domain-auth-key',
+        },
+        // The domain Worker is a separate deployable service. Tests keep the
+        // call boundary local and observable instead of starting a second
+        // workerd; production uses the Wrangler service binding below.
+        serviceBindings: {
+          GLASSES_MANAGEMENT: async (request: Request) =>
+            new Response(await request.text(), {
+              headers: { 'content-type': 'application/json' },
+            }),
         },
       },
     }),

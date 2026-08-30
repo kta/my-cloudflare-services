@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EYEX予約 — この端末の使い方を決める</title>
+<link rel="stylesheet" href="../assets/eyex.css">
+<style>
+  .setup { height: 100%; display: flex; flex-direction: column; padding: 36px 44px 36px; }
+  .modes { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 32px; margin-top: 28px; }
+  .mode {
+    display: flex; flex-direction: column;
+    border: 1px solid var(--line-strong); border-radius: var(--r-l);
+    background: var(--surface); padding: 28px 30px;
+  }
+  .mode .head { display: flex; align-items: center; gap: 18px; }
+  .mode .ico {
+    flex: none; width: 62px; height: 62px; border-radius: 50%;
+    background: var(--brand); color: var(--on-brand);
+    display: grid; place-items: center; font-size: 27px;
+  }
+  .mode.share .ico { background: var(--walkin); }
+  .mode h3 { margin: 0; font-size: 22px; }
+  .mode h3 small { display: block; margin-top: 4px; font: 400 14px var(--sans); color: var(--ink-2); }
+  .diff { flex: 1; display: flex; flex-direction: column; margin: 26px 0 0; }
+  .diff > div { padding: 14px 0; border-bottom: 1px solid var(--line); }
+  .diff > div:last-child { border-bottom: 0; }
+  .diff dt { font-size: 13px; font-weight: 600; color: var(--ink-2); }
+  .diff dd { margin: 3px 0 0; font-size: 16px; line-height: 1.45; }
+  .mode .btn { width: 100%; margin-top: 26px; }
+  .foot { margin-top: 26px; font-size: 13px; color: var(--ink-2); }
+</style>
+</head>
+<body>
+<div class="caption">
+  <h1>この端末の使い方を決める</h1>
+  <p>iPad を配ったあと、最初の1回だけ通る画面。個人の端末か共有の端末かで、記録に残る名前・お客様の情報の隠し方・暗証番号の種類が変わる。</p>
+</div>
+
+<main class="device" id="screen">
+  <div class="statusbar"><span>9:41</span><span>EYEX 銀座店</span><span>Wi‑Fi　100%</span></div>
+
+  <header class="appbar">
+    <div class="storename">EYEX 銀座店<small>端末のはじめの設定</small></div>
+    <div class="barbtns">
+      <button class="barbtn"><b>ヘルプ</b></button>
+    </div>
+  </header>
+
+  <div class="body">
+    <div class="setup">
+      <div class="ask">
+        <span class="bubble" aria-hidden="true"></span>
+        <div>
+          <h2>この iPad の使い方を決めてください</h2>
+          <p>はじめの1回だけの設定です。</p>
+        </div>
+      </div>
+
+      <div class="modes">
+        <section class="mode">
+          <div class="head">
+            <span class="ico" aria-hidden="true">☺</span>
+            <h3>個人の端末として使う<small>スタッフが自分で持ち歩きます</small></h3>
+          </div>
+          <dl class="diff">
+            <div><dt>記録される名前</dt><dd>選んだスタッフご本人の名前</dd></div>
+            <div><dt>お客様の情報</dt><dd>そのまま表示したまま</dd></div>
+            <div><dt>暗証番号</dt><dd>スタッフ一人ひとりの4〜6桁</dd></div>
+          </dl>
+          <button class="btn primary big">個人の端末にする</button>
+        </section>
+
+        <section class="mode share">
+          <div class="head">
+            <span class="ico" aria-hidden="true">▤</span>
+            <h3>みんなで使う端末として置く<small>レジ横・受付に据え置きます</small></h3>
+          </div>
+          <dl class="diff">
+            <div><dt>記録される名前</dt><dd>置き場所の名前（例：レジ横iPad）</dd></div>
+            <div><dt>お客様の情報</dt><dd>2分間さわらないと自動で隠す</dd></div>
+            <div><dt>暗証番号</dt><dd>店舗で共通の4〜6桁</dd></div>
+          </dl>
+          <button class="btn primary big">みんなで使う端末にする</button>
+        </section>
+      </div>
+
+      <p class="foot">あとから「設定 › 端末」で変更できます。　端末の名前：EYEX-iPad-07</p>
+    </div>
+  </div>
+</main>
+</body>
+</html>

@@ -24,6 +24,22 @@ describe('unwrap', () => {
       name: 'ApiError',
       status: 409,
       code: 'email_taken',
+      body: { error: 'email_taken' },
+    })
+  })
+
+  it('preserves a retryable error payload for a caller-owned recovery flow', async () => {
+    await expect(
+      unwrap(
+        jsonResponse(
+          { error: 'organization_sync_failed', organizationId: 'org-1', retryable: true },
+          502,
+        ),
+      ),
+    ).rejects.toMatchObject({
+      status: 502,
+      code: 'organization_sync_failed',
+      body: { error: 'organization_sync_failed', organizationId: 'org-1', retryable: true },
     })
   })
 

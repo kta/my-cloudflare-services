@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EYEX予約 — 業務を始める（共有端末・置き場所を選ぶ）</title>
+<link rel="stylesheet" href="../assets/eyex.css">
+<style>
+  .pick { height: 100%; padding: 40px 44px; }
+  .places { margin-top: 30px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+  .place {
+    display: flex; flex-direction: column; text-align: left;
+    padding: 20px 22px;
+    border: 1px solid var(--line-strong); border-radius: var(--r-m);
+    background: var(--surface); color: var(--ink); font-family: var(--sans);
+  }
+  .place.on { border: 3px solid var(--brand); background: var(--brand-tint); padding: 16px 18px; }
+  .place .top { display: flex; align-items: center; gap: 10px; }
+  .place .nm { font-size: 17px; font-weight: 700; }
+  .place .where {
+    margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line);
+    font-size: 13px; color: var(--ink-2);
+  }
+  .place.on .where { border-top-color: var(--brand-line); }
+  .place .state { margin-top: 8px; font-size: 13px; color: var(--ink-2); }
+  .go { margin-top: 34px; }
+</style>
+</head>
+<body>
+<div class="caption">
+  <h1>業務を始める（共有端末・置き場所を選ぶ）</h1>
+  <p>据え置きの iPad は「誰か」ではなく「どこか」を選ぶ。置き場所がそのまま記録に残る名前になる。</p>
+</div>
+
+<main class="device" id="screen">
+  <div class="statusbar"><span>9:41</span><span>EYEX 銀座店</span><span>Wi‑Fi　100%</span></div>
+
+  <header class="appbar">
+    <div class="storename">EYEX 銀座店<small>業務を始める　みんなで使う端末</small></div>
+    <div class="barbtns">
+      <button class="barbtn"><b>別の店舗</b>丸の内店・新宿店</button>
+      <button class="barbtn"><b>設定</b></button>
+    </div>
+  </header>
+
+  <div class="body">
+    <div class="pick">
+      <div class="ask">
+        <span class="bubble" aria-hidden="true"></span>
+        <div>
+          <h2>この端末はどこに置きますか？</h2>
+          <p>選んだ置き場所の名前が、そのまま記録に残ります。</p>
+        </div>
+      </div>
+
+      <div class="places" role="group" aria-label="端末の置き場所">
+        <button class="place on">
+          <span class="top">
+            <span class="nm">銀座店 レジ横iPad</span>
+            <span class="tag brand right">選択中</span>
+          </span>
+          <span class="where">レジの右側　固定スタンド</span>
+          <span class="state">まだ誰も使っていません</span>
+        </button>
+
+        <button class="place">
+          <span class="top">
+            <span class="nm">銀座店 受付iPad</span>
+            <span class="tag right">業務中</span>
+          </span>
+          <span class="where">入口の受付台</span>
+          <span class="state">高橋 健　9:32 から</span>
+        </button>
+
+        <button class="place">
+          <span class="top">
+            <span class="nm">銀座店 検査室iPad</span>
+            <span class="tag alert right">つながっていません</span>
+          </span>
+          <span class="where">検査室 1　測定機の脇</span>
+          <span class="state">最終通信　昨日 18:42</span>
+        </button>
+      </div>
+
+      <div class="actions end go">
+        <button class="btn quiet">使い方を変える</button>
+        <button class="btn primary big">この置き場所で始める</button>
+      </div>
+    </div>
+  </div>
+</main>
+</body>
+</html>

@@ -9,9 +9,11 @@ adminは運営コンソールであり、次の唯一の源泉である。
 - organization、plan、disabled状態
 - user、role、invitation
 - login、access token、refresh token rotation/revocation、rate limit
+- 標準ロール（head_office_admin / store_manager / staff）と担当店舗の割り当て、およびその結果の store membership 同期（UC-EYEX-149）
+- 個人PINの設定・変更と、本人確認記録付きのPIN再設定チケット（UC-EYEX-151）。adminはPINを閲覧・設定できない
 - domain serviceへのorganization同期と日次reconciliation
 
-React SPAとHono APIを1 Workerで配信し、admin専用D1と `AUTH_RL` KVを所有する。Cloudflare には admin だけをデプロイし、他 Worker への service binding は持たない。
+React SPAとHono APIを1 Workerで配信し、admin専用D1と `AUTH_RL` KVを所有する。Cloudflare には admin をデプロイし、EYEX の `glasses-management` へ組織スナップショットと認証プロキシを service binding で提供する。
 
 ## 構成と入口
 
@@ -19,11 +21,12 @@ React SPAとHono APIを1 Workerで配信し、admin専用D1と `AUTH_RL` KVを�
 |---|---|
 | `src/worker/index.ts` | Hono routes、cookie境界、認可、organization/invitation API、Cron |
 | `src/worker/auth/service.ts` | login、refresh rotation、invite acceptance、revoke |
+| `src/worker/users/service.ts` | 利用者一覧・検索・権限差分・担当店舗変更・監査・個人PIN（時刻は `deps.now` で注入） |
 | `src/worker/db/schema.ts` | auth/organization D1 schema |
 | `src/worker/sync.ts` | domain serviceへのtyped upsert/list |
 | `src/worker/reconcile.ts` | drift検知とbounded resync |
 | `src/web/auth/` | access tokenのmemory保持、refresh cookie経由session |
-| `src/web/routes/` | Login、Invite、Orgs |
+| `src/web/routes/` | Login、Invite、Orgs、Users（利用者管理）、Pin（個人PIN） |
 | `test/` | auth時間境界、権限表、integration、reconciliation |
 | `e2e/` | loginと運営操作のsmoke |
 | `seed.mjs` | local/remote明示指定のseed |
@@ -42,7 +45,8 @@ React SPAとHono APIを1 Workerで配信し、admin専用D1と `AUTH_RL` KVを�
 ## Organizationとbinding境界
 
 - admin D1がorganizationのsource of truth。他serviceのD1へcross-D1 query/JOINしない。
-- syncはHono RPCの `AppType` とservice bindingを使い、`x-internal-key` を付ける。
+- syncはHono RPCの `AppType` とservice bindingを使い、`x-internal-key` を付ける。canonical組織IDは既存形式を保持し、admin D1の単調増加 revision を payload に含める。
+- service binding の到着順逆転で古い状態へ戻らないよう domain 側は revision 条件付き upsert を行う。同期失敗時は admin 正本を保持し、運営adminの `POST /api/organizations/:id/sync` で同じ snapshot を再送できる。
 - create/updateの成功条件とdomain同期失敗時の応答・再検知を既存specに合わせる。best-effort失敗はlog、戻り値、再試行上限をテストする。
 - reconciliationは1runの上限、drift、partial failureを維持し、無制限fan-outを入れない。
 - invitation通知が失敗した場合のlink fallbackを消さない。送信成功を偽装しない。

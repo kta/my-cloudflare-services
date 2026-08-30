@@ -1,8 +1,8 @@
-import type { Organization, Plan } from '@app/contracts'
+import { type Organization, OrganizationSyncFailed, type Plan } from '@app/contracts'
 import { ANALYTICS_EVENTS, trackEvent } from '@app/shared'
 import { Button, Chip, Dialog, Notice, TextInput } from '@app/ui'
 import { useEffect, useState } from 'react'
-import { client, unwrap } from '../client'
+import { ApiError, client, unwrap } from '../client'
 import { EmptyState, PageHeader, Section, Spinner } from '../components/ui'
 import { messageForError, messageForStatus } from '../lib/errorMessages'
 import { toast } from '../store/toast'
@@ -14,10 +14,19 @@ import { toast } from '../store/toast'
 
 const dateFormat = new Intl.DateTimeFormat('ja-JP', { dateStyle: 'medium' })
 
+type OrganizationSyncFailure = OrganizationSyncFailed
+
+function syncFailureFrom(err: unknown): OrganizationSyncFailure | null {
+  if (!(err instanceof ApiError) || err.code !== 'organization_sync_failed') return null
+  const parsed = OrganizationSyncFailed.safeParse(err.body)
+  return parsed.success ? parsed.data : null
+}
+
 export function Orgs() {
   const [orgs, setOrgs] = useState<Organization[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [pendingSync, setPendingSync] = useState<OrganizationSyncFailure | null>(null)
 
   // 作成フォーム
   const [name, setName] = useState('')
@@ -55,7 +64,38 @@ export function Orgs() {
       setPlan('free')
       await load()
     } catch (err) {
+      const syncFailure = syncFailureFrom(err)
+      if (syncFailure) {
+        setPendingSync(syncFailure)
+        setName('')
+        setPlan('free')
+        await load()
+        setError('組織は作成済みです。EYEXへの同期を再試行してください。')
+        toast.error('組織は作成済みです。EYEXへの同期を再試行してください。')
+        return
+      }
       setError('組織の作成に失敗しました。')
+      toast.error(messageForError(err))
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function retrySync(): Promise<void> {
+    if (!pendingSync) return
+    setBusyId(pendingSync.organizationId)
+    try {
+      await unwrap(
+        await client.api.organizations[':id'].sync.$post({
+          param: { id: pendingSync.organizationId },
+        }),
+      )
+      setPendingSync(null)
+      setError(null)
+      toast.success('EYEXへの同期を完了しました。')
+      await load()
+    } catch (err) {
+      setError('EYEXへの同期を完了できませんでした。時間をおいて再試行してください。')
       toast.error(messageForError(err))
     } finally {
       setBusyId(null)
@@ -141,7 +181,20 @@ export function Orgs() {
 
       {error && (
         <div className="mb-6">
-          <Notice tone="danger">{error}</Notice>
+          <Notice tone="danger">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <span>{error}</span>
+              {pendingSync && (
+                <Button
+                  variant="ghost"
+                  onClick={() => void retrySync()}
+                  disabled={busyId === pendingSync.organizationId}
+                >
+                  {busyId === pendingSync.organizationId ? '同期中…' : '同期を再試行'}
+                </Button>
+              )}
+            </div>
+          </Notice>
         </div>
       )}
 

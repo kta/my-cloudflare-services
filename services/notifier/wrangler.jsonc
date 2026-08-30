@@ -1,0 +1,22 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "notifier",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-25",
+  "observability": { "enabled": true },
+  // Notifications are synchronous and use one KV namespace for a 24-hour
+  // best-effort idempotency record. The real ID is supplied by Terraform.
+  "kv_namespaces": [
+    {
+      "binding": "DEDUPE",
+      "id": "00000000000000000000000000000000"
+    }
+  ],
+  // MAIL_FROM is not a secret, but an empty default keeps the Worker
+  // fail-closed until a verified sender is configured per environment.
+  "vars": {
+    "MAIL_FROM": ""
+  }
+  // No secrets are stored in vars. INTERNAL_KEY and RESEND_API_KEY are set
+  // with `wrangler secret put`; MAIL_FROM is an ordinary deployment variable.
+}

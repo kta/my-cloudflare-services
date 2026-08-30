@@ -17,8 +17,9 @@ async function parseJsonBody(res: Response): Promise<unknown | undefined> {
 export async function unwrap<T>(res: Response): Promise<T> {
   if (!res.ok) {
     let code = `http_${res.status}`
+    let body: unknown | undefined
     try {
-      const body = await parseJsonBody(res)
+      body = await parseJsonBody(res)
       if (
         body !== null &&
         typeof body === 'object' &&
@@ -30,16 +31,18 @@ export async function unwrap<T>(res: Response): Promise<T> {
     } catch {
       // ignore
     }
-    throw new ApiError(res.status, code)
+    throw new ApiError(res.status, code, body)
   }
   const body = await parseJsonBody(res)
   return body as T
 }
 
-class ApiError extends Error {
+export class ApiError extends Error {
   constructor(
     public status: number,
     public code: string,
+    /** Recovery UIs may use a documented structured error payload. */
+    public body: unknown | undefined,
   ) {
     super(code)
     this.name = 'ApiError'

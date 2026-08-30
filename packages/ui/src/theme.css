@@ -1,73 +1,111 @@
 /*
- * Design tokens — the single place a project's visual identity lives.
+ * デザイントークン — この製品の見た目が住む唯一の場所。
  *
- * This default theme is a PLACEHOLDER identity ("paper & pine"): warm paper
- * surfaces, near-black green-cast ink, one pine accent, amber reserved for
- * focus. When you copy this template for a real product, REPLACE these values
- * following docs/frontend/DESIGN_RULE.md (pick a subject-grounded palette and
- * type pairing first, then encode it here). Components and app code must only
- * ever reference these semantic tokens — never raw hex, never Tailwind's
- * default palette (bg-blue-500 etc.), never arbitrary values (p-[13px]).
+ * 値は承認済みモック `docs/frontend/mockups/eyex/`（0ベース版・68画面）の
+ * `assets/eyex.css` の `:root` から採った。アプリのコードはこのセマンティック
+ * トークンだけを参照する。生の hex、Tailwind 既定パレット（bg-blue-500 等）、
+ * 任意値（p-[13px]）は使わない。
  *
- * Tailwind v4 turns each token into utilities automatically:
+ * Tailwind v4 が各トークンをユーティリティへ自動展開する:
  *   --color-ink → text-ink / bg-ink / border-ink …
- *   --font-display → font-display
+ *   --font-sans → font-sans
  *   --radius-ctl → rounded-ctl
+ *
+ * 旧モック（`eyex-reservation`）専用だった方言トークン（terminal-* / viz-* /
+ * sp-* / compact-*）は、対応する画面ごと作り直したので削除した。
  */
 @theme {
-  /* --- Type. Two roles on purpose: a characterful display face used with
-     restraint (wordmark, page titles) and a quiet body face for everything
-     else. Data (timestamps, ids) uses the mono stack. --- */
-  --font-display: "Fraunces Variable", Georgia, "Times New Roman", serif;
-  --font-sans: "Public Sans Variable", system-ui, -apple-system, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+  /* --- 書体。Apple HIG に従い iPadOS の既定を先頭に置く。和文が無い環境のために
+     自前ホストの IBM Plex Sans JP を後ろに残す（packages/ui/src/index.ts が読む）。
+     等幅は時刻・予約番号・数値だけに使い、和文には使わない。 --- */
+  --font-sans:
+    -apple-system, "SF Pro JP", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "IBM Plex Sans JP",
+    "Noto Sans JP", sans-serif;
+  /* 見出し用の別書体は持たない。1 書体のウェイトだけで段を作る（モックと同じ）。 */
+  --font-display:
+    -apple-system, "SF Pro JP", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "IBM Plex Sans JP",
+    "Noto Sans JP", sans-serif;
+  --font-mono: "SF Mono", ui-monospace, "IBM Plex Mono", Menlo, monospace;
 
-  /* --- Surfaces & ink --- */
-  --color-paper: #f4f3ee; /* app background */
-  --color-surface: #fdfdfb; /* cards, inputs */
-  --color-ink: #22271f; /* primary text — near-black with a green cast */
-  --color-ink-muted: #68705f; /* secondary text; AA on paper */
-  --color-line: #d9d7cc; /* hairline borders */
+  /* --- 文字寸法。モックが実際に使っている段だけを持つ。ここに無い大きさは
+     モックに存在しないということなので、任意値で足さずにまずモックを見る。 --- */
+  --text-hero: 1.75rem; /* 28px トップの主操作 */
+  --text-title: 1.375rem; /* 22px 画面の問いかけ・見出し */
+  --text-bar: 1.1875rem; /* 19px 上のバーの店名 */
+  --text-lead: 1.0625rem; /* 17px 選択肢・入力・一覧の見出し */
+  --text-body: 1rem; /* 16px 本文 */
+  --text-body--line-height: 1.5;
+  --text-grid: 0.8125rem; /* 13px 台帳・補足 */
+  --text-note: 0.75rem; /* 12px 状態の札・凡例 */
+  --text-fine: 0.6875rem; /* 11px 目盛・端末名 */
 
-  /* --- Accent. One dominant accent (pine) spent on primary actions and the
-     wordmark; amber appears ONLY as the focus ring — a deliberate, scarce
-     signal. Resist adding more colors; add neutrals instead. --- */
-  --color-pine: #2f5743;
-  --color-pine-deep: #21402f;
-  --color-amber: #c2921e;
-  --color-amber-deep: #8a6712; /* amber legible at small sizes (warning text on soft fills) */
-  --color-danger: #a2372c;
+  /* --- 面と罫。モック --canvas / --surface / --surface-2 / --line / --line-strong --- */
+  --color-paper: #f1f4f2; /* 画面の下地 */
+  --color-surface: #ffffff; /* カード・入力・セル */
+  --color-surface-2: #e9eeeb; /* 見出し行・左ペイン・サイドバー */
+  --color-line: #d3dbd7; /* 罫線（装飾。仕切りとしてだけ使う） */
+  /* 押せるもの（入力欄・ボタン・選べる札）の縁と、表の外枠。
+     この線が「そこが操作できる」ことを伝える唯一の手がかりなので、
+     WCAG 1.4.11（非テキスト 3:1）を満たす濃さにしてある。
+     モックの実測値 #b6c2bc は白地 1.84:1 で届かないため、色相と彩度を保ったまま
+     明度だけ下げた（白 3.55:1 / 下地 3.20:1 / 見出し行 3.02:1）。 */
+  --color-line-strong: #778d82;
 
-  /* Glasses reservation source-parity roles: translated from the static
-     reception mock so service CSS never needs raw palette values. */
-  --color-glass-canvas: #f6f8f4;
-  --color-glass-home-canvas: #176b5b;
-  --color-glass-paper: #fffefd;
-  --color-glass-green-050: #f4f9f1;
-  --color-glass-green-100: #e9f3e5;
-  --color-glass-green-600: #59a648;
-  --color-glass-green-500: #82ae6f;
-  --color-glass-green-700: #3f8a36;
-  --color-glass-green-800: #2f702e;
-  --color-glass-green-900: #235626;
-  --color-glass-green-source-mid: #347b2c;
-  --color-glass-green-source-end: #448b35;
-  --color-glass-line-strong: #d6ded3;
-  --color-glass-warm: #fff8eb;
-  --color-glass-warning: #c9822a;
-  --color-glass-blue: #4c88bd;
-  --color-glass-blue-light: #93b9d9;
-  --color-glass-green-150: #d9e7cd;
-  --color-glass-recording-bg: #235626;
-  --color-glass-recording-dot: #ed6a60;
-  --color-glass-recording-wave: #9ed582;
-  --color-glass-recording-muted: #b8d0b3;
+  /* --- 文字 --- */
+  --color-ink: #16211d; /* 本文 */
+  --color-ink-muted: #566761; /* 補足 */
+  /* プレースホルダ。入力前の手がかりも本文と同じ 4.5:1 を満たす必要があるので、
+     モックの実測値 #7d8b85（白地 3.56:1）を色相そのままで暗くした（白 5.31:1）。 */
+  --color-ink-faint: #626e69;
 
-  /* --- Shape. Controls share one radius; anything larger must be earned. --- */
-  --radius-ctl: 0.3125rem;
-  --radius-none: 0;
+  /* --- 眼鏡店の緑。ヘッダー・主操作・選択状態はこの 1 色が担う。
+     白文字とのコントラストは WCAG AA を満たす。 --- */
+  --color-pine: #17705a;
+  --color-on-pine: #ffffff;
+  --color-pine-deep: #0f5645;
+  --color-pine-soft: #e4f0eb; /* 選択の塗り */
+  /* 選択された札の縁。塗りと文字でも選択は分かるが、縁だけで選択を示す場面
+     （時間の枠など）があるので 3:1 を満たす濃さにする（白 3.53:1 / 選択の塗り 3.02:1）。 */
+  --color-pine-line: #58947f;
+
+  /* --- 予約の出どころ。色だけに意味を持たせず、必ず文字を添える。 --- */
+  --color-web: #1c5c8c; /* Web予約 */
+  --color-web-soft: #e6eef5;
+  --color-walkin: #9a5a15; /* ウォークイン */
+  --color-walkin-soft: #fbeedd;
+
+  /* --- 状態 --- */
+  --color-danger: #97302b; /* 取消・警告・現在時刻の線・破壊的操作 */
+  --color-on-danger: #ffffff;
+  --color-danger-soft: #fbe9e7;
+  --color-amber: #7a5415; /* 失敗ではない注意 */
+  --color-amber-soft: #fff6e5;
+  --color-busy: #cdd5d1; /* 埋まっている枠 */
+  /* 埋まっている枠の地。`--color-busy` の上では `--color-ink-muted` が 4.00:1 で AA に
+     届かず、文字を濃くすると埋まった枠が空き枠より目立ってしまうので、地を明るくする側で
+     解く（この地の上で 4.87:1）。AC-LEDGER-11 がこの名前で指している値である。 */
+  --color-busy-soft: #e4e9e6;
+  --color-free: #eef6f2; /* 空いている枠 */
+  --color-focus: #0a63c4; /* フォーカスリング（白・下地の上で 5.8:1） */
+  /* 緑の面（上のバー・主操作ボタン）の上では #0a63c4 が 1.03:1 で消えるので、
+     そこだけ白いリングにする（緑の上で 6.00:1）。 */
+  --color-focus-on-pine: #ffffff;
+
+  /* --- 台帳の時間グリッド。30分ごとは薄く、1時間ごとは少し濃く。
+     予約の帯をまたいでも途切れないよう、背景として通す。
+     **名前に `-line` を付けているのは `--text-grid` と衝突させないため。**
+     Tailwind v4 は `text-<名前>` を大きさと色の両方の名前空間から引くので、
+     `--color-grid` と `--text-grid` が両方あると `text-grid` が「色」に解決され、
+     13px の指定が消えたうえ、文字が地に溶ける（`--color-grid` は白に近い）。 --- */
+  --color-grid-line: #e7ecea;
+  --color-grid-hour-line: #cbd5d1;
+
+  /* --- 形。モックは 8px（操作）・12px（カード）・16px（大きな面）と、
+     丸ごと丸いピル。 --- */
+  --radius-ctl: 0.5rem; /* 8px */
+  --radius-card: 0.75rem; /* 12px */
+  --radius-panel: 1rem; /* 16px */
   --radius-full: 9999px;
   --radius-circle: 50%;
-  --radius-pill: 9999px;
-  --radius-brand: 0.7rem 0.7rem 0.55rem 0.55rem;
+  --radius-none: 0;
 }

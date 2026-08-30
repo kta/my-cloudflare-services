@@ -2,7 +2,12 @@
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "treatConfigHintsAsErrors": true,
   "ignoreDependencies": ["^cloudflare(:.*)?$"],
-  "ignoreFiles": [".agents/skills/design-select/scripts/**"],
+  "ignoreFiles": [
+    ".agents/skills/design-select/scripts/**",
+    // モックは製品のコードではなく、発注元へ見せる静止画とその撮影道具である。
+    // 依存の監査に混ぜると、モックを増やすたびに「使われていない」と言われる。
+    "docs/frontend/mockups/**"
+  ],
   "workspaces": {
     "packages/contracts": {
       "entry": ["test/**/*.test.ts"],
@@ -21,6 +26,11 @@
     "services/admin": {
       "entry": ["test/**/*.test.ts", "vitest.config.ts", "src/web/**/*.test.{ts,tsx}"],
       "project": ["src/**/*.{ts,tsx,css}", "test/**/*.ts", "e2e/**/*.ts", "*.ts", "*.mjs"],
+      "vitest": false
+    },
+    "services/glasses_management": {
+      "entry": ["test/**/*.test.ts", "vitest.config.ts", "src/web/**/*.test.{ts,tsx}"],
+      "project": ["src/**/*.{ts,tsx,css}", "test/**/*.ts", "e2e/**/*.ts", "*.ts"],
       "vitest": false
     },
     "services/example_service": {

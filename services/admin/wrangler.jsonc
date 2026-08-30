@@ -20,6 +20,10 @@
   ],
   // Rate-limit / lockout counters for login (email+IP window). Free tier.
   "kv_namespaces": [{ "binding": "AUTH_RL", "id": "ec31896881954c4aa932a4a72b1a08be" }],
+  // Domain services receive canonical organization snapshots through an
+  // internal service binding. The receiving Worker still verifies
+  // x-internal-key, so a binding alone never grants access.
+  "services": [{ "binding": "GLASSES_MANAGEMENT", "service": "glasses-management" }],
   // No secrets in `vars` (official guidance): INTERNAL_KEY / JWT_SECRET /
   // AUTH_PEPPER / AUTH_DEV_GRANT live in .dev.vars for local dev (copied from
   // .dev.vars.example by `make init`) and are set via `wrangler secret put` in
