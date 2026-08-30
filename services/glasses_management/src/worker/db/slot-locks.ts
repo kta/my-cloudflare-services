@@ -111,22 +111,34 @@ export type SlotLockBatchInput = {
   newId?: () => string
 }
 
-/** 上限判定の内側。要求する枠を 4 列の派生表に並べ、1 つでも埋まっていれば真になる。 */
-function capacityReached(requests: readonly SlotLockRequest[]): string {
-  const rows = requests
-    .map((_, index) =>
-      index === 0
-        ? 'SELECT ? AS kind, ? AS target_key, ? AS slot_start, ? AS cap'
-        : 'SELECT ?, ?, ?, ?',
-    )
-    .join(' UNION ALL ')
+/**
+ * 上限判定の内側。要求する枠を 1 つずつ数え、**1 つでも埋まっていれば真**になる。
+ *
+ * 要求は `SELECT ? UNION ALL SELECT ?…` の派生表ではなく **JSON の配列 1 個**で渡す。
+ * `design/03-data-model.md` §7.6 の SQL は `UNION ALL` で書いてあるが、
+ * **D1 の compound SELECT は 5 項までしか受け取らない**（実測: 6 項目で
+ * `too many terms in compound SELECT: SQLITE_ERROR`）。1 予約は「（所要 ＋ 片付け）÷ 刻み」
+ * 枠 ×（店舗 1 ＋ 担当 1 ＋ 設備 0〜2）行を要求するので、60 分・刻み 30 分・設備 2 台の
+ * ごく普通のご予約が 12 項になり、確定が丸ごと 500 で落ちる。
+ * SQLite の複数行 `VALUES` も内部では compound SELECT なので同じ壁に当たる。
+ * `json_each` なら項の数が SQL の形に出ないので、枠が何本でも 1 文で書ける。
+ *
+ * **代償: 枠の本数に対して二乗で効く。**要求する枠の全体を JSON 1 個にして、その 1 個を
+ * 枠の本数ぶんの全文へ配るので、N 枠の予約は N×N 個の枠記述子をバインドする
+ * （実測: 10:00 から 480 分・設備 5 台の 119 文で 1 回の確定に約 1.5MB）。
+ * ふつうのご予約は 9〜16 文なので実害は無いが、所要と設備の上限を緩めるときは
+ * ここを先に見る。
+ */
+function capacityReached(): string {
   return (
-    `SELECT 1 FROM (${rows}) w WHERE (` +
+    'SELECT 1 FROM json_each(?) w WHERE (' +
     'SELECT COUNT(*) FROM reservation_slot_locks l ' +
     'WHERE l.organization_id = ? AND l.store_id = ? ' +
-    'AND l.kind = w.kind AND l.target_key = w.target_key AND l.slot_start = w.slot_start ' +
+    "AND l.kind = json_extract(w.value, '$.kind') " +
+    "AND l.target_key = json_extract(w.value, '$.targetKey') " +
+    "AND l.slot_start = json_extract(w.value, '$.slotStart') " +
     'AND l.reservation_id <> ?' +
-    ') >= w.cap'
+    ") >= json_extract(w.value, '$.cap')"
   )
 }
 
@@ -140,14 +152,10 @@ export function slotLockStatements(
 ): D1PreparedStatement[] {
   if (input.requests.length === 0) return []
   const newId = input.newId ?? (() => crypto.randomUUID())
-  const guard = capacityReached(input.requests)
+  const guard = capacityReached()
+  // 要求する枠は JSON 1 個にまとめて渡す（項の数が SQL の形に出ないので枠が何本でも通る）。
   const guardParams = [
-    ...input.requests.flatMap((request) => [
-      request.kind,
-      request.targetKey,
-      request.slotStart,
-      request.cap,
-    ]),
+    JSON.stringify(input.requests),
     input.organizationId,
     input.storeId,
     input.reservationId,

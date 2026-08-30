@@ -87,6 +87,9 @@ const SKILL_LABELS: Record<SkillCode, string> = {
   repair: '修理・部品交換',
 }
 
+/** `AvailabilityLane.subtitle` / `LedgerLane.subtitle` の上限（契約と同じ 40 文字）。 */
+const LANE_SUBTITLE_MAX = 40
+
 /** SETTINGS-EQUIPMENT の種別 3 値。 */
 const EQUIPMENT_KIND_LABELS: Record<EquipmentKind, string> = {
   measure: '視力測定機',
@@ -370,6 +373,21 @@ export function warnBusinessHours(input: {
   return [
     `予約の刻み（${input.slotMinutes}分）が 1件あたりの片付け（${input.cleanupMinutes}分）より短いため、続けてお受けできない時刻ができます。`,
   ]
+}
+
+/**
+ * 担当の行名の下に出す小さい文字（BOOK-03 の「視力測定・加工」）。
+ * 肩書きと技能を `・` でつなぎ、40 文字で切る（`AvailabilityLane.subtitle` の上限）。
+ *
+ * **技能の語を作るのはここ 1 か所である。**空き枠エンジン（`domain/availability.ts`）は
+ * 受け取った文字をそのまま並べるだけで、技能の綴りを知らない。肩書きだけを渡すと、
+ * 肩書きを持たない担当（世界観データでは 6 名中 5 名）の行が全部空になる。
+ */
+export function staffSubline(jobLabel: string | null, skills: readonly SkillCode[]): string {
+  const parts = [jobLabel ?? '', ...skills.map((skill) => SKILL_LABELS[skill])].filter(
+    (part) => part !== '',
+  )
+  return parts.join('・').slice(0, LANE_SUBTITLE_MAX)
 }
 
 /** ご用件が要る技能を持つ担当が 1 人もいなくなったことを知らせる（保存は通す）。 */

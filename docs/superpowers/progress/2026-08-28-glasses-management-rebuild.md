@@ -7,7 +7,7 @@
 | P0 サービスの土台 | `003-service-foundation` | **完了（Approved）** | 下記 |
 | P1 店舗の受付条件 | `004-store-settings` | **完了（Approved）** | 下記 |
 | P2 空き枠と予約台帳 | `005-availability-and-ledger` | **完了（Approved）** | 下記 |
-| P3 予約受付 | `006-booking-flow` | 未着手 | — |
+| P3 予約受付 | `006-booking-flow` | **完了（Approved）** | 下記 |
 | P4 顧客台帳 | `007-customer-records` | 未着手 | — |
 | P5 来店受付とウォークイン | `008-reception-and-walkin` | 未着手 | — |
 | P6 変更と取消 | `009-change-and-cancel` | 未着手 | — |
@@ -155,3 +155,42 @@ PR #6 の最初の `verify` は `test/foundation.integration.test.ts` の
 `test/env.d.ts` で `INTERNAL_KEY` / `JWT_SECRET` / `AUTH_DEV_GRANT` を明示し、生成物に頼らない形にした。
 あわせて `services/glasses_management/CLAUDE.md → AGENTS.md` の symlink を足し、
 `scripts/check-agent-compat.sh` の検査対象に `glasses_management` を加えた（旧サービス削除で落ちていた規約）。
+
+
+## P3（2026-08-31）
+
+作ったもの:
+
+- `src/worker/domain/booking.ts` — 予約番号（`EY-YYMM-NNNN`）の採番と衝突時の再試行、冪等キー、
+  UNIQUE 違反の翻訳（エラー文字列のパースに頼らない）
+- `src/worker/domain/holds.ts` — 枠の仮押さえ 420 秒。残り 60 秒ちょうどの境界、取り直し 10 回まで
+- 確定は **1 バッチ**。上限つきの条件付き INSERT が D1 側で二重予約を止め、`meta.changes === 0` を 409 の合図にする
+- `reception_sessions` を確定・破棄の両方で残す（予約にならなかった受付も記録が残る）
+- 画面 13 面（5 工程 + 目的が収まらない面 + ドラッグ移動 + テンキー + 手書き + 枠が先に埋まっていた面）
+- 各工程の「次へ」が押せる条件は、モックの `.fab` の有効・無効をそのまま状態機械にした
+
+レビュー: subagent で **3 巡**（① backend / frontend ② 受入基準の充足・敵対的な実装可能性・
+モック忠実度の検査 ③ 指摘の反映）。
+
+確かめたこと:
+
+```
+（.dev.vars を退避した CI 相当の状態で）
+bash scripts/check-agent-compat.sh   → ok
+pnpm exec biome check .              → 緑
+pnpm run deps:check                  → 緑
+pnpm -r --if-present typecheck       → 緑
+pnpm run test                        → 緑（1,629 テスト + traceability）
+pnpm --filter @app/glasses_management e2e → 96 passed
+```
+
+モック突き合わせは 20 面に増えた（HOME / HOME-PERSONAL / SETTINGS ×6 / LEDGER ×4 /
+EX-OFFLINE / BOOK ×7）。
+
+### 途中で落ちたところ
+
+- セッションの中断でワークフローが死に、T-002（3 表と migration `0003`）だけが完成した状態で止まった。
+  そのまま resume すると migration が重複して生えるので、**T-002 を外したワークフローを組み直して**再開した。
+- `006` spec が Draft のままだったため traceability が 37 件の `Unknown E2E mapping` で落ちた。
+  E2E が全部緑であることを確かめてから Approved に上げた。
+  **spec を Approved に上げるのは E2E が緑になった後**という運用は変えない。

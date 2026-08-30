@@ -21,6 +21,8 @@ import {
   EquipmentMaintenance,
   EquipmentMaintenanceInput,
   EquipmentPatch,
+  Hold,
+  HoldInput,
   LedgerAxis,
   LedgerBlock,
   LedgerEntry,
@@ -37,6 +39,11 @@ import {
   PurposeOrderInput,
   PurposeRequirement,
   PurposeRequirementsInput,
+  ReceptionSession,
+  ReceptionSessionClose,
+  ReceptionSessionDraft,
+  ReceptionSessionDraftPatch,
+  ReceptionSessionStart,
   ReservationAssignment,
   ReservationCode,
   ReservationDetail,
@@ -55,6 +62,7 @@ import {
   StaffMember,
   StaffMemberInput,
   StaffMemberPatch,
+  StaffReservationCreate,
   StaffShift,
   StaffShiftQuery,
   StaffShiftsInput,
@@ -1374,5 +1382,361 @@ describe('台帳と空き枠の応答', () => {
       expect(() => schema.parse(valid)).not.toThrow()
       expect(() => schema.parse({ ...valid, customerPhone: '090-1234-5678' })).toThrow()
     }
+  })
+})
+
+/* --------------------------------------------------------------------------- *
+ * P3 電話・店頭からの予約受付（`006-booking-flow`）
+ * --------------------------------------------------------------------------- */
+
+const staffReservationCreate = {
+  storeId: UUID,
+  startsAt: START,
+  purposeIds: [UUID2],
+  source: 'phone',
+}
+
+const holdInput = { storeId: UUID, startsAt: START, durationMinutes: 60 }
+
+/** 仮の押さえは 420 秒（7 分）。BOOK-05-CONFIRM の `11:11` と「11:18 まで」の差である。 */
+const HOLD_EXPIRES_AT = '2026-08-27T02:15:00.000Z'
+
+const hold = {
+  id: UUID,
+  startsAt: START,
+  endsAt: END,
+  expiresAt: HOLD_EXPIRES_AT,
+}
+
+const receptionDraft = {
+  purposeIds: [UUID2],
+  staffId: UUID2,
+  equipmentIds: [uuidOf(3)],
+  startsAt: START,
+  durationMinutes: 60,
+  phoneTyped: '090-1234-5',
+  nameTyped: '田中 花',
+  kanaTyped: 'たなか はな',
+  noteTyped: '遠近両用のご相談',
+  handwritingKeys: [`notes/${ORG}/sessions/${UUID}/${UUID2}.svg`],
+}
+
+const receptionSession = {
+  id: UUID,
+  storeId: UUID2,
+  startedAt: NOW,
+  createdAt: NOW,
+  draft: receptionDraft,
+}
+
+describe('ReservationCode', () => {
+  it('accepts EY-2608-0142 and the five-digit carry EY-2608-10000', () => {
+    expect(ReservationCode.parse('EY-2608-0142')).toBe('EY-2608-0142')
+    // 組織 × YYMM の連番が 9999 を越えた月だけ 5 桁になる（書式は 1 種類のまま）。
+    expect(ReservationCode.parse('EY-2608-10000')).toBe('EY-2608-10000')
+    // 年をまたぐと YYMM が 2612 から 2701 になり、連番は 1 に戻る。
+    expect(ReservationCode.parse('EY-2701-0001')).toBe('EY-2701-0001')
+  })
+
+  it('rejects a store prefix, a three-digit serial and a lowercase ey', () => {
+    // 採番は組織ごと・YYMM ごとの 1 列で、店舗を頭に付けない（店舗が違っても同じ列を使う）。
+    for (const code of [
+      'GINZA-EY-2608-0142',
+      'EY-GZ-2608-0142',
+      'EY-2608-142',
+      'ey-2608-0142',
+      'EY-2608-100000',
+    ]) {
+      expect(() => ReservationCode.parse(code)).toThrow()
+    }
+  })
+})
+
+describe('StaffReservationCreate', () => {
+  it('accepts a phone booking with one purpose and no staff', () => {
+    const created = StaffReservationCreate.parse(staffReservationCreate)
+    expect(created.source).toBe('phone')
+    expect(created.equipmentIds).toEqual([])
+    // 省略した所要は目的の合計から決める（サーバが決めるので既定値を作らない）。
+    expect(created.durationMinutes).toBeUndefined()
+    expect([created.noteCustomer, created.noteInternal]).toEqual(['', ''])
+    // 押さえも受付セッションも任意。期限切れの `holdId` で確定を止めない。
+    expect([created.holdId, created.receptionSessionId]).toEqual([undefined, undefined])
+    // お客様は P4 まで結びつかない（`reservations.customer_id` は常に NULL）。
+    expect(created.customerId).toBeUndefined()
+  })
+
+  it('treats a null staffId as decide-later and keeps it distinct from omitted', () => {
+    // null =「担当はあとで決める」を押した。未定でも枠は消費するので行を作る。
+    expect(
+      StaffReservationCreate.parse({ ...staffReservationCreate, staffId: null }).staffId,
+    ).toBeNull()
+    // 欄そのものが無い =「まだ伺っていない」。既定値で null に潰すと、押していない
+    // 端末の本文が「あとで決める」に化けて、受付の意図が消える。
+    expect(StaffReservationCreate.parse(staffReservationCreate).staffId).toBeUndefined()
+    expect(
+      StaffReservationCreate.parse({ ...staffReservationCreate, staffId: UUID2 }).staffId,
+    ).toBe(UUID2)
+    expect(() =>
+      StaffReservationCreate.parse({ ...staffReservationCreate, staffId: 'あとで' }),
+    ).toThrow()
+  })
+
+  it('bounds purposeIds to 1..5 and equipmentIds to 0..5', () => {
+    const five = [1, 2, 3, 4, 5].map(uuidOf)
+    expect(
+      StaffReservationCreate.parse({ ...staffReservationCreate, purposeIds: five }).purposeIds,
+    ).toHaveLength(5)
+    // 目的の無い予約は受け付けない（所要も復唱の文も作れない）。
+    expect(() =>
+      StaffReservationCreate.parse({ ...staffReservationCreate, purposeIds: [] }),
+    ).toThrow()
+    expect(() =>
+      StaffReservationCreate.parse({
+        ...staffReservationCreate,
+        purposeIds: [...five, uuidOf(6)],
+      }),
+    ).toThrow()
+    // 設備は 0 件でよい（設備を要らない目的がある）。
+    expect(
+      StaffReservationCreate.parse({ ...staffReservationCreate, equipmentIds: five }).equipmentIds,
+    ).toHaveLength(5)
+    expect(() =>
+      StaffReservationCreate.parse({
+        ...staffReservationCreate,
+        equipmentIds: [...five, uuidOf(6)],
+      }),
+    ).toThrow()
+  })
+
+  it('rejects customerId and customerDraft given together', () => {
+    expect(
+      StaffReservationCreate.parse({ ...staffReservationCreate, customerId: UUID2 }).customerId,
+    ).toBe(UUID2)
+    // `customerDraft`（新規登録と同時）は `CustomerCreate` を作る P4 が足す欄で、
+    // この面にはまだ無い。両方を送る本文は知らないキーとして落ちるので、排他はいまも成り立つ。
+    expect(() =>
+      StaffReservationCreate.parse({
+        ...staffReservationCreate,
+        customerId: UUID2,
+        customerDraft: { name: '田中 花子' },
+      }),
+    ).toThrow()
+    expect(() =>
+      StaffReservationCreate.parse({
+        ...staffReservationCreate,
+        customerDraft: { name: '田中 花子' },
+      }),
+    ).toThrow()
+  })
+
+  it('rejects an unknown key so a stale client field never lands silently', () => {
+    for (const stale of [
+      { customerPhone: '090-1234-5678' },
+      { customerName: '田中 花子' },
+      { staff_id: UUID2 },
+      { durationMinute: 60 },
+      { endsAt: END },
+    ]) {
+      expect(() => StaffReservationCreate.parse({ ...staffReservationCreate, ...stale })).toThrow()
+    }
+  })
+
+  // 確定は受け取った並びのぶんだけ占有行を積むので、同じ id が 2 回入ると
+  // その設備の空きが 1 予約で 2 つ減り、所要も倍になる（`reservation_slot_locks` に
+  // 一意 index は無く、D1 は止めない）。落とすのはここである。
+  it('rejects a repeated purposeId or equipmentId so one booking never eats two slots', () => {
+    expect(() =>
+      StaffReservationCreate.parse({ ...staffReservationCreate, purposeIds: [UUID2, UUID2] }),
+    ).toThrow()
+    expect(() =>
+      StaffReservationCreate.parse({ ...staffReservationCreate, equipmentIds: [UUID2, UUID2] }),
+    ).toThrow()
+    expect(
+      StaffReservationCreate.parse({
+        ...staffReservationCreate,
+        equipmentIds: [UUID2, uuidOf(3)],
+      }).equipmentIds,
+    ).toHaveLength(2)
+  })
+})
+
+describe('HoldInput', () => {
+  it('accepts a hold with no staff and no equipment', () => {
+    const input = HoldInput.parse(holdInput)
+    // 担当も設備も決まっていない工程 3 の途中でも押さえられる（未定の枠を押さえる）。
+    expect(input.staffId).toBeNull()
+    expect([input.equipmentIds, input.receptionSessionId]).toEqual([[], null])
+    expect(HoldInput.parse({ ...holdInput, staffId: UUID2 }).staffId).toBe(UUID2)
+    // 空き枠エンジンは自分の受付が置いた押さえを塞がりに数えないので、受付の id を運ぶ。
+    expect(HoldInput.parse({ ...holdInput, receptionSessionId: UUID }).receptionSessionId).toBe(
+      UUID,
+    )
+    expect(() => HoldInput.parse({ ...holdInput, durationMinutes: 61 })).toThrow()
+    expect(() => HoldInput.parse({ ...holdInput, holdId: UUID })).toThrow()
+  })
+})
+
+describe('Hold', () => {
+  it('carries expiresAt so the screen can count down without asking again', () => {
+    const parsed = Hold.parse(hold)
+    expect(parsed.expiresAt).toBe(HOLD_EXPIRES_AT)
+    // 420 秒（7 分）。画面は端末の時計ではなく、この値と応答の現在時刻の差で残りを数える。
+    expect(Date.parse(parsed.expiresAt) - Date.parse(NOW)).toBe(420_000)
+    expect([parsed.staffId, parsed.equipmentIds, parsed.receptionSessionId]).toEqual([
+      null,
+      [],
+      null,
+    ])
+    // 期限が無い応答は数えられない。残り時間を別の呼び出しで聞き直さない。
+    expect(() => Hold.parse({ id: UUID, startsAt: START, endsAt: END })).toThrow()
+    expect(() => Hold.parse({ ...hold, startsAt: END, endsAt: START })).toThrow()
+  })
+})
+
+describe('ReservationAssignment', () => {
+  it('allows a null targetId — decide-later still consumes the slot', () => {
+    // 担当も設備も未定のまま行を作る。作らないと同時受付上限の数え方が台帳とずれる。
+    for (const kind of ['staff', 'equipment']) {
+      expect(
+        ReservationAssignment.parse({ kind, targetId: null, startsAt: START, endsAt: END })
+          .targetId,
+      ).toBeNull()
+    }
+    // 未定は `targetId` の null で表す。占有行の `target_key='unassigned'` は D1 側の語で、
+    // 契約の `targetId` には入らない。
+    expect(() =>
+      ReservationAssignment.parse({
+        kind: 'staff',
+        targetId: 'unassigned',
+        startsAt: START,
+        endsAt: END,
+      }),
+    ).toThrow()
+  })
+})
+
+describe('ReservationDetail', () => {
+  it('keeps purposeLabel and purposeLabelInternal as separate fields', () => {
+    // 台帳の帯だけが短い名前（`name_short`）を使い、復唱・詳細・受付は `name_internal`。
+    const detail = ReservationDetail.parse({
+      ...reservationDetail,
+      purposeLabel: '新調・測定',
+      purposeLabelInternal: 'メガネを新しく作る・視力測定だけ',
+    })
+    expect([detail.purposeLabel, detail.purposeLabelInternal]).toEqual([
+      '新調・測定',
+      'メガネを新しく作る・視力測定だけ',
+    ])
+    // 連結の上限も別（5 文字 × 5 件 + 区切り / 40 文字 × 5 件 + 区切り）。
+    expect(
+      ReservationDetail.parse({
+        ...reservationDetail,
+        purposeLabel: 'あ'.repeat(30),
+        purposeLabelInternal: 'あ'.repeat(220),
+      }).purposeLabelInternal,
+    ).toHaveLength(220)
+    expect(() =>
+      ReservationDetail.parse({ ...reservationDetail, purposeLabel: 'あ'.repeat(31) }),
+    ).toThrow()
+    expect(() =>
+      ReservationDetail.parse({ ...reservationDetail, purposeLabelInternal: 'あ'.repeat(221) }),
+    ).toThrow()
+  })
+
+  it('requires webBookingCode to be null unless source is web', () => {
+    // お電話・店頭・ウォークインのご予約に、お客様が読み上げる Web の番号は生えない。
+    for (const source of ['phone', 'counter', 'walkin']) {
+      expect(ReservationDetail.parse({ ...reservationDetail, source }).webBookingCode).toBeNull()
+      expect(() =>
+        ReservationDetail.parse({
+          ...reservationDetail,
+          source,
+          webBookingCode: 'EY-W-2608-0031',
+        }),
+      ).toThrow()
+    }
+    expect(
+      ReservationDetail.parse({
+        ...reservationDetail,
+        source: 'web',
+        webBookingCode: 'EY-W-2608-0031',
+      }).webBookingCode,
+    ).toBe('EY-W-2608-0031')
+    expect(() => ReservationDetail.parse({ ...reservationDetail, source: 'web' })).toThrow()
+  })
+})
+
+describe('ReceptionSessionDraft', () => {
+  it('holds only chosen ids and typed characters, never a customer name or phone', () => {
+    const draft = ReceptionSessionDraft.parse(receptionDraft)
+    expect(draft.purposeIds).toEqual([UUID2])
+    expect([draft.staffId, draft.customerId]).toEqual([UUID2, null])
+    expect([draft.nameTyped, draft.kanaTyped, draft.phoneTyped]).toEqual([
+      '田中 花',
+      'たなか はな',
+      '090-1234-5',
+    ])
+    // 受付を始めた直後は空。工程を進めるたびに同じ形で上書きする。
+    const empty = ReceptionSessionDraft.parse({})
+    expect([empty.purposeIds, empty.equipmentIds, empty.handwritingKeys]).toEqual([[], [], []])
+    expect([empty.startsAt, empty.durationMinutes, empty.nameTyped]).toEqual([null, null, ''])
+    // 確定したお客様の氏名・電話番号そのものを持つ列を作らない（`07-nfr.md` §6.6）。
+    // 打ちかけの文字（`nameTyped` / `phoneTyped`）とは別のものである。
+    for (const leak of [
+      { customerName: '田中 花子' },
+      { customerPhone: '090-1234-5678' },
+      { customerKana: 'たなか はなこ' },
+      { email: 'hanako@example.com' },
+    ]) {
+      expect(() => ReceptionSessionDraft.parse({ ...receptionDraft, ...leak })).toThrow()
+      expect(() =>
+        ReceptionSessionDraftPatch.parse({ draft: { ...receptionDraft, ...leak } }),
+      ).toThrow()
+      expect(() => ReceptionSessionStart.parse({ storeId: UUID, ...leak })).toThrow()
+    }
+    // 保存は下書きまるごと 1 つ。欄ごとの差分にしないので「消す」と「触っていない」が割れる。
+    expect(ReceptionSessionDraftPatch.parse({ draft: receptionDraft }).draft.nameTyped).toBe(
+      '田中 花',
+    )
+    expect(ReceptionSessionStart.parse({ storeId: UUID }).storeId).toBe(UUID)
+    // 取り直した回数は下書きに載る。端末の state だけに持つと、タブを読み込み直しただけで
+    // 0 に戻り「10 回まで」が消える（上限そのものは Worker が数える）。
+    expect(empty.holdRenewals).toBe(0)
+    expect(ReceptionSessionDraft.parse({ holdRenewals: 10 }).holdRenewals).toBe(10)
+    expect(() => ReceptionSessionDraft.parse({ holdRenewals: -1 })).toThrow()
+    expect(() => ReceptionSessionDraft.parse({ holdRenewals: 1.5 })).toThrow()
+    // 手書きは R2 の鍵だけを持ち、筆跡そのものを下書きに入れない。1 受付 5 枚まで。
+    const keys = [1, 2, 3, 4, 5].map((n) => `notes/${ORG}/sessions/${UUID}/${uuidOf(n)}.svg`)
+    expect(ReceptionSessionDraft.parse({ handwritingKeys: keys }).handwritingKeys).toHaveLength(5)
+    expect(() =>
+      ReceptionSessionDraft.parse({
+        handwritingKeys: [...keys, `notes/${ORG}/sessions/${UUID}/${uuidOf(6)}.svg`],
+      }),
+    ).toThrow()
+  })
+})
+
+describe('ReceptionSessionClose', () => {
+  it('only accepts discarded — booked is written by the server on confirm', () => {
+    // 「入力をやめる」だけがこのルートを通る。成立（booked）は確定の 1 バッチが書くので、
+    // 端末から送れると、予約の無い受付が成立として残せてしまう。
+    expect(ReceptionSessionClose.parse({ outcome: 'discarded' }).outcome).toBe('discarded')
+    for (const outcome of ['booked', 'cancelled', 'in_progress', null]) {
+      expect(() => ReceptionSessionClose.parse({ outcome })).toThrow()
+    }
+    // 応答は両方の結果を運ぶ。受けかけの受付は `outcome` も `endedAt` も null のまま。
+    const session = ReceptionSession.parse(receptionSession)
+    expect([session.outcome, session.endedAt, session.reservationId]).toEqual([null, null, null])
+    expect([session.terminalId, session.actorId]).toEqual([null, null])
+    expect(session.draft?.nameTyped).toBe('田中 花')
+    const booked = ReceptionSession.parse({
+      ...receptionSession,
+      endedAt: NOW,
+      outcome: 'booked',
+      reservationId: UUID2,
+      draft: null,
+    })
+    expect([booked.outcome, booked.reservationId, booked.draft]).toEqual(['booked', UUID2, null])
   })
 })

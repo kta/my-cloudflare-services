@@ -35,7 +35,12 @@ import type {
   LedgerShiftRow,
   LedgerStaffRow,
 } from '../../domain/ledger'
-import type { BlackoutBand, DayException, WeeklyHours } from '../../domain/store-settings'
+import {
+  type BlackoutBand,
+  type DayException,
+  staffSubline,
+  type WeeklyHours,
+} from '../../domain/store-settings'
 import {
   equipment,
   equipmentMaintenance,
@@ -485,7 +490,9 @@ export async function readAvailabilityDay(
       maxParallelReservations: row.maxParallelReservations,
       isActive: isOn(row.isActive),
       sortOrder: row.sortOrder,
-      subtitle: row.jobLabel ?? '',
+      // 行名の下は**肩書きと技能**（BOOK-03 の「視力測定・加工」）。肩書きだけを写すと、
+      // 肩書きを持たない担当の行が全部空になり、盤で「誰に何ができるか」が読めない。
+      subtitle: staffSubline(row.jobLabel, held.get(row.id) ?? []),
     })),
     shifts: shiftRows.map((row) => ({
       staffId: row.staffId,

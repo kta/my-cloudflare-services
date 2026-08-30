@@ -2,6 +2,7 @@ import type { Store } from '@app/contracts'
 import { auth } from '@app/shared'
 import { Button, Field, focusRing, focusRingOnPine, Notice, TextInput } from '@app/ui'
 import { type FormEvent, type ReactNode, useCallback, useEffect, useState } from 'react'
+import { BookingScreen } from './booking/BookingScreen'
 import { client } from './client'
 import { MyReservations } from './home/MyReservations'
 import { LedgerScreen } from './ledger/LedgerScreen'
@@ -121,6 +122,26 @@ function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
 
   const store = stores?.find((s) => s.isActive) ?? stores?.[0]
 
+  /*
+   * 予約の受付（BOOK-01〜06）は**サイドバーを出さない**（`design/05-screen-flow.md` §3.3）ので、
+   * `AppShell` を通さずに面ごと入れ替える。出口はどちらもトップへ戻る。
+   */
+  if (current === 'book') {
+    return store ? (
+      <BookingScreen
+        storeId={store.id}
+        storeName={store.name}
+        onExit={() => navigate('home')}
+        onOpenLedger={() => navigate('ledger')}
+        onSessionExpired={onSignOut}
+      />
+    ) : (
+      <p role="status" className="p-11 text-body text-ink-muted">
+        読み込んでいます…
+      </p>
+    )
+  }
+
   return (
     <AppShell
       storeName={store ? store.name : 'EYEX'}
@@ -157,6 +178,7 @@ function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
             currentStoreId={store?.id}
             onOpenReservation={(id) => navigate('ledger', id)}
             onOpenLedger={() => navigate('ledger')}
+            onStartBooking={() => navigate('book')}
           />
         ) : current === 'ledger' ? (
           store ? (
@@ -189,11 +211,14 @@ function Home({
   currentStoreId,
   onOpenReservation,
   onOpenLedger,
+  onStartBooking,
 }: {
   stores: Store[] | null
   currentStoreId?: string
   onOpenReservation: (reservationId: string) => void
   onOpenLedger: () => void
+  /** 受付の 5 工程へ入る。マイクの許可はこの指の操作の中で求める（Safari の制約）。 */
+  onStartBooking: () => void
 }) {
   const others = stores?.filter((s) => s.id !== currentStoreId) ?? []
   return (
@@ -204,6 +229,7 @@ function Home({
           note="お電話・ご来店のお客様"
           tone="pine"
           glyph="☎"
+          onPress={onStartBooking}
         />
         <PrimaryAction
           title="予約を変更する"
@@ -248,15 +274,18 @@ function PrimaryAction({
   note,
   tone,
   glyph,
+  onPress,
 }: {
   title: string
   note: string
   tone: 'pine' | 'walkin'
   glyph: string
+  onPress?: () => void
 }) {
   return (
     <button
       type="button"
+      onClick={onPress}
       className={`flex min-h-33 w-180 items-center gap-6 rounded-panel border border-line-strong bg-surface px-8 text-left ${focusRing}`}
     >
       <span

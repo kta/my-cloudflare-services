@@ -1,6 +1,8 @@
 import {
   AvailabilityQuery,
+  type AvailabilityReason,
   AvailabilityResponse,
+  AvailabilitySlot,
   BusinessHoursInput,
   BusinessHoursView,
   CalendarException,
@@ -13,6 +15,8 @@ import {
   EquipmentMaintenance,
   EquipmentMaintenanceInput,
   EquipmentPatch,
+  Hold,
+  HoldInput,
   IssueTokenRequest,
   LedgerQuery,
   LedgerView,
@@ -22,6 +26,11 @@ import {
   PurposeListQuery,
   PurposeOrderInput,
   PurposeRequirementsInput,
+  ReceptionSession,
+  ReceptionSessionClose,
+  ReceptionSessionDraft,
+  ReceptionSessionDraftPatch,
+  ReceptionSessionStart,
   ReservationDetail,
   type SettingsImpactItem,
   SettingsImpactReport,
@@ -33,6 +42,7 @@ import {
   StaffMember,
   StaffMemberInput,
   StaffMemberPatch,
+  StaffReservationCreate,
   StaffShift,
   StaffShiftQuery,
   StaffShiftsInput,
@@ -53,6 +63,7 @@ import {
   requireActiveOrg,
   signAccessToken,
   tenantAuth,
+  toJstDateString,
 } from '@app/shared'
 import type {
   D1Database,
@@ -67,12 +78,18 @@ import { type DrizzleD1Database, drizzle } from 'drizzle-orm/d1'
 import { type Context, Hono, type MiddlewareHandler } from 'hono'
 import { except } from 'hono/combine'
 import { HTTPException } from 'hono/http-exception'
-import { readAvailabilityDay, readLedgerDay, readReservationDetail } from './db/queries/ledger'
+import {
+  type AvailabilityDayRows,
+  readAvailabilityDay,
+  readLedgerDay,
+  readReservationDetail,
+} from './db/queries/ledger'
 import {
   equipment,
   equipmentMaintenance,
   organizations,
   purposeRequirements,
+  receptionSessions,
   staff,
   staffShifts,
   staffSkills,
@@ -85,7 +102,22 @@ import {
   stores,
   visitPurposes,
 } from './db/schema'
-import { computeAvailability } from './domain/availability'
+import {
+  type AvailabilityInput,
+  computeAvailability,
+  evaluateSlot,
+  type HoldOccupancy,
+} from './domain/availability'
+import {
+  type BookingPurposeLine,
+  beginIdempotency,
+  bookingStatements,
+  readIdempotencyKey,
+  releaseIdempotency,
+  requestHash,
+  withReservationCode,
+} from './domain/booking'
+import { deleteHold, HOLD_RENEW_MAX, listHoldOccupancies, putHold } from './domain/holds'
 import { buildLedgerView } from './domain/ledger'
 import {
   type ImpactWebSlot,
@@ -854,6 +886,114 @@ app.post('/api/auth/token', zValidator('json', IssueTokenRequest), async (c) => 
 })
 
 // ルートはチェーンする。`typeof routes` が RPC クライアントの型になる。
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * 電話・店頭からの予約受付（P3）が共有する道具
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * 8 条件（`domain/availability.ts`）のうち、**時間が経っても変わらない理由**だけを
+ * 409 のコードへ写す。
+ *
+ * 埋まっているかどうか（`staff_busy` / `equipment_busy` / `max_parallel`）は
+ * **ここで断らない。**断ると「読んで判定して書く」形になり、読んでから書くまでの窓に
+ * 別の端末の書き込みが入る。枠が取れたかどうかを決めるのは確定のバッチだけである
+ * （`03-data-model.md` §7.6）。
+ */
+const BLOCKING_REASON: Partial<Record<AvailabilityReason, 'store_closed' | 'purpose_unavailable'>> =
+  {
+    closed: 'store_closed',
+    outside_hours: 'store_closed',
+    break: 'store_closed',
+    no_skill: 'purpose_unavailable',
+    staff_off: 'purpose_unavailable',
+    no_equipment: 'purpose_unavailable',
+    maintenance: 'purpose_unavailable',
+  }
+
+/**
+ * 空き枠の面と確定の面が**同じ材料で同じ 8 条件**を解くための盤面。
+ * 式を 2 つ作らないので、「画面では置けたのに確定できない」が理由の食い違いから起きない。
+ */
+function bookingBoard(input: {
+  date: string
+  now: Date
+  rows: AvailabilityDayRows
+  isSuspended: boolean
+  durationMinutes: number
+  staffId: string | null
+  equipmentIds: readonly string[]
+  receptionSessionId: string | null
+  holds: readonly HoldOccupancy[]
+  preferredStartsAt: string
+}): AvailabilityInput {
+  return {
+    date: input.date,
+    now: input.now,
+    slotRules: input.rows.slotRules,
+    weeklyHours: input.rows.hours,
+    exceptions: input.rows.exceptions,
+    blackouts: input.rows.blackouts,
+    isSuspended: input.isSuspended,
+    purposes: input.rows.purposes,
+    durationMinutes: input.durationMinutes,
+    staff: input.rows.staff,
+    shifts: input.rows.shifts,
+    equipment: input.rows.equipment,
+    maintenances: input.rows.maintenances,
+    occupied: input.rows.occupied,
+    holds: input.holds,
+    staffId: input.staffId,
+    // 空の配列は「設備を絞らない」であって「どの設備も使えない」ではない。
+    equipmentIds: input.equipmentIds.length > 0 ? input.equipmentIds : undefined,
+    excludeReceptionSessionId: input.receptionSessionId,
+    preferredStartsAt: input.preferredStartsAt,
+  }
+}
+
+/** ご用件の名前と所要（**予約した時点の写し**）。並びは送られてきた順そのまま。 */
+async function readPurposeLines(db: Db, org: string, purposeIds: readonly string[]) {
+  const rows = await db
+    .select({
+      id: visitPurposes.id,
+      nameShort: visitPurposes.nameShort,
+      nameInternal: visitPurposes.nameInternal,
+      durationMinutes: visitPurposes.durationMinutes,
+    })
+    .from(visitPurposes)
+    .where(and(eq(visitPurposes.organizationId, org), inArray(visitPurposes.id, [...purposeIds])))
+  const byId = new Map(rows.map((row) => [row.id, row]))
+  return purposeIds.flatMap((id) => {
+    const row = byId.get(id)
+    return row === undefined ? [] : [row]
+  })
+}
+
+/** 自分の組織の受付だけを引く。他テナントの id は「無い」として扱う。 */
+async function findReceptionSession(db: Db, org: string, sessionId: string) {
+  const rows = await db
+    .select()
+    .from(receptionSessions)
+    .where(and(eq(receptionSessions.organizationId, org), eq(receptionSessions.id, sessionId)))
+  return rows[0] ?? null
+}
+
+/** 受付 1 行 → 契約の形。下書きは保存したときの形のまま読み直す。 */
+function toReceptionSession(row: typeof receptionSessions.$inferSelect) {
+  return {
+    id: row.id,
+    storeId: row.storeId,
+    reservationId: row.reservationId,
+    terminalId: row.terminalId,
+    actorId: row.actorId,
+    startedAt: row.startedAt,
+    endedAt: row.endedAt,
+    outcome: row.outcome,
+    draft: row.draftJson === null ? null : ReceptionSessionDraft.parse(JSON.parse(row.draftJson)),
+    createdAt: row.createdAt,
+  }
+}
+
 const routes = app
   .get('/api/health', (c) => c.json({ status: 'ok' as const }))
 
@@ -2125,10 +2265,11 @@ const routes = app
       equipment: rows.equipment,
       maintenances: rows.maintenances,
       occupied: rows.occupied,
-      // 仮の押さえ（KV）を塞がりに数えるのは、押さえを作る `POST /api/staff/holds` を
-      // 足す `006-booking-flow` から。P2 には押さえを作る経路が 1 本も無く、
-      // ここで `KV.list` を空振りさせても 1 日 1,000 回の上限を削るだけになる。
-      holds: [],
+      // 仮の押さえ（KV）を塞がりに数える。`KV.list` は**空き枠 1 回につき 1 回だけ**で、
+      // 自分の受付が置いた押さえは `excludeReceptionSessionId` が落とす
+      // （落とさないと、11:00 に置いてから 11:30 へ動かしたとき 11:00 が 7 分間
+      // だれにも取れなくなる）。**公開面（`/api/public/**`）ではここを読まない。**
+      holds: await listHoldOccupancies(c.env.SHORT_LIVED, org, query.storeId, now),
       axis: query.axis,
       staffId: query.staffId ?? null,
       // 空の配列は「設備を絞らない」であって「どの設備も使えない」ではない。
@@ -2262,6 +2403,429 @@ const routes = app
       }),
     )
   })
+
+  /* --- 電話・店頭からの予約受付（P3） ------------------------------------ */
+
+  /**
+   * 枠の仮の押さえ（BOOK-05-CONFIRM「仮の押さえ → 11:18 まで」）。**常に 200 を返す。**
+   *
+   * KV に CAS が無いので「取れなかった」を判定できず、409 `slot_taken` を返さない
+   * （`04-api.md` §6.3）。二重予約を止めるのは確定の 1 バッチだけである。
+   * 押さえは組織の鍵空間（`hold:<org>:<store>:`）にしか書かないので、店舗の実在を
+   * D1 に問い合わせない — 実在しない店舗の押さえは 420 秒で消えるだけで、
+   * 誰の枠も塞がない。
+   *
+   * **枠が取れないこと以外は断る。**取り直しの上限（Q-06 のいまの前提は 10 回）だけは
+   * 409 `renew_limit` を返す。数えるのは受付の下書きに載った回数で、端末の state では
+   * ない（タブを読み込み直すと 0 に戻り、上限が消える）。
+   */
+  .post('/api/staff/holds', zValidator('json', HoldInput), async (c) => {
+    const org = c.get('auth').org
+    const input = c.req.valid('json')
+    const now = new Date()
+    // 受付が分かっているときだけ D1 を 1 回引く。受付を持たない押さえ（工程 3 の下見）は
+    // 取り直しの数えようが無いので、これまでどおり素通りさせる。
+    // 下書きの回数は**いま押した 1 回を含む**（画面は打ち直しの前に下書きを送る）ので、
+    // 10 回目ちょうどまでは通し、越えたぶんだけ断る。
+    if (input.receptionSessionId !== null) {
+      const session = await findReceptionSession(drizzle(c.env.DB), org, input.receptionSessionId)
+      const draft =
+        session?.draftJson == null
+          ? null
+          : ReceptionSessionDraft.parse(JSON.parse(session.draftJson))
+      if ((draft?.holdRenewals ?? 0) > HOLD_RENEW_MAX) {
+        return c.json({ error: 'renew_limit' }, 409)
+      }
+    }
+    const endsAt = new Date(
+      Date.parse(input.startsAt) + input.durationMinutes * MS_PER_MINUTE,
+    ).toISOString()
+    // id はルートが振る。応答の `Hold.id` になり、`DELETE` の宛先にもなる。
+    const held = await putHold(
+      c.env.SHORT_LIVED,
+      {
+        organizationId: org,
+        storeId: input.storeId,
+        holdId: crypto.randomUUID(),
+        startsAt: input.startsAt,
+        endsAt,
+        staffId: input.staffId,
+        equipmentIds: input.equipmentIds,
+        receptionSessionId: input.receptionSessionId,
+      },
+      now,
+    )
+    return c.json(
+      Hold.parse({
+        id: held.id,
+        startsAt: held.startsAt,
+        endsAt: held.endsAt,
+        expiresAt: held.expiresAt,
+        staffId: held.staffId,
+        equipmentIds: held.equipmentIds,
+        receptionSessionId: held.receptionSessionId,
+      }),
+    )
+  })
+
+  /**
+   * 押さえを返す（工程 3 で選び直したとき・BOOK-CONFLICT から戻ったとき）。
+   *
+   * 鍵は `hold:<org>:<store>:<holdId>` の 1 通りだけなので、**店舗をクエリで受ける**。
+   * `KV.list` で店舗を探し当てない — list は無料枠 1,000 回/日で、この設計で最初に当たる
+   * 上限である（`04-api.md` §6.3）。取り消しのたびに 1 回使うと、空き枠の表示ぶんが削られる。
+   */
+  .delete('/api/staff/holds/:holdId', async (c) => {
+    const org = c.get('auth').org
+    const holdId = c.req.param('holdId')
+    // 店舗が分かっているなら渡してもらう（`KV.list` を 1 回節約できる）。
+    // 分からなくても消せる — `holdId` だけの `DELETE` が経路として成り立つことが、
+    // この API を `param` だけで書ける前提である（`04-api.md` §3.6）。
+    const removed = await deleteHold(c.env.SHORT_LIVED, org, holdId, c.req.query('storeId'))
+    if (!removed) return c.json({ error: 'not_found' }, 404)
+    return c.json(DeletedResult.parse({ id: holdId, deleted: true }))
+  })
+
+  /**
+   * ご予約の確定（BOOK-05-CONFIRM「復唱を終えて予約を確定する」）。
+   *
+   * 枠が取れたかどうかは**確定の 1 バッチの中だけ**で決まる。ここで枠を読み直して
+   * 判定しない（`03-data-model.md` §7.6）。1 本目の占有行の `meta.changes === 0` が
+   * 409 `slot_taken` の合図で、そのとき予約は 1 行も書かれていない。
+   *
+   * 断るのは**動かない事実**だけである — 定休日・営業時間の外（409 `store_closed`）と、
+   * ご用件が要求する技能・設備がその時間帯に無いこと（409 `purpose_unavailable`）。
+   */
+  .post('/api/staff/reservations', zValidator('json', StaffReservationCreate), async (c) => {
+    const db = drizzle(c.env.DB)
+    const { org, sub } = c.get('auth')
+    const input = c.req.valid('json')
+    // 全クエリを JWT の `org` で絞る。他テナントの店舗 id は「無い」として 404。
+    const store = await findStore(db, org, input.storeId)
+    if (!store) return c.json({ error: 'not_found' }, 404)
+
+    // 現在時刻はハンドラの入口で 1 回だけ作り、以降は引数で配る。
+    const now = new Date()
+    const date = toJstDateString(input.startsAt)
+    const rows = await readAvailabilityDay(db, {
+      organizationId: org,
+      storeId: input.storeId,
+      date,
+      purposeIds: input.purposeIds,
+    })
+    // 予約の間隔が決まっていない店舗には確定できない（暗黙の既定値を作らない）。
+    const slotRules = rows.slotRules
+    if (slotRules === null) return c.json({ error: 'not_found' }, 404)
+    // 受けられないご用件（無い id・止めた目的・他店舗のもの）が 1 つでも混ざったら確定しない。
+    if (rows.missingPurposes > 0) return c.json({ error: 'purpose_unavailable' }, 409)
+
+    const lines = await readPurposeLines(db, org, input.purposeIds)
+    // 「お取りする時間」は目的の合計とは限らない（60 分の用件を 90 分押さえられる）。
+    const durationMinutes =
+      input.durationMinutes ?? lines.reduce((total, line) => total + line.durationMinutes, 0)
+    const endsAt = new Date(
+      Date.parse(input.startsAt) + durationMinutes * MS_PER_MINUTE,
+    ).toISOString()
+    // 所要は**予約した時点の写し**で凍結する（目的の所要をあとで変えても動かない）。
+    const bookingPurposes: BookingPurposeLine[] = lines.map((line, index) => ({
+      purposeId: line.id,
+      durationMinutes: line.durationMinutes,
+      sortOrder: index,
+    }))
+
+    // 担当・設備は自分の組織・自分の店舗のものだけ。他テナントの id は「無い」として 404。
+    const staffMember =
+      input.staffId === undefined || input.staffId === null
+        ? null
+        : (rows.staff.find((member) => member.id === input.staffId) ?? null)
+    if (input.staffId !== undefined && input.staffId !== null && staffMember === null) {
+      return c.json({ error: 'not_found' }, 404)
+    }
+    const units: { id: string; capacity: number }[] = []
+    for (const equipmentId of input.equipmentIds) {
+      const unit = rows.equipment.find((candidate) => candidate.id === equipmentId)
+      if (unit === undefined) return c.json({ error: 'not_found' }, 404)
+      units.push({ id: unit.id, capacity: unit.capacity })
+    }
+    // 受付セッションも org で絞る。他テナントの id を指した確定は 404 で、予約はできない。
+    const receptionSessionId = input.receptionSessionId ?? null
+    const receptionSession =
+      receptionSessionId === null ? null : await findReceptionSession(db, org, receptionSessionId)
+    if (receptionSessionId !== null && receptionSession === null) {
+      return c.json({ error: 'not_found' }, 404)
+    }
+    // **終わった受付（`booked` / `discarded`）では確定させない。**確定のバッチが打つ
+    // `UPDATE reception_sessions … WHERE outcome IS NULL` は 0 行でも失敗しないので、
+    // ここで断らないと 200 が返りながら受付と予約の結び付きだけが黙って切れる。
+    // 語彙は PATCH / close と揃える（`04-api.md` §5）。
+    if (receptionSession !== null && receptionSession.outcome !== null) {
+      return c.json({ error: 'invalid_transition' }, 409)
+    }
+
+    const holds = await listHoldOccupancies(c.env.SHORT_LIVED, org, input.storeId, now)
+    const board = bookingBoard({
+      date,
+      now,
+      rows,
+      isSuspended: store.isActive !== '1',
+      durationMinutes,
+      staffId: input.staffId ?? null,
+      equipmentIds: input.equipmentIds,
+      receptionSessionId,
+      holds,
+      preferredStartsAt: input.startsAt,
+    })
+    const verdict = evaluateSlot(board, input.startsAt)
+    const blocked = verdict.reason === null ? undefined : BLOCKING_REASON[verdict.reason]
+    if (blocked !== undefined) return c.json({ error: blocked }, 409)
+
+    // 冪等（`04-api.md` §6.2）。`Idempotency-Key` を送らない端末は素通りする
+    // （送らない再送は 2 件の予約になる。画面は工程 1 で作った鍵を成功まで送り続ける）。
+    // **空文字は「送っていない」と同じ扱いにする** — 素通しすると組織のすべての端末が
+    // `<org>:reservation.create:` の 1 本を共有し、別のお客様のご予約を replay する。
+    const header = readIdempotencyKey(c.req.header('Idempotency-Key'))
+    if (!header.ok) {
+      return c.json(
+        rejected([
+          'Idempotency-Key に使えない文字が入っているため確定できません。鍵を作り直して送り直してください。',
+        ]),
+        400,
+      )
+    }
+    const clientKey = header.key
+    let idempotencyKey: string | null = null
+    if (clientKey !== null) {
+      const started = await beginIdempotency(c.env.DB, {
+        organizationId: org,
+        scope: 'reservation.create',
+        clientKey,
+        requestHash: await requestHash(input),
+        now,
+      })
+      // **再実行しない。**保存した応答をそのまま返す。
+      if (started.state === 'replay') return c.json(ReservationDetail.parse(started.response))
+      if (started.state === 'conflict') return c.json({ error: 'idempotency_conflict' }, 409)
+      idempotencyKey = started.key
+    }
+
+    const reservationId = crypto.randomUUID()
+    const correlationId = crypto.randomUUID()
+    const actorId = await actorStaffId(db, org, input.storeId, sub)
+    // 予期しない失敗（D1 の一時障害など）でも `in_progress` を残さない。残すと同じ
+    // `Idempotency-Key` の再送が 24 時間ずっと 409 `idempotency_conflict` になり、
+    // 伺った内容を持ったままの端末が確定できなくなる（`04-api.md` §6.2 の④）。
+    // **採番の打ち直しはここを通らない**（`withReservationCode` の中で吸収される）。
+    const attempt = await withReservationCode(c.env.DB, org, now, async (code) => {
+      const detail = ReservationDetail.parse({
+        id: reservationId,
+        code,
+        storeId: input.storeId,
+        source: input.source,
+        status: 'confirmed',
+        startsAt: input.startsAt,
+        endsAt,
+        durationMinutes,
+        purposes: lines.map((line, index) => ({
+          purposeId: line.id,
+          nameInternal: line.nameInternal,
+          durationMinutes: line.durationMinutes,
+          sortOrder: index,
+        })),
+        assignments: [
+          { kind: 'staff', targetId: staffMember?.id ?? null, startsAt: input.startsAt, endsAt },
+          ...units.map((unit) => ({
+            kind: 'equipment' as const,
+            targetId: unit.id,
+            startsAt: input.startsAt,
+            endsAt,
+          })),
+        ],
+        webBookingCode: webBookingCodeOf(input.source, code),
+        // 台帳の帯は短い名前、詳細と復唱は業務の名前（`03-data-model.md` §6.1）。
+        purposeLabel: lines.map((line) => line.nameShort).join('・'),
+        purposeLabelInternal: lines.map((line) => line.nameInternal).join('・'),
+        noteCustomer: input.noteCustomer,
+        noteInternal: input.noteInternal,
+        version: FIRST_VERSION,
+        createdAt: now.toISOString(),
+        updatedAt: now.toISOString(),
+        createdBy: actorId,
+        cancelledAt: null,
+        cancelReason: null,
+      })
+      const results = await c.env.DB.batch(
+        bookingStatements(c.env.DB, {
+          organizationId: org,
+          storeId: input.storeId,
+          reservationId,
+          code,
+          source: input.source,
+          startsAt: input.startsAt,
+          endsAt,
+          durationMinutes,
+          purposes: bookingPurposes,
+          staff:
+            staffMember === null
+              ? null
+              : {
+                  id: staffMember.id,
+                  maxParallelReservations: staffMember.maxParallelReservations,
+                },
+          equipment: units,
+          slotRules,
+          noteCustomer: input.noteCustomer,
+          noteInternal: input.noteInternal,
+          actorId,
+          correlationId,
+          receptionSessionId,
+          idempotency: idempotencyKey === null ? null : { key: idempotencyKey, response: detail },
+          now,
+        }),
+      )
+      // 1 本目は占有行の INSERT。0 行なら枠は取れていない（予約も 1 行も書かれていない）。
+      return { taken: (results[0]?.meta.changes ?? 0) === 0, detail }
+    }).catch(async (err: unknown) => {
+      if (idempotencyKey !== null) await releaseIdempotency(c.env.DB, idempotencyKey)
+      throw err
+    })
+
+    // 採番が尽きた。500 にせず人を呼ぶ（`04-api.md` §5 の `code_exhausted`）。
+    if (!attempt.ok) {
+      if (idempotencyKey !== null) await releaseIdempotency(c.env.DB, idempotencyKey)
+      return c.json({ error: 'code_exhausted' }, 409)
+    }
+    if (attempt.value.taken) {
+      // 鍵を空けて、同じ鍵のまま時刻を選び直せるようにする（伺った内容を失わせない）。
+      if (idempotencyKey !== null) await releaseIdempotency(c.env.DB, idempotencyKey)
+      // 代わりの時刻は**取られたあとの盤面**から採る（自分が読んだあとに相手が確定している）。
+      const fresh = await readAvailabilityDay(db, {
+        organizationId: org,
+        storeId: input.storeId,
+        date,
+        purposeIds: input.purposeIds,
+      })
+      const answer = computeAvailability(
+        bookingBoard({
+          date,
+          now,
+          rows: fresh,
+          isSuspended: store.isActive !== '1',
+          durationMinutes,
+          staffId: input.staffId ?? null,
+          equipmentIds: input.equipmentIds,
+          receptionSessionId,
+          holds,
+          preferredStartsAt: input.startsAt,
+        }),
+      )
+      return c.json(
+        {
+          error: 'slot_taken' as const,
+          alternatives: AvailabilitySlot.array().max(3).parse(answer.alternatives),
+        },
+        409,
+      )
+    }
+    // 取れた枠の押さえを返す。**返さないと、確定したご予約とその予約が置いた押さえの
+    // 両方が同じ枠を数える**（同時受付 2 の担当なら 1 件のご予約で「満席」と出る）。
+    // 画面の `DELETE` だけに任せない — タブを閉じる・回線が切れるで 420 秒ぶん残る。
+    // 枠の一次排他はもうバッチが打ってあるので、失敗しても確定は止めない（best-effort）。
+    // 店舗が分かっているので `storeId` を渡し、`KV.list` を 1 回節約する（§6.3）。
+    if (input.holdId !== undefined) {
+      await deleteHold(c.env.SHORT_LIVED, org, input.holdId, input.storeId).catch(() => false)
+    }
+    return c.json(attempt.value.detail)
+  })
+
+  /**
+   * 受付を始める（「新しい予約を取る」）。始めた時点で決まっているのは店舗だけである。
+   * 破棄でも行は残すので、ここで作った行は消えない（`03-data-model.md` §8.1）。
+   */
+  .post('/api/staff/reception-sessions', zValidator('json', ReceptionSessionStart), async (c) => {
+    const db = drizzle(c.env.DB)
+    const { org, sub } = c.get('auth')
+    const { storeId } = c.req.valid('json')
+    if (!(await findStore(db, org, storeId))) return c.json({ error: 'not_found' }, 404)
+    const startedAt = new Date().toISOString()
+    const id = crypto.randomUUID()
+    const actorId = await actorStaffId(db, org, storeId, sub)
+    await c.env.DB.prepare(
+      'INSERT INTO reception_sessions (id, organization_id, store_id, reservation_id, terminal_id, actor_id, started_at, ended_at, outcome, draft_json, created_at) VALUES (?,?,?,NULL,NULL,?,?,NULL,NULL,NULL,?)',
+    )
+      .bind(id, org, storeId, actorId, startedAt, startedAt)
+      .run()
+    return c.json(
+      ReceptionSession.parse({
+        id,
+        storeId,
+        reservationId: null,
+        terminalId: null,
+        actorId,
+        startedAt,
+        endedAt: null,
+        outcome: null,
+        draft: null,
+        createdAt: startedAt,
+      }),
+    )
+  })
+
+  /**
+   * 5 工程で伺った内容の下書きを保存する。**欄ごとの差分ではなく丸ごと 1 つ**を受ける。
+   *
+   * 端末のメモリだけに持たないのは、iPadOS の Safari が裏に回ったタブを容易に捨て、
+   * 戻ると読み込み直すためである（伺った内容が丸ごと消える）。持てるのは選んだ id と
+   * 打ちかけの文字だけで、お客様のお名前・お電話番号そのものを持つ欄は無い（`07-nfr.md` §6.6）。
+   */
+  .patch(
+    '/api/staff/reception-sessions/:sessionId',
+    zValidator('json', ReceptionSessionDraftPatch),
+    async (c) => {
+      const db = drizzle(c.env.DB)
+      const org = c.get('auth').org
+      const sessionId = c.req.param('sessionId')
+      const row = await findReceptionSession(db, org, sessionId)
+      if (row === null) return c.json({ error: 'not_found' }, 404)
+      // 終わった受付の下書きは動かさない（成立した予約の裏で下書きだけが変わらない）。
+      if (row.outcome !== null) return c.json({ error: 'invalid_transition' }, 409)
+      const { draft } = c.req.valid('json')
+      await c.env.DB.prepare(
+        'UPDATE reception_sessions SET draft_json = ? WHERE organization_id = ? AND id = ? AND outcome IS NULL',
+      )
+        .bind(JSON.stringify(draft), org, sessionId)
+        .run()
+      return c.json(ReceptionSession.parse({ ...toReceptionSession(row), draft }))
+    },
+  )
+
+  /**
+   * 受付をやめる（BOOK の「入力をやめる」）。**受ける結果は `discarded` だけ**である。
+   * 成立（`booked`）は確定の 1 バッチが書く値なので、端末から送れると予約の無い受付を
+   * 成立として残せてしまう。破棄でも行は残す（録音も捨てない）。
+   */
+  .post(
+    '/api/staff/reception-sessions/:sessionId/close',
+    zValidator('json', ReceptionSessionClose),
+    async (c) => {
+      const db = drizzle(c.env.DB)
+      const org = c.get('auth').org
+      const sessionId = c.req.param('sessionId')
+      const row = await findReceptionSession(db, org, sessionId)
+      if (row === null) return c.json({ error: 'not_found' }, 404)
+      if (row.outcome !== null) return c.json({ error: 'invalid_transition' }, 409)
+      const { outcome } = c.req.valid('json')
+      const endedAt = new Date().toISOString()
+      // `outcome` と `ended_at` は同じ UPDATE で書き、`draft_json` は NULL へ戻す。
+      await c.env.DB.prepare(
+        'UPDATE reception_sessions SET ended_at = ?, outcome = ?, draft_json = NULL WHERE organization_id = ? AND id = ? AND outcome IS NULL',
+      )
+        .bind(endedAt, outcome, org, sessionId)
+        .run()
+      return c.json(
+        ReceptionSession.parse({ ...toReceptionSession(row), endedAt, outcome, draft: null }),
+      )
+    },
+  )
 
 // web 側はこの型だけを（type-only で）読み、`hc<AppType>` のクライアントを作る。
 export type AppType = typeof routes
