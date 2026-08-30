@@ -4,6 +4,7 @@ import { Button, Field, focusRing, focusRingOnPine, Notice, TextInput } from '@a
 import { type FormEvent, type ReactNode, useCallback, useEffect, useState } from 'react'
 import { BookingScreen } from './booking/BookingScreen'
 import { client } from './client'
+import { CustomerScreen } from './customers/CustomerScreen'
 import { MyReservations } from './home/MyReservations'
 import { LedgerScreen } from './ledger/LedgerScreen'
 import { SettingsScreen } from './settings/SettingsScreen'
@@ -89,6 +90,13 @@ function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
   const [openReservation, setOpenReservation] = useState<string | null>(null)
   const [stores, setStores] = useState<Store[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // 顧客台帳の「この方のご予約を取る」（AC-CUST-26）から来たときの、その方。
+  // 工程 4 のお名前・ふりがな・お電話番号をこれで埋める。
+  const [bookingCustomer, setBookingCustomer] = useState<{
+    name: string
+    kana: string
+    phone: string | null
+  } | null>(null)
   // 上のバーの中央。台帳が日付の帯を差し込む（モックの `.datepill` の置き場所）。
   const [barCenter, setBarCenter] = useState<ReactNode>(null)
 
@@ -120,6 +128,12 @@ function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
     setRail(RAIL_BY_DEFAULT.has(key))
   }
 
+  /** 顧客台帳から「ご予約を取る」（AC-CUST-26）。渡さなければ、いつもの白紙の受付になる。 */
+  function startBooking(customer?: { name: string; kana: string; phone: string | null }) {
+    setBookingCustomer(customer ?? null)
+    navigate('book')
+  }
+
   const store = stores?.find((s) => s.isActive) ?? stores?.[0]
 
   /*
@@ -131,7 +145,11 @@ function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
       <BookingScreen
         storeId={store.id}
         storeName={store.name}
-        onExit={() => navigate('home')}
+        initialCustomer={bookingCustomer ?? undefined}
+        onExit={() => {
+          setBookingCustomer(null)
+          navigate('home')
+        }}
         onOpenLedger={() => navigate('ledger')}
         onSessionExpired={onSignOut}
       />
@@ -178,7 +196,7 @@ function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
             currentStoreId={store?.id}
             onOpenReservation={(id) => navigate('ledger', id)}
             onOpenLedger={() => navigate('ledger')}
-            onStartBooking={() => navigate('book')}
+            onStartBooking={() => startBooking()}
           />
         ) : current === 'ledger' ? (
           store ? (
@@ -187,6 +205,17 @@ function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
               initialReservationId={openReservation ?? undefined}
               onBarCenter={setBarCenter}
               onOpenSettings={() => navigate('settings')}
+              onSessionExpired={onSignOut}
+            />
+          ) : (
+            <p className="p-11 text-body text-ink-muted">読み込んでいます…</p>
+          )
+        ) : current === 'customers' ? (
+          store ? (
+            <CustomerScreen
+              storeId={store.id}
+              stores={stores}
+              onStartBooking={(customer) => startBooking(customer)}
               onSessionExpired={onSignOut}
             />
           ) : (

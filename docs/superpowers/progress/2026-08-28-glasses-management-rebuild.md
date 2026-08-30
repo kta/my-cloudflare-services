@@ -8,7 +8,7 @@
 | P1 店舗の受付条件 | `004-store-settings` | **完了（Approved）** | 下記 |
 | P2 空き枠と予約台帳 | `005-availability-and-ledger` | **完了（Approved）** | 下記 |
 | P3 予約受付 | `006-booking-flow` | **完了（Approved）** | 下記 |
-| P4 顧客台帳 | `007-customer-records` | 未着手 | — |
+| P4 顧客台帳 | `007-customer-records` | **完了（Approved）** | 下記 |
 | P5 来店受付とウォークイン | `008-reception-and-walkin` | 未着手 | — |
 | P6 変更と取消 | `009-change-and-cancel` | 未着手 | — |
 | P7 受付の録音 | `010-recording` | 未着手 | — |
@@ -194,3 +194,35 @@ EX-OFFLINE / BOOK ×7）。
 - `006` spec が Draft のままだったため traceability が 37 件の `Unknown E2E mapping` で落ちた。
   E2E が全部緑であることを確かめてから Approved に上げた。
   **spec を Approved に上げるのは E2E が緑になった後**という運用は変えない。
+
+
+## P4（2026-08-31）
+
+作ったもの:
+
+- `src/worker/domain/customers.ts` — お電話番号の正規化と後方一致（伺い終えた時点で候補が出る）、
+  お名前・かなでの探し方、候補の確からしさの順序、来店回数と「最後のご来店」、
+  おまとめの下見、手書きの再直列化。**すべて純関数で時刻は引数で受ける**
+- 顧客のルート 11 本。おまとめは**下見と実行の両方**に `settings.manage` を要求する
+  （`requireRole('admin')` を店長判定に使わない）。実行は 1 バッチで、
+  統合された顧客は行を消さず `merged_into_id` を持ち検索結果に出さない
+- 来店回数を書き戻し、**台帳の帯にお名前と来店回数が出るようになった**（P2 が器だけ置いた場所）
+- 手書きは `RECORDINGS` バケットの `notes/{org}/{customerId}/{noteId}.svg`。ダウンロード URL を出さない
+- 画面 6 面（一覧と右の要約 / 詳細 / 新しいお客様 / 候補の面 / おまとめ / 手書き）
+
+レビュー: subagent で **2 巡**（① Sonnet で backend / frontend ② Opus で受入基準 40 本の
+1 本ずつの充足確認と敵対的な粗探し）。
+
+確かめたこと:
+
+```
+（.dev.vars を退避した CI 相当の状態で）
+bash scripts/check-agent-compat.sh   → ok
+pnpm exec biome check .              → 緑
+pnpm run deps:check                  → 緑
+pnpm -r --if-present typecheck       → 緑
+pnpm run test                        → 緑（2,031 テスト + traceability）
+pnpm --filter @app/glasses_management e2e → 128 passed
+```
+
+モック突き合わせは **26 面**（差 1.7〜8.6%）。

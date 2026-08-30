@@ -42,7 +42,16 @@ const EMPTY: CustomerDraft = {
 
 function Step() {
   const [value, setValue] = useState<CustomerDraft>(EMPTY)
-  return <CustomerStep value={value} onChange={setValue} soFar={SO_FAR} writer={WRITER} now={NOW} />
+  return (
+    <CustomerStep
+      value={value}
+      onChange={setValue}
+      soFar={SO_FAR}
+      writer={WRITER}
+      now={NOW}
+      onLookup={async () => []}
+    />
+  )
 }
 
 /** 既定の normalizer は全角の空白（U+3000）を半角へ畳むので、文字どおり探すときに使う。 */

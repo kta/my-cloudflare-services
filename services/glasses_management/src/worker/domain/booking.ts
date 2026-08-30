@@ -314,7 +314,15 @@ export async function beginIdempotency(
   if (!row) return { state: 'conflict', key }
   if (row.requestHash !== input.requestHash) return { state: 'conflict', key }
   if (row.status !== 'done') return { state: 'conflict', key }
-  return { state: 'replay', key, response: JSON.parse(row.responseJson ?? 'null') }
+  /*
+   * 写しがまだ書かれていない `done` がありうる。応答が本処理の**あと**にしか作れない
+   * 経路（おまとめは、まとめ終えた詳細を読まないと `CustomerMergeResult` を組めない）が
+   * バッチで `done` にし、写しは次の 1 文で書くからである。その隙間に届いた再送で
+   * `JSON.parse('')` を投げると 500 になり、**確定しているのに失敗と見える**。
+   * 409 にして鍵を作り直させる（作り直した実行は版の条件で止まるので、二重にはまとまらない）。
+   */
+  if (row.responseJson === null || row.responseJson === '') return { state: 'conflict', key }
+  return { state: 'replay', key, response: JSON.parse(row.responseJson) }
 }
 
 /*

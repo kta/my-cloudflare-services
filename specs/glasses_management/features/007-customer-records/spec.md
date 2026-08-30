@@ -1,7 +1,7 @@
 # 007-customer-records: 顧客台帳
 
 - サービス: `glasses_management`
-- ステータス: Draft
+- ステータス: Approved
 
 ## 1. WHAT / WHY
 

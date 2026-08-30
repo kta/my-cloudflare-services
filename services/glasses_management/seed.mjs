@@ -336,6 +336,8 @@ const reservationSeeds = [
     staff: TAKAHASHI,
     source: 'phone',
     status: 'arrived',
+    // 伊藤 健 様の「覚えておくこと」が言う「本日 10:00 に調整」がこの帯である。
+    customer: 3,
   },
   {
     start: '10:30',
@@ -354,9 +356,11 @@ const reservationSeeds = [
     source: 'phone',
     status: 'confirmed',
     places: [{ unit: MEASURE_A }, { unit: COUNTER_2 }],
-    // LEDGER-DETAIL の 2 行。お客様のお名前と来店回数は 007-customer-records で足す。
+    // LEDGER-DETAIL の 2 行。この 60 分の帯が AC-CUST-24 / AC-CUST-25 の
+    // 「11:00 の 田中 花子 様（4回目）」で、CUSTOMER-DETAIL の「次のご予約」でもある。
     noteCustomer: '「遠近は初めてです」',
     noteInternal: '度数変更の理由は、段階的に説明してください。',
+    customer: 7,
   },
   {
     start: '11:00',
@@ -399,6 +403,9 @@ const reservationSeeds = [
     source: 'phone',
     status: 'confirmed',
     places: [{ unit: COUNTER_1 }],
+    // AC-CUST-24 の狭い帯（お名前を姓だけに落とす側）。モックは 30 分だが、
+    // 台帳の e2e が 20 分の帯として固定しているので所要時間は動かさない。
+    customer: 9,
   },
   {
     start: '15:00',
@@ -473,6 +480,325 @@ const reservationRows = reservationSeeds.map((seed, i) => {
     ),
   }
 })
+
+/* --- 顧客台帳（CUSTOMER-LIST / CUSTOMER-DETAIL） --------------------------- *
+ * 承認済みモック CUSTOMER-LIST.png の 8 行と、CUSTOMER-DETAIL.png の 田中 花子 様
+ * （度数 3 件・いまお使いのメガネ 2 本・接客のメモ 7 件）をそのまま置く。
+ * マスタープラン §5 と重なる方（田中 花子・伊藤 健・川上 恵・相川 みどり）は §5 が正である。
+ *
+ * `visit_count` / `first_visit_at` / `last_visit_at` は**列に入れた値が正本**である
+ * （読むたびに数え直さず、来店済みになった時点で書き戻す決め。既存店の名簿を移してきた
+ * 初日の姿でもある）。田中 花子 様だけは過去のご予約 5 件（来店済み 4 件・取り消し 1 件）も
+ * 置いてあり、列と数え上げと「よくご担当した者」が一致する。
+ *
+ * おまとめ（CUSTOMER-MERGE）の 2 件目 G-02310 は**ここに置かない**。同じお電話番号の行を
+ * seed に残すと BOOK-04b の候補が 3 件になり「同じ番号のご来店が2件見つかりました。」が
+ * 崩れるので、おまとめを確かめる e2e が自分で作って自分でまとめる。
+ */
+const CUSTOMER_STORE = GINZA
+const MARUNOUCHI = stores[1].id
+
+/** 来店の「瞬間」。列は ISO8601 で持ち、画面は JST の暦日へ落として読む。 */
+const visitAt = (date) => (date === null ? null : `${date}T02:00:00.000Z`)
+
+const customerSeeds = [
+  {
+    number: 'G-01455',
+    name: '相川 みどり',
+    kana: 'あいかわ みどり',
+    phone: '090-2233-4455',
+    visits: 2,
+    first: '2025-05-06',
+    last: '2026-07-03',
+    memo: '調整の途中です',
+  },
+  {
+    number: 'G-01488',
+    name: '青木 律子',
+    kana: 'あおき りつこ',
+    phone: '080-3344-5566',
+    visits: 4,
+    first: '2023-09-12',
+    last: '2026-06-21',
+    memo: '遠近両用を長くお使い',
+  },
+  {
+    number: 'G-01521',
+    name: '石井 孝',
+    kana: 'いしい たかし',
+    phone: '090-4455-6677',
+    visits: 2,
+    first: '2026-03-02',
+    last: '2026-08-11',
+    memo: '2回目のご来店です',
+  },
+  {
+    number: 'G-01596',
+    name: '伊藤 健',
+    kana: 'いとう けん',
+    phone: '080-5566-7788',
+    visits: 2,
+    first: '2025-10-19',
+    last: '2026-08-27',
+    memo: '本日 10:00 に調整',
+  },
+  {
+    number: 'G-01634',
+    name: '大森 千夏',
+    kana: 'おおもり ちなつ',
+    phone: '090-6677-8899',
+    visits: 2,
+    first: '2025-02-11',
+    last: '2025-12-08',
+    memo: 'まぶしさに弱い',
+  },
+  // ご来店が 0 件の 1 名。一覧は「初」、最後のご来店は「—」になる（AC-CUST-10）。
+  {
+    number: 'G-01702',
+    name: '川上 恵',
+    kana: 'かわかみ めぐみ',
+    phone: '080-7788-9900',
+    visits: 0,
+    first: null,
+    last: null,
+    memo: 'お子様の分もご一緒に',
+  },
+  // お電話番号を伺えていない 1 名。3 列とも NULL にする（片方だけ入る形を作らない）。
+  {
+    number: 'G-01777',
+    name: '木下 亮太',
+    kana: 'きのした りょうた',
+    phone: null,
+    visits: 2,
+    first: '2025-06-30',
+    last: '2026-02-14',
+    memo: 'ご連絡先が未登録',
+  },
+  {
+    number: 'G-01842',
+    name: '田中 花子',
+    kana: 'たなか はなこ',
+    phone: '090-1234-5678',
+    visits: 4,
+    first: '2024-03-15',
+    last: '2026-05-12',
+    memo: 'PC作業用・鼻パッド低め',
+    address: '東京都中央区銀座 4-◯-◯',
+  },
+  // BOOK-04b の 2 件目。下 4 桁は違い、共通するのは先頭 7 桁（0901234）だけである。
+  {
+    number: 'G-02180',
+    name: '田中 一郎',
+    kana: 'たなか いちろう',
+    phone: '090-1234-9912',
+    visits: 1,
+    first: '2026-08-13',
+    last: '2026-08-13',
+    memo: 'ご家族で同じお電話番号',
+  },
+  {
+    number: 'G-02402',
+    name: '松本 一郎',
+    kana: 'まつもと いちろう',
+    phone: '090-8899-0011',
+    visits: 3,
+    first: '2025-01-20',
+    last: '2026-08-20',
+    memo: '掛け具合の調整が続いています',
+  },
+  /*
+   * おまとめ（CUSTOMER-MERGE）の見本になる 2 件。**ご来店は 1回 に留める** ——
+   * 「ご来店 2〜4回」の札で絞ったときの 42名 を動かさないためで、ふりがなも
+   * 「まつもと いちろう」より後ろに置いて一覧の 8 行を押し出さない。
+   * 同じお電話番号だが 0905555 で始まるので、BOOK-04b の候補（0901234）にも混ざらない。
+   */
+  {
+    number: 'G-02510',
+    name: '渡会 昭',
+    kana: 'わたらい あきら',
+    phone: '090-5555-0001',
+    visits: 1,
+    first: '2026-08-13',
+    last: '2026-08-13',
+    memo: '同じお電話番号でふたつに分かれています',
+    address: '東京都中央区銀座 5-◯-◯',
+  },
+  {
+    number: 'G-02511',
+    name: '渡会 章',
+    kana: 'わたらい あきら',
+    phone: '090-5555-0001',
+    visits: 1,
+    first: '2026-08-20',
+    last: '2026-08-20',
+    memo: '受付でもう一度お伺いしてしまった行',
+  },
+]
+
+/*
+ * CUSTOMER-LIST の「当てはまるお客様 42名」と「ほか 34名 ／ 続きを見る ›」を成り立たせる
+ * 控えの 34 名。ふりがなは**「まつもと いちろう」より後ろに並ぶ姓だけ**を使い、
+ * モックが描いている 8 行を押し出さない。ご来店は 2〜4回 の帯に収める（同じ札で絞ったとき
+ * 42 名になる）。お電話番号は 070 で始め、候補の前方一致（0901234）に混ざらないようにする。
+ */
+const fillerFamilies = [
+  ['三浦', 'みうら'],
+  ['村上', 'むらかみ'],
+  ['森田', 'もりた'],
+  ['山口', 'やまぐち'],
+  ['山本', 'やまもと'],
+  ['湯浅', 'ゆあさ'],
+  ['横山', 'よこやま'],
+  ['吉田', 'よしだ'],
+  ['和田', 'わだ'],
+  ['渡辺', 'わたなべ'],
+  ['若林', 'わかばやし'],
+  ['鷲尾', 'わしお'],
+]
+const fillerGiven = [
+  ['明', 'あきら'],
+  ['香織', 'かおり'],
+  ['聡', 'さとし'],
+]
+const fillerSeeds = Array.from({ length: 34 }, (_, i) => {
+  const [family, familyKana] = fillerFamilies[i % fillerFamilies.length]
+  const [given, givenKana] = fillerGiven[Math.floor(i / fillerFamilies.length)]
+  return {
+    number: `G-0${3000 + i}`,
+    name: `${family} ${given}`,
+    kana: `${familyKana} ${givenKana}`,
+    phone: `070-1000-${String(3000 + i)}`,
+    visits: 2 + (i % 3),
+    first: '2024-04-01',
+    last: `2026-0${1 + (i % 6)}-1${i % 10}`,
+    memo: '',
+  }
+})
+
+const allCustomers = [...customerSeeds, ...fillerSeeds].map((c, i) => ({
+  ...c,
+  id: i < customerSeeds.length ? uid('0a010000', i) : uid('0a020000', i - customerSeeds.length),
+  normalized: c.phone === null ? null : c.phone.replace(/[^0-9]/g, ''),
+}))
+
+const HANAKO = uid('0a010000', 7)
+
+/* 田中 花子 様の度数 3 件（CUSTOMER-DETAIL「度数の移り変わり」）。
+ * いま有効な行はちょうど 1 つで、その値が一覧の要約の「いまの度数」と同じになる。 */
+const prescriptionSeeds = [
+  { at: '2026-05-12', r: [-2.25, -0.5, 180], l: [-2.0, -0.75, 175], pd: 62.0, current: true },
+  { at: '2025-04-18', r: [-2.25, -0.5, 180], l: [-2.0, -0.75, 175], pd: 62.0, current: false },
+  { at: '2024-03-15', r: [-2.0, -0.5, 180], l: [-1.75, -0.5, 175], pd: 61.5, current: false },
+]
+
+/* いまお使いのメガネ 2 本。見出しの「2本」は `is_current` の本数と必ず一致させる。 */
+const glassesSeeds = [
+  {
+    at: '2025-04-20',
+    usage: '遠近両用（お出かけ用）',
+    frame: 'クラシック TR-88 マットブラウン 52□17',
+    lens: '遠近両用 1.60',
+  },
+  {
+    at: '2024-03-15',
+    usage: '近用（PC作業用）',
+    frame: 'ライト AL-12 ガンメタル 50□18',
+    lens: '単焦点 1.60',
+  },
+]
+
+/* 接客のメモ 7 件。**注意ごとに数えるのは `attention` かつ `published` の 1 件だけ**で、
+ * 残る 6 件は下書きのままである（おまとめの下見が「接客のメモ 7件」と読む数でもある）。
+ * 筆跡は R2 の本体を伴うのでここには置かない（seed は D1 だけを書く）。手書きは
+ * `POST /api/staff/customers/:id/notes` が本体ごと足す。 */
+const noteSeeds = [
+  {
+    kind: 'attention',
+    status: 'published',
+    store: CUSTOMER_STORE,
+    author: 0,
+    at: '2024-03-15T02:10:00.000Z',
+    body: '金属アレルギーのお申し出があります。\nフレームはチタン・樹脂からご案内します。',
+  },
+  {
+    kind: 'memo',
+    status: 'draft',
+    store: CUSTOMER_STORE,
+    author: 0,
+    at: '2026-05-12T02:20:00.000Z',
+    body: 'PC作業用のレンズ交換のご相談。鼻パッドは低めに調整ずみ。',
+  },
+  {
+    kind: 'memo',
+    status: 'draft',
+    store: CUSTOMER_STORE,
+    author: 1,
+    at: '2025-11-02T02:20:00.000Z',
+    body: '右の見え方が落ちたとのこと。次回は遠近両用も一緒に考える。',
+  },
+  {
+    kind: 'memo',
+    status: 'draft',
+    store: MARUNOUCHI,
+    author: 2,
+    at: '2025-04-20T02:20:00.000Z',
+    body: '丸の内店でお渡し。フレームは 52□17。',
+  },
+  {
+    kind: 'memo',
+    status: 'draft',
+    store: CUSTOMER_STORE,
+    author: 0,
+    at: '2025-04-18T02:20:00.000Z',
+    body: '遠近は初めてとのこと。段階的にご説明する。',
+  },
+  {
+    kind: 'memo',
+    status: 'draft',
+    store: CUSTOMER_STORE,
+    author: 0,
+    at: '2024-09-08T02:20:00.000Z',
+    body: 'お仕事はPC作業が中心。手元の距離は 45cm ほど。',
+  },
+  {
+    kind: 'memo',
+    status: 'draft',
+    store: CUSTOMER_STORE,
+    author: 1,
+    at: '2024-03-15T02:30:00.000Z',
+    body: '初回のご来店。ご紹介でお越しになった。',
+  },
+]
+
+/* 田中 花子 様の過去のご予約 5 件。来店済み（done）4 件と取り消し 1 件で、
+ * 一覧の「4回」・候補の「4回目」・詳細の「よくご担当した者 佐藤 美咲」が同時に成り立つ
+ * （AC-CUST-10）。台帳の e2e が見る 8月27日・28日 とは重ならない日だけを使う。 */
+const pastVisitSeeds = [
+  { customer: 7, date: '2024-03-15', staff: SATO, status: 'done', use: NEW_GLASSES },
+  { customer: 7, date: '2025-04-18', staff: SATO, status: 'done', use: EYESIGHT },
+  { customer: 7, date: '2025-11-02', staff: TAKAHASHI, status: 'done', use: ADJUST },
+  { customer: 7, date: '2026-05-12', staff: SATO, status: 'done', use: EYESIGHT },
+  { customer: 7, date: '2026-06-30', staff: SATO, status: 'cancelled', use: ADJUST },
+  // おまとめの見本の 2 件。**残さない側にもご予約が 1 件ある**ので、
+  // まとめたときに「予約が残す側へ付け替わる」ことをそのまま確かめられる。
+  { customer: 10, date: '2026-08-13', staff: SATO, status: 'done', use: ADJUST },
+  { customer: 11, date: '2026-08-20', staff: SATO, status: 'done', use: ADJUST },
+]
+
+const pastVisitRows = pastVisitSeeds.map((v, i) => {
+  const startsAt = new Date(Date.parse(`${v.date}T11:00:00.000+09:00`)).toISOString()
+  return {
+    ...v,
+    customerId: uid('0a010000', v.customer),
+    id: uid('0a060000', i),
+    code: `EY-${v.date.slice(2, 4)}${v.date.slice(5, 7)}-9${String(i + 1).padStart(3, '0')}`,
+    startsAt,
+    endsAt: after(startsAt, purposes[v.use].minutes),
+  }
+})
+
+/** 改行を含む本文。SQL の 1 文を 1 行に保つため、実際の改行は `char(10)` で組み立てる。 */
+const qBody = (text) => text.split('\n').map(q).join(' || char(10) || ')
 
 /* --- 担当店舗（E2E の権限まわりが使う） ------------------------------------ *
  * 実運用では admin が service binding で配るが、dev と E2E の足場としてここに置く。 */
@@ -580,17 +906,59 @@ const lines = [
       `INSERT OR IGNORE INTO store_memberships (id, organization_id, store_id, user_id, permissions, created_at) VALUES (${q(uid('f0010000', i))}, ${q(ORG)}, ${q(GINZA)}, ${q(m.userId)}, ${q(m.permissions)}, ${q(NOW)});`,
   ),
 
+  // お客様 44 名（モックの 8 行 ＋ 候補の 田中 一郎 様 ＋ 松本 一郎 様 ＋ 控え 34 名）。
+  ...allCustomers.map(
+    (c) =>
+      `INSERT OR IGNORE INTO customers (id, organization_id, customer_number, name, kana, phone, phone_normalized, phone_last4, email, birth_date, address, memo, first_visit_at, last_visit_at, visit_count, merged_into_id, version, created_store_id, created_terminal_id, created_at, updated_at) VALUES (${q(c.id)}, ${q(ORG)}, ${q(c.number)}, ${q(c.name)}, ${q(c.kana)}, ${c.phone === null ? 'NULL' : q(c.phone)}, ${c.normalized === null ? 'NULL' : q(c.normalized)}, ${c.normalized === null ? 'NULL' : q(c.normalized.slice(-4))}, NULL, NULL, ${c.address === undefined ? 'NULL' : q(c.address)}, ${q(c.memo)}, ${c.first === null ? 'NULL' : q(visitAt(c.first))}, ${c.last === null ? 'NULL' : q(visitAt(c.last))}, ${c.visits}, NULL, 1, ${q(CUSTOMER_STORE)}, NULL, ${q(NOW)}, ${q(NOW)});`,
+  ),
+
+  // 田中 花子 様の度数 3 行。いま有効（is_current='1'）はちょうど 1 行。
+  ...prescriptionSeeds.map(
+    (m, i) =>
+      `INSERT OR IGNORE INTO customer_prescriptions (id, organization_id, customer_id, store_id, measured_at, r_sph, r_cyl, r_axis, r_add, l_sph, l_cyl, l_axis, l_add, pd, note, is_current, created_at) VALUES (${q(uid('0a030000', i))}, ${q(ORG)}, ${q(HANAKO)}, ${q(CUSTOMER_STORE)}, ${q(m.at)}, ${m.r[0]}, ${m.r[1]}, ${m.r[2]}, NULL, ${m.l[0]}, ${m.l[1]}, ${m.l[2]}, NULL, ${m.pd}, '', ${m.current ? "'1'" : "'0'"}, ${q(NOW)});`,
+  ),
+
+  // 田中 花子 様のいまお使いのメガネ 2 本。
+  ...glassesSeeds.map(
+    (g, i) =>
+      `INSERT OR IGNORE INTO customer_glasses (id, organization_id, customer_id, store_id, purchased_at, frame_name, lens_name, usage_label, note, is_current, created_at) VALUES (${q(uid('0a040000', i))}, ${q(ORG)}, ${q(HANAKO)}, ${q(CUSTOMER_STORE)}, ${q(g.at)}, ${q(g.frame)}, ${q(g.lens)}, ${q(g.usage)}, '', '1', ${q(NOW)});`,
+  ),
+
+  // 田中 花子 様の接客のメモ 7 件（注意ごとに数えるのは published の 1 件だけ）。
+  ...noteSeeds.map(
+    (n, i) =>
+      `INSERT OR IGNORE INTO customer_notes (id, organization_id, customer_id, store_id, kind, body, handwriting_key, author_id, revision, status, created_at, updated_at) VALUES (${q(uid('0a050000', i))}, ${q(ORG)}, ${q(HANAKO)}, ${q(n.store)}, ${q(n.kind)}, ${qBody(n.body)}, NULL, ${q(uid('c0010000', n.author))}, 1, ${q(n.status)}, ${q(n.at)}, ${q(n.at)});`,
+  ),
+
+  // おまとめの見本の残さない側（渡会 章 様）の接客のメモ 1 件。
+  `INSERT OR IGNORE INTO customer_notes (id, organization_id, customer_id, store_id, kind, body, handwriting_key, author_id, revision, status, created_at, updated_at) VALUES (${q(uid('0a050000', 90))}, ${q(ORG)}, ${q(uid('0a010000', 11))}, ${q(CUSTOMER_STORE)}, 'memo', 'フレームのご相談を承った。', NULL, ${q(uid('c0010000', 0))}, 1, 'draft', '2026-08-20T02:30:00.000Z', '2026-08-20T02:30:00.000Z');`,
+
+  // 田中 花子 様と おまとめの見本の過去のご予約 7 件（来店済み 6 件・取り消し 1 件）と、その担当。
+  ...pastVisitRows.map(
+    (r) =>
+      `INSERT OR IGNORE INTO reservations (id, organization_id, store_id, code, customer_id, source, status, starts_at, ends_at, duration_minutes, note_customer, note_internal, version, created_at, updated_at, created_by, cancelled_at, cancel_reason) VALUES (${q(r.id)}, ${q(ORG)}, ${q(GINZA)}, ${q(r.code)}, ${q(r.customerId)}, 'phone', ${q(r.status)}, ${q(r.startsAt)}, ${q(r.endsAt)}, ${purposes[r.use].minutes}, '', '', 1, ${q(NOW)}, ${q(NOW)}, NULL, ${r.status === 'cancelled' ? q(NOW) : 'NULL'}, ${r.status === 'cancelled' ? q('ご都合により') : 'NULL'});`,
+  ),
+  ...pastVisitRows.map(
+    (r, i) =>
+      `INSERT OR IGNORE INTO reservation_purposes (id, organization_id, reservation_id, purpose_id, duration_minutes, sort_order, created_at) VALUES (${q(uid('0a070000', i))}, ${q(ORG)}, ${q(r.id)}, ${q(uid('e0010000', r.use))}, ${purposes[r.use].minutes}, 0, ${q(NOW)});`,
+  ),
+  ...pastVisitRows.map(
+    (r, i) =>
+      `INSERT OR IGNORE INTO reservation_assignments (id, organization_id, reservation_id, kind, target_id, starts_at, ends_at, created_at) VALUES (${q(uid('0a080000', i))}, ${q(ORG)}, ${q(r.id)}, 'staff', ${q(uid('c0010000', r.staff))}, ${q(r.startsAt)}, ${q(r.endsAt)}, ${q(NOW)});`,
+  ),
+
   // 当日の勤務（曜日テンプレートを 2026-08-27 から 5 週間ぶん日付へ展開したもの）。
   ...shiftRows.map(
     (r) =>
       `INSERT OR IGNORE INTO staff_shifts (id, organization_id, store_id, staff_id, date, starts_at, ends_at, kind, created_at) VALUES (${q(uid('c0040000', r.n))}, ${q(ORG)}, ${q(GINZA)}, ${q(uid('c0010000', r.staffIndex))}, ${q(r.date)}, ${q(r.startsAt)}, ${q(r.endsAt)}, ${q(r.kind)}, ${q(NOW)});`,
   ),
 
-  // 2026年8月27日（木）のご予約 12 行。お客様は 007-customer-records で足すので
-  // customer_id は全件 NULL、created_by も NULL（共有端末で個人未確認）にする。
+  // 2026年8月27日（木）のご予約 12 行。3 件だけ `customer_id` が入る
+  // （10:00 伊藤 健 様／11:00 田中 花子 様／14:00 松本 一郎 様）。
+  // created_by は全件 NULL（共有端末で個人未確認）にする。
   ...reservationRows.map(
     (r) =>
-      `INSERT OR IGNORE INTO reservations (id, organization_id, store_id, code, customer_id, source, status, starts_at, ends_at, duration_minutes, note_customer, note_internal, version, created_at, updated_at, created_by, cancelled_at, cancel_reason) VALUES (${q(r.id)}, ${q(ORG)}, ${q(GINZA)}, ${q(r.code)}, NULL, ${q(r.seed.source)}, ${q(r.seed.status)}, ${q(r.startsAt)}, ${q(r.endsAt)}, ${r.seed.minutes}, ${q(r.seed.noteCustomer ?? '')}, ${q(r.seed.noteInternal ?? '')}, 1, ${q(NOW)}, ${q(NOW)}, NULL, NULL, NULL);`,
+      `INSERT OR IGNORE INTO reservations (id, organization_id, store_id, code, customer_id, source, status, starts_at, ends_at, duration_minutes, note_customer, note_internal, version, created_at, updated_at, created_by, cancelled_at, cancel_reason) VALUES (${q(r.id)}, ${q(ORG)}, ${q(GINZA)}, ${q(r.code)}, ${r.seed.customer === undefined ? 'NULL' : q(uid('0a010000', r.seed.customer))}, ${q(r.seed.source)}, ${q(r.seed.status)}, ${q(r.startsAt)}, ${q(r.endsAt)}, ${r.seed.minutes}, ${q(r.seed.noteCustomer ?? '')}, ${q(r.seed.noteInternal ?? '')}, 1, ${q(NOW)}, ${q(NOW)}, NULL, NULL, NULL);`,
   ),
 
   // ご用件。所要時間は予約した時点の写しなので、目的を直しても既存のご予約は動かない。
@@ -651,5 +1019,11 @@ console.log(
     `${reservationRows.filter((r) => r.seed.source === 'web').length} 件）／ 押さえ ` +
     `${reservationRows.reduce((n, r) => n + r.bands.length, 0)} 行 ／ 枠 ` +
     `${reservationRows.reduce((n, r) => n + r.locks.length, 0)} 行 ／ 勤務 ${shiftRows.length} 行`,
+)
+console.log(
+  `   顧客台帳: お客様 ${allCustomers.length} 名（ご来店 2〜4回 ` +
+    `${allCustomers.filter((c) => c.visits >= 2 && c.visits <= 4).length} 名）／ ` +
+    `田中 花子 様の度数 ${prescriptionSeeds.length} 件・メガネ ${glassesSeeds.length} 本・` +
+    `接客のメモ ${noteSeeds.length} 件・過去のご予約 ${pastVisitRows.length} 件`,
 )
 console.log('   業務開始の画面では、お店のコードに org-eyex-seed を入れる。')

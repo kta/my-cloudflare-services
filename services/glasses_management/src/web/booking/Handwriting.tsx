@@ -243,10 +243,19 @@ export function Handwriting({
           </button>
         </fieldset>
 
-        {/* 用紙。`touch-action: none` はここに入れる（`07-nfr.md` §2.9）。 */}
+        {/* 用紙。`touch-action: none` はここに入れる（`07-nfr.md` §2.9）。
+            中の `<svg>` は `aria-hidden` なので、**用紙そのものに名前を持たせる** ——
+            さもないと読み上げでは面のいちばん大きい場所が無音になり、そこに何があるのか、
+            いま何本書けているのかが分からない。 */}
         <div
           ref={paperRef}
           data-testid="handwriting-paper"
+          role="img"
+          aria-label={
+            empty
+              ? '手書きの用紙　まだ何も書かれていません'
+              : `手書きの用紙　線 ${strokes.length}本`
+          }
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}

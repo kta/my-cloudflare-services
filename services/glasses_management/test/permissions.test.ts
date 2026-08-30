@@ -64,6 +64,12 @@ const fixture = {
   ledgerPurposeId: '',
   receptionSessionId: '',
   closableSessionIds: [] as string[],
+  // P4 の 11 ルートが 200 で返る足場。おまとめは 1 度しか通らないので、
+  // 表の主体ぶん叩かれても状態が食い違わないよう専用の 2 件を分けて持つ。
+  customerId: '',
+  noteId: '',
+  mergePrimaryId: '',
+  mergeSecondaryId: '',
 }
 
 /** dev グラントが載せる `sub`。membership の `userId` はこれに合わせる。 */
@@ -242,6 +248,38 @@ beforeAll(async () => {
   }
   fixture.receptionSessionId = await startSession()
   for (const _ of [0, 1, 2, 3, 4]) fixture.closableSessionIds.push(await startSession())
+
+  // P4 の足場。お客様の行は組織単位で 1 本なので店舗に紐づけない。
+  const seedCustomer = async (name: string, customerNumber: string): Promise<string> => {
+    const id = crypto.randomUUID()
+    await env.DB.prepare(
+      'INSERT INTO customers (id, organization_id, customer_number, name, kana, phone, phone_normalized, phone_last4, email, birth_date, address, memo, first_visit_at, last_visit_at, visit_count, merged_into_id, version, created_store_id, created_terminal_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,NULL,NULL,NULL,?,NULL,NULL,0,NULL,1,NULL,NULL,?,?)',
+    )
+      .bind(
+        id,
+        ORG,
+        customerNumber,
+        name,
+        'たなか はなこ',
+        '090-1234-5678',
+        '09012345678',
+        '5678',
+        '',
+        NOW,
+        NOW,
+      )
+      .run()
+    return id
+  }
+  fixture.customerId = await seedCustomer('田中 花子', 'G-01842')
+  fixture.mergePrimaryId = await seedCustomer('田中 花子', 'G-01843')
+  fixture.mergeSecondaryId = await seedCustomer('田中 花子', 'G-02310')
+  fixture.noteId = crypto.randomUUID()
+  await env.DB.prepare(
+    "INSERT INTO customer_notes (id, organization_id, customer_id, store_id, kind, body, handwriting_key, author_id, revision, status, created_at, updated_at) VALUES (?,?,?,?,'memo',?,NULL,NULL,1,'draft',?,?)",
+  )
+    .bind(fixture.noteId, ORG, fixture.customerId, fixture.storeId, '覚えておくこと', NOW, NOW)
+    .run()
 })
 
 /** やめるの表が 1 行ずつ食べる受付。使い切ったら「無い受付」を指す（401 の主体も 1 つ食べる）。 */
@@ -270,6 +308,22 @@ async function currentPurposeVersion(): Promise<number> {
     .bind(fixture.purposeId)
     .first<{ version: number }>()
   return row?.version ?? 1
+}
+
+/** お客様の版。表の主体が順に保存するので、送る直前に読み直す。 */
+async function currentCustomerVersion(): Promise<number> {
+  const row = await env.DB.prepare('SELECT version FROM customers WHERE id = ?')
+    .bind(fixture.customerId)
+    .first<{ version: number }>()
+  return row?.version ?? 1
+}
+
+/** メモの改訂。読み取った文字を直すたびに +1 される。 */
+async function currentNoteRevision(): Promise<number> {
+  const row = await env.DB.prepare('SELECT revision FROM customer_notes WHERE id = ?')
+    .bind(fixture.noteId)
+    .first<{ revision: number }>()
+  return row?.revision ?? 1
 }
 
 type Row = {
@@ -333,6 +387,37 @@ const BOOKING_MISSING = {
   none: 401,
   staff: 404,
   admin: 404,
+  expired: 401,
+  'wrong-secret': 401,
+} as const
+
+/**
+ * 顧客台帳の 9 本は**店長限定ではない**。お電話を取った人がそのまま探して登録する面なので、
+ * `store_memberships` の許可リストを見ない。403 の行は 1 つも無い。
+ * **他店で書かれた度数・手書き・履歴にも権限を足さない**（お客様の行は組織単位で 1 本）。
+ */
+const CUSTOMER = {
+  none: 401,
+  staff: 200,
+  admin: 200,
+  manager: 200,
+  clerk: 200,
+  expired: 401,
+  'wrong-secret': 401,
+} as const
+
+/**
+ * おまとめ（下見と実行）だけが店長のものである。
+ * 店長は `StorePermission` の `settings.manage` を持つ人で、**JWT の `role` では決まらない** —
+ * `admin` の行が 403 なのはそのためで、`requireRole('admin')` を店長判定に使っていない証拠になる。
+ * 下見も閉じるのは、AC-CUST-16 が「入口が画面のどこにも出ず」と要求するからである。
+ */
+const MERGE = {
+  none: 401,
+  staff: 403,
+  admin: 403,
+  manager: 200,
+  clerk: 403,
   expired: 401,
   'wrong-secret': 401,
 } as const
@@ -693,6 +778,108 @@ const TABLE: Row[] = [
     }),
     expected: READ,
   },
+
+  /* --- 顧客台帳（P4。おまとめだけが店長のもの） --- */
+  {
+    name: 'お客様の一覧は店舗の誰でも読める',
+    method: 'GET',
+    path: () => '/api/staff/customers?limit=8',
+    expected: CUSTOMER,
+  },
+  {
+    name: 'お客様の候補は店舗の誰でも読める',
+    method: 'GET',
+    path: () => '/api/staff/customers/lookup?phone=09012345678',
+    expected: CUSTOMER,
+  },
+  {
+    name: 'お客様 1 名は店舗の誰でも読める',
+    method: 'GET',
+    path: () => `/api/staff/customers/${fixture.customerId}`,
+    expected: CUSTOMER,
+  },
+  {
+    name: 'お客様の登録は店舗の誰でもできる',
+    method: 'POST',
+    path: () => '/api/staff/customers',
+    body: () => ({ name: '新規 太郎' }),
+    expected: CUSTOMER,
+  },
+  {
+    name: 'お客様の更新は店舗の誰でもできる',
+    method: 'PATCH',
+    path: () => `/api/staff/customers/${fixture.customerId}`,
+    body: async () => ({ memo: '覚えておくこと', version: await currentCustomerVersion() }),
+    expected: CUSTOMER,
+  },
+  {
+    name: 'メモの一覧は店舗の誰でも読める',
+    method: 'GET',
+    path: () => `/api/staff/customers/${fixture.customerId}/notes`,
+    expected: CUSTOMER,
+  },
+  {
+    name: 'メモの追加は店舗の誰でもできる',
+    method: 'POST',
+    path: () => `/api/staff/customers/${fixture.customerId}/notes`,
+    body: () => ({ kind: 'memo', storeId: fixture.storeId, body: '伺ったこと' }),
+    expected: CUSTOMER,
+  },
+  {
+    name: '読み取った文字の修正は店舗の誰でもできる',
+    method: 'PATCH',
+    path: () => `/api/staff/customers/${fixture.customerId}/notes/${fixture.noteId}`,
+    body: async () => ({ revision: await currentNoteRevision(), body: '直した文字' }),
+    expected: CUSTOMER,
+  },
+  {
+    name: '注意ごとへの申し込みは店舗の誰でもできる',
+    method: 'POST',
+    path: () => `/api/staff/customers/${fixture.customerId}/notes/${fixture.noteId}/publish`,
+    body: async () => ({ revision: await currentNoteRevision(), body: '注意ごとの申し込み' }),
+    expected: CUSTOMER,
+  },
+  {
+    name: 'おまとめの下見は店長だけ',
+    method: 'POST',
+    path: () => '/api/staff/customers/merge/preview',
+    body: () => ({ primaryId: fixture.mergePrimaryId, secondaryId: fixture.mergeSecondaryId }),
+    expected: MERGE,
+  },
+  {
+    name: 'おまとめの実行は店長だけ',
+    method: 'POST',
+    path: () => '/api/staff/customers/merge',
+    body: () => ({
+      primaryId: fixture.mergePrimaryId,
+      secondaryId: fixture.mergeSecondaryId,
+      primaryVersion: 1,
+      secondaryVersion: 1,
+      fields: [
+        {
+          field: 'name',
+          primaryValue: '田中 花子',
+          secondaryValue: '田中 花子',
+          choice: 'primary',
+        },
+      ],
+    }),
+    expected: MERGE,
+  },
+  {
+    name: '未知の顧客パスも既定の拒否に落ちる',
+    method: 'GET',
+    path: () => '/api/staff/customers/not-a-route',
+    expected: {
+      none: 401,
+      staff: 404,
+      admin: 404,
+      manager: 404,
+      clerk: 404,
+      expired: 401,
+      'wrong-secret': 401,
+    },
+  },
 ]
 
 describe('権限マトリクス', () => {
@@ -771,6 +958,42 @@ describe('設定の書き込みは membership だけで決まる', () => {
       headers: headersFor('clerk'),
     })
     expect(authenticated.status).toBe(404)
+  })
+})
+
+describe('おまとめは店長だけができる', () => {
+  it('スタッフが実行しても、どちらの登録も 1 行も変わらない', async () => {
+    const before = await env.DB.prepare(
+      'SELECT id, version, merged_into_id AS mergedIntoId FROM customers WHERE organization_id = ? ORDER BY customer_number',
+    )
+      .bind(ORG)
+      .all<{ id: string; version: number; mergedIntoId: string | null }>()
+
+    const res = await SELF.fetch(`${BASE}/api/staff/customers/merge`, {
+      method: 'POST',
+      headers: headersFor('clerk'),
+      body: JSON.stringify({
+        primaryId: fixture.mergePrimaryId,
+        secondaryId: fixture.mergeSecondaryId,
+        primaryVersion: 1,
+        secondaryVersion: 1,
+        fields: [],
+      }),
+    })
+    expect(res.status).toBe(403)
+    expect(await res.json()).toMatchObject({ error: 'forbidden' })
+
+    const after = await env.DB.prepare(
+      'SELECT id, version, merged_into_id AS mergedIntoId FROM customers WHERE organization_id = ? ORDER BY customer_number',
+    )
+      .bind(ORG)
+      .all<{ id: string; version: number; mergedIntoId: string | null }>()
+    expect(after.results).toEqual(before.results)
+  })
+
+  it('内部 API の共有鍵では顧客のルートに入れない', async () => {
+    const res = await SELF.fetch(`${BASE}/api/staff/customers`, { headers: INTERNAL_HEADERS })
+    expect(res.status).toBe(401)
   })
 })
 

@@ -896,6 +896,16 @@ export const ReservationDetail = z
     startsAt: IsoDateTime,
     endsAt: IsoDateTime,
     durationMinutes: DurationMinutes,
+    /*
+     * 詳細の見出しに出るお客様（AC-CUST-25「見出しに『田中 花子 様』が出る」）。
+     * 帯（`LedgerEntry`）と**同じ 2 欄**を詳細も運ぶ — 帯から開く道しか無いうちは
+     * 画面が持ち回れるが、ご予約番号で直に開く道（`009`）が付いた瞬間に見出しが空になる。
+     * お客様の付いていないご予約（ウォークインの前身）は 3 欄とも null。
+     * **省略可にしてあるのは形の弱さではなく移行の都合**で、応答は必ず 3 欄を載せる。
+     */
+    customerId: Uuid.nullable().optional(),
+    customerName: z.string().trim().max(40).nullable().optional(),
+    visitCount: z.number().int().nonnegative().nullable().optional(),
     // **読む側の下限は 0 件にする。**「1 予約に 1 件以上」（`03-data-model.md` §7.2）と
     // 「`kind='staff'` はちょうど 1 行」（§7.3）は**書く側の不変条件**で、D1 には CHECK が無い。
     // 読む側で 1 件以上を強いると、行が 1 本欠けただけでご予約 1 件の詳細が
@@ -1162,8 +1172,11 @@ export type AvailabilityResponse = z.infer<typeof AvailabilityResponse>
  * ここに置くのは**書くための形**である。読む側（`ReservationDetail` / 台帳 /
  * 空き枠）は P2 が持っているのでそのまま使い、同じ形を二度作らない。
  *
- * お客様の台帳（`customers`）は P4（`007-customer-records`）が作るので、この面では
- * `customerId` を受けるだけで、新規登録と同時に作る `customerDraft` の欄は**まだ足さない**。
+ * お客様の台帳（`customers`）は P4（`007-customer-records`）が作った。新規のお客様は
+ * `POST /api/staff/customers`（`CustomerCreate`）で先に登録し、返る id をここへ渡す
+ * 2 段構えにしたので、この面に `customerDraft`（登録と確定を 1 本にまとめる欄）は足さない
+ * — 確定の 1 バッチに新規登録まで混ぜると、枠が取れずに確定が失敗したときの巻き戻しが
+ * 「予約」と「お客様」の 2 つの資源にまたがってしまう。
  * 伺ったお名前・お電話番号は `reception_sessions.draft_json`（下）に打ちかけの文字として置く。
  * ------------------------------------------------------------------------- */
 
@@ -1187,8 +1200,8 @@ export const StaffReservationCreate = z
     // どちらでも枠は消費するので `reservation_assignments` の行は作る。
     staffId: Uuid.nullable().optional(),
     equipmentIds: Uuid.array().max(5).default([]),
-    // `customerDraft`（新規登録と同時）は `CustomerCreate` を作る P4 が足す。
-    // それまで両方を送る本文は `strictObject` が知らないキーとして落とすので、排他は成り立つ。
+    // 新規のお客様は先に `POST /api/staff/customers`（`CustomerCreate`）で登録し、
+    // 返った id をここへ渡す（`customerDraft` は足さない。上のコメント参照）。
     customerId: Uuid.optional(),
     noteCustomer: z.string().refine(codePointsAtMost(500)).default(''),
     noteInternal: z.string().refine(codePointsAtMost(500)).default(''),
@@ -1345,3 +1358,402 @@ export type ReceptionSession = z.infer<typeof ReceptionSession>
  */
 export const ReceptionSessionClose = z.strictObject({ outcome: z.literal('discarded') })
 export type ReceptionSessionClose = z.infer<typeof ReceptionSessionClose>
+
+/* ------------------------------------------------------------------------- *
+ * P4 顧客台帳（`specs/glasses_management/features/007-customer-records`）
+ *
+ * お客様を「探す・特定する・思い出す」ところの入出力。**電話番号の引き方は 2 本立て**で、
+ * 台帳と受付は下 4 桁の完全一致（`PhoneSuffix` → `customers.phone_last4`）、予約の工程は
+ * 正規化した番号の前方一致（`PhoneNormalized` → `customers.phone_normalized`）である。
+ * 後方一致は B-tree が効かず顧客表の全走査になるので、契約の側でも欄を分けておく。
+ *
+ * 手書きの筆跡は R2（binding `RECORDINGS`）の `notes/{organizationId}/{customerId}/{noteId}.svg`
+ * に置く。**契約に載せるのは SVG の本体だけ**で、R2 のキーも署名付き URL も返さない。
+ * ------------------------------------------------------------------------- */
+
+/* --- 原始型 --------------------------------------------------------------- */
+
+/**
+ * 打ち込まれたままのお電話番号。ハイフンも全角も受ける（数字だけへ落とすのは
+ * ドメイン層の `normalizePhone`）。契約でハイフンを禁じると、受付が打ち終わる前に
+ * 欄が赤くなり、お客様に伺いながら打てなくなる。
+ */
+export const PhoneInput = z.string().trim().min(10).max(20)
+export type PhoneInput = z.infer<typeof PhoneInput>
+
+/** 正規化した番号。10 桁または 11 桁で、先頭は 0。前方一致で引く側の値である。 */
+export const PhoneNormalized = z.string().regex(/^0\d{9,10}$/)
+export type PhoneNormalized = z.infer<typeof PhoneNormalized>
+
+/**
+ * 下 4 桁（LEDGER-WALKIN「下4桁でも探せます」）。**ちょうど 4 桁**だけを番号として扱い、
+ * 3 桁も 5 桁もお名前として扱う（`customers.phone_last4` の完全一致で引く）。
+ */
+export const PhoneSuffix = z.string().regex(/^\d{4}$/)
+export type PhoneSuffix = z.infer<typeof PhoneSuffix>
+
+/**
+ * お客様番号（CUSTOMER-DETAIL「お客様番号 G-01842」）。おまとめで失った番号は
+ * 再利用しない。`reservations.code` / `recordings.code` とは別の系統である。
+ */
+export const CustomerNumber = z.string().regex(/^G-\d{5}$/)
+export type CustomerNumber = z.infer<typeof CustomerNumber>
+
+/** 一覧の続きを指す不透明な文字列。`(kana, id)` / `(visit_count, id)` の 2 種を包む。 */
+const Cursor = z.string().min(1).max(512)
+
+/** 一覧の 1 ページ。`QueryInteger` と同じ理由で `?limit=8` の文字列も受ける。 */
+const Limit = QueryInteger.pipe(z.number().int().min(1).max(200)).default(50)
+
+/** 0 以上の整数（件数・回数）。クエリ文字列でも本文でも同じ境界で見る。 */
+const CountInteger = z.number().int().nonnegative()
+
+/**
+ * `QueryFlag` は欄そのものが無いとき `false` になる。他店で書かれた記録は既定で
+ * 見せる（`03-data-model.md` §9.4）ので、既定を `true` にした同じ形をここで作る。
+ */
+const IncludeOtherStores = z
+  .union([z.boolean(), z.enum(['true', '1', 'false', '0'])])
+  .default(true)
+  .transform((value) => value === true || value === 'true' || value === '1')
+
+/* --- お客様 --------------------------------------------------------------- */
+
+/**
+ * 一覧の 1 行と、埋め込みのお客様。CUSTOMER-LIST の 4 列（お名前 / ご来店 /
+ * 最後のご来店 / 覚えておくこと）がそのまま載る。
+ *
+ * `customerNumber` を持つのは、おまとめの下見が「まとめると、こうなります」で
+ * お客様番号 G-01842 を出すからである（`CustomerMergePreview.result` はこの形）。
+ * `lastVisitAt` は暦日で持つ — 来店済み（`arrived` / `serving` / `done`）の予約の
+ * 最終 `starts_at` を JST の暦日へ落とした値で、0 件のお客様は null（画面は「—」）。
+ */
+export const CustomerSummary = z.strictObject({
+  id: Uuid,
+  customerNumber: CustomerNumber,
+  name: z.string().trim().min(1).max(40),
+  kana: z.string().trim().max(40).default(''),
+  // 表示用の生文字列（`customers.phone`）は載せない。画面は数字から整形する。
+  phone: PhoneNormalized.nullable().default(null),
+  visitCount: CountInteger,
+  lastVisitAt: LocalDate.nullable().default(null),
+  // 一覧で「…」に切ってよい唯一の列。お名前・日付・番号は切らずに折り返す。
+  memoShort: z.string().refine(codePointsAtMost(40)).default(''),
+})
+export type CustomerSummary = z.infer<typeof CustomerSummary>
+
+/* --- 度数といまお使いのメガネ --------------------------------------------- */
+
+/** 球面。測定機が出すのは 0.25 の格子の上だけなので、間の値を作らせない。 */
+const Diopter = z.number().min(-30).max(30).multipleOf(0.25)
+/** 乱視。 */
+const Cylinder = z.number().min(-10).max(10).multipleOf(0.25)
+/** 加入度数（遠近のみ）。 */
+const AddPower = z.number().min(0).max(5).multipleOf(0.25)
+/** 軸。0〜180 の整数で、181 は角度として存在しない。 */
+const Axis = z.number().int().min(0).max(180)
+/** 瞳孔間距離（mm）。度数と違って **0.5 刻み**である。 */
+const PupillaryDistance = z.number().min(40).max(85).multipleOf(0.5)
+
+/**
+ * 度数 1 行（CUSTOMER-DETAIL「度数の移り変わり」）。**文字列で持たない** —
+ * 「R -2.25 L -2.00 PD 62.0」は表示時の整形であって、保存する形ではない。
+ * 片目だけ測ることも PD を測らないこともあるので、値はすべて null を取る。
+ */
+export const Prescription = z.strictObject({
+  id: Uuid,
+  // 測定日は暦日だけを持つ（時刻を持たない）。
+  measuredAt: LocalDate,
+  rSph: Diopter.nullable().default(null),
+  lSph: Diopter.nullable().default(null),
+  rCyl: Cylinder.nullable().default(null),
+  lCyl: Cylinder.nullable().default(null),
+  rAxis: Axis.nullable().default(null),
+  lAxis: Axis.nullable().default(null),
+  rAdd: AddPower.nullable().default(null),
+  lAdd: AddPower.nullable().default(null),
+  pd: PupillaryDistance.nullable().default(null),
+  note: z.string().refine(codePointsAtMost(200)).default(''),
+  // 顧客ごとにちょうど 1 行が true。古い行を false にする UPDATE は同じバッチで書く。
+  isCurrent: z.boolean(),
+})
+export type Prescription = z.infer<typeof Prescription>
+
+/** いまお使いのメガネ 1 本。買い替えても行は消さず `isCurrent` を落とす。 */
+export const OwnedGlasses = z.strictObject({
+  id: Uuid,
+  purchasedAt: LocalDate,
+  frameName: z.string().trim().max(60).default(''),
+  lensName: z.string().trim().max(60).default(''),
+  usageLabel: z.string().trim().max(30).default(''),
+  note: z.string().refine(codePointsAtMost(200)).default(''),
+  isCurrent: z.boolean(),
+})
+export type OwnedGlasses = z.infer<typeof OwnedGlasses>
+
+/* --- メモ・注意ごと・手書き ----------------------------------------------- */
+
+/** 種別。`attention` かつ `published` の行だけが「注意ごと N件」に数えられる。 */
+const CustomerNoteKind = z.enum(['memo', 'attention'])
+
+/** 状態。昇格の申し込みは `draft` のまま置き、承認の面（P10）が `published` へ上げる。 */
+const CustomerNoteStatus = z.enum(['draft', 'published', 'hidden'])
+
+/**
+ * 筆跡そのもの。**R2 に置き、D1 には `customer_notes.handwriting_key` だけを持つ**
+ * （1 枚 3〜12KB × 5 枚 × 5,000 顧客で 300MB になり、D1 の 500MB の 6 割を占める）。
+ * 読み出しは Worker が R2 から取り、許可リストで再直列化してからここへ載せる。
+ */
+const HandwritingSvg = z.string().max(512 * 1024)
+
+/** メモ 1 件。手書きの読み取り結果も `body` に入る（人がいつでも直せる）。 */
+export const CustomerNote = z.strictObject({
+  id: Uuid,
+  kind: CustomerNoteKind,
+  body: z.string().refine(codePointsAtMost(2000)).default(''),
+  handwritingSvg: HandwritingSvg.nullable().default(null),
+  authorId: Uuid.nullable().default(null),
+  authorName: z.string().trim().max(40).default(''),
+  revision: CountInteger,
+  status: CustomerNoteStatus,
+  // 書いた店舗（「丸の内店 記入 中村 彩」）。他店の 1 枚も同じ組織なら読める。
+  storeId: Uuid,
+  createdAt: IsoDateTime,
+})
+export type CustomerNote = z.infer<typeof CustomerNote>
+
+/** メモの取得。`status` を渡さなければ絞り込まない。 */
+export const CustomerNoteQuery = z.strictObject({
+  kind: CustomerNoteKind.optional(),
+  // クエリ文字列はカンマ区切りで届く（`?status=draft,published`）。分解を Worker の
+  // 手書きに残すと、語彙の検査が契約の外へ出て知らない語が黙って通る。
+  status: z
+    .union([
+      CustomerNoteStatus.array(),
+      z.string().transform((value) =>
+        value
+          .split(',')
+          .map((part) => part.trim())
+          .filter((part) => part !== ''),
+      ),
+    ])
+    .pipe(CustomerNoteStatus.array().max(3))
+    .default([]),
+  includeOtherStores: IncludeOtherStores,
+})
+export type CustomerNoteQuery = z.infer<typeof CustomerNoteQuery>
+
+/**
+ * メモの追加。**本文と筆跡の両方が空なら拒む** — 空の 1 件を残せると、手書きの面が
+ * 「1枚」と数えたまま中身の無い行ができ、5 枚の上限もそれで埋まる。
+ */
+export const CustomerNoteInput = z
+  .strictObject({
+    kind: CustomerNoteKind,
+    body: z.string().refine(codePointsAtMost(2000)).default(''),
+    handwritingSvg: HandwritingSvg.nullable().default(null),
+    storeId: Uuid,
+  })
+  .refine((value) => value.body.trim() !== '' || value.handwritingSvg !== null, {
+    message: '本文か手書きのどちらかを入れる',
+    path: ['body'],
+  })
+export type CustomerNoteInput = z.infer<typeof CustomerNoteInput>
+
+/**
+ * 読み取った文字の修正（CUSTOMER-HANDWRITE「文字を保存する」）。
+ * **筆跡は書いたときのまま残す**ので、この経路に手書きの欄を置かない。
+ * `published` へ上げるのも承認の面の仕事なので、状態は `draft` と `hidden` だけを許す。
+ */
+export const CustomerNotePatch = z.strictObject({
+  revision: CountInteger,
+  body: z.string().refine(codePointsAtMost(2000)).optional(),
+  status: z.enum(['draft', 'hidden']).optional(),
+})
+export type CustomerNotePatch = z.infer<typeof CustomerNotePatch>
+
+/**
+ * 注意ごとへの申し込み（「注意ごととして登録を申し込む」）。
+ * **申し込みだけでは注意ごとにならない**（`kind='attention'` / `status='draft'` で立てる）。
+ * 誤読がそのまま接客の禁忌になるのを避けるため、本文は 1 文字以上を要求する。
+ */
+export const CustomerNotePublishInput = z.strictObject({
+  revision: CountInteger,
+  body: z.string().trim().min(1).refine(codePointsAtMost(2000)),
+})
+export type CustomerNotePublishInput = z.infer<typeof CustomerNotePublishInput>
+
+/* --- 詳細・検索・候補 ----------------------------------------------------- */
+
+/**
+ * お客様の詳細（CUSTOMER-DETAIL）。「よくご担当した者」は列を持たず、`status='done'` の
+ * 予約に紐づく担当のうち最も多い者（同数なら新しいほう）をサーバが読み出し時に決める。
+ * 「注意ごと N件」も欄を持たない — `notes` の `kind='attention'` かつ
+ * `status='published'` を数えれば出るので、同じ数を 2 か所に置かない。
+ */
+export const CustomerDetail = CustomerSummary.extend({
+  email: z.string().trim().email().max(320).nullable().default(null),
+  birthDate: LocalDate.nullable().default(null),
+  // CUSTOMER-MERGE の「ご住所」。P4 は読むだけで、直す画面は作らない。
+  address: z.string().trim().max(120).nullable().default(null),
+  memo: z.string().refine(codePointsAtMost(2000)).default(''),
+  firstVisitAt: LocalDate.nullable().default(null),
+  frequentStaffName: z.string().trim().max(40).nullable().default(null),
+  prescriptions: Prescription.array().max(20).default([]),
+  glasses: OwnedGlasses.array().default([]),
+  notes: CustomerNote.array().default([]),
+  nextReservation: ReservationSummary.nullable().default(null),
+  // 非 NULL の行は参照専用（検索からも一覧からも外れる）。
+  mergedIntoId: Uuid.nullable().default(null),
+  version: Version,
+})
+export type CustomerDetail = z.infer<typeof CustomerDetail>
+
+/** 台帳の検索（CUSTOMER-LIST）。`OFFSET` は使わず `cursor` で続きを取る。 */
+export const CustomerSearchQuery = z.strictObject({
+  query: z.string().trim().max(40).optional(),
+  // 並べ方は「お名前順」と「ご来店の回数順」の 2 つだけ（segmented の 2 枚）。
+  sort: z.enum(['kana', 'visits']).default('kana'),
+  // 絞り込みの札が持つのはご来店の回数の 4 段（初 / 1回 / 2〜4回 / 5回以上）だけ。
+  visitCountMin: QueryInteger.pipe(CountInteger).optional(),
+  visitCountMax: QueryInteger.pipe(CountInteger).optional(),
+  lastVisitFrom: LocalDate.optional(),
+  lastVisitTo: LocalDate.optional(),
+  staffId: Uuid.optional(),
+  limit: Limit,
+  cursor: Cursor.optional(),
+})
+export type CustomerSearchQuery = z.infer<typeof CustomerSearchQuery>
+
+/** 一覧の応答（`04-api.md` §1.2 の形）。`total` は「当てはまるお客様 42名」。 */
+export const CustomerList = z.strictObject({
+  items: CustomerSummary.array().default([]),
+  nextCursor: Cursor.nullable().default(null),
+  total: CountInteger,
+})
+export type CustomerList = z.infer<typeof CustomerList>
+
+/**
+ * お電話番号やお名前からの照会。**4 つとも空なら拒む** — 空の照会は台帳の全走査になる。
+ * `phone` は正規化して `phone_normalized` の前方一致、`phoneLast4` は `phone_last4` の
+ * 完全一致で、引き方そのものが違うので欄を分けてある。
+ */
+export const CustomerLookupQuery = z
+  .strictObject({
+    phone: PhoneInput.optional(),
+    phoneLast4: PhoneSuffix.optional(),
+    name: z.string().trim().max(40).optional(),
+    kana: z.string().trim().max(40).optional(),
+  })
+  .refine(
+    (value) =>
+      [value.phone, value.phoneLast4, value.name, value.kana].some((f) => (f ?? '') !== ''),
+    { message: 'お電話番号・下 4 桁・お名前・ふりがなのどれか 1 つを入れる', path: ['phone'] },
+  )
+export type CustomerLookupQuery = z.infer<typeof CustomerLookupQuery>
+
+/**
+ * 候補 1 件（BOOK-04b-CUSTOMER-MATCH）。**確からしさは 2 段だけ**で、全桁が一致したものが
+ * `strong`（「よく一致しています」）、前方一致だけ・下 4 桁だけのものが `weak`
+ * （「確かめが必要です」）。3 段目を作ると添える札の文言が無く、自動確定への逃げ道にもなる。
+ * **1 件でも自動で確定しない**ので、応答は常に配列で返す。
+ */
+export const CustomerCandidate = z.strictObject({
+  customer: CustomerSummary,
+  match: z.enum(['strong', 'weak']),
+  lastVisitAt: LocalDate.nullable().default(null),
+  // 「お選びになると引き継がれること」の 4 項目（現在の度数 / 前回の担当 / 注意ごと / ご連絡先）。
+  currentPrescription: Prescription.nullable().default(null),
+  lastStaffName: z.string().trim().max(40).nullable().default(null),
+  attentionSummary: z.string().refine(codePointsAtMost(60)).default(''),
+})
+export type CustomerCandidate = z.infer<typeof CustomerCandidate>
+
+/** 新しいお客様の登録（CUSTOMER-NEW）。**お名前だけで登録できる。** */
+export const CustomerCreate = z.strictObject({
+  name: z.string().trim().min(1).max(40),
+  kana: z.string().trim().max(40).optional(),
+  phone: PhoneInput.optional(),
+  email: z.string().trim().email().max(320).optional(),
+  birthDate: LocalDate.optional(),
+  memo: z.string().refine(codePointsAtMost(2000)).optional(),
+})
+export type CustomerCreate = z.infer<typeof CustomerCreate>
+
+/** 更新。`version` は必須で、版だけを送る「何も変えない保存」は拒まない。 */
+export const CustomerPatch = CustomerCreate.partial().extend({ version: Version })
+export type CustomerPatch = z.infer<typeof CustomerPatch>
+
+/* --- おまとめ ------------------------------------------------------------- */
+
+/** 同じ行を両側に置かせない（残さない側に自分自身を統合先として書けてしまう）。 */
+const differentCustomers = (value: { primaryId: string; secondaryId: string }): boolean =>
+  value.primaryId !== value.secondaryId
+
+/** 見比べ表の項目。CUSTOMER-MERGE が描くのはこのうち 4 つである。 */
+const CustomerMergeFieldName = z.enum([
+  'name',
+  'kana',
+  'phone',
+  'email',
+  'address',
+  'birthDate',
+  'memo',
+  'notes',
+])
+
+/**
+ * 項目ごとの残す側。**`'both'` は接客のメモだけ**に許す（7 + 1 = 8 件）。
+ * お名前やお電話番号を 2 つ持つ行は作れないので、他の項目で `'both'` は意味を持たない。
+ */
+export const CustomerMergeField = z
+  .strictObject({
+    field: CustomerMergeFieldName,
+    primaryValue: z.string().max(2000).nullable().default(null),
+    secondaryValue: z.string().max(2000).nullable().default(null),
+    choice: z.enum(['primary', 'secondary', 'both']),
+  })
+  .refine((value) => value.choice !== 'both' || value.field === 'notes', {
+    message: "'both' を選べるのは接客のメモだけ",
+    path: ['choice'],
+  })
+export type CustomerMergeField = z.infer<typeof CustomerMergeField>
+
+/** おまとめの下見。取り消せない操作の前に、まとめたあとの姿と失う番号を読ませる。 */
+export const CustomerMergePreviewRequest = z
+  .strictObject({ primaryId: Uuid, secondaryId: Uuid })
+  .refine(differentCustomers, { message: '同じお客様どうしはまとめない', path: ['secondaryId'] })
+export type CustomerMergePreviewRequest = z.infer<typeof CustomerMergePreviewRequest>
+
+/** 下見の中身。`losingCustomerNumber` は「G-02310 は使えなくなります。」の番号。 */
+export const CustomerMergePreview = z.strictObject({
+  fields: CustomerMergeField.array().max(8).default([]),
+  result: CustomerSummary,
+  noteCount: CountInteger,
+  losingCustomerNumber: CustomerNumber,
+})
+export type CustomerMergePreview = z.infer<typeof CustomerMergePreview>
+
+/**
+ * おまとめの実行。**両側の `version` を要求する** — 下見のあとに片方へ新しい予約が
+ * 入っていたら拒み、下見からやり直させる（AC-CUST-15）。下見と同じ守りをここにも掛ける。
+ */
+export const CustomerMergeInput = z
+  .strictObject({
+    primaryId: Uuid,
+    secondaryId: Uuid,
+    primaryVersion: Version,
+    secondaryVersion: Version,
+    fields: CustomerMergeField.array().max(8).default([]),
+  })
+  .refine(differentCustomers, { message: '同じお客様どうしはまとめない', path: ['secondaryId'] })
+export type CustomerMergeInput = z.infer<typeof CustomerMergeInput>
+
+/** 実行の結果。残さない側の行は消さず、`mergedIntoId` を書いて参照専用にする。 */
+export const CustomerMergeResult = z.strictObject({
+  customer: CustomerDetail,
+  mergedId: Uuid,
+  movedReservations: CountInteger,
+  movedNotes: CountInteger,
+})
+export type CustomerMergeResult = z.infer<typeof CustomerMergeResult>

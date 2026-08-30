@@ -1,4 +1,4 @@
-import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
+import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
 
 /*
  * D1 は SQLite。このリポジトリの決め:
@@ -11,7 +11,7 @@ import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqli
  *
  * テーブルはフェーズごとに増える（specs/glasses_management/design/03-data-model.md）。
  * P0（基盤）の 3 つに、P1（店舗の受付条件）の 16 と P2（枠の一次排他）の 1、
- * P3（電話・店頭からの予約受付）の 3 を足した 23 表がここにある。
+ * P3（電話・店頭からの予約受付）の 3 と P4（顧客台帳）の 4 を足した 27 表がここにある。
  */
 
 /**
@@ -723,5 +723,182 @@ export const receptionSessions = sqliteTable(
     index('reception_sessions_org_store_started_idx').on(t.organizationId, t.storeId, t.startedAt),
     // 予約詳細から受付と録音へたどる。
     index('reception_sessions_org_reservation_idx').on(t.organizationId, t.reservationId),
+  ],
+)
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * P4 顧客台帳（0004_*.sql）
+ * お客様を「探す・特定する・思い出す」ための 4 表。**組織単位で 1 本**にし、
+ * 店舗をまたいで共有する（03-data-model.md §9）。別の店舗で書かれた度数・手書き・
+ * 履歴も同じ組織なら読める。「別の店舗だから見えない」という分岐は作らない。
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * 顧客台帳の本体。予約・受付・メモ・度数のすべてがこの行に集まる。
+ *
+ * 電話番号は 3 列に分けて持つ。`phone` は伺ったままの表示用、`phone_normalized` は
+ * 数字だけ、`phone_last4` はその末尾 4 桁の写しで、3 つとも NULL か 3 つとも非 NULL。
+ * 下 4 桁の検索を後方一致（`LIKE '%' || ?`）で書くと前方ワイルドカードで B-tree が
+ * 効かず、年 20,000 行ずつ増えて消えない顧客表を毎回全走査することになる。
+ * 写しの列を持って完全一致で引けるようにするのはそのためである。
+ *
+ * `visit_count` は `reservations` の `status='done'` の件数を書き戻した値で、
+ * 読むたびに数え直さない。`merged_into_id` が非 NULL の行は参照専用（検索・一覧から
+ * 外し、予約とメモは統合先へ付け替える）。行は削除しない。
+ */
+export const customers = sqliteTable(
+  'customers',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    // 'G-NNNNN'。統合で失った番号は再利用しない。reservations.code / recordings.code と
+    // 紛れないよう code とは呼ばない。
+    customerNumber: text('customer_number').notNull(),
+    name: text('name').notNull(), // 1〜40文字
+    kana: text('kana'), // ひらがなと空白。五十音順一覧の並び
+    phone: text('phone'), // 表示用の生文字列 '090-1234-5678'
+    phoneNormalized: text('phone_normalized'), // 数字のみ '09012345678'
+    phoneLast4: text('phone_last4'), // phone_normalized の末尾 4 桁の写し
+    email: text('email'), // Web 予約から入る
+    birthDate: text('birth_date'), // 'YYYY-MM-DD'
+    address: text('address'), // 0〜120文字
+    memo: text('memo'), // 0〜60文字。一覧の「覚えておくこと」列
+    firstVisitAt: text('first_visit_at'), // ISO8601 (UTC)
+    lastVisitAt: text('last_visit_at'), // ISO8601 (UTC)。一覧の「最後のご来店」
+    visitCount: integer('visit_count').notNull(), // 0 以上。done の件数の書き戻し
+    mergedIntoId: text('merged_into_id'), // 非 NULL の行は検索・一覧から外す
+    version: integer('version').notNull(), // 1 以上。楽観ロック
+    createdStoreId: text('created_store_id'), // stores.id
+    createdTerminalId: text('created_terminal_id'), // terminals は P10。それまで常に NULL
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (t) => [
+    // BOOK-04b の候補提示（前方一致 `LIKE ? || '%'`）と CUSTOMER-NEW の重複警告。
+    // 同じ番号のご家族が並ぶので一意にしない。
+    index('customers_org_phone_idx').on(t.organizationId, t.phoneNormalized),
+    // LEDGER-WALKIN / CUSTOMER-NEW の「下 4 桁でも探せます」。完全一致で引く。
+    index('customers_org_phone_last4_idx').on(t.organizationId, t.phoneLast4),
+    // CUSTOMER-LIST の五十音順一覧。カーソルは (kana, id) の複合で OFFSET を使わない。
+    index('customers_org_kana_idx').on(t.organizationId, t.kana),
+    // お客様番号での引き当てと、G-NNNNN の採番衝突検出。
+    uniqueIndex('customers_org_customer_number_idx').on(t.organizationId, t.customerNumber),
+    // 「ご来店の回数順」以外の並べ替えと、来店の古い順の抽出。
+    index('customers_org_last_visit_idx').on(t.organizationId, t.lastVisitAt),
+  ],
+)
+
+/**
+ * 度数の履歴。CUSTOMER-DETAIL の「度数の移り変わり」表。
+ * 測定日は時刻を持たない（'YYYY-MM-DD'）。度数と PD は数値で持ち、
+ * 表示のときに小数 2 桁（PD は 1 桁）へ整形する。
+ * `is_current='1'` は顧客ごとにちょうど 1 行で、新しい測定を足すときは
+ * 古い行を '0' にする UPDATE と同じ `db.batch()` で書く。
+ */
+export const customerPrescriptions = sqliteTable(
+  'customer_prescriptions',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    customerId: text('customer_id').notNull(),
+    storeId: text('store_id').notNull(), // 測定した店舗
+    measuredAt: text('measured_at').notNull(), // 'YYYY-MM-DD'（JST の暦日）
+    rSph: real('r_sph'), // -20.00〜+20.00（0.25 刻み）
+    rCyl: real('r_cyl'), // -10.00〜0.00
+    rAxis: integer('r_axis'), // 0〜180
+    rAdd: real('r_add'), // 0.00〜+4.00。遠近のみ
+    lSph: real('l_sph'),
+    lCyl: real('l_cyl'),
+    lAxis: integer('l_axis'),
+    lAdd: real('l_add'),
+    pd: real('pd'), // 40.0〜80.0（mm）
+    note: text('note'), // 0〜200文字
+    isCurrent: text('is_current').notNull(), // '0' | '1'。表の緑・太字行
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => [
+    // CUSTOMER-DETAIL の履歴表（新しい順・最大 20 行）。
+    index('customer_prescriptions_org_customer_measured_idx').on(
+      t.organizationId,
+      t.customerId,
+      t.measuredAt,
+    ),
+  ],
+)
+
+/**
+ * いまお使いのメガネ。CUSTOMER-DETAIL の「いまお使いのメガネ 2本」。
+ * 買い替えても行を削除せず、古い行を `is_current='0'` にする。
+ * `is_current='1'` の本数に上限はない（0 本でも成り立つ）。
+ */
+export const customerGlasses = sqliteTable(
+  'customer_glasses',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    customerId: text('customer_id').notNull(),
+    storeId: text('store_id').notNull(), // お渡しした店舗
+    purchasedAt: text('purchased_at').notNull(), // 'YYYY-MM-DD'（JST の暦日）
+    frameName: text('frame_name'), // 0〜60文字
+    lensName: text('lens_name'), // 0〜40文字
+    usageLabel: text('usage_label'), // 0〜20文字。'お出かけ用' / 'PC作業用'
+    note: text('note'), // 0〜200文字
+    isCurrent: text('is_current').notNull(), // '0' | '1'
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => [
+    // CUSTOMER-DETAIL の一覧（新しい順）。何本でも持てるので一意にしない。
+    index('customer_glasses_org_customer_purchased_idx').on(
+      t.organizationId,
+      t.customerId,
+      t.purchasedAt,
+    ),
+  ],
+)
+
+/**
+ * 接客のメモ・注意ごと・手書き。手書きから注意ごとへの昇格は申し込み制で、
+ * 申し込みは `kind='attention'` / `status='draft'` の行として作る（自動で上げない）。
+ * 「注意ごと N件」に数えるのは `kind='attention'` かつ `status='published'` の行だけ。
+ *
+ * **手書きの SVG 本体は D1 に置かず、R2（binding `RECORDINGS`）へ置く。**
+ * 1 枚 3〜12KB × 5 枚 × 5,000 顧客で約 300MB になり、D1 の 500MB の 6 割を
+ * 手書きだけで占めてしまう。キーは `notes/{organizationId}/{customerId}/{id}.svg` で、
+ * 前置 `notes/` が録音の `recordings/` と分かれる（掃除の Cron が自分の前置だけを見る）。
+ * 読み出しは Worker が R2 から取り、許可リストで再直列化してから返す。
+ * 署名付き URL をクライアントへ渡さない。枚数上限は 1 顧客 5 枚。
+ */
+export const customerNotes = sqliteTable(
+  'customer_notes',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    customerId: text('customer_id').notNull(),
+    storeId: text('store_id').notNull(), // 書いた店舗（'丸の内店 記入 中村 彩'）
+    kind: text('kind').notNull(), // 'memo' | 'attention'
+    // 0〜500文字。手書きの読み取り結果もここに入る。手書きだけのメモは空文字で作る
+    // （NULL は使わない。読み取り前と読み取り結果が空の区別を持たない）。
+    body: text('body').notNull(),
+    handwritingKey: text('handwriting_key'), // R2 のキー。SVG の本体を D1 に置かない
+    authorId: text('author_id'), // staff.id
+    revision: integer('revision').notNull(), // 1 以上。直すたび +1
+    status: text('status').notNull(), // 'draft' | 'published' | 'hidden'
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (t) => [
+    // CUSTOMER-HANDWRITE のサムネイル一覧（新しい順）と、5 枚の上限判定。
+    index('customer_notes_org_customer_created_idx').on(
+      t.organizationId,
+      t.customerId,
+      t.createdAt,
+    ),
+    // 「注意ごと N件」の件数と RECEPTION-CHECKIN の確認行。
+    index('customer_notes_org_customer_kind_idx').on(
+      t.organizationId,
+      t.customerId,
+      t.kind,
+      t.status,
+    ),
   ],
 )

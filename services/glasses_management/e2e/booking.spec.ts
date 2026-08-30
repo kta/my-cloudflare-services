@@ -583,6 +583,14 @@ test('工程 4 はテンキーで番号を打ち切るまで「完了」も「�
   }
   await expect(keypad.getByRole('button', { name: '完了', exact: true })).toBeEnabled()
   await keypad.getByRole('button', { name: '完了', exact: true }).click()
+  // 090-1234-5678 は同じ番号の登録が 2 件ある番号なので、候補の吹き出しが開く
+  // （AC-CUST-04）。候補が開いている間はフォーカスをお電話番号の欄に残す
+  // （AC-CUST-21）ので、お名前の欄は候補を退けたあとで手で入れられる。
+  await expect(page.getByRole('dialog', { name: 'お客様の候補' })).toBeVisible()
+  await expect(page.getByLabel('お電話番号')).toBeFocused()
+  await page.getByRole('button', { name: 'どちらでもありません' }).click()
+  await expect(page.getByRole('dialog', { name: 'お客様の候補' })).toHaveCount(0)
+  await page.getByLabel('お名前').click()
   await expect(page.getByLabel('お名前')).toBeFocused()
 })
 

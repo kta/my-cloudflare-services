@@ -1,6 +1,7 @@
 import type { LedgerEntry, LedgerLane, LedgerView } from '@app/contracts'
 import { cn, focusRing } from '@app/ui'
 import { type KeyboardEvent, useEffect, useRef, useState } from 'react'
+import { visitLabel } from '../../worker/domain/customers'
 import { bandSourceLabel, type LedgerBandTone } from '../../worker/domain/ledger'
 import {
   bandName,
@@ -33,8 +34,12 @@ import {
  * （緑＝お電話・店頭／青＝Web予約／茶＝ウォークイン）＋担当が未定の赤で、
  * **色だけに意味を持たせないので緑以外は必ず語を添える**（AC-LEDGER-05）。
  *
- * この面が描かないもの: お客様のお名前と来店回数（`customers` は 007）、
- * お待ちのお客様の人数（`walk_ins` は 008。いまは 0名 の器）。
+ * お名前と来店回数（`007-customer-records`。AC-CUST-24）: 60分以上（2 列）の帯は
+ * お名前フルネーム＋来店回数の印を出し、30分（1 列）の帯は印を持たずお名前を
+ * **姓だけ**に落とす（`docs/frontend/mockups/eyex/images/LEDGER-STAFF.png` の
+ * 「田中 花子 様／4回目」「松本 様」）。読み上げ名は省略しない（`metrics.ts` の `bandName`）。
+ *
+ * この面が描かないもの: お待ちのお客様の人数（`walk_ins` は 008。いまは 0名 の器）。
  */
 
 /** 名前列の幅を rem で。任意値（`grid-cols-[170px_1fr]`）を書かないための値。 */
@@ -434,6 +439,33 @@ function Segment({
  * モックの `.appt.narrow { word-break: keep-all }` は中身がお名前 1 行だけの帯の決めで、
  * 語を 2〜3 行積むこの実装には当てはまらない（60分の帯でも「・」の無いご用件が切れる）。
  */
+/** 姓だけに落とす（AC-CUST-24）。区切りは半角・全角の空白のどちらでも切れる。 */
+function surnameOf(name: string): string {
+  return (name.split(/[\s　]+/)[0] ?? name).trim()
+}
+
+/**
+ * 来店回数の印。**数字の文字を必ず出す**（色だけで区別しない）。
+ * はじめての方は薄い橙、3 回目以上は薄い緑、1〜2 回目は罫だけ。
+ * **この印はお名前の右に添えるものだけ**にしてある —— 回数の列をすでに持つ面
+ * （顧客台帳の一覧）には入れない（`docs/frontend/mockups/eyex/README.md` の決め）ので、
+ * 印の綴りはこの 1 か所しか無い。
+ */
+function VisitBadge({ count }: { count: number }) {
+  return (
+    <span
+      className={cn(
+        'inline-flex min-h-4.5 w-fit items-center rounded-ctl border px-1.5 font-mono text-fine font-semibold',
+        count === 0 && 'border-walkin bg-walkin-soft text-walkin',
+        count >= 3 && 'border-pine-line bg-pine-soft text-pine-deep',
+        count >= 1 && count <= 2 && 'border-line-strong bg-surface text-ink',
+      )}
+    >
+      {visitLabel(count, 'badge')}
+    </span>
+  )
+}
+
 function Band({ entry, wide }: { entry: LedgerEntry; wide: boolean }) {
   const source = bandSourceLabel(entry.source)
   return (
@@ -454,6 +486,17 @@ function Band({ entry, wide }: { entry: LedgerEntry; wide: boolean }) {
           </>
         )}
       </span>
+      {/* お名前と来店回数（AC-CUST-24）。60分以上（2 列）はフルネーム＋印、
+          30分（1 列）は姓だけに落とし印を持たない（文字予算がおよそ 6 字しかない）。 */}
+      {entry.customerName !== null &&
+        (wide ? (
+          <>
+            <span className="truncate font-semibold">{`${entry.customerName} 様`}</span>
+            {entry.visitCount !== null && <VisitBadge count={entry.visitCount} />}
+          </>
+        ) : (
+          <span className="font-semibold">{`${surnameOf(entry.customerName)} 様`}</span>
+        ))}
       {/* 30分 1 列の文字予算はおよそ 6 字しかない。狭い帯にはご用件を入れない（AC-LEDGER-06）。 */}
       {wide && <span>{entry.purposeLabel}</span>}
       {source !== null && <span className="text-fine text-ink-muted">{source}</span>}
