@@ -13,7 +13,16 @@ import {
   authed,
   BASE,
   INTERNAL_HEADERS,
+  insertBusinessHours,
+  insertReservation,
+  insertShift,
+  insertSlotRules,
+  insertStaff,
+  insertStore,
+  insertVisitPurpose,
   JSON_HEADERS,
+  jstAt,
+  LEDGER_DATE,
   orgId,
   syncOrganization,
   tokenFor,
@@ -393,5 +402,181 @@ describe('受付条件は組織をまたがない', () => {
     expect(other.status).toBe(200)
     const rows = (other.body as { rows: { isClosed: boolean }[] }).rows
     expect(rows.every((row) => row.isClosed)).toBe(true)
+  })
+})
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * P2 予約台帳と空き枠
+ * 予約は API では作れない（`POST /api/staff/reservations` は P3）ので、
+ * 他テナントの行は `env.DB` へ直に置く。**自分の店舗 id を持たせた他社の行**を
+ * わざと作り、org で絞っていない経路が 1 本も無いことを確かめる。
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+/** 台帳と空き枠を読める最小の店舗（営業時間・予約の間隔・担当・ご用件）を持つテナント。 */
+async function ledgerTenant(name = 'EYEX 銀座店') {
+  const org = orgId()
+  const token = await tokenFor(org)
+  const storeId = await insertStore(org, name)
+  await insertBusinessHours(org, storeId)
+  await insertSlotRules(org, storeId)
+  const staffId = await insertStaff(org, storeId, {
+    displayName: '佐藤 美咲',
+    skills: ['sales_reception'],
+  })
+  await insertShift(org, storeId, staffId)
+  const purposeId = await insertVisitPurpose(org, storeId, {
+    nameInternal: '今のメガネを調整したい',
+    nameShort: '調整',
+    durationMinutes: 20,
+  })
+  return { org, token, storeId, staffId, purposeId }
+}
+
+type LedgerBody = {
+  lanes: { entries: { reservationId: string }[] }[]
+  counts: { all: number; upcoming: number; pendingReview: number }
+}
+type AvailabilityBody = {
+  slots: { startsAt: string; isAvailable: boolean; reason: string | null }[]
+}
+
+async function readLedger(token: string, storeId: string) {
+  const res = await SELF.fetch(`${BASE}/api/staff/ledger?storeId=${storeId}&date=${LEDGER_DATE}`, {
+    headers: authed(token),
+  })
+  return { status: res.status, body: (await res.json().catch(() => null)) as LedgerBody }
+}
+
+async function readAvailability(token: string, storeId: string, purposeId: string) {
+  const res = await SELF.fetch(
+    `${BASE}/api/staff/availability?storeId=${storeId}&date=${LEDGER_DATE}&purposeIds=${purposeId}`,
+    { headers: authed(token) },
+  )
+  return { status: res.status, body: (await res.json().catch(() => null)) as AvailabilityBody }
+}
+
+/** 台帳に出ているご予約 id をすべて集める。 */
+const drawnIds = (body: LedgerBody) =>
+  body.lanes.flatMap((lane) => lane.entries.map((entry) => entry.reservationId))
+
+describe('予約台帳と空き枠は組織をまたがない', () => {
+  it('別テナントが自分の店舗 id を持つ予約を書いても、台帳の帯に 1 件も混ざらない', async () => {
+    const [mine, theirs] = [await ledgerTenant(), await ledgerTenant('B 店')]
+    const ours = await insertReservation(mine.org, {
+      storeId: mine.storeId,
+      startsAt: jstAt(LEDGER_DATE, '11:00'),
+      staffId: mine.staffId,
+      purposes: [{ id: mine.purposeId }],
+    })
+    // 他社の行に、こちらの店舗 id を持たせる（読み出しが org を落としていれば混ざる）。
+    const intruder = await insertReservation(theirs.org, {
+      storeId: mine.storeId,
+      startsAt: jstAt(LEDGER_DATE, '11:30'),
+      staffId: null,
+      purposes: [{ id: theirs.purposeId }],
+    })
+
+    const ledger = await readLedger(mine.token, mine.storeId)
+    expect(ledger.status).toBe(200)
+    expect(drawnIds(ledger.body)).toEqual([ours])
+    expect(drawnIds(ledger.body)).not.toContain(intruder)
+    expect(ledger.body.counts.all).toBe(1)
+  })
+
+  it('別テナントの予約は空き枠の塞がりに数えない（自分の 3 件は数える）', async () => {
+    const [mine, theirs] = [await ledgerTenant(), await ledgerTenant('B 店')]
+    const at11 = jstAt(LEDGER_DATE, '11:00')
+    const slotAt11 = (body: AvailabilityBody) => body.slots.find((slot) => slot.startsAt === at11)
+
+    // 同時受付上限は 3 件。他社の 3 件をこちらの店舗 id で書いても満席にならない。
+    for (const _ of [0, 1, 2]) {
+      await insertReservation(theirs.org, {
+        storeId: mine.storeId,
+        startsAt: at11,
+        staffId: null,
+        purposes: [{ id: theirs.purposeId }],
+      })
+    }
+    const open = await readAvailability(mine.token, mine.storeId, mine.purposeId)
+    expect(slotAt11(open.body)?.isAvailable).toBe(true)
+
+    // 同じ 3 件を自分の組織で書くと満席になる（上の緑が「数えていない」ことの証拠になる）。
+    for (const _ of [0, 1, 2]) {
+      await insertReservation(mine.org, {
+        storeId: mine.storeId,
+        startsAt: at11,
+        staffId: null,
+        purposes: [{ id: mine.purposeId }],
+      })
+    }
+    const full = await readAvailability(mine.token, mine.storeId, mine.purposeId)
+    expect(slotAt11(full.body)?.isAvailable).toBe(false)
+    expect(slotAt11(full.body)?.reason).toBe('max_parallel')
+  })
+
+  it('別テナントの storeId をクエリに渡しても 404 になる（403 で存在を漏らさない）', async () => {
+    const [mine, theirs] = [await ledgerTenant(), await ledgerTenant('B 店')]
+    await insertReservation(theirs.org, {
+      storeId: theirs.storeId,
+      startsAt: jstAt(LEDGER_DATE, '11:00'),
+      staffId: theirs.staffId,
+      purposes: [{ id: theirs.purposeId }],
+    })
+
+    expect((await readLedger(mine.token, theirs.storeId)).status).toBe(404)
+    expect((await readAvailability(mine.token, theirs.storeId, theirs.purposeId)).status).toBe(404)
+    // 自分の店舗なら同じ形の要求が通る（落ちているのは店舗の持ち主だけである）。
+    expect((await readLedger(mine.token, mine.storeId)).status).toBe(200)
+  })
+
+  it('別テナントのご予約 id は 404 を返す（403 で存在を漏らさない）', async () => {
+    const [mine, theirs] = [await ledgerTenant(), await ledgerTenant('B 店')]
+    const theirReservation = await insertReservation(theirs.org, {
+      storeId: theirs.storeId,
+      startsAt: jstAt(LEDGER_DATE, '11:00'),
+      staffId: theirs.staffId,
+      purposes: [{ id: theirs.purposeId }],
+    })
+
+    const intruded = await SELF.fetch(`${BASE}/api/staff/reservations/${theirReservation}`, {
+      headers: authed(mine.token),
+    })
+    expect(intruded.status).toBe(404)
+    expect(await intruded.json()).toMatchObject({ error: 'not_found' })
+
+    // 持ち主が読めば 200。404 は「無い」ではなく「あなたのものではない」である。
+    const owner = await SELF.fetch(`${BASE}/api/staff/reservations/${theirReservation}`, {
+      headers: authed(theirs.token),
+    })
+    expect(owner.status).toBe(200)
+  })
+
+  it('3 テナントが同じ日に予約を持っても、各自の台帳しか見えない', async () => {
+    const tenants = [
+      await ledgerTenant('A 店'),
+      await ledgerTenant('B 店'),
+      await ledgerTenant('C 店'),
+    ]
+    const owned: string[][] = []
+    for (const [index, tenant] of tenants.entries()) {
+      const ids: string[] = []
+      for (let n = 0; n <= index; n++) {
+        ids.push(
+          await insertReservation(tenant.org, {
+            storeId: tenant.storeId,
+            startsAt: jstAt(LEDGER_DATE, `1${n}:00`),
+            staffId: tenant.staffId,
+            purposes: [{ id: tenant.purposeId }],
+          }),
+        )
+      }
+      owned.push(ids)
+    }
+
+    for (const [index, tenant] of tenants.entries()) {
+      const ledger = await readLedger(tenant.token, tenant.storeId)
+      expect(drawnIds(ledger.body).sort()).toEqual([...(owned[index] ?? [])].sort())
+      expect(ledger.body.counts.all).toBe(index + 1)
+    }
   })
 })

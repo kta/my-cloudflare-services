@@ -1,11 +1,13 @@
 import type { Store } from '@app/contracts'
 import { auth } from '@app/shared'
 import { Button, Field, focusRing, focusRingOnPine, Notice, TextInput } from '@app/ui'
-import { type FormEvent, useCallback, useEffect, useState } from 'react'
+import { type FormEvent, type ReactNode, useCallback, useEffect, useState } from 'react'
 import { client } from './client'
+import { MyReservations } from './home/MyReservations'
+import { LedgerScreen } from './ledger/LedgerScreen'
 import { SettingsScreen } from './settings/SettingsScreen'
 import { AppShell } from './shell/AppShell'
-import { RAIL_BY_DEFAULT } from './shell/destinations'
+import { DESTINATIONS, RAIL_BY_DEFAULT } from './shell/destinations'
 
 /*
  * P0（基盤）の画面。承認済みモック docs/frontend/mockups/eyex/images/HOME.png の
@@ -82,8 +84,12 @@ function StartWork({ onStarted }: { onStarted: (org: string) => void }) {
 function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
   const [current, setCurrent] = useState('home')
   const [rail, setRail] = useState(false)
+  // 個人トップの 1 行から来たとき、台帳のその帯の詳細を開いた状態で出す。
+  const [openReservation, setOpenReservation] = useState<string | null>(null)
   const [stores, setStores] = useState<Store[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // 上のバーの中央。台帳が日付の帯を差し込む（モックの `.datepill` の置き場所）。
+  const [barCenter, setBarCenter] = useState<ReactNode>(null)
 
   const load = useCallback(async () => {
     const res = await client.api.staff.stores.$get()
@@ -107,8 +113,9 @@ function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
     load().catch(() => setError('通信できませんでした。画面を開き直してください。'))
   }, [load])
 
-  function navigate(key: string) {
+  function navigate(key: string, reservationId: string | null = null) {
     setCurrent(key)
+    setOpenReservation(reservationId)
     setRail(RAIL_BY_DEFAULT.has(key))
   }
 
@@ -117,12 +124,17 @@ function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
   return (
     <AppShell
       storeName={store ? store.name : 'EYEX'}
-      storeSubline={current === 'home' ? '営業中　10:00–19:00' : ''}
+      storeSubline={
+        current === 'home'
+          ? '営業中　10:00–19:00'
+          : (DESTINATIONS.find((destination) => destination.key === current)?.label ?? '')
+      }
       current={current}
-      onNavigate={navigate}
+      onNavigate={(key) => navigate(key)}
       rail={rail}
       onToggleRail={() => setRail((v) => !v)}
       terminalNote={[`${org} の端末`, '共有で使っています']}
+      barCenter={barCenter}
       barActions={
         <button
           type="button"
@@ -140,7 +152,24 @@ function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
           </div>
         )}
         {current === 'home' ? (
-          <Home stores={stores} currentStoreId={store?.id} />
+          <Home
+            stores={stores}
+            currentStoreId={store?.id}
+            onOpenReservation={(id) => navigate('ledger', id)}
+            onOpenLedger={() => navigate('ledger')}
+          />
+        ) : current === 'ledger' ? (
+          store ? (
+            <LedgerScreen
+              storeId={store.id}
+              initialReservationId={openReservation ?? undefined}
+              onBarCenter={setBarCenter}
+              onOpenSettings={() => navigate('settings')}
+              onSessionExpired={onSignOut}
+            />
+          ) : (
+            <p className="p-11 text-body text-ink-muted">読み込んでいます…</p>
+          )
         ) : current === 'settings' ? (
           store ? (
             <SettingsScreen storeId={store.id} />
@@ -155,37 +184,61 @@ function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
   )
 }
 
-function Home({ stores, currentStoreId }: { stores: Store[] | null; currentStoreId?: string }) {
+function Home({
+  stores,
+  currentStoreId,
+  onOpenReservation,
+  onOpenLedger,
+}: {
+  stores: Store[] | null
+  currentStoreId?: string
+  onOpenReservation: (reservationId: string) => void
+  onOpenLedger: () => void
+}) {
   const others = stores?.filter((s) => s.id !== currentStoreId) ?? []
   return (
-    <div className="grid h-full content-center justify-start gap-6 pb-31 pl-11">
-      <PrimaryAction title="新しい予約を取る" note="お電話・ご来店のお客様" tone="pine" glyph="☎" />
-      <PrimaryAction
-        title="予約を変更する"
-        note="日時・内容の変更、取り消し"
-        tone="walkin"
-        glyph="✎"
-      />
-      <section aria-label="ほかのお店" className="mt-2">
-        {stores === null ? (
-          <p className="text-grid text-ink-muted">読み込んでいます…</p>
-        ) : stores.length === 0 ? (
-          <p className="text-grid text-ink-muted">お店がまだ登録されていません。</p>
-        ) : others.length > 0 ? (
-          <ul className="flex flex-wrap gap-2">
-            {others.map((s) => (
-              <li key={s.id}>
-                <button
-                  type="button"
-                  className={`min-h-11 rounded-full border border-line-strong bg-surface px-4 text-note font-semibold text-ink-muted ${focusRing}`}
-                >
-                  {s.name}へ切り替える
-                </button>
-              </li>
-            ))}
-          </ul>
-        ) : null}
-      </section>
+    <div className="grid h-full grid-flow-col content-center justify-start gap-12 pb-31 pl-11">
+      <div className="grid content-center gap-6">
+        <PrimaryAction
+          title="新しい予約を取る"
+          note="お電話・ご来店のお客様"
+          tone="pine"
+          glyph="☎"
+        />
+        <PrimaryAction
+          title="予約を変更する"
+          note="日時・内容の変更、取り消し"
+          tone="walkin"
+          glyph="✎"
+        />
+        <section aria-label="ほかのお店" className="mt-2">
+          {stores === null ? (
+            <p className="text-grid text-ink-muted">読み込んでいます…</p>
+          ) : stores.length === 0 ? (
+            <p className="text-grid text-ink-muted">お店がまだ登録されていません。</p>
+          ) : others.length > 0 ? (
+            <ul className="flex flex-wrap gap-2">
+              {others.map((s) => (
+                <li key={s.id}>
+                  <button
+                    type="button"
+                    className={`min-h-11 rounded-full border border-line-strong bg-surface px-4 text-note font-semibold text-ink-muted ${focusRing}`}
+                  >
+                    {s.name}へ切り替える
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </section>
+      </div>
+      {currentStoreId !== undefined && (
+        <MyReservations
+          storeId={currentStoreId}
+          onOpen={onOpenReservation}
+          onOpenLedger={onOpenLedger}
+        />
+      )}
     </div>
   )
 }

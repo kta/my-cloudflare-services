@@ -1,4 +1,6 @@
 import {
+  AvailabilityQuery,
+  AvailabilityResponse,
   BusinessHoursInput,
   BusinessHoursView,
   CalendarException,
@@ -12,12 +14,15 @@ import {
   EquipmentMaintenanceInput,
   EquipmentPatch,
   IssueTokenRequest,
+  LedgerQuery,
+  LedgerView,
   MaintenanceQuery,
   OrganizationSync,
   type Plan,
   PurposeListQuery,
   PurposeOrderInput,
   PurposeRequirementsInput,
+  ReservationDetail,
   type SettingsImpactItem,
   SettingsImpactReport,
   SettingsImpactRequest,
@@ -62,6 +67,7 @@ import { type DrizzleD1Database, drizzle } from 'drizzle-orm/d1'
 import { type Context, Hono, type MiddlewareHandler } from 'hono'
 import { except } from 'hono/combine'
 import { HTTPException } from 'hono/http-exception'
+import { readAvailabilityDay, readLedgerDay, readReservationDetail } from './db/queries/ledger'
 import {
   equipment,
   equipmentMaintenance,
@@ -79,6 +85,8 @@ import {
   stores,
   visitPurposes,
 } from './db/schema'
+import { computeAvailability } from './domain/availability'
+import { buildLedgerView } from './domain/ledger'
 import {
   type ImpactWebSlot,
   impactOfBusinessHours,
@@ -211,6 +219,18 @@ const toJstMinutes = (instant: string): number =>
 /** 空白区切りの許可リストに含まれるか。知らない語は届かない（同期で fail close 済み）。 */
 const allows = (permissions: string, perm: StorePermission): boolean =>
   permissions.split(' ').includes(perm)
+
+/**
+ * お客様に読み上げていただく Web のご予約番号（`EY-W-2608-0006`）。
+ *
+ * 正本は `web_bookings.public_code` で、その表を作るのは `011-web-booking`（P8）である。
+ * それまでは業務側の予約番号（`reservations.code`）から機械的に作る。契約は
+ * 「`source='web'` のご予約は必ずこの番号を持つ」形で決めてあり、ここで null を返すと
+ * Web から入ったご予約は 1 件も詳細を開けない。**採番の系統を 2 つ持たない**ので、
+ * P8 で表ができたらこの関数の中だけを読み替える。
+ */
+const webBookingCodeOf = (source: string, code: string): string | null =>
+  source === 'web' ? code.replace('EY-', 'EY-W-') : null
 
 /** 自分の組織の店舗だけを引く。他テナントの id は「無い」として扱う。 */
 async function findStore(db: Db, org: string, storeId: string) {
@@ -2023,6 +2043,222 @@ const routes = app
                 cleanupMinutes: rules.cleanupMinutes,
                 closesAt: head.closesAt,
               }),
+      }),
+    )
+  })
+
+  /* --- 予約台帳と空き枠（P2。読むだけで、1 件も書かない） ----------------- */
+
+  /**
+   * 置ける時刻。8 条件をすべて掛けた結果を返す。
+   *
+   * **定休日と受けられないご用件は 200 の本文で `slots: []` を返す**（409 にしない）。
+   * 409 は「置けないと分かっている枠へ確定しようとしたとき」のために取っておく。
+   * 日時を選んでいる最中に 409 を返すと、画面は枠を 1 つも描けないまま
+   * 「エラー」だけを出すことになり、次にどの日を見ればよいかが伝わらない。
+   */
+  .get('/api/staff/availability', zValidator('query', AvailabilityQuery), async (c) => {
+    const db = drizzle(c.env.DB)
+    const org = c.get('auth').org
+    const query = c.req.valid('query')
+    // 全クエリを JWT の `org` で絞る。他テナントの店舗 id は「無い」として 404。
+    const store = await findStore(db, org, query.storeId)
+    if (!store) return c.json({ error: 'not_found' }, 404)
+    // 店舗まるごとの受付を止めた日は、定休日と同じく枠を 1 つも返さない（AC-LEDGER-22）。
+    const isSuspended = store.isActive !== '1'
+
+    // 現在時刻はハンドラの入口で 1 回だけ作り、以降は引数で配る。
+    // **ドメイン層は `Date.now()` を 1 度も呼ばない。**
+    const now = new Date()
+    const rows = await readAvailabilityDay(db, {
+      organizationId: org,
+      storeId: query.storeId,
+      date: query.date,
+      purposeIds: query.purposeIds,
+    })
+    // 予約の間隔がまだ決まっていない店舗は 404。暗黙の既定値（刻み 30 分）を作らない。
+    if (rows.slotRules === null) return c.json({ error: 'not_found' }, 404)
+    const rules = rows.slotRules
+
+    if (rows.missingPurposes > 0) {
+      // 受けられないご用件（無い id・止めた目的・他店舗のもの）が 1 つでも混ざったら
+      // 枠を出さない。既定の所要時間へ落として枠を出すと、受けられないご用件で
+      // ご予約が取れてしまう。
+      const day = resolveBusinessDay({
+        date: query.date,
+        weeklyRows: rows.hours,
+        exceptions: rows.exceptions,
+        isSuspended,
+      })
+      return c.json(
+        AvailabilityResponse.parse({
+          date: query.date,
+          opensAt: day.opensAt,
+          closesAt: day.closesAt,
+          isClosed: day.isClosed,
+          slotMinutes: rules.slotMinutes,
+          cleanupMinutes: rules.cleanupMinutes,
+          durationMinutes: query.durationMinutes ?? rules.slotMinutes,
+          slots: [],
+          lanes: [],
+          alternatives: [],
+          // 枠が 0 件の理由を本文で必ず伝える。理由を落とすと、画面は
+          // 「定休日」も「お受けできないご用件」も同じ空の一覧として描くことになる。
+          reason: 'purpose_unavailable',
+          serverNow: now.toISOString(),
+        }),
+      )
+    }
+
+    const answer = computeAvailability({
+      date: query.date,
+      now,
+      slotRules: rules,
+      weeklyHours: rows.hours,
+      exceptions: rows.exceptions,
+      blackouts: rows.blackouts,
+      isSuspended,
+      purposes: rows.purposes,
+      durationMinutes: query.durationMinutes,
+      staff: rows.staff,
+      shifts: rows.shifts,
+      equipment: rows.equipment,
+      maintenances: rows.maintenances,
+      occupied: rows.occupied,
+      // 仮の押さえ（KV）を塞がりに数えるのは、押さえを作る `POST /api/staff/holds` を
+      // 足す `006-booking-flow` から。P2 には押さえを作る経路が 1 本も無く、
+      // ここで `KV.list` を空振りさせても 1 日 1,000 回の上限を削るだけになる。
+      holds: [],
+      axis: query.axis,
+      staffId: query.staffId ?? null,
+      // 空の配列は「設備を絞らない」であって「どの設備も使えない」ではない。
+      // そのまま渡すと 1 台も残らず、設備軸のレーンが 0 行になる。
+      equipmentIds: query.equipmentIds.length > 0 ? query.equipmentIds : undefined,
+      excludeReservationId: query.excludeReservationId ?? null,
+      excludeReceptionSessionId: query.excludeReceptionSessionId ?? null,
+    })
+    return c.json(
+      AvailabilityResponse.parse({
+        date: answer.date,
+        opensAt: answer.opensAt,
+        closesAt: answer.closesAt,
+        isClosed: answer.isClosed,
+        slotMinutes: rules.slotMinutes,
+        cleanupMinutes: rules.cleanupMinutes,
+        durationMinutes: answer.durationMinutes,
+        slots: answer.slots,
+        lanes: answer.lanes,
+        alternatives: answer.alternatives,
+        // その日ぜんぶが同じ理由で落ちているときだけ載る（定休日は `closed`）。
+        reason: answer.reason,
+        serverNow: answer.serverNow,
+      }),
+    )
+  })
+
+  /**
+   * 台帳 1 日分。`axis`（担当者／設備・場所）と `view`（タイムテーブル／予約リスト）は
+   * **別の指定**で、4 通りすべてが有効な組み合わせである。1 日分は
+   * `readLedgerDay` の **1 回の `db.batch()`** で読む（`04-api.md` §3.6。16 文以内）。
+   *
+   * 応答の `serverNow` は現在時刻の線と札の出どころなので必ず載せる
+   * （端末の時計がずれた日に台帳が黙って嘘をつかないよう、iPad の時計は読ませない）。
+   */
+  .get('/api/staff/ledger', zValidator('query', LedgerQuery), async (c) => {
+    const db = drizzle(c.env.DB)
+    const org = c.get('auth').org
+    // `filter`（すべて／これから／確認待ち）は応答の `counts` が 3 つとも載るので、
+    // ここでは行を落とさない。落とすと札の数字と行数が食い違う。
+    const { storeId, date, axis, view } = c.req.valid('query')
+    const store = await findStore(db, org, storeId)
+    if (!store) return c.json({ error: 'not_found' }, 404)
+
+    const serverNow = new Date()
+    const rows = await readLedgerDay(db, { organizationId: org, storeId, date })
+    // 刻みが決まっていない店舗は台帳の格子を描けない。空き枠と同じく 404 にする。
+    if (rows.slotRules === null) return c.json({ error: 'not_found' }, 404)
+    // 定休日・臨時休業・**店舗まるごとの受付停止**は `opensAt` / `closesAt` が null に
+    // なり、行を 1 本も返さない。3 つとも同じ型で描く（AC-LEDGER-22）。
+    const day = resolveBusinessDay({
+      date,
+      weeklyRows: rows.hours,
+      exceptions: rows.exceptions,
+      isSuspended: store.isActive !== '1',
+    })
+
+    return c.json(
+      LedgerView.parse(
+        buildLedgerView({
+          date,
+          axis,
+          view,
+          storeId,
+          opensAt: day.opensAt,
+          closesAt: day.closesAt,
+          slotMinutes: rows.slotRules.slotMinutes,
+          reservations: rows.reservations,
+          purposes: rows.purposes,
+          assignments: rows.assignments,
+          staff: rows.staff,
+          shifts: rows.shifts,
+          equipment: rows.equipment,
+          maintenance: rows.maintenance,
+          // 「ご来店お待ち」の人数は `walk_ins` を作る `008-reception-and-walkin` から。
+          // それまでは 0名 の器として出す（行そのものは最下段に常設する）。
+          serverNow,
+        }),
+      ),
+    )
+  })
+
+  /**
+   * ご予約 1 件（LEDGER-DETAIL）。他テナントの id は 404 にして、
+   * 403 で存在を漏らさない。
+   */
+  .get('/api/staff/reservations/:reservationId', async (c) => {
+    const db = drizzle(c.env.DB)
+    const org = c.get('auth').org
+    const found = await readReservationDetail(db, {
+      organizationId: org,
+      reservationId: c.req.param('reservationId'),
+    })
+    if (found === null) return c.json({ error: 'not_found' }, 404)
+    const { reservation, purposes, assignments } = found
+
+    return c.json(
+      ReservationDetail.parse({
+        id: reservation.id,
+        code: reservation.code,
+        storeId: reservation.storeId,
+        source: reservation.source,
+        status: reservation.status,
+        startsAt: reservation.startsAt,
+        endsAt: reservation.endsAt,
+        durationMinutes: reservation.durationMinutes,
+        purposes: purposes.map((row) => ({
+          purposeId: row.purposeId,
+          nameInternal: row.nameInternal,
+          durationMinutes: row.durationMinutes,
+          sortOrder: row.sortOrder,
+        })),
+        assignments: assignments.map((row) => ({
+          kind: row.kind,
+          targetId: row.targetId,
+          startsAt: row.startsAt,
+          endsAt: row.endsAt,
+        })),
+        webBookingCode: webBookingCodeOf(reservation.source, reservation.code),
+        // 台帳の帯は短い名前、詳細と復唱は業務の名前（`03-data-model.md` §6.1）。
+        purposeLabel: purposes.map((row) => row.nameShort).join('・'),
+        purposeLabelInternal: purposes.map((row) => row.nameInternal).join('・'),
+        noteCustomer: reservation.noteCustomer ?? '',
+        noteInternal: reservation.noteInternal ?? '',
+        version: reservation.version,
+        createdAt: reservation.createdAt,
+        updatedAt: reservation.updatedAt,
+        createdBy: reservation.createdBy,
+        cancelledAt: reservation.cancelledAt,
+        cancelReason: reservation.cancelReason,
       }),
     )
   })

@@ -15,6 +15,13 @@
       "when": 1787905429717,
       "tag": "0001_massive_dark_phoenix",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1788091742850,
+      "tag": "0002_massive_ultragirl",
+      "breakpoints": true
     }
   ]
 }

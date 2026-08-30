@@ -777,3 +777,381 @@ export type SettingsImpactReport = z.infer<typeof SettingsImpactReport>
 /** 削除の応答。 */
 export const DeletedResult = z.strictObject({ id: Uuid, deleted: z.literal(true) })
 export type DeletedResult = z.infer<typeof DeletedResult>
+
+/* ------------------------------------------------------------------------- *
+ * P2 空き枠と予約台帳（`specs/glasses_management/features/005-availability-and-ledger`）
+ *
+ * ここに置くのは**読むための形**だけである。予約を書く経路（確定・変更・取消）は
+ * `006-booking-flow` と `009-change-and-cancel` が足す。
+ * お客様のお名前・来店回数は `007-customer-records`、お待ちの人数は
+ * `008-reception-and-walkin` が足すので、この段階では null と 0 の器で持つ。
+ * ------------------------------------------------------------------------- */
+
+/* --- クエリの原始型 ------------------------------------------------------- */
+
+/**
+ * クエリ文字列は数値も**文字列**で届く（`?durationMinutes=60`）。`QueryFlag` と
+ * 同じ理由で文字列と数値の両方を受け、境界はこのあとの `pipe` の側で見る。
+ */
+const QueryInteger = z.union([
+  z.number(),
+  z
+    .string()
+    .regex(/^\d{1,4}$/)
+    .transform(Number),
+])
+
+/**
+ * カンマ区切りの id 列（`?purposeIds=<uuid>,<uuid>`）。分解を Worker の手書きに
+ * 残すと件数の上限が契約の外へ出て、6 件目が黙って通る。配列そのものも受ける。
+ */
+const QueryIdList = (max: number) =>
+  z
+    .union([
+      Uuid.array(),
+      z.string().transform((value) =>
+        value
+          .split(',')
+          .map((part) => part.trim())
+          .filter((part) => part !== ''),
+      ),
+    ])
+    .pipe(Uuid.array().max(max))
+    .default([])
+
+/* --- 予約（読むだけ） ----------------------------------------------------- */
+
+/** 業務側の予約番号。書式は 1 種類だけで、9999 を越えた月は 5 桁へ桁上げする。 */
+export const ReservationCode = z.string().regex(/^EY-\d{4}-\d{4,5}$/)
+export type ReservationCode = z.infer<typeof ReservationCode>
+
+/**
+ * お客様に読み上げていただく Web のご予約番号（`web_bookings.public_code`）。
+ * `reservations.code` とは**別の採番系統**なので、同じ月に別々の連番が共存する。
+ */
+export const WebBookingCode = z.string().regex(/^EY-W-\d{4}-\d{4,5}$/)
+export type WebBookingCode = z.infer<typeof WebBookingCode>
+
+/**
+ * ご予約の出どころ。**4 値**で、画面に出す語も 4 語
+ * （お電話 / 店頭 / Web予約 / ウォークイン）。台帳の帯の色は 3 系統
+ * （緑＝`phone`・`counter` ／ 青＝`web` ／ 茶＝`walkin`）で、緑は既定なので
+ * 帯に語を書かない。店頭で先の日時を伺った `counter` と、予約なしでいらした
+ * `walkin` は業務上まったく別なので 1 つにまとめない。
+ */
+export const ReservationSource = z.enum(['phone', 'counter', 'walkin', 'web'])
+export type ReservationSource = z.infer<typeof ReservationSource>
+
+/**
+ * ご予約の状態。`confirmed → arrived → serving → done` の一方向で、
+ * 取消は `confirmed` からの `cancelled` / `no_show` だけ。
+ */
+export const ReservationStatus = z.enum([
+  'confirmed',
+  'arrived',
+  'serving',
+  'done',
+  'cancelled',
+  'no_show',
+])
+export type ReservationStatus = z.infer<typeof ReservationStatus>
+
+/**
+ * 担当・設備の押さえ。**担当が未定（`targetId` が null）でも枠は消費する**ので、
+ * 未定のまま行を作る。作らないと同時受付上限の数え方が台帳とずれ、同じ時刻に
+ * 上限を越えた予約が入る。
+ */
+export const ReservationAssignment = z
+  .strictObject({
+    kind: z.enum(['staff', 'equipment']),
+    targetId: Uuid.nullable().default(null),
+    startsAt: IsoDateTime,
+    endsAt: IsoDateTime,
+  })
+  .refine(startsBeforeEnds, { message: '終了は開始より後にする', path: ['endsAt'] })
+export type ReservationAssignment = z.infer<typeof ReservationAssignment>
+
+/** ご用件 1 件。所要時間は**予約した時点の写し**で、あとで目的を直しても動かない。 */
+export const ReservationPurposeLine = z.strictObject({
+  purposeId: Uuid,
+  nameInternal: z.string().trim().min(1).max(40),
+  durationMinutes: DurationMinutes,
+  sortOrder: z.number().int().nonnegative(),
+})
+export type ReservationPurposeLine = z.infer<typeof ReservationPurposeLine>
+
+/**
+ * ご予約 1 件（LEDGER-DETAIL）。お客様・注意ごと・録音は
+ * `007-customer-records` と `010-recording` が足す（P2 は `customer_id` が常に NULL）。
+ * ご要望・店内メモの上限は `03-data-model.md` §7.1 の列（500 文字）に合わせ、
+ * 画面と同じ符号位置で数える。
+ */
+export const ReservationDetail = z
+  .strictObject({
+    id: Uuid,
+    code: ReservationCode,
+    storeId: Uuid,
+    source: ReservationSource,
+    status: ReservationStatus,
+    startsAt: IsoDateTime,
+    endsAt: IsoDateTime,
+    durationMinutes: DurationMinutes,
+    // **読む側の下限は 0 件にする。**「1 予約に 1 件以上」（`03-data-model.md` §7.2）と
+    // 「`kind='staff'` はちょうど 1 行」（§7.3）は**書く側の不変条件**で、D1 には CHECK が無い。
+    // 読む側で 1 件以上を強いると、行が 1 本欠けただけでご予約 1 件の詳細が
+    // まるごと 500 になり、受付は原因も分からないまま行き止まる（画面は欠けを本文で言える）。
+    purposes: ReservationPurposeLine.array().max(5),
+    // `kind='staff'` はちょうど 1 本（未定でも作る）、`kind='equipment'` は 0〜5 本。
+    assignments: ReservationAssignment.array().max(6),
+    webBookingCode: WebBookingCode.nullable().default(null),
+    // 台帳の帯・一覧は `name_short`、詳細・復唱・受付は `name_internal` を出す。
+    purposeLabel: z.string().trim().max(30),
+    purposeLabelInternal: z.string().trim().max(220),
+    noteCustomer: z.string().refine(codePointsAtMost(500)).default(''),
+    noteInternal: z.string().refine(codePointsAtMost(500)).default(''),
+    version: Version,
+    createdAt: IsoDateTime,
+    updatedAt: IsoDateTime,
+    createdBy: Uuid.nullable().default(null),
+    cancelledAt: IsoDateTime.nullable().default(null),
+    // CHANGE-CANCEL の 4 択。取消の入力そのものは `009-change-and-cancel` が足す。
+    cancelReason: z.enum(['customer', 'store', 'duplicate', 'no_show']).nullable().default(null),
+  })
+  .refine(startsBeforeEnds, { message: '終了は開始より後にする', path: ['endsAt'] })
+  .refine((value) => (value.webBookingCode !== null) === (value.source === 'web'), {
+    // Web のご予約番号はお客様が読み上げる番号なので、Web から入った予約は必ず持ち、
+    // お電話・店頭・ウォークインの予約は決して持たない。
+    message: 'Web のご予約番号は source が web のときだけ持つ',
+    path: ['webBookingCode'],
+  })
+export type ReservationDetail = z.infer<typeof ReservationDetail>
+
+/** 一覧・検索結果の 1 行。`staffName` が null の行は「決めてください」と描く。 */
+export const ReservationSummary = z.strictObject({
+  id: Uuid,
+  code: ReservationCode,
+  startsAt: IsoDateTime,
+  durationMinutes: DurationMinutes,
+  status: ReservationStatus,
+  source: ReservationSource,
+  customerName: z.string().trim().max(40).nullable().default(null),
+  visitCount: z.number().int().nonnegative().nullable().default(null),
+  purposeLabel: z.string().trim().max(30),
+  staffName: z.string().trim().max(40).nullable().default(null),
+})
+export type ReservationSummary = z.infer<typeof ReservationSummary>
+
+/* --- 台帳 ----------------------------------------------------------------- */
+
+/**
+ * 台帳の並べ方。**URL のクエリに乗る語は `resource`** であって `equipment` ではない
+ * （応答の中の `LedgerLane.kind` の `equipment` とは別の語彙である）。
+ */
+export const LedgerAxis = z.enum(['staff', 'resource'])
+export type LedgerAxis = z.infer<typeof LedgerAxis>
+
+/**
+ * 表示のかたち。並べ方（`axis`）とは**別のセグメント**で、4 通りすべてが有効な
+ * 組み合わせである。1 つの enum にまとめると、予約リストへ切り替えたときに
+ * 設備・場所の並べ方が失われてタイムテーブルへ戻れなくなる。
+ */
+export const LedgerViewMode = z.enum(['timetable', 'list'])
+export type LedgerViewMode = z.infer<typeof LedgerViewMode>
+
+/** 予約リストの絞り込み。語は `pending`（`pending_review` ではない）。 */
+export const LedgerFilter = z.enum(['all', 'upcoming', 'pending'])
+export type LedgerFilter = z.infer<typeof LedgerFilter>
+
+/** 台帳の取得。日付を移すたびに取り直す（先読みしない）。 */
+export const LedgerQuery = z.strictObject({
+  storeId: Uuid,
+  date: LocalDate,
+  axis: LedgerAxis.default('staff'),
+  view: LedgerViewMode.default('timetable'),
+  filter: LedgerFilter.default('all'),
+})
+export type LedgerQuery = z.infer<typeof LedgerQuery>
+
+/**
+ * 台帳の帯 1 本。`purposeLabel` は `visit_purposes.name_short`（1〜5 文字）を
+ * 「・」で連ねたもので、目的は最大 5 件なので 29 文字に収まる。
+ * お名前と来店回数は `007-customer-records` が入れるまで null のままである。
+ */
+export const LedgerEntry = z
+  .strictObject({
+    reservationId: Uuid,
+    startsAt: IsoDateTime,
+    endsAt: IsoDateTime,
+    customerName: z.string().trim().max(40).nullable().default(null),
+    visitCount: z.number().int().nonnegative().nullable().default(null),
+    purposeLabel: z.string().trim().max(30),
+    source: ReservationSource,
+    status: ReservationStatus,
+    isUnassigned: z.boolean().default(false),
+  })
+  .refine(startsBeforeEnds, { message: '終了は開始より後にする', path: ['endsAt'] })
+export type LedgerEntry = z.infer<typeof LedgerEntry>
+
+/**
+ * 埋まっている帯。休憩（`staff_shifts.kind='break'`）・点検
+ * （`equipment_maintenance`）・受付を止めた帯（`store_blackout_windows` と
+ * 臨時休業）の 3 つを同じ器で描く。
+ */
+export const LedgerBlock = z
+  .strictObject({
+    kind: z.enum(['break', 'maintenance', 'closed']),
+    startsAt: IsoDateTime,
+    endsAt: IsoDateTime,
+    label: z.string().trim().max(30).default(''),
+  })
+  .refine(startsBeforeEnds, { message: '終了は開始より後にする', path: ['endsAt'] })
+export type LedgerBlock = z.infer<typeof LedgerBlock>
+
+/**
+ * 台帳の 1 行。「担当が未定」と「ご来店お待ち」は担当者でも設備でもない擬似行なので
+ * `id` を持たない。お待ちの人数（「2名」）は `subtitle` に載せる
+ * （`walk_ins` は `008-reception-and-walkin` が足すので P2 は常に「0名」）。
+ */
+export const LedgerLane = z.strictObject({
+  kind: z.enum(['staff', 'equipment', 'unassigned', 'walkin']),
+  id: Uuid.nullable(),
+  name: z.string().trim().min(1).max(40),
+  subtitle: z.string().trim().max(40).default(''),
+  entries: LedgerEntry.array().default([]),
+  blocks: LedgerBlock.array().default([]),
+})
+export type LedgerLane = z.infer<typeof LedgerLane>
+
+/**
+ * 台帳の応答。`serverNow` は**現在時刻の線と札の出どころ**なので必ず載せる
+ * （端末の時計がずれると台帳が嘘をつくため、iPad の時計は読まない）。
+ *
+ * **受け付けを止めた日は 3 通りとも同じ形で返す**（定休日・臨時休業・店舗まるごとの
+ * 受付停止）。`opensAt` と `closesAt` を null にし、`lanes` と `counts` を空にする。
+ * 画面は目盛りだけの空の格子を出さず「◯月◯日（◯）は定休日です。」と日付を戻す操作を
+ * 1 つ出す（AC-LEDGER-22）。`LedgerBlock(kind='closed')` はその日の**一部**を閉じる
+ * ときのための器で、丸一日を閉じるのに帯は使わない。
+ */
+export const LedgerView = z.strictObject({
+  date: LocalDate,
+  axis: LedgerAxis,
+  view: LedgerViewMode,
+  opensAt: LocalTime.nullable(),
+  closesAt: LocalTime.nullable(),
+  slotMinutes: z.number().int().min(5).max(60),
+  lanes: LedgerLane.array().default([]),
+  // LEDGER-LIST の絞り込みの札（「すべて 12件／これから 7件／確認待ち 1件」）。
+  counts: z.strictObject({
+    all: z.number().int().nonnegative(),
+    upcoming: z.number().int().nonnegative(),
+    pendingReview: z.number().int().nonnegative(),
+  }),
+  serverNow: IsoDateTime,
+})
+export type LedgerView = z.infer<typeof LedgerView>
+
+/* --- 空き枠 --------------------------------------------------------------- */
+
+/** 業務側の空き枠の取得。8 条件をすべて掛けた結果を返す。 */
+export const AvailabilityQuery = z.strictObject({
+  storeId: Uuid,
+  date: LocalDate,
+  purposeIds: QueryIdList(5),
+  durationMinutes: QueryInteger.pipe(DurationMinutes).optional(),
+  staffId: Uuid.optional(),
+  equipmentIds: QueryIdList(5),
+  // 変更のとき自分自身を塞がりに数えない。
+  excludeReservationId: Uuid.optional(),
+  // 自分の受付が置いた仮の押さえを塞がりに数えない（自分の押さえで戻れなくなる）。
+  excludeReceptionSessionId: Uuid.optional(),
+  axis: LedgerAxis.default('staff'),
+})
+export type AvailabilityQuery = z.infer<typeof AvailabilityQuery>
+
+/**
+ * 置けない理由。**判定に使った理由を必ず添える**（BOOK-02b が
+ * 「視力測定機が 11:30 から点検です。」と理由を出すため）。
+ * `web_window` と `lead_time` は Web 予約（`011-web-booking`）だけが使う。
+ */
+export const AvailabilityReason = z.enum([
+  'closed',
+  'outside_hours',
+  'break',
+  'maintenance',
+  'staff_busy',
+  'staff_off',
+  // 使える台はあるが、その時間はすべて埋まっている。
+  'equipment_busy',
+  // その種別の設備・場所が**この店舗に 1 台も無い**（未登録、または全台を止めている）。
+  // `equipment_busy` と分けるのは、BOOK-02b が理由をそのまま文にする面だからである
+  // （「視力測定機がすべて埋まっています」と「1 台も使える機械がありません」は別の話で、
+  // 前者は時間をずらせば取れ、後者は設定を直すまで何時でも取れない）。
+  'no_equipment',
+  'no_skill',
+  'max_parallel',
+  'web_window',
+  'lead_time',
+])
+export type AvailabilityReason = z.infer<typeof AvailabilityReason>
+
+/**
+ * **応答まるごとに掛かる理由**。枠ごとの `AvailabilityReason`（12 値）に、
+ * ご用件そのものをお受けできないこと（無い目的・止めた目的・他店舗の目的）だけを
+ * 足した語彙である。`04-api.md` §3.6 の「`store_closed` / `purpose_unavailable` は
+ * **200 の応答本文で `slots: []` + `reason`** を返すのが既定」を満たすために置く。
+ * 枠ごとの理由に混ぜないのは、`purpose_unavailable` が枠の性質ではなく
+ * 求めそのものの性質だからである。
+ */
+export const AvailabilityBlockReason = z.enum([
+  ...AvailabilityReason.options,
+  'purpose_unavailable',
+])
+export type AvailabilityBlockReason = z.infer<typeof AvailabilityBlockReason>
+
+/** 枠 1 つ。`remaining` は「あと N枠」で、0 は「満席」と描く。 */
+export const AvailabilitySlot = z
+  .strictObject({
+    startsAt: IsoDateTime,
+    endsAt: IsoDateTime,
+    remaining: z.number().int().nonnegative(),
+    isAvailable: z.boolean(),
+    staffIds: Uuid.array().default([]),
+    equipmentIds: Uuid.array().default([]),
+    reason: AvailabilityReason.nullable().default(null),
+  })
+  .refine(startsBeforeEnds, { message: '終了は開始より後にする', path: ['endsAt'] })
+export type AvailabilitySlot = z.infer<typeof AvailabilitySlot>
+
+/** 担当軸・設備軸の 1 行。担当が未定のレーンは `id` を持たない。 */
+export const AvailabilityLane = z.strictObject({
+  kind: z.enum(['staff', 'equipment', 'unassigned']),
+  id: Uuid.nullable(),
+  name: z.string().trim().min(1).max(40),
+  subtitle: z.string().trim().max(40).default(''),
+  slots: AvailabilitySlot.array().default([]),
+})
+export type AvailabilityLane = z.infer<typeof AvailabilityLane>
+
+/**
+ * 空き枠の応答。定休日・受けられないご用件は **200 で `slots: []` + 理由**を返す
+ * （409 を返すのは営業日でないと分かった状態で予約を確定しようとしたときだけ）。
+ * `alternatives` は BOOK-CONFLICT が出す代わりの時刻で、3 件までに閉じる
+ * （4 つ目を出しても画面に置き場が無い）。
+ */
+export const AvailabilityResponse = z.strictObject({
+  date: LocalDate,
+  opensAt: LocalTime.nullable(),
+  closesAt: LocalTime.nullable(),
+  isClosed: z.boolean(),
+  slotMinutes: z.number().int().min(5).max(60),
+  cleanupMinutes: z.number().int().min(0).max(60),
+  durationMinutes: DurationMinutes,
+  slots: AvailabilitySlot.array().default([]),
+  lanes: AvailabilityLane.array().default([]),
+  alternatives: AvailabilitySlot.array().max(3).default([]),
+  // その日ぜんぶが同じ理由で落ちているときだけ載る（定休日は `closed`、
+  // お受けできないご用件は `purpose_unavailable`）。置ける枠が 1 つでもあれば null。
+  reason: AvailabilityBlockReason.nullable().default(null),
+  serverNow: IsoDateTime,
+})
+export type AvailabilityResponse = z.infer<typeof AvailabilityResponse>

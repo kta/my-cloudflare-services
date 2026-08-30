@@ -307,3 +307,214 @@
 - 権限マトリクスの `body` を関数にして、送る直前に版を読み直す — 理由: 店長の 200 が 1 行ごとに版を進めるので、固定の `version` を書くと後ろの行が 409 になる — 影響: `test/permissions.test.ts`
 - 既存の `同じ slug を別テナントが使っても衝突せず、互いに見えない` を `同じ店舗 id を持つ 2 テナントは作れないが、slug は全組織で先取り順になる` に置き換えた — 理由: P1 の `0001_*.sql` が `stores_slug_idx` を全組織横断の一意に張り替えたので、元のテストの前提が消えた — 影響: `test/tenant-isolation.test.ts`
 
+
+## G. P2（空き枠と予約台帳）の実装で決めたこと
+
+実装とレビューを担当した subagent の自己判断。**全 173 件**。
+
+### G-availability（20 件）
+
+- T-003 の `test/availability.test.ts` を作らず、19 本を `test/availability.time.test.ts` に同居させた — 理由: 担当として渡されたファイルが 2 本だけで、`test/fixtures/availability.ts` も含めて新規ファイルを増やせない — 影響: `services/glasses_management/test/availability.time.test.ts`（36 本）
+- 受付を止める帯（blackout）は**枠の開始時刻だけ**を塞ぎ、ご予約の本体が帯をまたぐことは許す — 理由: T-004 の「帯を 12:01–13:00 へ 1 分ずらすと 12:00 の枠が戻る」は、60 分のご用件が帯をまたげないと成立しない。BOOK-01 が 11:30（お昼にまたがる 60 分）を満席として出しているのとも合う — 影響: `availability.ts` の条件 ②
+- 所要が収まるかの判定（条件 ④）は P1 の `lastAcceptableStart` を 1 日 1 回呼んで上限にした — 理由: SETTINGS-HOURS の「最後にお受けできるのは 18:20 です」と押せる枠の式を 2 つ作らない（`03-data-model.md` §4.4） — 影響: `availability.ts` の条件 ④。閉店前の帯は実質「またげない」（最後の区間の終わりが上限になる）、お昼の帯は「またげる」という非対称になるが、これは業務上も正しい（閉店は硬い締切、お昼は受付を止めるだけ）
+- 閉店までに収まらない開始時刻の理由は `outside_hours` にした — 理由: 11 値に「閉店に収まらない」専用の語が無く、営業時間の外という意味に一番近い — 影響: `availability.ts`
+- 目的が要求する種別の設備が 1 台も無い（全部止めている）ときの理由は `equipment_busy` にした — 理由: 11 値に `no_equipment` が無い。`maintenance` は点検の事実が無いのに点検と言うことになる — 影響: `availability.ts` の条件 ⑥
+- 同じ種別の設備が「点検で使えない」と「埋まっている」で混ざるときは `maintenance` を優先した — 理由: BOOK-02b が「視力測定機が 11:30 から点検です。」と点検を名指しする — 影響: `availability.ts` の条件 ⑥
+- 同時受付上限（条件 ⑦）は**担当の割当行を全部**数える（担当が決まっている予約も含む） — 理由: AC-LEDGER-17 が「担当が未定の予約も数に入って 3 件で満席」と言う。`reservation_slot_locks` の `target_key='unassigned'` レーンだけを数えると、担当が決まった予約が上限に効かない — 影響: `availability.ts` の条件 ⑦
+- `remaining` は担当・設備レーンでも**店舗の残り枠**（`max_parallel` − その枠のご予約件数）で統一した — 理由: 「あと2枠」の数字の意味を 1 つに保つ — 影響: `availability.ts`
+- `store_slot_rules` が無い店舗は `slots: []` / `lanes: []` / `slotRules: null` を返し、`slotMinutes` の既定値を作らない — 理由: §4.4 の「暗黙の既定値を作らない」 — 影響: `availability.ts`。ルート側（T-010）は `slotRules === null` を見て設定画面へ誘導する
+- 担当のレーンは「その日に勤務がある・技能を持つ・有効な担当」だけ作る — 理由: 一日中お休みの担当の空行は置ける枠を 1 つも持たず、読む人の目を素通りさせる — 影響: `availability.ts` の `lanes`
+- 「担当が未定」のレーンも条件 ⑤（技能を持つ担当が空いている）を満たさないと置けないことにした — 理由: 担当を後で決めるだけで、誰も接客できない時刻をお受けしてよいわけではない — 影響: `availability.ts`
+- `alternatives` は `preferredStartsAt`（任意）に最も近い置ける枠 3 件にした — 理由: BOOK-CONFLICT は「取れなかった時刻の代わり」を出す面で、前後どちらも候補になる — 影響: `availability.ts`
+- 片付け時間は担当の勤務帯の外にはみ出してよいことにした（勤務は `[開始, 開始+所要)` だけを覆えばよい） — 理由: 片付けは店の時間で、担当の退勤後でも成立する — 影響: `availability.ts` の条件 ⑤
+- 目的が 1 件も無く `durationMinutes` も無いときは `slot_minutes` を所要とみなす — 理由: 台帳から「この時刻は置けるか」だけを見る呼び出しが所要を持たない — 影響: `availability.ts`
+- **未解決として残す**: 銀座店の seed にある「朝の支度 10:00–10:15」の帯があると、上の条件 ② により 10:00 の枠は `break` になる。BOOK-01-DATETIME は 10:00 を枠として描いており食い違う。帯の定義（`03-data-model.md` §4.5）に従い枠を出さない側を採った。seed（T-011）とモックはこちらでは直していない。
+- 外へ出す判定は `evaluateSlot`（1 時刻）と `computeAvailability`（その日の格子）の 2 本にした。格子版は 1 枠ずつ前者を呼ぶ — 理由: 「9:30 は outside_hours」のように格子の外の時刻へ理由を返す必要があり、確定直前の再判定（P3）も同じ判定を要る — 影響: `availability.ts` の export
+- 担当レーンの `subtitle`（「視力測定・加工」）は `StaffMember.subtitle` として呼び出し側から受け取る — 理由: 技能の日本語は `store-settings.ts` の `SKILL_LABELS`（非 export）が持っており、担当ファイルの外なので同じ語を二度書かない — 影響: `availability.ts` の `StaffMember` / `buildLanes`
+- 応答の `reason` は「その日の枠が全部同じ理由で落ちたとき」だけ添える — 理由: BOOK-02b は「この日は受けられない」の一言を要るが、まだらに落ちている日に代表の理由を付けると嘘になる — 影響: `availability.ts` の `computeAvailability`
+- 条件の順が ④（所要が収まるか）→ ⑤（技能）なので、技能を持つ担当が 1 人も居ない日でも閉店間際の枠だけは `outside_hours` を返す — 理由: TODO が定めた適用順どおり。最初に落ちた条件を返す — 影響: `availability.time.test.ts` の `no_skill` の本は 10:00 と 15:00 を名指しで見る
+- テストを 36 本ではなく 37 本にした（`語彙` の 1 本を足した） — 理由: 返る理由が `AvailabilityReason` の 11 値から出ていないことを 1 本で縛る — 影響: `availability.time.test.ts`
+
+### G-backend-review（7 件）
+
+- 置けない枠の `remaining` を 0 に固定した — 理由: `isAvailable=false` の枠に「あと3枠」と書かせないため（画面は `remaining===0` を「満席」と描く） — 影響: `src/worker/domain/availability.ts` の `judge()`、`AvailabilitySlot.remaining` の意味
+- 置ける枠の `remaining` を「使う枠すべての残りの最小」にした — 理由: 60分の枠が後ろの 30分枠で満席なのに先頭枠の残りを返していた — 影響: 同上。`test/availability.time.test.ts` に回帰 2 本
+- `AvailabilityResponse` に `reason` を足した — 理由: TODO T-006 と `04-api.md` §3.6「`store_closed` / `purpose_unavailable` は 200 の本文で `slots: []` + `reason`」を満たすため。ドメインは既に日ぜんぶの理由を計算していたが応答で捨てていた — 影響: `packages/contracts/src/glasses_management.ts` / `index.ts` / `src/worker/index.ts` の availability ルート
+- 応答の理由に `AvailabilityBlockReason`（11 値 + `purpose_unavailable`）という別の enum を作った — 理由: `AvailabilityReason` は枠ごとの語彙で 11 値に固定（`04-api.md` §4.5・T-001 の契約テスト）。`purpose_unavailable` は枠の性質ではなく求めそのものの性質なので混ぜない — 影響: 契約の新 export 1 本
+- 台帳の行を出せない担当（消えた・別店舗）を指した押さえを「担当が未定」に倒した — 理由: 帯は「担当が未定」の行に置かれるのに `isUnassigned` が false で、色だけが理由になっていた（AC-LEDGER-07 は文字を要求する） — 影響: `domain/ledger.ts` の `drawnReservations`、`counts.pendingReview` の数え方も一致する
+- `missingPurposes` を「求めた**相異なる** id のうち見つからなかった数」にした — 理由: 同じご用件を 2 度渡すだけで「お受けできないご用件」になっていた — 影響: `db/queries/ledger.ts`。同じ目的の重複は 1 件に畳まれる（所要は 1 回ぶん）
+- 台帳の文数テストを「バッチの外の文も数える」形にした — 理由: バッチの中だけを数えると `requireActiveOrg` と `findStore` の 2 文が見えず、07-nfr の 16 本を測ったことにならない — 影響: `test/ledger.integration.test.ts`。実測は **12 文**
+
+### G-contracts（16 件）
+
+- `LedgerView` から `walkins` / `estimatedWaitMinutes` / `nextTicketNo` を落とす — 理由: いずれも LEDGER-WALKIN の面（`008-reception-and-walkin`）の値で、P2 の spec スコープ外かつ `walk_ins` 表がまだ無い — 影響: `packages/contracts/src/glasses_management.ts` の `LedgerView`。P5 が足す
+- 「ご来店お待ち」の人数は `LedgerLane.subtitle`（「0名」）に載せる — 理由: `LedgerLane` は既に行見出しの副文（「視力測定・加工」）を持っており、人数のためだけの列を足さずに AC-LEDGER-08 を満たせる — 影響: `LedgerLane`。P2 は常に「0名」
+- `LedgerView` に `isClosed` を足さない。定休日・臨時休業は `opensAt`/`closesAt` が null、店舗まるごとの受付停止は全幅の `LedgerBlock(kind='closed')` で表す — 理由: `design/04-api.md` §4.5 の `LedgerView` に `isClosed` が無く、`LedgerBlock.kind` に `closed` がある — 影響: `LedgerView` / `LedgerBlock`。AC-LEDGER-22 の描き分けは web 側で 2 通りを読む
+- `ReservationDetail` から `customer` / `attentions` / `recording` を落とす — 理由: `CustomerSummary` / `CustomerNote` / `RecordingSummary` は `007-customer-records` と `010-recording` のスキーマで、P2 には表も値も無い（`reservations.customer_id` は常に NULL） — 影響: `ReservationDetail`。P4・P10 が足す
+- `noteCustomer` / `noteInternal` の上限を 500 文字にする（`design/04-api.md` §4.5 の 2000 を採らない） — 理由: `design/03-data-model.md` §7.1 の列定義が「0〜500文字」で、列より長い本文を契約が通すと画面が保存できたつもりになる — 影響: `ReservationDetail`
+- 文字数は符号位置（`[...text].length`）で数える — 理由: P1 の `introText` と同じ数え方に揃える（絵文字を 2 文字と数えない） — 影響: `ReservationDetail.noteCustomer` / `noteInternal`
+- `axis` の語彙を `LedgerAxis`、`view` を `LedgerViewMode`、`filter` を `LedgerFilter` という 3 つの別々の enum として export する — 理由: 「1 つの enum にまとめない」を型の側から守り、`LedgerView`（応答スキーマ）と名前が衝突しないようにする — 影響: `LedgerQuery` / `AvailabilityQuery`（`axis` は同じ語彙なので `LedgerAxis` を使い回す）
+- `AvailabilityQuery.purposeIds` / `equipmentIds` はカンマ区切りの文字列を受けて `Uuid[]` へ変換して返す（既定 `[]`） — 理由: `design/04-api.md` は「カンマ区切り・最大 5 件」としか書いておらず、分解を Worker 側の手書きに残すと件数の上限が契約の外へ出る — 影響: `AvailabilityQuery`
+- クエリの数値（`durationMinutes`）は文字列と数値の両方を受ける — 理由: P1 の `QueryFlag` と同じ理由（クエリ文字列は必ず文字列で届き、手書き `parse` の ZodError は 500 に化ける） — 影響: `AvailabilityQuery.durationMinutes`
+- `ReservationDetail` に「`webBookingCode` が非 null であることと `source==='web'` が同値」の refine を置く — 理由: T-001 のテスト名「web のときだけ非 null になる」を契約で守る — 影響: `ReservationDetail`
+- 上記以外の不変条件（取消済みなら `cancelledAt` 非 null、`kind='staff'` の割当はちょうど 1 行、`isAvailable` と `reason` の対応）は refine にしない — 理由: T-001 のテスト名に無く、テストの無い分岐を契約へ足すとカバレッジの穴になる。DB とドメイン層（T-009 / T-010）が守る — 影響: `ReservationDetail` / `AvailabilitySlot`
+- `cancelReason` の 4 語は `ReservationDetail` の中に直接書き、`ReservationCancelReason` として export しない — 理由: 取消の入力（`ReservationCancelInput`）は `009-change-and-cancel` の担当で、使い手が居ない export は Knip の未使用検出に当たる — 影響: `ReservationDetail`。P3 が取り出す
+- `LedgerEntry.purposeLabel` の上限を 30 文字にする — 理由: `visit_purposes.name_short` は 1〜5 文字で、1 予約の目的は最大 5 件（5×5 + 「・」4 = 29） — 影響: `LedgerEntry`
+- `ReservationDetail.assignments` を 1〜6 件にする — 理由: `kind='staff'` の行はちょうど 1 本（未定でも作る）、`kind='equipment'` は 0〜5 本という `03-data-model.md` §7.3 の不変条件の外枠を件数で表す — 影響: `ReservationDetail`
+- `purposeLabel` は 30 文字、`purposeLabelInternal` は 220 文字を上限にする — 理由: `name_short` 5 文字 × 5 件 +「・」4、`name_internal` 40 文字 × 5 件 +「・」4 — 影響: `ReservationDetail` / `ReservationSummary` / `LedgerEntry`
+- `LedgerView.slotMinutes` と `AvailabilityResponse.slotMinutes` は `SlotRules.slotMinutes` と同じ 5〜60、`cleanupMinutes` は 0〜60 にする — 理由: 応答が設定より広い値を返せると台帳の列数が設定画面と食い違う — 影響: `LedgerView` / `AvailabilityResponse`
+
+### G-e2e-mock（22 件）
+
+- **`LedgerScreen.tsx` に詳細（`ReservationDetail`）と通信断（`OfflineBanner`）を繋いだ** — 理由: 両方とも部品は出来ていたが、繋ぐ担当が居ないまま残っていた（`decisions-p2-timetable.md`「口だけ開けた」／`decisions-p2-list-detail-offline.md`「器を触らない担当分けだから」）。繋がないと AC-LEDGER-15 / 18 / 19 と UC-LEDGER-04 / 09 / 10 の 6 件が E2E で 1 本も確かめられず、spec を Approved に上げられない（validator は Approved の ID しか対応付けを許さないので、1 件でも欠けると 33 件すべてが「未知の対応付け」になる）— 影響: `src/web/ledger/LedgerScreen.tsx`
+- **`src/web/home/MyReservations.tsx` を新設し `App.tsx` のトップへ差し込んだ** — 理由: 同上（AC-LEDGER-21 / UC-LEDGER-11）。TODO の T-019 は個人トップを含むが、担当が「別の担当に残る」と記録して降りている — 影響: `src/web/home/MyReservations.tsx` / `src/web/App.tsx`
+- **`e2e/store-settings.spec.ts` の AC-SET-12 の前置きを 2 行に縮めた** — 理由: P2 の seed が当日の勤務（`staff_shifts`）を展開するようになり、佐藤 美咲の日曜が最初から 12:00–19:00 で入る。「まず 12:00–19:00 を置く」という前置きが差分ゼロになり、保存ボタンが押せないまま 30 秒で落ちていた（P1 の e2e が P2 の seed で壊れた）。テストの狙い（営業時間の外へはみ出しても警告だけで保存できる）はそのまま — 影響: `e2e/store-settings.spec.ts`
+- **端末の時計と応答の `serverNow` の両方を 2026年8月27日 11:08（JST）に据えた** — 理由: seed のご予約はその日に固定だが、サーバの時計は実時刻で進む。据えないと台帳が本日（＝予約 0 件の日）を開き、現在時刻の線も「これから 7件」も出ない — 影響: `e2e/ledger.spec.ts` / `e2e/mock-compare.spec.ts`。盤面（D1）には触れない
+- **`serverNow` を差し替えるとき `counts.upcoming` も同じ時刻で数え直した** — 理由: 件数はサーバが `serverNow` から数えた結果なので、時刻だけを据えると札の数字（0件）と行数（7行）が食い違う。数え直すのは担当軸の行があるときだけ — 影響: 同上
+- **AC-LEDGER-16 を 14:00／14:30 で確かめた（AC の文言は 12:00／12:30）** — 理由: 8月27日の 12:00–13:00 は店舗の受付停止帯（お昼）で、片付け以外の理由でも枠が消える。13:00–14:00 の 1 件（高橋 健）を使えば、片付け 10分だけが効く「終わりちょうどは置けない／次の刻みは置ける」がそのまま見える — 影響: `e2e/ledger.spec.ts`
+- **AC-LEDGER-17 を 11:00（満席）と 13:00（残り 1）の 2 点で確かめた（AC の文言は 13:00 に 3 件）** — 理由: seed の 13:00 台は 2 件で上限 3 に届かない。11:00 は 4 件（うち 1 件が担当未定）で満席になり、13:00 は担当未定の 1 件を数えるからこそ残り 1 になる。「担当が未定も数に入る」と「上限に達したら満席」を分けて見る — 影響: `e2e/ledger.spec.ts`
+- **AC-LEDGER-11（点検）を 8月28日（金）で確かめた** — 理由: seed の点検は 8月28日 10:00–12:00（視力測定機 B）。モックは 8月27日に描いているが、盤面を書き換えない — 影響: `e2e/ledger.spec.ts`
+- **AC-LEDGER-21 の 0 件の枝を「佐藤 美咲が休みの金曜」で確かめた** — 理由: 「わたし」が誰か分からない共有端末ではこの面を出さない決めにしたので、0 件は「わたしは分かるが担当が 1 件も無い日」でしか起きない — 影響: `e2e/ledger.spec.ts`
+- **AC-LEDGER-21 は `staff.adminUserId` を dev の `sub` に付け替えて確かめ、必ず戻す** — 理由: P2 に個人端末の名乗り（PIN は P10）が無く、共有端末の `sub` は `dev:<org>` 固定。設定の API で結び付けるのが盤面を汚さない唯一の道 — 影響: `e2e/ledger.spec.ts`（D1 を書き換える唯一の 1 本。`finally` で戻す）
+- **詳細を閉じる 2 つの道は `page.mouse.click` で押した** — 理由: 詳細は台帳いっぱいの覆いを敷いており、`locator.click()` は覆いを「邪魔者」と見なして待ち続ける。指は覆いに当たるのが正しい振る舞いなので、座標で押す — 影響: `e2e/ledger.spec.ts`
+- **UC は対になる AC の test に相乗りさせ、22 本で 33 件を担った** — 理由: TODO が明示的に許している。1 ID 1 回の縛りは validator が見る — 影響: `e2e/ledger.spec.ts`
+- **e2e の tsconfig は DOM の型を持たないので、`getComputedStyle` だけをファイル頭で宣言した** — 理由: `tsconfig.base.json` の `lib` は `ESNext` のみ。`any` を書かず、使う分だけを型として置く — 影響: `e2e/ledger.spec.ts`
+- **通信が切れたら、最後に読めた台帳をそのまま出し続け、日付・並べ方・かたちもその応答へ戻す** — 理由: 届いていない日を出しているふりをしないため。届かなかった日を出したまま古い行を描くと、台帳が黙って嘘をつく — 影響: `LedgerScreen.tsx`
+- **一度も読めていないときは帯を出さず、これまでどおり「台帳を読み込めませんでした」を出す** — 理由: 「いまご覧の内容は 11:08 現在」と言える中身が無い — 影響: `LedgerScreen.tsx`
+- **詳細の矢印は、選ばれたセル（`aria-selected="true"`）の座標から毎回測る** — 理由: `Timetable` は押した帯の DOM を渡さない（`onSelectEntry` は帯そのもの）。器の中の相対座標で置けば、モーダルにせず帯へ矢印を刺せる — 影響: `LedgerScreen.tsx`
+- **担当と場所のお名前は、店舗の名簿（`staff` / `equipment`）を店舗 1 つにつき 1 度だけ読んで突き合わせる** — 理由: `ReservationDetail` は id しか運ばない。日付を動かしても名簿は変わらないので取り直さない。読めなくても台帳は読める（お名前が出ないだけ） — 影響: `LedgerScreen.tsx`
+- **個人トップの「わたし」は JWT の `sub` と `staff.adminUserId` の突き合わせで引き当て、誰にも当たらない端末にはこの面を**出さない** — 理由: HOME は共有端末のトップで、モックにこの一覧は無い。出すと承認済みモックとの突き合わせ（HOME）が壊れる。名乗りの引き当て方は `SettingsScreen` の `subjectFromToken` と同じ道に揃えた — 影響: `MyReservations.tsx` / `App.tsx`
+- **個人トップの行は応答の並び（開始の早い順）をそのまま使い、画面で並べ直さない** — 理由: 並べ方を 2 か所に持つと、どちらが正しいか画面から判断できなくなる — 影響: `MyReservations.tsx`
+- **トップの器を 2 列（主操作の列 ＋ 個人の一覧）にした。1 列目の中身と隙間は元のまま** — 理由: 共有端末では 2 列目が空になり、HOME の突き合わせが画素まで変わらない（実測でも HOME は 3.23% のまま通った） — 影響: `App.tsx`
+- **LEDGER-DETAIL / EX-OFFLINE / HOME-PERSONAL は突き合わせない** — 理由: 担当指示が台帳 3 面と決めている。3 面とも中身は `ledger.spec.ts` の業務 E2E が文言と操作で確かめている — 影響: `e2e/mock-compare.spec.ts`
+- 残っている差の中身は 3 つの test のコメントに 1 件ずつ書いた。**下げるだけで上げない。**
+
+### G-frontend-review（22 件）
+
+- 予約も点検も無い設備の行を `laneSegments` で 1 枠にまとめた — 理由: 14 枠に割ると画面は 1 枠しか描かず、その行へ矢印で降りたとき tabindex=0 の枠が台帳から消えて Tab で入り直せなくなる — 影響: `src/web/ledger/metrics.ts` `laneSegments` / `Timetable` の焦点移動
+- 帯を押したときに `active.row` を押した行に合わせた — 理由: いままで押した行と矢印キーの起点が食い違っていた — 影響: `src/web/ledger/Timetable.tsx` `press`
+- ツールバーの地を白、セグメントの地を灰、選んだ札を白＋緑の字にした — 理由: モックの `.toolbar { background: var(--surface) }` `.segmented { background: var(--surface-2) }` `.segmented button.on { background: var(--surface); color: var(--brand) }` と地と柄が逆だった — 影響: `LedgerScreen` のツールバー
+- ツールバーの高さを 56px（`h-14`）・左右 16px・間 10px に詰めた — 理由: モックの `.toolbar` の実測。触れる大きさ 44pt は札そのもので確保し、器の余白を削って高さを合わせる — 影響: `LedgerScreen`、台帳の上端の位置
+- 列見出しに縦罫（`border-r border-line`）を足した — 理由: モックの `.tt-head` が持っている。背景の目盛りは見出しの下からしか通らない — 影響: `Timetable`
+- 現在の札の目印を 2px から 3px にした — 理由: モックの `.nowchip::before { width: 3px }` — 影響: `LedgerScreen`
+- 詳細（ポップオーバー）が台帳からはみ出すときに、帯の上へ返す／左へ寄せるようにした — 理由: 器が `overflow: hidden` なので、下のほうの行の帯を押すと詳細がまったく読めなくなる — 影響: `ReservationDetail`（`anchor.bandTop` を足した）・`LedgerScreen`
+- 読み込み中に `role="status"`、読み込めなかったときに `role="alert"`、定休日の知らせに `role="status"` を足した — 理由: 中身がまるごと入れ替わるのに読み上げへ何も伝わっていなかった — 影響: `LedgerScreen` / `Timetable`
+- 格子の見出しの行に `aria-rowindex={1}` を足した — 理由: `aria-rowcount` を宣言した格子は全行が `aria-rowindex` を持つ — 影響: `Timetable`
+- 個人トップの 1 行をモックと同じ 2 段組み（時刻＋状態の札／ご用件）にした — 理由: HOME-PERSONAL の実測 — 影響: `MyReservations`
+- 突き合わせに LEDGER-DETAIL と EX-OFFLINE を足した（HOME-PERSONAL は足さない） — 理由: 前の 2 つは盤面に触れずに撮れる。HOME-PERSONAL は `staff.adminUserId` を書き換えないと出せず、同じ D1 を使う後続の突き合わせを汚す — 影響: `e2e/mock-compare.spec.ts`
+- 日付の帯は台帳の先頭に置いたまま（上のバーの中央へ移さない） — 理由: `AppShell` に中央の差し込み口を足すと P0 の器と App の状態の持ち方まで変わり、並行して動いている他の面へ波及する。差は実測値としてコメントに残す — 影響: LEDGER-* 4 面の差分の割合
+- `packages/ui/src/theme.css` の `--color-grid` / `--color-grid-hour` を `--color-grid-line` / `--color-grid-hour-line` に改名した — 理由: Tailwind v4 が `text-<名前>` を大きさと色の両方から引くため `--color-grid` と `--text-grid` が衝突し、`.text-grid` が font-size を一切出さず `color: #e7ecea`（ほぼ白）になっていた。13px の指定 65 か所が全部 16px になり、`text-grid text-danger` の 8 か所（設定画面のエラー文と警告文、台帳の「現在 11:08」の札）が地に溶けて読めなかった — 影響: `theme.css` の 2 行と `Timetable` の 2 か所。全画面の差分が下がった
+- 日付の帯を `AppShell` の中央（`barCenter`）へ移した — 理由: 台帳の先頭に置くと 60px の行がまるごと余分で、上のバー 64px ＋ ツールバー 56px ＝ 120px というモックの骨格から台帳全体が 60px 下へずれていた — 影響: `AppShell` に `barCenter` を新設、`App` が受け渡し、`LedgerScreen` は `onBarCenter` が無いときだけ自分で緑の帯を出す
+- 台帳の器の高さを `h-full` で取るようにした — 理由: `App` の箱が flex ではないので `flex-1` が効かず、台帳が画面の下端まで届かず 86px の余白が残っていた — 影響: `LedgerScreen`
+- 台帳の地を `bg-surface`（白）にした — 理由: 空き枠が `--color-paper` で透けていた。モックの空き枠は #ffffff（基準画像を実測） — 影響: `Timetable`
+- 表示窓と同じ 14 列の日は `min-width: 100%` にした — 理由: 1 列 68px に丸めるとモックの 1fr（67.7px）と 1 列 0.3px ずれ、右端の 16:30 で 4px の食い違いになる — 影響: `metrics.gridMinWidth` とその test
+- 詳細の矢印の合わせ先を「帯の左端」にした — 理由: `+ ARROW_LEFT_PX` して `- ARROW_LEFT_PX` していたので打ち消し合い、詳細が帯の左端から始まって矢印が 40px 右を指していた — 影響: `LedgerScreen` の `anchor`
+- 帯に `overflow-hidden` を足した — 理由: 帯からはみ出した字が、あとに描かれる隣の枠の下へ潜って途中で切れていた（モックの `.appt` も `overflow: hidden`） — 影響: `Timetable`
+- 帯の時刻の区切り（–）だけ等幅から外した — 理由: 13px の等幅では 2 本の短い線に割れて「11:00--12:00」と読めてしまう — 影響: `Timetable`
+- ご要望の鉤括弧を二重に付けないようにした — 理由: seed の `note_customer` が既に括ってあり「「遠近は初めてです」」になっていた — 影響: `ReservationDetail`
+- 403 を通信断と分けた — 理由: 権限が無いときに「もう一度読み込む」を出しても結果は同じで、古い台帳を出し続けるのも誤り — 影響: `LedgerScreen`
+
+### G-ledger（16 件）
+
+- `view='list'` のときは `axis` によらず担当軸の行を返す（`axis` は応答にそのまま載せる） — 理由: 予約リストの「担当」欄と「決めてください」は担当の割当からしか出せず、設備の行を平坦化しても列が埋まらない — 影響: `src/worker/domain/ledger.ts` `buildLedgerView`（`laneAxis`）。`axis=resource` + `view=list` でも lanes は担当の行になる
+- 設備軸の帯は**その設備を押さえている区間**で描き、担当軸の帯はご予約まるごとの区間で描く — 理由: 15:30–16:00 は測定機・16:00–16:30 は相談カウンター という押さえ方があり、設備の行に 15:30–16:30 の帯を出すと空いている測定機が埋まって見える — 影響: `equipmentLanes` / `staffLanes`。`ledger.test.ts` の「1 予約が 2 つの設備を押さえていると…」
+- 「担当が未定」の行と「ご来店お待ち」の行は、帯が 0 本の日でも**常に置く** — 理由: モック LEDGER-STAFF が両方を常設の行として描いており、日によって行が消えると台帳の高さと押す位置が変わる — 影響: `staffLanes`
+- 定休日・臨時休業（`opensAt` か `closesAt` が null）は `lanes` を空配列で返す — 理由: AC-LEDGER-22 の「目盛りだけの空の格子を出さない」を、行を作らないことで担保する — 影響: `buildLedgerView`
+- 点検の `LedgerBlock.label` は常に「点検」にし、`equipment_maintenance.note` を載せない — 理由: note は 60 文字まで許されるが `LedgerBlock.label` は 30 文字までで、切って出すと業務上読めない — 影響: `equipmentLanes`
+- 休憩の `LedgerBlock.label` は「休憩」の 1 語にする — 理由: `staff_shifts` に文言の列が無く、帯の幅（30分 1 列）に入る語がこれしかない — 影響: `staffLanes`
+- 当日の勤務（`kind='work'`）が無くても、その日のご予約を持つ担当は行を出す — 理由: 勤務の展開漏れや当日の代打でご予約が台帳から消えると、そのお客様を誰も見つけられない — 影響: `staffLanes`。勤務もご予約も無い担当（小林 誠）は従来どおり行にしない
+- 設備は「止めていて（`is_active='0'`）かつ `ledger_display='hide'`」の行だけを台帳から外す — 理由: schema のコメントどおり `ledger_display` が効くのは止めている設備だけで、動いている設備は必ず行にする — 影響: `equipmentLanes`
+- 担当の割当行が欠けている／担当 id が当日の行に無いご予約は「担当が未定」の行で拾う — 理由: I-05 により起きないはずだが、起きたときに帯を落とすと台帳からご予約が消える（静かに壊れる） — 影響: `drawnReservations` の `isUnassigned` と `staffLanes` の未定行
+- 取り消したご予約の押さえ（`reservation_assignments`）の行が残っていても、設備の行に帯を出さない — 理由: 取消で消すのは `reservation_slot_locks` であり、割当の行は残りうる — 影響: `equipmentLanes`
+- `counts.all` は「帯にする件数」（他店舗・他の日・`cancelled` を除き、`no_show` を含む）とする — 理由: 札の数字と実際の行数が食い違うと、どちらが正しいか画面から判断できない — 影響: `buildLedgerView` / `filterLedgerRows`
+- 他店舗・他の日のご予約は関数の側でも落とす（読み出し側の絞り込みを信用しない） — 理由: テナント分離と同じで、境界を 1 か所に頼らない — 影響: `drawnReservations`
+- 表示窓 14 列は 420分（JST 10:00–17:00）とし、`offsetRatio` / `widthRatio` をこの 420分で正規化する — 理由: モックの現在時刻線 0.1619 が「11:08 は 10:00 から 68分 ÷ 420分」で出ており、この幅でしか一致しない — 影響: `LEDGER_WINDOW_MINUTES` / `placeOnLedgerWindow` / `nowMarker`
+- 表示窓の外へ出る帯も位置を返し、`isWithinWindow=false` を添えるだけにする（捨てない） — 理由: 営業時間が 14 列より長い日は台帳の中を横スクロールさせるので、窓に入らない 17:00 のご予約を落とすと台帳から消える — 影響: `placeOnLedgerWindow`
+- `nowMarker` は表示中の日付が本日でなくても `clock` を返し、`ratio=null` で線を出さない合図だけを立てる — 理由: 線と札の出し分けは画面の決め（AC-LEDGER-03 / 04）で、ドメインは事実だけを返す — 影響: `nowMarker`
+- `LedgerListRow` に `durationMinutes` を持たせない — 理由: 開始と終わりから引けるうえ、`reservations.duration_minutes` と食い違ったときにどちらが正かを増やしたくない — 影響: `buildLedgerRows`
+
+### G-list-detail-offline（24 件）
+
+- ファイル名を TODO の `LedgerList` / `ReservationPopover` / `OfflineBand` ではなく `ReservationList` / `ReservationDetail` / `OfflineBanner` にした — 理由: 担当指示のファイル一覧が正本で、並行する他エージェントとの衝突を避けるため — 影響: src/web/ledger/ReservationList.tsx / ReservationDetail.tsx / OfflineBanner.tsx
+- 個人トップ（`MyReservations`）は作らない — 理由: 担当のファイル一覧に無く、`App.tsx` を触らないと差し込めないため — 影響: T-019 のうち個人トップ 4 本は別の担当に残る
+- 3 つとも props だけを受け取る部品にし、日付・並べ方・表示のかたち・開いている予約 id は器（LedgerScreen）に持たせた — 理由: 器を触らない担当分けだから — 影響: ReservationListProps / ReservationDetailProps / OfflineBannerProps
+- 予約リストを `<table>`（`<th scope="col">` 5 本）で組んだ。モックは div の grid — 理由: 列見出しと 5 列を読み上げに載せる手段が表しか無く、任意値（`grid-cols-[120px_96px_...]`）も書けないため — 影響: ReservationList.tsx
+- 「お客様」の欄は `—`（aria-hidden）＋ 読み上げ用の「お名前はまだ出せません」 — 理由: `customers` は 007 なので出せる字が 1 つも無い。空セルは「読み落とした」と区別が付かない — 影響: ReservationList.tsx の 3 列目
+- 「ご用件」の欄は `name_short`（帯と同じ語）にした。モックの一覧は `name_internal` — 理由: `LedgerEntry` が `purposeLabel`（name_short）しか運ばないため。詳細だけが `name_internal` を持つ — 影響: ReservationList.tsx ／ T-021 のモック差分に 1 件足りる
+- 出どころの 4 語の置き場所を、通常は「受け付け」の欄・通信断のときは「お客様」の欄にした — 理由: AC-LEDGER-12 は 4 語を「受け付け」の欄に置けと言い、EX-OFFLINE はその列ごと落として名前の下に置いているため — 影響: ReservationList.tsx（`isOffline`）
+- 左端の語の割り当てを 状態 → 出どころ の順に決めた: `arrived`/`serving`/`done`＝「受付済み」（押せない文字）、`no_show`＝「ご来店なし」（同）、`walkin`＝「ご案内」、`web` かつ担当未定＝「内容を確認」、ほか＝「ご来店」 — 理由: モックの 4 語をそのまま使い、押し直す導線を作らないため — 影響: ReservationList.tsx の `actionOf`
+- 一覧の行は 8 つまでにし、末尾を「このあと 15:00 ほか 4件。」にした。モックは 7 行＋お名前つきの 1 行 — 理由: 引き算の決めが「8 つまで」。お名前は P2 で出せない — 影響: ReservationList.tsx の `MAX_ROWS`
+- 0 件の「すべて」では「すべてを見る」を出さない（見出し 1 行と理由 1 行だけ） — 理由: すでに「すべて」なので押しても何も変わらない操作になるため — 影響: ReservationList.tsx
+- 絞り込みの札に `aria-label="すべて 12件"` を足した — 理由: 語と件数を別の要素に置くと読み上げ名が「すべて12件」と繋がるため — 影響: ReservationList.tsx
+- 「録音を聞く」を詳細に置かない — 理由: 押した先（010）も、録音があるかを知る手段（`recordings` 表）も P2 に無い。押せない札を 1 つ増やすだけになる — 影響: ReservationDetail.tsx ／ T-021 のモック差分に 1 件足りる
+- 詳細に「✕（詳細を閉じる）」を足した。モックには描かれていない — 理由: 担当指示が「× ボタンと Esc の両方」を求め、IDX-LEDGER-04 6d も物理キーボードの無い端末のために出口を 1 つ以上要求しているため — 影響: ReservationDetail.tsx ／ T-021 のモック差分に 1 件足りる
+- 詳細は台帳いっぱいの透明なボタン（`data-testid="reservation-detail-dismiss"`）を自分で敷き、その 1 回のタップを台帳へ届かせない — 理由: AC-LEDGER-19 の「閉じるためのその 1 回は新しい予約を起こさない」を器の実装に依らず守るため — 影響: ReservationDetail.tsx。**別の帯を押しても、その 1 回は閉じるだけになる**（帯を開き直すには 2 回押す）
+- 詳細を開いたときのフォーカスは詳細そのもの（`tabIndex={-1}` の `role="dialog"`）に置き、主操作には置かない。閉じたら開く前に押していた要素へ返す — 理由: 開いた拍子に「ご来店を受け付ける」を二度押ししないため — 影響: ReservationDetail.tsx
+- 「受付済み 11:02」の時刻は props（`checkedInAt`）で受け取り、渡されないときは時刻を作らず「受付済み」とだけ書く — 理由: P2 の `reservations` に受付時刻の列が無く、`updated_at` は状態が進むたびに動くので嘘になるため（`visits` は 008） — 影響: ReservationDetail.tsx
+- 詳細の「ご要望」「注意ごと」は中身があるときだけ行にする — 理由: 空の `<dd>` を並べると「読み落とした」と区別が付かないため — 影響: ReservationDetail.tsx
+- 場所が 0 件のときは「場所は決めていません」と書く — 理由: 空欄にすると設備が要らない目的なのか決め忘れなのか分からないため — 影響: ReservationDetail.tsx
+- 時刻の JST 変換は `./metrics` の `jstClock` を使う（自分で書かない） — 理由: 同じ変換を 2 度作らないため。`metrics.ts` は T-012 が置いた台帳の寸法・時刻の単一ソース — 影響: 3 ファイルとも
+- `role="group"` を `<fieldset>` にした — 理由: biome の `a11y/useSemanticElements` が role=group に対して fieldset を求めるため。読み上げ名は `aria-label` で保つ — 影響: ReservationList.tsx（絞り込み）／ ReservationDetail.tsx（下段の操作）
+- トークンに無い文字寸法は作らず最寄りへ寄せた: 見出し 21px → `text-title`(22px)、一覧の時刻 18px → `text-lead`(17px)、本文 15px → `text-body`(16px) — 理由: 任意値を書かない決め。差は 1px で読みに影響しない — 影響: 3 ファイルとも ／ T-021 のモック差分
+- 影は `shadow-xl`（Tailwind 既定）にした。モックは `0 12px 32px rgba(20,40,33,.22)` — 理由: 任意値を書かない決め。影の色はパレットの色ではない — 影響: ReservationDetail.tsx
+- 予約リストの行から詳細は開かない（押せるのは左端の 1 列と絞り込みの札だけ） — 理由: T-017 のシグネチャが「左端の 1 列だけが押せて、ほかは読むだけ」だから — 影響: ReservationList.tsx。リストからの詳細は 008 / 009 の操作面に譲る
+- 通信断のときの列は 4 列（時間 112px / お客様 250px / ご用件 1fr / 担当 140px）にした — 理由: EX-OFFLINE の実測値。「受け付け」の列ごと落とすと書き込みの操作が 1 つも残らない — 影響: ReservationList.tsx（`isOffline`）
+
+### G-routes（19 件）
+
+- T-007 の `test/slot-locks.integration.test.ts` と T-010 の `src/worker/db/queries/ledger.ts` /
+  `src/worker/db/slot-locks.ts` を新規に作った — 理由: 担当の 4 タスクが指す実体で、いずれも新規ファイルなので他エージェントと衝突しない
+  — 影響: services/glasses_management/test/slot-locks.integration.test.ts / src/worker/db/queries/ledger.ts / src/worker/db/slot-locks.ts
+- `test/helpers.ts` に予約・割当・枠の直 INSERT の道具を足した — 理由: T-006 が挙げるファイルで、台帳・権限表・テナント分離の 3 本が同じ器を使う
+  — 影響: services/glasses_management/test/helpers.ts
+- 予約の間隔（`store_slot_rules`）の行が無い店舗は、空き枠だけでなく**台帳も 404 `not_found`** にした — 理由: `LedgerView.slotMinutes` は必須で null を持たず、暗黙の既定値（30 分）を作らないという §4.4 の決めに従うと格子を描けない — 影響: `src/worker/index.ts` `GET /api/staff/ledger`（丸の内店・新宿店のように 6 面が未設定の店舗は台帳も開けない）
+- `AvailabilityQuery.equipmentIds` が空配列のときは、ドメインへ `undefined` を渡す — 理由: ドメインの `equipmentIds` は「渡したら絞る」で、空配列をそのまま渡すと 1 台も残らず設備軸のレーンが 0 行になる — 影響: `src/worker/index.ts` `GET /api/staff/availability`
+- 受けられないご用件（無い id・止めた目的・他店舗の目的）が 1 つでも混ざったら、ルート側で `slots: []` / `lanes: []` を返して空き枠エンジンを呼ばない — 理由: 目的が 0 件のまま呼ぶと刻みを所要とみなして枠が出てしまい、受けられないご用件でご予約が取れる — 影響: `src/worker/index.ts` `GET /api/staff/availability`（200 のまま。409 にしない）
+- 仮の押さえ（KV `hold:*`）は P2 では読まず `holds: []` を渡す — 理由: 押さえを作る `POST /api/staff/holds` は P3 で、P2 には 1 本も置く経路が無い。空振りの `KV.list` は Free の 1,000 回/日を削るだけになる — 影響: `src/worker/index.ts`。P3 で押さえを足すときに同じハンドラで読む
+- `LedgerQuery.filter` は応答で行を落とさない（`counts` が 3 つとも載る） — 理由: 札の数字（`counts`）と行数が食い違うと、どちらが正しいか画面から判断できない。絞り込みは画面が `counts` と同じ数え方で行う — 影響: `src/worker/index.ts` `GET /api/staff/ledger`
+- `ReservationDetail.webBookingCode` は `reservations.code` の `EY-` を `EY-W-` に置き換えて作る — 理由: 正本の `web_bookings.public_code` は P8 の表で、契約は「`source='web'` は必ず番号を持つ」形に決まっている。null を返すと Web 由来のご予約が 1 件も詳細を開けない — 影響: `src/worker/index.ts` の `webBookingCodeOf`（P8 で中身だけを読み替える）
+- `db/queries/ledger.ts` の `jstDayWindow` を消し、`domain/availability.ts` の `jstDayRange` に寄せた — 理由: knip の unused export であり、JST の暦日 → UTC の窓の実装を 2 つ持つと片方だけ直る — 影響: `src/worker/db/queries/ledger.ts`
+- `NOT_DRAWN` / `NOT_OCCUPYING` の `as const` を `string[]` に変えた — 理由: drizzle の `notInArray` が読み取り専用タプルを受けず typecheck が落ちる — 影響: `src/worker/db/queries/ledger.ts`
+- 権限表には台帳用の**別の店舗**（`fixture.ledgerStoreId`）を `beforeAll` で立てた — 理由: 銀座店は「予約の間隔がまだ無い店舗は 404」を見るためにわざと未設定で、同じ店舗を使うと表の行の実行順（店長の PUT が先に通ること）に結果が依存する — 影響: `test/permissions.test.ts`
+- 3 本の主体は 7 種（未認証 / staff / admin / 店長 / スタッフ / 期限切れ / 別 secret）にした。403 の行は無い — 理由: 台帳・空き枠・ご予約 1 件は読み取りだけの面で、`store_memberships` を見るのは設定の保存だけ（AC-SET-17）。TODO が挙げた 5 種を含む上位集合になる — 影響: `test/permissions.test.ts` の `LEDGER_READ`（21 行）
+- テナント分離は「**他社の行に自分の店舗 id を持たせる**」形の偽装で見た — 理由: 別々の店舗 id で分かれているだけでは、読み出しが `organization_id` を落としても緑になってしまう — 影響: `test/tenant-isolation.test.ts`
+- 「他社の 3 件は満席にしない」の直後に「自分の 3 件は満席にする」を置いた — 理由: 塞がりを 1 件も数えていないだけでも前半は緑になる — 影響: `test/tenant-isolation.test.ts`
+- `seed/reservations.mjs` に分けず `seed.mjs` の中に置いた — 理由: 担当ファイルの外に新しいファイルを作らない（他エージェントと衝突させない）。分割は P3 以降でご予約の材料が増えたときに行う — 影響: `services/glasses_management/seed.mjs`
+- **当日の勤務（`staff_shifts`）を 2026-08-27 から 35 日ぶん展開して入れた**（150 行） — 理由: 曜日テンプレートを日付へ展開するのは保存の経路と日次 Cron で、seed は API を通らないので展開結果が 1 行も無い。無いままだと台帳から佐藤 美咲の休憩の帯が消え、空き枠は全時刻が `staff_off` になる — 影響: `seed.mjs`。木曜に出るのは 佐藤・高橋・中村 の 3 名（LEDGER-STAFF の 3 行と一致）
+- LEDGER-DETAIL の「ご要望」と「注意ごと」を #3（11:00）の `note_customer` / `note_internal` に入れた — 理由: P2 の詳細が描ける文字はこの 2 列しかない（お客様の注意ごとは `customers` の列で P4） — 影響: `seed.mjs`。P4 でお客様の注意ごとを足すときに置き場を見直す
+- `reservation_purposes.duration_minutes` は**目的そのものの所要**を写した — 理由: 列の意味が「予約した時点の写し」であり、帯の長さ（`reservations.duration_minutes`）とは別の数である（#3 は 60+30 の用件を 60 分の帯に収めている） — 影響: `seed.mjs`
+- 枠の一次排他（`reservation_slot_locks`）は片付け 10 分を足した格子へ展開して 43 行入れた — 理由: 確定の経路（P3）が書く内容と同じにしておかないと、P3 の 2 件目が seed の枠を無視して入る — 影響: `seed.mjs`
+
+### G-T-002-schema（4 件）
+
+- `reservation_slot_locks` の追加を人の承認を待たずに進めた — 理由: 起動指示が「迷ったら暫定案を採って進む。人に聞かない」と明示しており、`design/03-data-model.md` §7.6 が「これ以外に二重予約を止める手段が無い」と根拠まで書いているため。 — 影響: `services/glasses_management/src/worker/db/schema.ts` に 1 表を追加。人の追認が取れなければこの表と 0002 の該当 DDL を落とす。
+- TODO の 11 本に加えて 4 本のテストを足した（`reservation_assignments` > `担当が未定の押さえを表すため target_id は NULL 可` / `reservation_slot_locks` > `対象キーは NOT NULL（…）` / `刻みに展開した枠の開始と、バッチの時刻を見分ける作成日時を持つ` / `reservations` > 開始時刻 index が非一意であること） — 理由: `design/03-data-model.md` §7.3 §7.6 が明文で根拠を書いている不変条件（NULL を使わない／未定でも枠を消費する）が、index の形だけでは固定できないため。 — 影響: `services/glasses_management/test/schema.test.ts`。計 15 本。
+- 「共通 > 4 表とも外部キーを宣言しない」は既存の `外部キー`（P1 の 16 表）describe に足さず、`予約の 4 表` の describe を新設した — 理由: 既存の describe は `expect(added).toHaveLength(16)` で P1 の表数そのものを固定しており、そこへ 1 表足すと P1 のテストの意図（16 表を出した）が壊れるため。 — 影響: `services/glasses_management/test/schema.test.ts` に describe が 1 つ増える。
+- P1 が `reservations` / `reservation_purposes` / `reservation_assignments` / `visit_purposes.name_short` をすべて出し切っていたので、schema.ts への追記は `reservation_slot_locks` 1 表だけにした — 理由: TODO が「既にあるものは差分だけにする」と指示しており、`migrations/0001_*.sql` に `name_short` と 3 表の全 index が揃っていることを確認したため。 — 影響: `0002_massive_ultragirl.sql` は CREATE TABLE 1 文 + CREATE INDEX 2 文だけで、既存表を一切作り直さない。
+
+### G-timetable（23 件）
+
+- 位置と幅の計算を `timetable.ts` ではなく **`metrics.ts`** に置いた — 理由: macOS のファイル名は大文字小文字を区別しないので `timetable.ts` と `Timetable.tsx` が衝突し、`./Timetable` が `timetable.ts` に解決されて画面が undefined になった（実際に 29 本が同じ理由で落ちた）。TODO の T-012 と `worker/domain/ledger.ts` の doc コメントが指す名前もこれ — 影響: `src/web/ledger/metrics.ts` / `metrics.test.ts`
+- `theme.css` に `--color-busy-soft` を足さず、埋まった帯の地を `--color-surface-2`（#e9eeeb）にした — 理由: `theme.css` は担当ファイル外で、並行して触られると壊れる。#e9eeeb は提案値 #e4e9e6 とほぼ同じ明るさで、`--color-ink-muted` との比が 5.10:1 と AC-LEDGER-11 の 4.5:1 を満たす — 影響: `Timetable.tsx` の休憩・点検の帯
+- 埋まった帯に左 4px の `--color-line-strong` を添えた — 理由: 地だけを明るくすると見出し行（同じ `--color-surface-2`）と見分けが付かない。モックの `.appt.busy` も左に灰の縦線を持つ — 影響: `Timetable.tsx`
+- 表示窓の外まで営業する日は、1 列の最小幅 68px（`--spacing` の 17 刻み ＝ 4.25rem）で格子に最小幅を与えて横スクロールさせた — 理由: 14 列が iPad 1194px でちょうど 68px になる（1194 − サイドバー 76 − 名前列 170 ＝ 948 ÷ 14）。列数で幅を計算する calc を書くより、最小幅 1 つで同じ結果になる — 影響: `metrics.ts` の `gridMinWidth` / `Timetable.tsx`
+- 格子の列指定と行指定だけを inline style で書いた — 理由: `grid-cols-[170px_repeat(14,1fr)]` は禁止の任意値で、列数は日ごとに変わるためクラス名にできない。色は 1 つも inline に書かない（DESIGN_RULE 0-1 が禁じるのは inline の色指定） — 影響: `Timetable.tsx`
+- 帯の 1 行目をお客様のお名前ではなく時刻（`11:00–12:00`）にした — 理由: `customers` は P4 なので名前が無く、30分幅の帯が空になる。時刻なら P4 で名前に置き換えるだけで済む — 影響: `Timetable.tsx`
+- 出どころの語は 30分幅の狭い帯にも出す — 理由: AC-LEDGER-05 は色だけに意味を持たせないことを非交渉としている。落とすのはご用件のほう（AC-LEDGER-06） — 影響: `Timetable.tsx`
+- 帯の色は「担当が未定」が出どころより優先する — 理由: モック LEDGER-STAFF の 相川 みどり 様（ウォークイン由来）が赤で描かれている — 影響: `metrics.ts` の `bandToneOf`
+- `no_show` の帯にだけ状態の語（「ご来店なし」）を添えた — 理由: 帯にする以上、来られなかった事実を色以外で伝える必要がある。ほかの状態は詳細で読む — 影響: `Timetable.tsx`
+- 定休日の文言は常に「◯月◯日（◯）は定休日です。」にした — 理由: 応答は定休日と臨時休業を区別せず（どちらも `opensAt: null`）、AC-LEDGER-22 は同じ型で出すことだけを求めている — 影響: `metrics.ts` の `closedNotice`
+- 札の時刻は先頭の 0 を落とす（`09:42` → `9:42`） — 理由: AC-LEDGER-03 の文言が「現在 9:42（営業時間の外）」 — 影響: `metrics.ts` の `clockLabel`
+- 最初に尋ねる日付だけは端末の時計から出し、以後の「本日」判定・線・札はすべて応答の `serverNow` から出す — 理由: 応答を受け取る前はサーバの時刻を知りようがない。線と札は 1 度目の応答から `serverNow` だけを読む — 影響: `LedgerScreen.tsx`
+- 日付の帯（‹ ／ 日付 ／ › ／ 本日）を上のバーではなく台帳の面の先頭に置いた — 理由: `AppShell` は担当ファイル外で、上のバーの中央に差し込み口が無い — 影響: `LedgerScreen.tsx`
+- 選んだ帯の状態は `Timetable` の中に持ち、`onSelectEntry` で外へ知らせる — 理由: 詳細のポップオーバー（T-018）は別のエージェントの担当なので、器だけを開けておく — 影響: `Timetable.tsx`
+- `src/web/ledger/fixtures.ts` を作った — 理由: T-013 の触るファイルに挙がっており、テスト同士が `LedgerView` の作り置きを共有する必要がある（テストファイルを別のテストから import すると二重に走る） — 影響: `src/web/ledger/fixtures.ts`
+- 表示窓の定数と割り付けは `worker/domain/ledger.ts` から import した — 理由: 「同じものを二度作らない」。あの純関数群は D1 にも実時刻にも触れないので画面から読んでよい — 影響: `metrics.ts`
+- セグメントの押せる高さをモックの 38px でなく 44pt にした — 理由: `design/07-nfr.md` §2.1 の触れる大きさが品質フロアとして勝つ — 影響: `LedgerScreen.tsx` の `Segmented`
+- セグメントの器を `div role="group"` でなく `<fieldset aria-label>` にした — 理由: Biome の `a11y/useSemanticElements` に素直に従うほうが抑制コメントより読みやすい。読み上げ名は変わらない — 影響: `LedgerScreen.tsx`
+- 列見出し・行見出しに `tabIndex={-1}` を置いた — 理由: roving tabindex の格子で焦点を持ちうるセルは `0` か `-1` を必ず持つ（`a11y/useFocusableInteractive`）。行（`display:contents`）だけは箱を持たないので抑制コメントで断った — 影響: `Timetable.tsx`
+- `<div role="grid">` を `<table>` にしなかった — 理由: `display:grid` を当てるとブラウザが表のロールを落とし、帯を列にまたがせながら目盛りを背景の 1 枚として通せない。WAI-ARIA APG の grid パターンを抑制コメント付きで書いた — 影響: `Timetable.tsx`
+- 「予約リスト」に別のエージェントの `ReservationList` をそのまま差し込んだ — 理由: T-017 の触るファイルに `LedgerPage.tsx`（＝ `LedgerScreen.tsx`）が挙がっているが、そのファイルはこちらの担当なので繋ぐ側が居ない。`renderList` は差し替え口として残した — 影響: `LedgerScreen.tsx`
+- 絞り込み（`filter`）は画面の中だけで効かせ、取り直さない — 理由: 応答の `counts` は 3 つとも載り、ルートも `filter` で行を落とさない（`worker/index.ts` のコメント） — 影響: `LedgerScreen.tsx`
+- 詳細のポップオーバー（`ReservationDetail`）と通信断の帯（`OfflineBanner`）は繋がずに口だけ開けた — 理由: 1 件取得・場所と担当の名寄せ・帯の座標が要り、T-018 / T-019 の範囲。`Timetable` の `onSelectEntry` が押した帯を渡す — 影響: `Timetable.tsx` / `LedgerScreen.tsx`
+

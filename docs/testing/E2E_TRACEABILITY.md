@@ -41,15 +41,16 @@ idempotency ID を検証するためだけに使う。production Worker にテ�
 
 ## 現在の基準線
 
-Approved かつ UC/AC を持つ spec は次の 4 本である。`admin` の service spec と
+Approved かつ UC/AC を持つ spec は次の 5 本である。`admin` の service spec と
 infrastructure-only の文書には UC/AC がないため、分母には入らない（機械的な免除ではなく、
 そもそも product behavior を定義していない）。新しい production behavior は Approved spec
 に UC/AC を付け、この表と E2E mapping を同じ変更で追加する。
 
-`glasses_management` は 0 から作り直している最中で、P2 以降の feature spec は
+`glasses_management` は 0 から作り直している最中で、P3 以降の feature spec は
 **`- ステータス: Draft` のまま置いてある**。Approved にした瞬間に E2E が必須になるので、
 そのフェーズの E2E が緑になってから Approved へ上げる（`specs/glasses_management/design/08-traceability.md`）。
-P1（`004-store-settings`）はこの表の下 36 行がそろった時点で Approved にした。
+P1（`004-store-settings`）はこの表の 36 行が、P2（`005-availability-and-ledger`）は
+続く 33 行（UC-LEDGER-01..11 / AC-LEDGER-01..22）がそろった時点で Approved にした。
 
 | Spec ID | Playwright scenario |
 |---|---|
@@ -101,6 +102,39 @@ P1（`004-store-settings`）はこの表の下 36 行がそろった時点で Ap
 | AC-SET-21 | `services/glasses_management/e2e/store-settings.spec.ts` — 設備を足すと一覧に 1 行増える |
 | UC-SET-14 | `services/glasses_management/e2e/store-settings.spec.ts` — 目的を足すと 7件になり、並べ替えた順のまま残る |
 | AC-SET-22 | `services/glasses_management/e2e/store-settings.spec.ts` — 目的を足すと 7件になり、並べ替えた順のまま残る |
+| UC-LEDGER-01 | `services/glasses_management/e2e/ledger.spec.ts` — 予約台帳を開くと本日の担当者別タイムテーブルが出る |
+| UC-LEDGER-02 | `services/glasses_management/e2e/ledger.spec.ts` — 並べ方を「設備・場所」にすると縦軸が設備の行に入れ替わる |
+| UC-LEDGER-03 | `services/glasses_management/e2e/ledger.spec.ts` — 表示のかたちを「予約リスト」にすると時間順の行になり、出どころの 4 語がそのまま出る |
+| UC-LEDGER-04 | `services/glasses_management/e2e/ledger.spec.ts` — 帯を押すと台帳を隠さずに詳細が開き、次の操作が 3 つだけ並ぶ |
+| UC-LEDGER-05 | `services/glasses_management/e2e/ledger.spec.ts` — 日付を前後に移すと線と札が消え、並べ方と表示のかたちは保たれる |
+| UC-LEDGER-06 | `services/glasses_management/e2e/ledger.spec.ts` — 本日は現在時刻の線と札が出て、端末の時計を 1 時間進めても動かない |
+| UC-LEDGER-07 | `services/glasses_management/e2e/ledger.spec.ts` — 12:00 に終わる予約の後ろには片付けの 10分が付き、次の刻みから置ける |
+| UC-LEDGER-08 | `services/glasses_management/e2e/ledger.spec.ts` — 担当が未定の予約は担当の行の下の専用の行に置かれ、帯にも文字で書かれる |
+| UC-LEDGER-09 | `services/glasses_management/e2e/ledger.spec.ts` — 通信が切れても台帳は読めたまま残り、書き込みの操作を受け付けない |
+| UC-LEDGER-10 | `services/glasses_management/e2e/ledger.spec.ts` — 開いた詳細は 3 つのどの道でも閉じ、閉じるその 1 回は新しい予約を起こさない |
+| UC-LEDGER-11 | `services/glasses_management/e2e/ledger.spec.ts` — トップに本日わたしが担当するご予約が時間順に並び、1 行から台帳の詳細へ行ける |
+| AC-LEDGER-01 | `services/glasses_management/e2e/ledger.spec.ts` — 予約台帳を開くと本日の担当者別タイムテーブルが出る |
+| AC-LEDGER-02 | `services/glasses_management/e2e/ledger.spec.ts` — 目盛りは 10:00 から 16:30 までの 14 列を表示窓にし、長い日は台帳の中だけが横に流れる |
+| AC-LEDGER-03 | `services/glasses_management/e2e/ledger.spec.ts` — 本日は現在時刻の線と札が出て、端末の時計を 1 時間進めても動かない |
+| AC-LEDGER-04 | `services/glasses_management/e2e/ledger.spec.ts` — 日付を前後に移すと線と札が消え、並べ方と表示のかたちは保たれる |
+| AC-LEDGER-05 | `services/glasses_management/e2e/ledger.spec.ts` — 出どころは色だけでなく文字で分かり、緑の帯は語を持たない |
+| AC-LEDGER-06 | `services/glasses_management/e2e/ledger.spec.ts` — 60分の帯にはご用件の短い名前が出て、30分の狭い帯には入らない |
+| AC-LEDGER-07 | `services/glasses_management/e2e/ledger.spec.ts` — 担当が未定の予約は担当の行の下の専用の行に置かれ、帯にも文字で書かれる |
+| AC-LEDGER-08 | `services/glasses_management/e2e/ledger.spec.ts` — 「ご来店お待ち」は最下段の全幅の帯で、行見出しに人数が出る |
+| AC-LEDGER-09 | `services/glasses_management/e2e/ledger.spec.ts` — 並べ方を「設備・場所」にすると縦軸が設備の行に入れ替わる |
+| AC-LEDGER-10 | `services/glasses_management/e2e/ledger.spec.ts` — 場所を 2 つ押さえた 1 件の予約は 2 行に出て、片方を押すともう片方にも印が付く |
+| AC-LEDGER-11 | `services/glasses_management/e2e/ledger.spec.ts` — 点検の時間帯は「点検」で埋まり、予約の無い設備は「いま空いています」と出る |
+| AC-LEDGER-12 | `services/glasses_management/e2e/ledger.spec.ts` — 表示のかたちを「予約リスト」にすると時間順の行になり、出どころの 4 語がそのまま出る |
+| AC-LEDGER-13 | `services/glasses_management/e2e/ledger.spec.ts` — 「これから」を押すと現在時刻までに始まった行が消え、0 件の絞り込みは行き止まりにしない |
+| AC-LEDGER-14 | `services/glasses_management/e2e/ledger.spec.ts` — 担当が未定の行は担当の欄が「決めてください」になる |
+| AC-LEDGER-15 | `services/glasses_management/e2e/ledger.spec.ts` — 帯を押すと台帳を隠さずに詳細が開き、次の操作が 3 つだけ並ぶ |
+| AC-LEDGER-16 | `services/glasses_management/e2e/ledger.spec.ts` — 12:00 に終わる予約の後ろには片付けの 10分が付き、次の刻みから置ける |
+| AC-LEDGER-17 | `services/glasses_management/e2e/ledger.spec.ts` — 担当が未定の予約も同時受付の上限に数えられ、上限に達した時刻は満席になる |
+| AC-LEDGER-18 | `services/glasses_management/e2e/ledger.spec.ts` — 通信が切れても台帳は読めたまま残り、書き込みの操作を受け付けない |
+| AC-LEDGER-19 | `services/glasses_management/e2e/ledger.spec.ts` — 開いた詳細は 3 つのどの道でも閉じ、閉じるその 1 回は新しい予約を起こさない |
+| AC-LEDGER-20 | `services/glasses_management/e2e/ledger.spec.ts` — 台帳は矢印キーで枠を移れる格子で、またぐ帯を 2 度読ませない |
+| AC-LEDGER-21 | `services/glasses_management/e2e/ledger.spec.ts` — トップに本日わたしが担当するご予約が時間順に並び、1 行から台帳の詳細へ行ける |
+| AC-LEDGER-22 | `services/glasses_management/e2e/ledger.spec.ts` — 定休日は目盛りだけの空の格子を出さず、事実と「本日」だけを出す |
 
 validator 自体は `scripts/check-e2e-traceability.test.mjs` で unit test する。通常の実行は次の
 とおり。

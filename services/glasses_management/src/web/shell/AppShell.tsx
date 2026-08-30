@@ -24,6 +24,11 @@ export type AppShellProps = {
   alertCount?: number
   /** この端末は何か（例: 銀座店 レジ横iPad / 共有で使っています）。 */
   terminalNote?: readonly string[]
+  /**
+   * 上のバーの中央に差し込むもの（台帳・予約枠の日付の帯）。モックの `.datepill` は
+   * 店名と右端の操作の間に `margin: 0 auto` で置かれる。中身は画面の側が持つ。
+   */
+  barCenter?: ReactNode
   /** 上のバーの右端に足す操作。 */
   barActions?: ReactNode
   children: ReactNode
@@ -38,6 +43,7 @@ export function AppShell({
   onToggleRail,
   alertCount = 0,
   terminalNote,
+  barCenter,
   barActions,
   children,
 }: AppShellProps) {
@@ -59,6 +65,7 @@ export function AppShell({
           <p className="truncate text-bar font-bold">{storeName}</p>
           <p className="truncate text-note opacity-90">{storeSubline}</p>
         </div>
+        {barCenter}
         <div className="ml-auto flex items-center gap-2">{barActions}</div>
       </header>
 

@@ -12,6 +12,7 @@ import {
   purposeRequirements,
   reservationAssignments,
   reservationPurposes,
+  reservationSlotLocks,
   reservations,
   staff,
   staffShifts,
@@ -377,13 +378,146 @@ describe('reservations', () => {
   const table = getTableConfig(reservations)
 
   it('組織・店舗・開始時刻で 1 日分を引く index を持つ', () => {
-    // P1 は読み取り専用の器として作る（書き込み経路は P3）。設定の影響試算が読む。
+    // 台帳 1 日分（LEDGER-STAFF / RESOURCE / LIST）と、空き枠エンジンの重なり判定。
     expect(columnsOf(table, 'reservations_org_store_start_idx')).toEqual([
       'organization_id',
       'store_id',
       'starts_at',
     ])
+    expect(isUnique(table, 'reservations_org_store_start_idx')).toBe(false)
+  })
+
+  it('組織の中で予約番号が一意である', () => {
+    // 採番は組織 × YYMM の連番。店舗をまたぐ検索で番号が衝突しないよう組織で一意にする。
     expect(isUnique(table, 'reservations_org_code_idx')).toBe(true)
+    expect(columnsOf(table, 'reservations_org_code_idx')).toEqual(['organization_id', 'code'])
+  })
+
+  it('絞り込み用に組織・店舗・状態・開始時刻の index を持つ', () => {
+    // LEDGER-LIST の「すべて／これから／確認待ち」と、お知らせの確認待ち件数。
+    expect(columnsOf(table, 'reservations_org_store_status_start_idx')).toEqual([
+      'organization_id',
+      'store_id',
+      'status',
+      'starts_at',
+    ])
+  })
+
+  it('顧客の次のご予約を引く index を持つ', () => {
+    // 顧客詳細の「次のご予約」と来店回数の再計算（customers は P4 で足す）。
+    expect(columnsOf(table, 'reservations_org_customer_start_idx')).toEqual([
+      'organization_id',
+      'customer_id',
+      'starts_at',
+    ])
+  })
+})
+
+describe('reservation_purposes', () => {
+  const table = getTableConfig(reservationPurposes)
+
+  it('予約 id と並び順で引ける', () => {
+    // 台帳の帯の purposeLabel は、この並び順どおりに name_short を「・」で連ねる。
+    expect(columnsOf(table, 'reservation_purposes_org_reservation_idx')).toEqual([
+      'organization_id',
+      'reservation_id',
+      'sort_order',
+    ])
+    expect(isUnique(table, 'reservation_purposes_org_reservation_idx')).toBe(false)
+  })
+})
+
+describe('reservation_assignments', () => {
+  const table = getTableConfig(reservationAssignments)
+
+  it('種別・対象・開始時刻で「その担当はその時間に空いているか」を引ける', () => {
+    expect(columnsOf(table, 'reservation_assignments_org_target_start_idx')).toEqual([
+      'organization_id',
+      'kind',
+      'target_id',
+      'starts_at',
+    ])
+  })
+
+  it('予約 id で 1 件分をまとめて引ける', () => {
+    // 予約詳細と変更差分。店舗の絞り込みは reservations との JOIN で行うので store_id を置かない。
+    expect(columnsOf(table, 'reservation_assignments_org_reservation_idx')).toEqual([
+      'organization_id',
+      'reservation_id',
+    ])
+    expect(table.columns.map((c) => c.name)).not.toContain('store_id')
+  })
+
+  it('担当が未定の押さえを表すため target_id は NULL 可', () => {
+    expect(table.columns.find((c) => c.name === 'target_id')?.notNull).toBe(false)
+  })
+})
+
+describe('reservation_slot_locks', () => {
+  const table = getTableConfig(reservationSlotLocks)
+
+  it('組織・店舗・種別・対象キー・枠の開始の複合 index を持つ', () => {
+    // 上限判定の COUNT(*) を 1 枠 1 回で引く。
+    expect(columnsOf(table, 'reservation_slot_locks_org_store_target_slot_idx')).toEqual([
+      'organization_id',
+      'store_id',
+      'kind',
+      'target_key',
+      'slot_start',
+    ])
+  })
+
+  it('その index は一意でない（上限つきの条件付き INSERT が上限を数えるため）', () => {
+    // 一意にすると設定で編集できる 3 つの上限（equipment.capacity /
+    // staff.max_parallel_reservations / store_slot_rules.max_parallel）がすべて 1 に潰れ、
+    // 担当を決めずに受け付けるウォークインが同じ枠に 2 人目を作れなくなる。
+    expect(isUnique(table, 'reservation_slot_locks_org_store_target_slot_idx')).toBe(false)
+    expect(table.indexes.filter((i) => i.config.unique)).toHaveLength(0)
+  })
+
+  it('予約 id で一括 DELETE できる index を持つ', () => {
+    // 取消・変更のときの一括 DELETE と、枠のガードの COUNT(*)。
+    expect(columnsOf(table, 'reservation_slot_locks_org_reservation_idx')).toEqual([
+      'organization_id',
+      'reservation_id',
+    ])
+  })
+
+  it('対象キーは NOT NULL（担当が未定のレーンは unassigned の固定値で表す）', () => {
+    // NULL 同士は = で結べないので、NULL を使うと上限判定の COUNT(*) が
+    // 担当未定のレーンだけを数えられなくなる。
+    expect(table.columns.find((c) => c.name === 'target_key')?.notNull).toBe(true)
+  })
+
+  it('刻みに展開した枠の開始と、バッチの時刻を見分ける作成日時を持つ', () => {
+    const names = table.columns.map((c) => c.name)
+    expect(names).toEqual(
+      expect.arrayContaining([
+        'id',
+        'organization_id',
+        'store_id',
+        'reservation_id',
+        'kind',
+        'target_key',
+        'slot_start',
+        'created_at',
+      ]),
+    )
+  })
+})
+
+describe('予約の 4 表', () => {
+  it('4 表とも外部キーを宣言しない', () => {
+    const tables = [reservations, reservationPurposes, reservationAssignments, reservationSlotLocks]
+    expect(tables).toHaveLength(4)
+    for (const t of tables) {
+      const table = getTableConfig(t)
+      expect(table.foreignKeys, `${table.name} が外部キーを宣言している`).toHaveLength(0)
+      expect(
+        table.columns.map((c) => c.name),
+        table.name,
+      ).toContain('organization_id')
+    }
   })
 })
 

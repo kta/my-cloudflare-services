@@ -1,7 +1,7 @@
 # 005-availability-and-ledger: 空き枠と予約台帳
 
 - サービス: `glasses_management`
-- ステータス: Draft
+- ステータス: Approved
 
 ## 1. WHAT / WHY
 

@@ -81,6 +81,10 @@
   --color-amber: #7a5415; /* 失敗ではない注意 */
   --color-amber-soft: #fff6e5;
   --color-busy: #cdd5d1; /* 埋まっている枠 */
+  /* 埋まっている枠の地。`--color-busy` の上では `--color-ink-muted` が 4.00:1 で AA に
+     届かず、文字を濃くすると埋まった枠が空き枠より目立ってしまうので、地を明るくする側で
+     解く（この地の上で 4.87:1）。AC-LEDGER-11 がこの名前で指している値である。 */
+  --color-busy-soft: #e4e9e6;
   --color-free: #eef6f2; /* 空いている枠 */
   --color-focus: #0a63c4; /* フォーカスリング（白・下地の上で 5.8:1） */
   /* 緑の面（上のバー・主操作ボタン）の上では #0a63c4 が 1.03:1 で消えるので、
@@ -88,9 +92,13 @@
   --color-focus-on-pine: #ffffff;
 
   /* --- 台帳の時間グリッド。30分ごとは薄く、1時間ごとは少し濃く。
-     予約の帯をまたいでも途切れないよう、背景として通す。 --- */
-  --color-grid: #e7ecea;
-  --color-grid-hour: #cbd5d1;
+     予約の帯をまたいでも途切れないよう、背景として通す。
+     **名前に `-line` を付けているのは `--text-grid` と衝突させないため。**
+     Tailwind v4 は `text-<名前>` を大きさと色の両方の名前空間から引くので、
+     `--color-grid` と `--text-grid` が両方あると `text-grid` が「色」に解決され、
+     13px の指定が消えたうえ、文字が地に溶ける（`--color-grid` は白に近い）。 --- */
+  --color-grid-line: #e7ecea;
+  --color-grid-hour-line: #cbd5d1;
 
   /* --- 形。モックは 8px（操作）・12px（カード）・16px（大きな面）と、
      丸ごと丸いピル。 --- */

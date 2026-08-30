@@ -411,17 +411,10 @@ test('日曜の勤務を直して保存すると残り、営業時間の外へ�
     .getByRole('button', { name: /佐藤 美咲/ })
     .click()
 
-  // seed は曜日テンプレートだけを持ち、日付への展開は保存が作る。まず 12:00–19:00 を置く。
-  await page.getByLabel('日曜日はお休み').uncheck()
-  await page.getByLabel('日曜日の勤務の開始').fill('12:00')
-  await page.getByLabel('日曜日の勤務の終了').fill('19:00')
-  await save(page)
-  await reopenSection(page, 'スタッフと技能')
-  await page
-    .getByRole('list', { name: 'スタッフ' })
-    .getByRole('button', { name: /佐藤 美咲/ })
-    .click()
+  // seed は台帳のために当日の勤務（`staff_shifts`）まで展開してあるので、日曜は
+  // 12:00–19:00 で入っている（005-availability-and-ledger の seed）。ここから直す。
   await expect(page.getByLabel('日曜日の勤務の開始')).toHaveValue('12:00')
+  await expect(page.getByLabel('日曜日の勤務の終了')).toHaveValue('19:00')
 
   await page.getByLabel('日曜日の勤務の開始').fill('10:00')
   // 日曜の営業時間は 10:00–18:00。はみ出しても保存は拒まず、起きることだけを知らせる。

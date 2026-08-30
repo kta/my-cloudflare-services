@@ -6,7 +6,7 @@
 |---|---|---|---|
 | P0 サービスの土台 | `003-service-foundation` | **完了（Approved）** | 下記 |
 | P1 店舗の受付条件 | `004-store-settings` | **完了（Approved）** | 下記 |
-| P2 空き枠と予約台帳 | `005-availability-and-ledger` | 未着手 | — |
+| P2 空き枠と予約台帳 | `005-availability-and-ledger` | **完了（Approved）** | 下記 |
 | P3 予約受付 | `006-booking-flow` | 未着手 | — |
 | P4 顧客台帳 | `007-customer-records` | 未着手 | — |
 | P5 来店受付とウォークイン | `008-reception-and-walkin` | 未着手 | — |
@@ -110,3 +110,48 @@ web statements 91.3% / branches 81.7% / functions 93.3% / lines 95.7%（下限 6
 | SETTINGS-EQUIPMENT | 4.52% | 同上 |
 
 自己判断は [`2026-08-28-self-decisions.md`](./2026-08-28-self-decisions.md) に全 220 件。
+
+
+## P2（2026-08-31）
+
+作ったもの:
+
+- `src/worker/domain/availability.ts` — 空き枠の 8 条件（営業日 / 営業時間と止める帯 / 刻みと片付け /
+  目的の所要 / 技能を持つ担当の空き / 設備種別の空きと点検 / 同時受付上限 / Web 公開条件）を
+  表駆動で縛った純関数。時刻は引数で受ける
+- `src/worker/domain/ledger.ts` と `src/worker/db/queries/ledger.ts` — 担当者別・設備別・時間順の
+  3 通りの行組み立て。**1 予約が複数の設備を押さえると設備軸では複数行に出る**
+- 台帳のルート 3 本。応答に `serverNow` を載せ、現在時刻の線は端末の時計を読まない
+- 画面 4 面（タイムテーブル / 設備・場所別 / 予約リスト / 台帳を隠さず開く詳細）と通信断の帯
+- 表示窓は 10:00–16:30 の 30分刻み 14 列。営業時間が長い日は台帳の中だけ横スクロール
+- 任意値を書かないため、格子の寸法は `src/web/ledger/metrics.ts` が `--spacing` の刻みで計算する
+
+レビュー: subagent で **3 巡**（① backend ② frontend とモック突き合わせ
+③ 受入基準の充足・敵対的な実装可能性・モック忠実度）。
+
+確かめたこと:
+
+```
+（.dev.vars を退避した CI 相当の状態で）
+bash scripts/check-agent-compat.sh   → ok
+pnpm exec biome check .              → 緑
+pnpm run deps:check                  → 緑
+pnpm -r --if-present typecheck       → 緑
+pnpm run test                        → 緑（1,362 テスト + traceability）
+pnpm --filter @app/glasses_management e2e → 62 passed
+```
+
+カバレッジ: Worker statements 96.3% / branches 87.8%、web statements 89.6% / branches 81.7%。
+
+承認済みモックとの差: LEDGER-STAFF 3.14% / LEDGER-RESOURCE 3.66% / LEDGER-LIST 5.16% /
+LEDGER-DETAIL 7.83%。残っている差はお客様のお名前と来店回数（P4/P5 の持ち物）が中心。
+
+### CI で落ちていたものと直し
+
+PR #6 の最初の `verify` は `test/foundation.integration.test.ts` の
+`Property 'AUTH_DEV_GRANT' does not exist on type 'Env'` で落ちた。
+**CI には `.dev.vars` が無い**（gitignore。verify では作らない）ので、`wrangler types` が作る
+`Env` に secret が現れない。ローカルにはファイルがあるので通ってしまう。
+`test/env.d.ts` で `INTERNAL_KEY` / `JWT_SECRET` / `AUTH_DEV_GRANT` を明示し、生成物に頼らない形にした。
+あわせて `services/glasses_management/CLAUDE.md → AGENTS.md` の symlink を足し、
+`scripts/check-agent-compat.sh` の検査対象に `glasses_management` を加えた（旧サービス削除で落ちていた規約）。

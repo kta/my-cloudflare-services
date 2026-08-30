@@ -180,7 +180,7 @@ function closedDay(date: LocalDate, weekday: Weekday): BusinessDay {
 }
 
 /**
- * ある 1 日の営業時間を解く。**解決順は 例外 → 曜日**で、
+ * ある 1 日の営業時間を解く。**解決順は 店舗まるごとの受付停止 → 例外 → 曜日**で、
  * 例外の行がある日は曜日の行を一切見ない。曜日の行が欠けていれば定休として扱う。
  * 止める帯は例外の日でも曜日のものを引き続き差し引く（帯は曜日に付いている）。
  */
@@ -189,10 +189,19 @@ export function resolveBusinessDay(input: {
   weeklyRows: readonly WeeklyHours[]
   exceptions?: readonly DayException[]
   blackouts?: readonly BlackoutBand[]
+  /**
+   * 店舗まるごとの受付を止めているか（`stores.is_active = '0'`）。
+   * 止めた店舗は**曜日にも例外にも関わりなく**その日を閉じる。定休日・臨時休業と
+   * 同じ型で出す（AC-LEDGER-22「臨時休業の日と、店舗まるごとの受付を止めた日も
+   * 同じ型で出す」）。
+   */
+  isSuspended?: boolean
 }): BusinessDay {
   const { date, weeklyRows } = input
   const weekday = weekdayOf(date)
   const bands = (input.blackouts ?? []).filter((band) => band.weekday === weekday)
+
+  if (input.isSuspended === true) return closedDay(date, weekday)
 
   const exception = (input.exceptions ?? []).find((row) => row.date === date)
   if (exception) {

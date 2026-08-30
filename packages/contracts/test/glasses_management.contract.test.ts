@@ -1,5 +1,10 @@
 import {
   Actor,
+  AvailabilityLane,
+  AvailabilityQuery,
+  AvailabilityReason,
+  AvailabilityResponse,
+  AvailabilitySlot,
   BlackoutWindow,
   BlackoutWindowInput,
   BusinessHoursInput,
@@ -16,6 +21,14 @@ import {
   EquipmentMaintenance,
   EquipmentMaintenanceInput,
   EquipmentPatch,
+  LedgerAxis,
+  LedgerBlock,
+  LedgerEntry,
+  LedgerFilter,
+  LedgerLane,
+  LedgerQuery,
+  LedgerView,
+  LedgerViewMode,
   LocalDate,
   LocalTime,
   MaintenanceQuery,
@@ -24,6 +37,13 @@ import {
   PurposeOrderInput,
   PurposeRequirement,
   PurposeRequirementsInput,
+  ReservationAssignment,
+  ReservationCode,
+  ReservationDetail,
+  ReservationPurposeLine,
+  ReservationSource,
+  ReservationStatus,
+  ReservationSummary,
   SettingsImpactItem,
   SettingsImpactReport,
   SettingsImpactRequest,
@@ -48,6 +68,7 @@ import {
   VisitPurpose,
   VisitPurposeInput,
   VisitPurposePatch,
+  WebBookingCode,
   Weekday,
 } from '@app/contracts'
 import { describe, expect, it } from 'vitest'
@@ -892,6 +913,466 @@ describe('SettingsImpactItem', () => {
     expect(SettingsImpactItem.parse({ ...base, label: 'あ'.repeat(80) }).label).toHaveLength(80)
     for (const label of ['', 'あ'.repeat(81)]) {
       expect(() => SettingsImpactItem.parse({ ...base, label })).toThrow()
+    }
+  })
+})
+
+/* --------------------------------------------------------------------------- *
+ * P2 空き枠と予約台帳（`005-availability-and-ledger`）
+ * --------------------------------------------------------------------------- */
+
+/** 1 本のテストで 6 件の id を並べるための連番。UUID v4 の形は保つ。 */
+const uuidOf = (n: number): string => `${n}1111111-2222-4333-8444-555555555555`
+
+const START = '2026-08-27T02:00:00.000Z'
+const END = '2026-08-27T03:00:00.000Z'
+
+const ledgerEntry = {
+  reservationId: UUID,
+  startsAt: START,
+  endsAt: END,
+  purposeLabel: '新調相談・視力測定',
+  source: 'phone',
+  status: 'confirmed',
+  isUnassigned: false,
+}
+
+const ledgerLane = {
+  kind: 'staff',
+  id: UUID2,
+  name: '佐藤 美咲',
+  subtitle: '視力測定・加工',
+  entries: [ledgerEntry],
+}
+
+const ledgerView = {
+  date: '2026-08-27',
+  axis: 'staff',
+  view: 'timetable',
+  opensAt: '10:00',
+  closesAt: '19:00',
+  slotMinutes: 30,
+  lanes: [ledgerLane],
+  counts: { all: 12, upcoming: 7, pendingReview: 1 },
+  serverNow: NOW,
+}
+
+const purposeLine = {
+  purposeId: UUID2,
+  nameInternal: 'メガネを新しく作る',
+  durationMinutes: 60,
+  sortOrder: 0,
+}
+
+const reservationDetail = {
+  id: UUID,
+  code: 'EY-2608-0142',
+  storeId: UUID2,
+  source: 'phone',
+  status: 'confirmed',
+  startsAt: START,
+  endsAt: END,
+  durationMinutes: 60,
+  purposes: [purposeLine],
+  assignments: [{ kind: 'staff', targetId: UUID2, startsAt: START, endsAt: END }],
+  purposeLabel: '新調相談',
+  purposeLabelInternal: 'メガネを新しく作る',
+  version: 1,
+  createdAt: NOW,
+  updatedAt: NOW,
+}
+
+const availabilitySlot = { startsAt: START, endsAt: END, remaining: 2, isAvailable: true }
+
+const availabilityResponse = {
+  date: '2026-08-27',
+  opensAt: '10:00',
+  closesAt: '19:00',
+  isClosed: false,
+  slotMinutes: 30,
+  cleanupMinutes: 10,
+  durationMinutes: 60,
+  slots: [availabilitySlot],
+  lanes: [
+    {
+      kind: 'staff',
+      id: UUID2,
+      name: '佐藤 美咲',
+      subtitle: '視力測定・加工',
+      slots: [availabilitySlot],
+    },
+  ],
+  serverNow: NOW,
+}
+
+describe('LedgerQuery', () => {
+  it('axis の既定は staff、view の既定は timetable、filter の既定は all', () => {
+    const query = LedgerQuery.parse({ storeId: UUID, date: '2026-08-27' })
+    expect([query.axis, query.view, query.filter]).toEqual(['staff', 'timetable', 'all'])
+    // 並べ方（axis）と表示のかたち（view）は別のセグメントで、4 通りすべてが有効である。
+    // 1 つの enum にまとめると `axis=resource` のまま予約リストへ切り替えられなくなる。
+    expect(LedgerAxis.options).toEqual(['staff', 'resource'])
+    expect(LedgerViewMode.options).toEqual(['timetable', 'list'])
+    expect(LedgerFilter.options).toEqual(['all', 'upcoming', 'pending'])
+    const swapped = LedgerQuery.parse({
+      storeId: UUID,
+      date: '2026-08-27',
+      axis: 'resource',
+      view: 'list',
+      filter: 'upcoming',
+    })
+    expect([swapped.axis, swapped.view, swapped.filter]).toEqual(['resource', 'list', 'upcoming'])
+  })
+
+  it('axis に equipment を渡すと落ちる（URL に乗る語は resource）', () => {
+    expect(LedgerQuery.parse({ storeId: UUID, date: '2026-08-27', axis: 'resource' }).axis).toBe(
+      'resource',
+    )
+    // 応答の中の `LedgerLane.kind` は `equipment` だが、URL のクエリに乗る語は `resource`。
+    expect(() =>
+      LedgerQuery.parse({ storeId: UUID, date: '2026-08-27', axis: 'equipment' }),
+    ).toThrow()
+  })
+
+  it('filter に pending_review を渡すと落ちる（語は pending）', () => {
+    expect(LedgerQuery.parse({ storeId: UUID, date: '2026-08-27', filter: 'pending' }).filter).toBe(
+      'pending',
+    )
+    expect(() =>
+      LedgerQuery.parse({ storeId: UUID, date: '2026-08-27', filter: 'pending_review' }),
+    ).toThrow()
+  })
+
+  it('date は YYYY-MM-DD だけを受ける（2026-8-7 は落ちる）', () => {
+    expect(LedgerQuery.parse({ storeId: UUID, date: '2026-08-27' }).date).toBe('2026-08-27')
+    for (const date of ['2026-8-7', '2026/08/27', '']) {
+      expect(() => LedgerQuery.parse({ storeId: UUID, date })).toThrow()
+    }
+    expect(() => LedgerQuery.parse({ storeId: 'ginza', date: '2026-08-27' })).toThrow()
+  })
+})
+
+describe('LedgerView', () => {
+  it('serverNow が無い応答は落ちる（現在時刻の線の出どころだから）', () => {
+    expect(LedgerView.parse(ledgerView).serverNow).toBe(NOW)
+    const { serverNow: _dropped, ...withoutNow } = ledgerView
+    // 端末の時計を読ませないために、現在時刻は必ず応答に載せる（AC-LEDGER-03）。
+    expect(() => LedgerView.parse(withoutNow)).toThrow()
+    expect(() => LedgerView.parse({ ...ledgerView, serverNow: '2026-08-27 11:08' })).toThrow()
+  })
+
+  it('定休日は opensAt と closesAt が null でも通る', () => {
+    const closed = LedgerView.parse({
+      ...ledgerView,
+      opensAt: null,
+      closesAt: null,
+      lanes: [],
+      counts: { all: 0, upcoming: 0, pendingReview: 0 },
+    })
+    expect([closed.opensAt, closed.closesAt]).toEqual([null, null])
+    expect(closed.lanes).toEqual([])
+  })
+
+  it('counts は all / upcoming / pendingReview の 3 つを必ず持つ', () => {
+    expect(LedgerView.parse(ledgerView).counts).toEqual({ all: 12, upcoming: 7, pendingReview: 1 })
+    for (const counts of [
+      { all: 12, upcoming: 7 },
+      { all: 12, pendingReview: 1 },
+      { all: 12, upcoming: 7, pendingReview: 1, cancelled: 2 },
+      { all: 12, upcoming: 7, pendingReview: -1 },
+    ]) {
+      expect(() => LedgerView.parse({ ...ledgerView, counts })).toThrow()
+    }
+  })
+})
+
+describe('LedgerLane', () => {
+  it('kind は staff / equipment / unassigned / walkin の 4 値', () => {
+    expect(LedgerLane.parse(ledgerLane).kind).toBe('staff')
+    expect(LedgerLane.parse({ ...ledgerLane, kind: 'equipment', name: '視力測定機 A' }).kind).toBe(
+      'equipment',
+    )
+    for (const kind of ['resource', 'room', 'break']) {
+      expect(() => LedgerLane.parse({ ...ledgerLane, kind })).toThrow()
+    }
+  })
+
+  it('unassigned と walkin の行は id が null でよい', () => {
+    // 「担当が未定」と「ご来店お待ち」は担当者でも設備でもない擬似行なので id を持たない。
+    const unassigned = LedgerLane.parse({ kind: 'unassigned', id: null, name: '担当が未定' })
+    expect([unassigned.entries, unassigned.blocks]).toEqual([[], []])
+    // 待っている人数は行見出しの副文に出す。`walk_ins` は 008 なので P2 は 0名 のまま。
+    const walkin = LedgerLane.parse({
+      kind: 'walkin',
+      id: null,
+      name: 'ご来店お待ち',
+      subtitle: '0名',
+    })
+    expect(walkin.subtitle).toBe('0名')
+  })
+})
+
+describe('LedgerEntry', () => {
+  it('customerName と visitCount は null を許す（顧客は 007 で足す）', () => {
+    const entry = LedgerEntry.parse(ledgerEntry)
+    expect([entry.customerName, entry.visitCount]).toEqual([null, null])
+    expect(entry.isUnassigned).toBe(false)
+    expect(ReservationStatus.options).toHaveLength(6)
+    const named = LedgerEntry.parse({ ...ledgerEntry, customerName: '山口 真央', visitCount: 3 })
+    expect([named.customerName, named.visitCount]).toEqual(['山口 真央', 3])
+    expect(() => LedgerEntry.parse({ ...ledgerEntry, visitCount: -1 })).toThrow()
+    // 帯は半開区間。左右が逆の帯は台帳に置けない。
+    expect(() => LedgerEntry.parse({ ...ledgerEntry, startsAt: END, endsAt: START })).toThrow()
+  })
+})
+
+describe('LedgerBlock', () => {
+  it('kind は break / maintenance / closed の 3 値で、label は 30 文字まで', () => {
+    const block = { startsAt: START, endsAt: END, label: '休憩' }
+    for (const kind of ['break', 'maintenance', 'closed']) {
+      expect(LedgerBlock.parse({ ...block, kind }).kind).toBe(kind)
+    }
+    for (const kind of ['lunch', 'blackout', 'staff']) {
+      expect(() => LedgerBlock.parse({ ...block, kind })).toThrow()
+    }
+    expect(
+      LedgerBlock.parse({ ...block, kind: 'break', label: 'あ'.repeat(30) }).label,
+    ).toHaveLength(30)
+    expect(() => LedgerBlock.parse({ ...block, kind: 'break', label: 'あ'.repeat(31) })).toThrow()
+  })
+})
+
+describe('ReservationSource', () => {
+  it('phone / counter / web / walkin の 4 値だけを受ける', () => {
+    for (const source of ['phone', 'counter', 'web', 'walkin']) {
+      expect(ReservationSource.parse(source)).toBe(source)
+    }
+    expect(ReservationSource.options).toHaveLength(4)
+    // 店頭（`counter`）と予約なしのご来店（`walkin`）は業務上まったく別で、まとめない。
+    for (const source of ['front', 'shop', 'telephone', 'web_booking']) {
+      expect(() => ReservationSource.parse(source)).toThrow()
+    }
+  })
+})
+
+describe('ReservationAssignment', () => {
+  it('targetId は null を許す（あとで決める）', () => {
+    const undecided = ReservationAssignment.parse({ kind: 'staff', startsAt: START, endsAt: END })
+    expect(undecided.targetId).toBeNull()
+    expect(
+      ReservationAssignment.parse({
+        kind: 'equipment',
+        targetId: UUID,
+        startsAt: START,
+        endsAt: END,
+      }).targetId,
+    ).toBe(UUID)
+    for (const kind of ['unassigned', 'walkin', 'resource']) {
+      expect(() => ReservationAssignment.parse({ kind, startsAt: START, endsAt: END })).toThrow()
+    }
+  })
+})
+
+describe('ReservationDetail', () => {
+  it('purposes は 5 件まで。0 件でも読める（1 件以上は書く側の不変条件）', () => {
+    expect(ReservationDetail.parse(reservationDetail).purposes).toHaveLength(1)
+    expect(ReservationPurposeLine.parse(purposeLine).sortOrder).toBe(0)
+    const five = [0, 1, 2, 3, 4].map((n) => ({ ...purposeLine, purposeId: uuidOf(n + 1) }))
+    expect(ReservationDetail.parse({ ...reservationDetail, purposes: five }).purposes).toHaveLength(
+      5,
+    )
+    // 0 件を落とすと、`reservation_purposes` が 1 行欠けただけでご予約 1 件の詳細が
+    // まるごと 500 になる。D1 に CHECK は無いので、読む側は 0 件でも本文を返す。
+    expect(
+      ReservationDetail.parse({ ...reservationDetail, purposes: [], purposeLabel: '' }).purposes,
+    ).toEqual([])
+    expect(ReservationDetail.parse({ ...reservationDetail, assignments: [] }).assignments).toEqual(
+      [],
+    )
+    expect(() =>
+      ReservationDetail.parse({
+        ...reservationDetail,
+        purposes: [...five, { ...purposeLine, purposeId: uuidOf(6) }],
+      }),
+    ).toThrow()
+  })
+
+  it('code は EY-2608-0142 の形。EY-W- で始まる番号は落ちる', () => {
+    expect(ReservationCode.parse('EY-2608-0142')).toBe('EY-2608-0142')
+    // 9999 を越えた月は 5 桁へ桁上げする。
+    expect(ReservationDetail.parse({ ...reservationDetail, code: 'EY-2608-10000' }).code).toBe(
+      'EY-2608-10000',
+    )
+    // お客様に見せる Web のご予約番号は別の採番系統で、`reservations.code` には入らない。
+    for (const code of ['EY-W-2608-0031', 'EY-2608-142', 'ey-2608-0142', '2608-0142']) {
+      expect(() => ReservationDetail.parse({ ...reservationDetail, code })).toThrow()
+    }
+    expect(WebBookingCode.parse('EY-W-2608-0031')).toBe('EY-W-2608-0031')
+    expect(() => WebBookingCode.parse('EY-2608-0142')).toThrow()
+  })
+
+  it('webBookingCode は source が web のときだけ非 null になる', () => {
+    expect(ReservationDetail.parse(reservationDetail).webBookingCode).toBeNull()
+    expect(
+      ReservationDetail.parse({
+        ...reservationDetail,
+        source: 'web',
+        webBookingCode: 'EY-W-2608-0031',
+      }).webBookingCode,
+    ).toBe('EY-W-2608-0031')
+    // お電話のご予約に Web のご予約番号は生えない。
+    expect(() =>
+      ReservationDetail.parse({ ...reservationDetail, webBookingCode: 'EY-W-2608-0031' }),
+    ).toThrow()
+    // Web から入ったご予約は必ずお客様に読み上げる番号を持つ。
+    expect(() => ReservationDetail.parse({ ...reservationDetail, source: 'web' })).toThrow()
+  })
+})
+
+describe('AvailabilityQuery', () => {
+  it('purposeIds はカンマ区切りで最大 5 件、6 件目で落ちる', () => {
+    const base = { storeId: UUID, date: '2026-08-27' }
+    expect(AvailabilityQuery.parse(base).purposeIds).toEqual([])
+    const five = [1, 2, 3, 4, 5].map(uuidOf)
+    expect(AvailabilityQuery.parse({ ...base, purposeIds: five.join(',') }).purposeIds).toEqual(
+      five,
+    )
+    expect(() =>
+      AvailabilityQuery.parse({ ...base, purposeIds: [...five, uuidOf(6)].join(',') }),
+    ).toThrow()
+    expect(() => AvailabilityQuery.parse({ ...base, purposeIds: 'ginza,shinjuku' })).toThrow()
+    // 設備の絞り込みも同じ形で受ける。
+    expect(AvailabilityQuery.parse({ ...base, equipmentIds: uuidOf(1) }).equipmentIds).toEqual([
+      uuidOf(1),
+    ])
+    expect(AvailabilityQuery.parse({ ...base, axis: 'resource' }).axis).toBe('resource')
+  })
+
+  it('durationMinutes は 5 の倍数で 5〜480', () => {
+    const base = { storeId: UUID, date: '2026-08-27' }
+    expect(AvailabilityQuery.parse(base).durationMinutes).toBeUndefined()
+    // クエリ文字列は必ず文字列で届く（`?durationMinutes=60`）。
+    expect(AvailabilityQuery.parse({ ...base, durationMinutes: '60' }).durationMinutes).toBe(60)
+    expect(AvailabilityQuery.parse({ ...base, durationMinutes: 5 }).durationMinutes).toBe(5)
+    expect(AvailabilityQuery.parse({ ...base, durationMinutes: 480 }).durationMinutes).toBe(480)
+    for (const durationMinutes of [0, 3, 45.5, 485, '61', 'いっぱい']) {
+      expect(() => AvailabilityQuery.parse({ ...base, durationMinutes })).toThrow()
+    }
+  })
+})
+
+describe('AvailabilityReason', () => {
+  it('12 値をすべて受け、知らない語は落ちる', () => {
+    expect(AvailabilityReason.options).toEqual([
+      'closed',
+      'outside_hours',
+      'break',
+      'maintenance',
+      'staff_busy',
+      'staff_off',
+      // 「すべて埋まっている」と「1 台も無い」は別の理由。前者は時間をずらせば取れ、
+      // 後者は設定を直すまで何時でも取れない（BOOK-02b が理由をそのまま文にする）。
+      'equipment_busy',
+      'no_equipment',
+      'no_skill',
+      'max_parallel',
+      'web_window',
+      'lead_time',
+    ])
+    for (const reason of ['full', 'holiday', 'busy', 'unknown']) {
+      expect(() => AvailabilityReason.parse(reason)).toThrow()
+    }
+  })
+})
+
+describe('AvailabilitySlot', () => {
+  it('remaining は 0 以上。−1 は落ちる', () => {
+    expect(AvailabilitySlot.parse(availabilitySlot).remaining).toBe(2)
+    const full = AvailabilitySlot.parse({
+      ...availabilitySlot,
+      remaining: 0,
+      isAvailable: false,
+      reason: 'max_parallel',
+    })
+    expect([full.remaining, full.reason]).toEqual([0, 'max_parallel'])
+    expect(AvailabilitySlot.parse(availabilitySlot).staffIds).toEqual([])
+    for (const remaining of [-1, 1.5]) {
+      expect(() => AvailabilitySlot.parse({ ...availabilitySlot, remaining })).toThrow()
+    }
+  })
+})
+
+describe('AvailabilityResponse', () => {
+  it('定休日は isClosed が true で slots が空でも通る', () => {
+    expect(AvailabilityResponse.parse(availabilityResponse).slots).toHaveLength(1)
+    const closed = AvailabilityResponse.parse({
+      ...availabilityResponse,
+      opensAt: null,
+      closesAt: null,
+      isClosed: true,
+      slots: [],
+      lanes: [],
+    })
+    expect([closed.isClosed, closed.slots, closed.alternatives]).toEqual([true, [], []])
+  })
+
+  it('枠が 0 件の理由を本文で持つ（定休日は closed、お受けできないご用件は purpose_unavailable）', () => {
+    // 既定は null。置ける枠が 1 つでもある日は理由を持たない。
+    expect(AvailabilityResponse.parse(availabilityResponse).reason).toBeNull()
+    for (const reason of ['closed', 'purpose_unavailable']) {
+      expect(
+        AvailabilityResponse.parse({ ...availabilityResponse, slots: [], lanes: [], reason })
+          .reason,
+      ).toBe(reason)
+    }
+    // 枠ごとの語彙（12 値）に `purpose_unavailable` は入れない。応答だけの語である。
+    expect(() => AvailabilityReason.parse('purpose_unavailable')).toThrow()
+    expect(() =>
+      AvailabilityResponse.parse({ ...availabilityResponse, reason: 'store_closed' }),
+    ).toThrow()
+  })
+
+  it('alternatives は 3 件まで', () => {
+    const three = [1, 2, 3].map(() => availabilitySlot)
+    expect(
+      AvailabilityResponse.parse({ ...availabilityResponse, alternatives: three }).alternatives,
+    ).toHaveLength(3)
+    expect(() =>
+      AvailabilityResponse.parse({
+        ...availabilityResponse,
+        alternatives: [...three, availabilitySlot],
+      }),
+    ).toThrow()
+  })
+})
+
+describe('台帳と空き枠の応答', () => {
+  it('いずれの応答スキーマも知らないキーを 1 つ混ぜると落ちる', () => {
+    const reservationSummary = {
+      id: UUID,
+      code: 'EY-2608-0142',
+      startsAt: START,
+      durationMinutes: 60,
+      status: 'confirmed',
+      source: 'phone',
+      purposeLabel: '新調相談',
+    }
+    expect(ReservationSummary.parse(reservationSummary).staffName).toBeNull()
+    const cases: [{ parse: (input: unknown) => unknown }, Record<string, unknown>][] = [
+      [LedgerView, ledgerView],
+      [LedgerLane, ledgerLane],
+      [LedgerEntry, ledgerEntry],
+      [LedgerBlock, { kind: 'break', startsAt: START, endsAt: END, label: '休憩' }],
+      [ReservationDetail, reservationDetail],
+      [ReservationSummary, reservationSummary],
+      [ReservationAssignment, { kind: 'staff', startsAt: START, endsAt: END }],
+      [AvailabilitySlot, availabilitySlot],
+      [AvailabilityLane, { kind: 'unassigned', id: null, name: '担当が未定' }],
+      [AvailabilityResponse, availabilityResponse],
+    ]
+    for (const [schema, valid] of cases) {
+      expect(() => schema.parse(valid)).not.toThrow()
+      expect(() => schema.parse({ ...valid, customerPhone: '090-1234-5678' })).toThrow()
     }
   })
 })

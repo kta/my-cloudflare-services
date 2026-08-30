@@ -10,7 +10,7 @@ import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqli
  * - 時間順の並びは created_at で取る（UUID v4 は並び替えに使えない）。
  *
  * テーブルはフェーズごとに増える（specs/glasses_management/design/03-data-model.md）。
- * P0（基盤）の 3 つに、P1（店舗の受付条件）の 16 を足した 19 表がここにある。
+ * P0（基盤）の 3 つに、P1（店舗の受付条件）の 16 と P2（枠の一次排他）の 1 を足した 20 表がここにある。
  */
 
 /**
@@ -551,5 +551,64 @@ export const reservationAssignments = sqliteTable(
     ),
     // 予約詳細と変更差分。店舗の絞り込みは reservations との JOIN で行う（この表に store_id を置かない）。
     index('reservation_assignments_org_reservation_idx').on(t.organizationId, t.reservationId),
+  ],
+)
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * P2 枠の一次排他（0002_*.sql）
+ * 予約の 3 表（reservations / reservation_purposes / reservation_assignments）は
+ * P1 が読み取り専用の器として作ってある。P2 で足すのはこの 1 表だけ。
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * 枠の一次排他。刻み（`store_slot_rules.slot_minutes`）単位に展開した占有行で、
+ * 予約の確定・変更と同じ `db.batch()` で「上限つき条件付き INSERT」として書く。
+ *
+ * この表が要るのは D1 の制約による。`db.batch()` は全文を投げてから結果をまとめて
+ * 受け取るので、同じバッチの中で読んで判定して書けない。「確定の直前に重なりを
+ * 再検査する」方式は 読み → アプリ側で判定 → 書き の 2 往復になり、その間に別端末の
+ * 書き込みが入る窓が空く。1 文で上限を数えながら書ける形はこの表しかない
+ * （specs/glasses_management/design/03-data-model.md §7.6）。
+ *
+ * 空き枠エンジンは同じ判定を表示のために先回りで行うが、最後の砦はこの表である。
+ * 取り消した予約（status IN ('cancelled','no_show')）の行は残さず DELETE する
+ * （空き枠を即座に戻すため）。
+ */
+export const reservationSlotLocks = sqliteTable(
+  'reservation_slot_locks',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    storeId: text('store_id').notNull(),
+    reservationId: text('reservation_id').notNull(), // 取消・変更で一括 DELETE する
+    // 'staff' | 'equipment' | 'store'。'store' は店舗まるごとのレーンで、
+    // 同時受付上限（store_slot_rules.max_parallel）をここで数える。担当ごとのレーンだけでは
+    // target_key が違う予約どうしが数え合わず、上限 3 の店の同じ枠に 4 件入ってしまう。
+    kind: text('kind').notNull(),
+    // staff.id / equipment.id / 'unassigned' / 'store'。担当が未定のレーンと
+    // 店舗まるごとのレーンは固定値で表す。NULL を使わないのは、NULL 同士が `=` で結べず、
+    // 上限判定の COUNT(*) がそのレーンだけを数えられなくなるため。
+    targetKey: text('target_key').notNull(),
+    slotStart: text('slot_start').notNull(), // ISO8601 (UTC)。slot_minutes の格子に載った時刻
+    // このバッチの時刻。同じ予約の古い行と新しい行をこの値で見分ける
+    // （変更は「新しい枠を取ってから古い枠を返す」順に書く）。
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => [
+    // 上限判定の COUNT(*) を 1 枠 1 回で引く。
+    // **一意にしない。** 一意 index は「1」しか表現できず、設定で編集できる 3 つの上限
+    // （equipment.capacity 1〜10 / staff.max_parallel_reservations 1〜5 /
+    // store_slot_rules.max_parallel 1〜20）がすべて 1 に潰れる。さらに
+    // target_key='unassigned' のレーンが 1 本に縛られると、担当を決めずに受け付ける
+    // ウォークインが同じ枠に 2 人目を作れなくなる（目の前のお客様を受け付けられない）。
+    index('reservation_slot_locks_org_store_target_slot_idx').on(
+      t.organizationId,
+      t.storeId,
+      t.kind,
+      t.targetKey,
+      t.slotStart,
+    ),
+    // 取消・変更のときの一括 DELETE と、枠のガードの COUNT(*)。
+    index('reservation_slot_locks_org_reservation_idx').on(t.organizationId, t.reservationId),
   ],
 )

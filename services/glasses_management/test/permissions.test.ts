@@ -15,7 +15,21 @@
 import { env, SELF } from 'cloudflare:test'
 import { signAccessToken } from '@app/shared'
 import { beforeAll, describe, expect, it } from 'vitest'
-import { BASE, INTERNAL_HEADERS, JSON_HEADERS, JWT_SECRET, orgId, tokenFor } from './helpers'
+import {
+  BASE,
+  INTERNAL_HEADERS,
+  insertBusinessHours,
+  insertReservation,
+  insertSlotRules,
+  insertStore,
+  insertVisitPurpose,
+  JSON_HEADERS,
+  JWT_SECRET,
+  jstAt,
+  LEDGER_DATE,
+  orgId,
+  tokenFor,
+} from './helpers'
 
 type ActorName = 'none' | 'staff' | 'admin' | 'manager' | 'clerk' | 'expired' | 'wrong-secret'
 
@@ -38,6 +52,11 @@ const fixture = {
   maintenanceId: '',
   purposeId: '',
   exceptionId: '',
+  // 台帳・空き枠・ご予約 1 件を叩くための、受付条件がそろった別の店舗。
+  // 銀座店（`storeId`）は「予約の間隔がまだ無い店舗は 404」を表で見るために、
+  // わざと未設定のままにしてある。同じ店舗を使い回すと表の行の順序に依存する。
+  ledgerStoreId: '',
+  reservationId: '',
 }
 
 /** dev グラントが載せる `sub`。membership の `userId` はこれに合わせる。 */
@@ -176,6 +195,24 @@ beforeAll(async () => {
       NOW,
     )
     .run()
+
+  // P2 の 3 本（台帳・空き枠・ご予約 1 件）が 200 で返る足場。
+  // 予約を書く API は P3 なので、材料は `helpers.ts` の直 INSERT で置く。
+  fixture.ledgerStoreId = await insertStore(ORG, 'EYEX 台帳確認店')
+  await insertBusinessHours(ORG, fixture.ledgerStoreId)
+  await insertSlotRules(ORG, fixture.ledgerStoreId)
+  const ledgerPurpose = await insertVisitPurpose(ORG, fixture.ledgerStoreId, {
+    nameInternal: '今のメガネを調整したい',
+    nameShort: '調整',
+    durationMinutes: 20,
+  })
+  fixture.reservationId = await insertReservation(ORG, {
+    storeId: fixture.ledgerStoreId,
+    startsAt: jstAt(LEDGER_DATE, '11:00'),
+    durationMinutes: 30,
+    staffId: null,
+    purposes: [{ id: ledgerPurpose }],
+  })
 })
 
 function headersFor(actor: ActorName): HeadersInit {
@@ -224,6 +261,21 @@ const WRITE = {
   staff: 403,
   manager: 200,
   clerk: 403,
+  expired: 401,
+  'wrong-secret': 401,
+} as const
+
+/**
+ * 台帳・空き枠・ご予約 1 件は**読み取りだけ**の面なので、店舗の membership を要求しない
+ * （`store_memberships` を見るのは設定の保存だけ。AC-SET-17）。したがってこの 3 本に
+ * 403 の行は無く、落ちるのは未認証・期限切れ・別 secret 署名の 401 だけである。
+ */
+const LEDGER_READ = {
+  none: 401,
+  staff: 200,
+  admin: 200,
+  manager: 200,
+  clerk: 200,
   expired: 401,
   'wrong-secret': 401,
 } as const
@@ -486,6 +538,26 @@ const TABLE: Row[] = [
     path: () => '/api/staff/purposes/order',
     body: () => ({ purposeIds: [fixture.purposeId] }),
     expected: WRITE,
+  },
+
+  /* --- 予約台帳と空き枠（P2。読み取りだけ） --- */
+  {
+    name: '台帳は店舗の誰でも読める',
+    method: 'GET',
+    path: () => `/api/staff/ledger?storeId=${fixture.ledgerStoreId}&date=${LEDGER_DATE}`,
+    expected: LEDGER_READ,
+  },
+  {
+    name: '空き枠は店舗の誰でも読める',
+    method: 'GET',
+    path: () => `/api/staff/availability?storeId=${fixture.ledgerStoreId}&date=${LEDGER_DATE}`,
+    expected: LEDGER_READ,
+  },
+  {
+    name: 'ご予約 1 件は店舗の誰でも読める',
+    method: 'GET',
+    path: () => `/api/staff/reservations/${fixture.reservationId}`,
+    expected: LEDGER_READ,
   },
 
   /* --- 保存の前に見せる影響（読み取り専用なので店長を要求しない） --- */

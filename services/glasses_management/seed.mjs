@@ -248,6 +248,232 @@ const purposeRequirements = [
   { kind: 'equipment_kind', value: 'counter' },
 ]
 
+/* --- 当日の勤務（staff_shifts） -------------------------------------------- *
+ * 曜日テンプレート（staff_weekly_shifts）を日付へ展開するのは保存の経路と日次 Cron で、
+ * seed は API を通らないので展開結果が 1 行も無い。台帳と空き枠は staff_shifts しか
+ * 読まないため、これを置かないと 8月27日の台帳から休憩の帯が消え、空き枠は
+ * 「担当がお休み」で全滅する。台帳と E2E が触る 5 週間ぶんだけを展開する。 */
+const SHIFT_FROM = '2026-08-27'
+const SHIFT_DAYS = 35
+const MS_PER_DAY = 86_400_000
+
+/** JST の暦日を n 日ぶん並べる（JST に夏時間は無いので UTC の日付計算でずれない）。 */
+const jstDays = (from, days) => {
+  const base = Date.parse(`${from}T00:00:00.000Z`)
+  return Array.from({ length: days }, (_, i) =>
+    new Date(base + i * MS_PER_DAY).toISOString().slice(0, 10),
+  )
+}
+const weekdayOf = (date) => new Date(`${date}T00:00:00.000Z`).getUTCDay()
+
+const shiftRows = jstDays(SHIFT_FROM, SHIFT_DAYS).flatMap((date, dayIndex) =>
+  staffMembers.flatMap((m, i) => {
+    const band = m.week[weekdayOf(date)]
+    if (band === null) return []
+    const [startsAt, endsAt] = band.split('-')
+    const rows = [{ n: i * 100 + dayIndex, staffIndex: i, date, startsAt, endsAt, kind: 'work' }]
+    if (m.rest !== null) {
+      const [restStart, restEnd] = m.rest.split('-')
+      // 休憩は担当ひとりのもので、台帳では担当の行にだけ灰色の帯として出る。
+      rows.push({
+        n: 100_000 + i * 100 + dayIndex,
+        staffIndex: i,
+        date,
+        startsAt: restStart,
+        endsAt: restEnd,
+        kind: 'break',
+      })
+    }
+    return rows
+  }),
+)
+
+/* --- 2026年8月27日（木）の銀座店のご予約 12 件（LEDGER-STAFF が正本） ------ *
+ * お客様のお名前は入れない（`customers` は 007-customer-records。`customer_id` は全件 NULL）。
+ * 台帳に出るのはご用件と担当だけである。モック同士が食い違う値は LEDGER-STAFF を正とする
+ * （HOME-PERSONAL は 13:00 と 15:30 を佐藤 美咲に置いているが、LEDGER-STAFF は
+ * それぞれ 高橋 健 と 中村 彩 に置いている。佐藤 美咲の本日の担当は
+ * 11:00 / 14:00 / 17:00 / 17:30 の 4 件になる）。
+ *
+ * 11 と 12 は表示窓 10:00–16:30 の外に置く。台帳の横スクロールの証拠になり、
+ * 「すべて 12件 ／ これから 7件（11:08 以降に始まる #6〜#12）／ 確認待ち 1件（#6）」が
+ * 数え上げの結果として成り立つ。 */
+const LEDGER_DATE = '2026-08-27'
+const SLOT_MINUTES = 30
+const CLEANUP_MINUTES = 10
+
+/** JST の壁時計 → UTC の ISO8601。 */
+const at = (hhmm) => new Date(Date.parse(`${LEDGER_DATE}T${hhmm}:00.000+09:00`)).toISOString()
+const after = (iso, minutes) => new Date(Date.parse(iso) + minutes * 60_000).toISOString()
+
+/** staffMembers / equipments / purposes の並び順（= id の連番）に付けた名前。 */
+const SATO = 0
+const TAKAHASHI = 1
+const NAKAMURA = 2
+const WATANABE = 4
+const MEASURE_A = 0
+const MEASURE_B = 1
+const COUNTER_1 = 3
+const COUNTER_2 = 4
+const NEW_GLASSES = 0
+const ADJUST = 1
+const PICKUP = 2
+const EYESIGHT = 5
+
+/* 予約 12 件（LEDGER-STAFF / LEDGER-LIST の帯とそのままの並び）。
+ *
+ * **10:00 の 1 件は「朝の支度」の受付停止帯（開店直後の 15 分）の中にある。**
+ * 台帳には帯が置いてあるのに、同じ時刻を新規で取ろうとすると空き枠エンジンは
+ * `reason='break'` で断る。これは食い違いではなく決めである —— 受付を止める帯は
+ * 「これから受ける予約を止める」ものであって、すでに入っている予約を消しはしない
+ * （帯を後から足した日に台帳から帯が消えたら、来店されたお客様を見失う）。
+ * モック LEDGER-STAFF が 10:00 の帯を描いているのが正本である。 */
+const reservationSeeds = [
+  {
+    start: '10:00',
+    minutes: 30,
+    use: [ADJUST],
+    staff: TAKAHASHI,
+    source: 'phone',
+    status: 'arrived',
+  },
+  {
+    start: '10:30',
+    minutes: 60,
+    use: [EYESIGHT],
+    staff: NAKAMURA,
+    source: 'web',
+    status: 'arrived',
+    places: [{ unit: MEASURE_B }],
+  },
+  {
+    start: '11:00',
+    minutes: 60,
+    use: [NEW_GLASSES, EYESIGHT],
+    staff: SATO,
+    source: 'phone',
+    status: 'confirmed',
+    places: [{ unit: MEASURE_A }, { unit: COUNTER_2 }],
+    // LEDGER-DETAIL の 2 行。お客様のお名前と来店回数は 007-customer-records で足す。
+    noteCustomer: '「遠近は初めてです」',
+    noteInternal: '度数変更の理由は、段階的に説明してください。',
+  },
+  {
+    start: '11:00',
+    minutes: 30,
+    use: [EYESIGHT],
+    staff: WATANABE,
+    source: 'walkin',
+    status: 'arrived',
+  },
+  {
+    start: '11:02',
+    minutes: 60,
+    use: [NEW_GLASSES],
+    staff: null,
+    source: 'walkin',
+    status: 'confirmed',
+  },
+  {
+    start: '13:00',
+    minutes: 20,
+    use: [ADJUST],
+    staff: null,
+    source: 'web',
+    status: 'confirmed',
+    places: [{ unit: COUNTER_1 }],
+  },
+  {
+    start: '13:00',
+    minutes: 60,
+    use: [ADJUST],
+    staff: TAKAHASHI,
+    source: 'phone',
+    status: 'confirmed',
+  },
+  {
+    start: '14:00',
+    minutes: 20,
+    use: [PICKUP],
+    staff: SATO,
+    source: 'phone',
+    status: 'confirmed',
+    places: [{ unit: COUNTER_1 }],
+  },
+  {
+    start: '15:00',
+    minutes: 60,
+    use: [NEW_GLASSES],
+    staff: NAKAMURA,
+    source: 'counter',
+    status: 'confirmed',
+  },
+  {
+    start: '15:30',
+    minutes: 60,
+    use: [EYESIGHT],
+    staff: null,
+    source: 'phone',
+    status: 'confirmed',
+    // 1 予約が場所を持ち替える（測定 → ご相談）。設備別の台帳では 2 行に出る。
+    places: [
+      { unit: MEASURE_A, from: '15:30', to: '16:00' },
+      { unit: COUNTER_2, from: '16:00', to: '16:30' },
+    ],
+  },
+  { start: '17:00', minutes: 30, use: [ADJUST], staff: SATO, source: 'phone', status: 'confirmed' },
+  { start: '17:30', minutes: 30, use: [PICKUP], staff: SATO, source: 'phone', status: 'confirmed' },
+]
+
+/** 押さえ 1 本を刻みの格子へ展開する（`reservation_slot_locks.slot_start`）。
+ * 片付けは予約の後ろにだけ付き、`ends_at` には含めない。 */
+const slotStartsOf = (startsAt, endsAt) => {
+  const step = SLOT_MINUTES * 60_000
+  const anchor = Date.parse(`${LEDGER_DATE}T00:00:00.000+09:00`)
+  const endMs = Date.parse(endsAt) + CLEANUP_MINUTES * 60_000
+  const first = anchor + Math.floor((Date.parse(startsAt) - anchor) / step) * step
+  const starts = []
+  for (let ms = first; ms < endMs; ms += step) starts.push(new Date(ms).toISOString())
+  return starts
+}
+
+/** 1 予約ぶんの行（本体・ご用件・押さえ・枠の一次排他）を組み立てる。 */
+const reservationRows = reservationSeeds.map((seed, i) => {
+  const startsAt = at(seed.start)
+  const endsAt = after(startsAt, seed.minutes)
+  // 担当の押さえは 1 予約にちょうど 1 行（未定でも作る。無いと枠の数え方が台帳とずれる）。
+  const bands = [
+    {
+      kind: 'staff',
+      targetId: seed.staff === null ? null : uid('c0010000', seed.staff),
+      startsAt,
+      endsAt,
+    },
+    ...(seed.places ?? []).map((place) => ({
+      kind: 'equipment',
+      targetId: uid('d0010000', place.unit),
+      startsAt: place.from === undefined ? startsAt : at(place.from),
+      endsAt: place.to === undefined ? endsAt : at(place.to),
+    })),
+  ]
+  return {
+    id: uid('a0010000', i),
+    code: `EY-2608-${String(i + 1).padStart(4, '0')}`,
+    startsAt,
+    endsAt,
+    seed,
+    bands,
+    locks: bands.flatMap((band) =>
+      slotStartsOf(band.startsAt, band.endsAt).map((slotStart) => ({
+        kind: band.kind,
+        // 担当が未定のレーンの鍵は固定の語にする（NULL 同士は `=` で結べない）。
+        targetKey: band.targetId ?? 'unassigned',
+        slotStart,
+      })),
+    ),
+  }
+})
+
 /* --- 担当店舗（E2E の権限まわりが使う） ------------------------------------ *
  * 実運用では admin が service binding で配るが、dev と E2E の足場としてここに置く。 */
 const memberships = [
@@ -353,6 +579,43 @@ const lines = [
     (m, i) =>
       `INSERT OR IGNORE INTO store_memberships (id, organization_id, store_id, user_id, permissions, created_at) VALUES (${q(uid('f0010000', i))}, ${q(ORG)}, ${q(GINZA)}, ${q(m.userId)}, ${q(m.permissions)}, ${q(NOW)});`,
   ),
+
+  // 当日の勤務（曜日テンプレートを 2026-08-27 から 5 週間ぶん日付へ展開したもの）。
+  ...shiftRows.map(
+    (r) =>
+      `INSERT OR IGNORE INTO staff_shifts (id, organization_id, store_id, staff_id, date, starts_at, ends_at, kind, created_at) VALUES (${q(uid('c0040000', r.n))}, ${q(ORG)}, ${q(GINZA)}, ${q(uid('c0010000', r.staffIndex))}, ${q(r.date)}, ${q(r.startsAt)}, ${q(r.endsAt)}, ${q(r.kind)}, ${q(NOW)});`,
+  ),
+
+  // 2026年8月27日（木）のご予約 12 行。お客様は 007-customer-records で足すので
+  // customer_id は全件 NULL、created_by も NULL（共有端末で個人未確認）にする。
+  ...reservationRows.map(
+    (r) =>
+      `INSERT OR IGNORE INTO reservations (id, organization_id, store_id, code, customer_id, source, status, starts_at, ends_at, duration_minutes, note_customer, note_internal, version, created_at, updated_at, created_by, cancelled_at, cancel_reason) VALUES (${q(r.id)}, ${q(ORG)}, ${q(GINZA)}, ${q(r.code)}, NULL, ${q(r.seed.source)}, ${q(r.seed.status)}, ${q(r.startsAt)}, ${q(r.endsAt)}, ${r.seed.minutes}, ${q(r.seed.noteCustomer ?? '')}, ${q(r.seed.noteInternal ?? '')}, 1, ${q(NOW)}, ${q(NOW)}, NULL, NULL, NULL);`,
+  ),
+
+  // ご用件。所要時間は予約した時点の写しなので、目的を直しても既存のご予約は動かない。
+  ...reservationRows.flatMap((r, i) =>
+    r.seed.use.map(
+      (purposeIndex, j) =>
+        `INSERT OR IGNORE INTO reservation_purposes (id, organization_id, reservation_id, purpose_id, duration_minutes, sort_order, created_at) VALUES (${q(uid('a0020000', i * 10 + j))}, ${q(ORG)}, ${q(r.id)}, ${q(uid('e0010000', purposeIndex))}, ${purposes[purposeIndex].minutes}, ${j}, ${q(NOW)});`,
+    ),
+  ),
+
+  // 担当・設備の押さえ。`kind='staff'` の行は担当が未定でも必ず 1 行ある（I-05）。
+  ...reservationRows.flatMap((r, i) =>
+    r.bands.map(
+      (band, j) =>
+        `INSERT OR IGNORE INTO reservation_assignments (id, organization_id, reservation_id, kind, target_id, starts_at, ends_at, created_at) VALUES (${q(uid('a0030000', i * 10 + j))}, ${q(ORG)}, ${q(r.id)}, ${q(band.kind)}, ${band.targetId === null ? 'NULL' : q(band.targetId)}, ${q(band.startsAt)}, ${q(band.endsAt)}, ${q(NOW)});`,
+    ),
+  ),
+
+  // 枠の一次排他。確定の経路（006-booking-flow）と同じ内容を刻みへ展開して置く。
+  ...reservationRows.flatMap((r, i) =>
+    r.locks.map(
+      (lock, j) =>
+        `INSERT OR IGNORE INTO reservation_slot_locks (id, organization_id, store_id, reservation_id, kind, target_key, slot_start, created_at) VALUES (${q(uid('a0040000', i * 100 + j))}, ${q(ORG)}, ${q(GINZA)}, ${q(r.id)}, ${q(lock.kind)}, ${q(lock.targetKey)}, ${q(lock.slotStart)}, ${q(NOW)});`,
+    ),
+  ),
 ]
 
 const sqlPath = join(mkdtempSync(join(tmpdir(), 'glasses-seed-')), 'seed.sql')
@@ -381,5 +644,12 @@ console.log(
   `   銀座店の受付条件: 営業時間 ${businessHours.length} 行 ／ 止める帯 ${blackoutWindows.length} 行 ／ ` +
     `スタッフ ${staffMembers.length} 名（技能 ${staffMembers.reduce((n, m) => n + m.skills.length, 0)} 行・` +
     `勤務 ${staffMembers.length * 7} 行）／ 設備 ${equipments.length} 行 ／ 目的 ${purposes.length} 件`,
+)
+console.log(
+  `   ${LEDGER_DATE} の台帳: ご予約 ${reservationRows.length} 件（担当が未定 ` +
+    `${reservationRows.filter((r) => r.seed.staff === null).length} 件・Web ` +
+    `${reservationRows.filter((r) => r.seed.source === 'web').length} 件）／ 押さえ ` +
+    `${reservationRows.reduce((n, r) => n + r.bands.length, 0)} 行 ／ 枠 ` +
+    `${reservationRows.reduce((n, r) => n + r.locks.length, 0)} 行 ／ 勤務 ${shiftRows.length} 行`,
 )
 console.log('   業務開始の画面では、お店のコードに org-eyex-seed を入れる。')
