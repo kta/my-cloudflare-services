@@ -1,4 +1,5 @@
 import type { LedgerBlock, LedgerEntry, LedgerLane, LocalDate, LocalTime } from '@app/contracts'
+import { visitLabel } from '../../worker/domain/customers'
 import {
   bandSourceLabel,
   bandTone,
@@ -172,7 +173,15 @@ export function bandName(
   laneName: string,
   laneKind?: LedgerLane['kind'],
 ): string {
-  const head = `${jstClock(entry.startsAt)}から${jstClock(entry.endsAt)}　${entry.purposeLabel}　${laneName}`
+  // お名前と来店回数は帯の見た目では姓だけ・印だけに縮めることがあるが（AC-CUST-24）、
+  // 読み上げ名では省略しない（狭い帯でも聞こえる情報を画面表示の文字数で削らない）。
+  const customer =
+    entry.customerName === null
+      ? ''
+      : `${entry.customerName} 様${
+          entry.visitCount === null ? '' : `　${visitLabel(entry.visitCount, 'badge')}`
+        }　`
+  const head = `${jstClock(entry.startsAt)}から${jstClock(entry.endsAt)}　${customer}${entry.purposeLabel}　${laneName}`
   const extras = [
     bandSourceLabel(entry.source),
     entry.isUnassigned && laneKind !== 'unassigned' ? '担当が未定' : null,

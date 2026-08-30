@@ -762,3 +762,258 @@ describe('予約の受付は組織をまたがない', () => {
     expect(intruded.status).toBe(404)
   })
 })
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * P4 顧客台帳は組織をまたがない
+ *
+ * お客様の行は組織単位で 1 本なので、**店舗では絞らない**（他店で書かれた度数・
+ * 手書き・履歴も同じ組織なら見せる）。境界はテナントだけであり、そこは
+ * 3 テナント・偽装入力・R2 のキーの 3 方向から潰す。
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+/** 顧客を D1 へ直に置く（他社の行は API から作れないので直に置くしかない）。 */
+async function seedCustomer(
+  org: string,
+  seed: { name: string; kana?: string; phone?: string; customerNumber: string },
+): Promise<string> {
+  const id = crypto.randomUUID()
+  const normalized = (seed.phone ?? '').replace(/\D/g, '')
+  await env.DB.prepare(
+    'INSERT INTO customers (id, organization_id, customer_number, name, kana, phone, phone_normalized, phone_last4, email, birth_date, address, memo, first_visit_at, last_visit_at, visit_count, merged_into_id, version, created_store_id, created_terminal_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,NULL,NULL,NULL,?,NULL,NULL,0,NULL,1,NULL,NULL,?,?)',
+  )
+    .bind(
+      id,
+      org,
+      seed.customerNumber,
+      seed.name,
+      seed.kana ?? '',
+      normalized === '' ? null : (seed.phone ?? null),
+      normalized === '' ? null : normalized,
+      normalized === '' ? null : normalized.slice(-4),
+      '',
+      NOW,
+      NOW,
+    )
+    .run()
+  return id
+}
+
+async function seedNote(org: string, customerId: string, storeId: string, body: string) {
+  await env.DB.prepare(
+    "INSERT INTO customer_notes (id, organization_id, customer_id, store_id, kind, body, handwriting_key, author_id, revision, status, created_at, updated_at) VALUES (?,?,?,?,'attention',?,NULL,NULL,1,'published',?,?)",
+  )
+    .bind(crypto.randomUUID(), org, customerId, storeId, body, NOW, NOW)
+    .run()
+}
+
+describe('顧客台帳は組織をまたがない', () => {
+  it('3 テナントが同じ電話番号のお客様を持っても、各自の 1 件しか出ない', async () => {
+    const [a, b, c] = [await managerOf('A 店'), await managerOf('B 店'), await managerOf('C 店')]
+    await seedCustomer(a.org, {
+      name: 'A の田中',
+      kana: 'たなか',
+      phone: '090-1234-5678',
+      customerNumber: 'G-01842',
+    })
+    await seedCustomer(b.org, {
+      name: 'B の田中',
+      kana: 'たなか',
+      phone: '090-1234-5678',
+      customerNumber: 'G-01842',
+    })
+    await seedCustomer(c.org, {
+      name: 'C の田中',
+      kana: 'たなか',
+      phone: '090-1234-5678',
+      customerNumber: 'G-01842',
+    })
+
+    for (const tenant of [a, b, c]) {
+      const listed = await callAs(tenant.token)('GET', '/api/staff/customers?query=5678')
+      const body = listed.body as unknown as { items: { name: string }[]; total: number }
+      expect(body.total).toBe(1)
+      expect(body.items).toHaveLength(1)
+    }
+    expect(
+      (
+        (await callAs(a.token)('GET', '/api/staff/customers?query=5678')).body as unknown as {
+          items: { name: string }[]
+        }
+      ).items[0]?.name,
+    ).toBe('A の田中')
+  })
+
+  it('他社のお客様 ID で詳細を開くと 404（403 にしない。存在の有無を漏らさない）', async () => {
+    const [mine, theirs] = [await managerOf(), await managerOf('B 店')]
+    const theirCustomer = await seedCustomer(theirs.org, {
+      name: '他社の花子',
+      customerNumber: 'G-02310',
+    })
+    const intruded = await callAs(mine.token)('GET', `/api/staff/customers/${theirCustomer}`)
+    expect(intruded.status).toBe(404)
+    expect(intruded.body).toMatchObject({ error: 'not_found' })
+    expect(JSON.stringify(intruded.body)).not.toContain('他社の花子')
+  })
+
+  it('他社のお客様 ID を merge の primaryId に渡すと 404', async () => {
+    const [mine, theirs] = [await managerOf(), await managerOf('B 店')]
+    const theirCustomer = await seedCustomer(theirs.org, {
+      name: '他社の花子',
+      customerNumber: 'G-02311',
+    })
+    const ours = await seedCustomer(mine.org, { name: '自社の花子', customerNumber: 'G-01843' })
+
+    const asPrimary = await callAs(mine.token)('POST', '/api/staff/customers/merge/preview', {
+      primaryId: theirCustomer,
+      secondaryId: ours,
+    })
+    expect(asPrimary.status).toBe(404)
+    const asSecondary = await callAs(mine.token)('POST', '/api/staff/customers/merge/preview', {
+      primaryId: ours,
+      secondaryId: theirCustomer,
+    })
+    expect(asSecondary.status).toBe(404)
+    const stillThere = await env.DB.prepare(
+      'SELECT merged_into_id AS mergedIntoId FROM customers WHERE id = ?',
+    )
+      .bind(theirCustomer)
+      .first<{ mergedIntoId: string | null }>()
+    expect(stillThere?.mergedIntoId).toBeNull()
+  })
+
+  it('body に別テナントの organizationId を混ぜても、自分の org の行として作られる', async () => {
+    const [mine, theirs] = [await managerOf(), await managerOf('B 店')]
+    // 契約は strictObject なので、組織を名指しする本文はそもそも受け取らない。
+    const forged = await callAs(mine.token)('POST', '/api/staff/customers', {
+      name: '偽装 太郎',
+      organizationId: theirs.org,
+    })
+    expect(forged.status).toBe(400)
+
+    const created = await callAs(mine.token)('POST', '/api/staff/customers', { name: '正規 太郎' })
+    expect(created.status).toBe(200)
+    const saved = await env.DB.prepare('SELECT organization_id AS org FROM customers WHERE id = ?')
+      .bind((created.body as unknown as { id: string }).id)
+      .first<{ org: string }>()
+    expect(saved?.org).toBe(mine.org)
+    const theirList = await callAs(theirs.token)('GET', '/api/staff/customers')
+    expect((theirList.body as unknown as { items: unknown[] }).items).toEqual([])
+  })
+
+  it('他社のお客様に付いたメモは一覧にも「注意ごと N件」にも出ない', async () => {
+    const [mine, theirs] = [await managerOf(), await managerOf('B 店')]
+    const theirCustomer = await seedCustomer(theirs.org, {
+      name: '他社の花子',
+      customerNumber: 'G-02312',
+    })
+    await seedNote(theirs.org, theirCustomer, theirs.storeId, '他社の注意ごと')
+    const ours = await seedCustomer(mine.org, { name: '自社の花子', customerNumber: 'G-01844' })
+
+    const notes = await callAs(mine.token)('GET', `/api/staff/customers/${ours}/notes`)
+    expect(notes.status).toBe(200)
+    expect(notes.body).toEqual([])
+    const detail = await callAs(mine.token)('GET', `/api/staff/customers/${ours}`)
+    expect((detail.body as unknown as { notes: unknown[] }).notes).toEqual([])
+    // 他社の顧客 id を指したメモの一覧も 404（存在の有無を漏らさない）。
+    const intruded = await callAs(mine.token)('GET', `/api/staff/customers/${theirCustomer}/notes`)
+    expect(intruded.status).toBe(404)
+  })
+
+  it('他社のお客様番号（G-01842）で検索しても引けない', async () => {
+    const [mine, theirs] = [await managerOf(), await managerOf('B 店')]
+    await seedCustomer(theirs.org, {
+      name: '他社の花子',
+      kana: 'たなか はなこ',
+      customerNumber: 'G-01842',
+    })
+    const listed = await callAs(mine.token)('GET', '/api/staff/customers?query=G-01842')
+    expect((listed.body as unknown as { items: unknown[]; total: number }).total).toBe(0)
+    const byName = await callAs(mine.token)(
+      'GET',
+      `/api/staff/customers?query=${encodeURIComponent('たなか')}`,
+    )
+    expect((byName.body as unknown as { items: unknown[] }).items).toEqual([])
+  })
+
+  it('下 4 桁の検索と候補の照会は、自分の org の中だけを走る', async () => {
+    const [mine, theirs] = [await managerOf(), await managerOf('B 店')]
+    await seedCustomer(theirs.org, {
+      name: '他社の花子',
+      phone: '090-1234-5678',
+      customerNumber: 'G-02313',
+    })
+    const bySuffix = await callAs(mine.token)('GET', '/api/staff/customers?query=5678')
+    expect((bySuffix.body as unknown as { total: number }).total).toBe(0)
+    const lookedUp = await callAs(mine.token)(
+      'GET',
+      '/api/staff/customers/lookup?phone=09012345678',
+    )
+    expect(lookedUp.body).toEqual([])
+  })
+
+  it('ご予約の詳細が運ぶお名前は、他社の予約 id では 1 文字も返らない', async () => {
+    // AC-CUST-25 で `ReservationDetail` がお客様を運ぶようになったので、
+    // その 3 欄が他社のご予約から漏れないことを確かめる。
+    const [mine, theirs] = [await managerOf(), await managerOf('B 店')]
+    const theirCustomer = await seedCustomer(theirs.org, {
+      name: '他社の花子',
+      customerNumber: 'G-02315',
+    })
+    const theirReservation = crypto.randomUUID()
+    await env.DB.prepare(
+      "INSERT INTO reservations (id, organization_id, store_id, code, customer_id, source, status, starts_at, ends_at, duration_minutes, note_customer, note_internal, version, created_at, updated_at, created_by, cancelled_at, cancel_reason) VALUES (?,?,?,?,?,'phone','confirmed',?,?,30,'','',1,?,?,NULL,NULL,NULL)",
+    )
+      .bind(
+        theirReservation,
+        theirs.org,
+        theirs.storeId,
+        'EY-2608-9911',
+        theirCustomer,
+        '2026-08-27T02:00:00.000Z',
+        '2026-08-27T02:30:00.000Z',
+        NOW,
+        NOW,
+      )
+      .run()
+
+    const intruded = await callAs(mine.token)('GET', `/api/staff/reservations/${theirReservation}`)
+    expect(intruded.status).toBe(404)
+    expect(JSON.stringify(intruded.body)).not.toContain('他社の花子')
+  })
+
+  it('手書きの R2 キーは organizationId を含み、他社のキーは読めない', async () => {
+    const [mine, theirs] = [await managerOf(), await managerOf('B 店')]
+    const ours = await seedCustomer(mine.org, { name: '自社の花子', customerNumber: 'G-01845' })
+    const theirCustomer = await seedCustomer(theirs.org, {
+      name: '他社の花子',
+      customerNumber: 'G-02314',
+    })
+
+    const svg =
+      '<svg viewBox="0 0 600 400"><path d="M10 10 L100 90" stroke="#1b3a2f" stroke-width="3" fill="none"/></svg>'
+    const created = await callAs(mine.token)('POST', `/api/staff/customers/${ours}/notes`, {
+      kind: 'memo',
+      storeId: mine.storeId,
+      handwritingSvg: svg,
+    })
+    expect(created.status).toBe(200)
+    const noteId = (created.body as unknown as { id: string }).id
+    const key = await env.DB.prepare(
+      'SELECT handwriting_key AS handwritingKey FROM customer_notes WHERE id = ?',
+    )
+      .bind(noteId)
+      .first<{ handwritingKey: string }>()
+    expect(key?.handwritingKey).toBe(`notes/${mine.org}/${ours}/${noteId}.svg`)
+    expect(key?.handwritingKey).not.toContain(theirs.org)
+
+    // 他社のお客様にぶら下げようとしても、その顧客 id はこちらには無い。
+    const intruded = await callAs(mine.token)(
+      'POST',
+      `/api/staff/customers/${theirCustomer}/notes`,
+      { kind: 'memo', storeId: mine.storeId, handwritingSvg: svg },
+    )
+    expect(intruded.status).toBe(404)
+    const objects = await env.RECORDINGS.list({ prefix: `notes/${theirs.org}/` })
+    expect(objects.objects).toEqual([])
+  })
+})

@@ -329,7 +329,7 @@ test('出どころは色だけでなく文字で分かり、緑の帯は語を�
   const walkin = band(page, '11:00から11:30　視力測定　渡辺 由紀　ウォークイン')
   await expect(walkin).toContainText('ウォークイン')
   // お電話（緑）は既定なので語を持たない。語を持つのは Web予約 と ウォークイン だけ。
-  const phone = band(page, '10:00から10:30　調整　高橋 健')
+  const phone = band(page, '10:00から10:30　伊藤 健 様　2回目　調整　高橋 健')
   await expect(phone).not.toContainText('お電話')
   await expect(phone).not.toContainText('店頭')
 
@@ -352,10 +352,10 @@ test('出どころは色だけでなく文字で分かり、緑の帯は語を�
 test('60分の帯にはご用件の短い名前が出て、30分の狭い帯には入らない', async ({ page }) => {
   await openLedger(page)
 
-  await expect(band(page, '11:00から12:00　新調相談・視力測定　佐藤 美咲')).toContainText(
-    '新調相談・視力測定',
-  )
-  const narrow = band(page, '10:00から10:30　調整　高橋 健')
+  await expect(
+    band(page, '11:00から12:00　田中 花子 様　4回目　新調相談・視力測定　佐藤 美咲'),
+  ).toContainText('新調相談・視力測定')
+  const narrow = band(page, '10:00から10:30　伊藤 健 様　2回目　調整　高橋 健')
   await expect(narrow).toContainText('10:00')
   await expect(narrow).not.toContainText('調整')
 })
@@ -418,8 +418,14 @@ test('場所を 2 つ押さえた 1 件の予約は 2 行に出て、片方を�
 
   // AC の Given は「**同時に**押さえている」なので、持ち替え（15:30 測定機 → 16:00 相談）
   // ではなく、11:00–12:00 を 視力測定機 A と 相談カウンター 2 で同時に押さえた 1 件を見る。
-  const measuring = band(page, '11:00から12:00　新調相談・視力測定　視力測定機 A')
-  const counter = band(page, '11:00から12:00　新調相談・視力測定　相談カウンター 2')
+  const measuring = band(
+    page,
+    '11:00から12:00　田中 花子 様　4回目　新調相談・視力測定　視力測定機 A',
+  )
+  const counter = band(
+    page,
+    '11:00から12:00　田中 花子 様　4回目　新調相談・視力測定　相談カウンター 2',
+  )
   await expect(measuring).toBeVisible()
   await expect(counter).toBeVisible()
 
@@ -591,7 +597,7 @@ test('担当が未定の行は担当の欄が「決めてください」にな�
 // @e2e-covers UC-LEDGER-04 AC-LEDGER-15
 test('帯を押すと台帳を隠さずに詳細が開き、次の操作が 3 つだけ並ぶ', async ({ page }) => {
   await openLedger(page)
-  await band(page, '11:00から12:00　新調相談・視力測定　佐藤 美咲').click()
+  await band(page, '11:00から12:00　田中 花子 様　4回目　新調相談・視力測定　佐藤 美咲').click()
 
   const detail = page.getByRole('dialog', { name: '予約の詳細' })
   await expect(detail).toBeVisible()
@@ -623,7 +629,7 @@ test('帯を押すと台帳を隠さずに詳細が開き、次の操作が 3 �
    * ここで見るのは事実の語だけにする。時刻は 008 が列と一緒に足す。
    */
   await page.keyboard.press('Escape')
-  await band(page, '10:00から10:30　調整　高橋 健').click()
+  await band(page, '10:00から10:30　伊藤 健 様　2回目　調整　高橋 健').click()
   const arrived = page.getByRole('dialog', { name: '予約の詳細' })
   await expect(arrived).toContainText('受付済み')
   await expect(arrived.getByRole('button', { name: 'ご来店を受け付ける' })).toHaveCount(0)
@@ -718,7 +724,7 @@ test('開いた詳細は 3 つのどの道でも閉じ、閉じるその 1 回�
   page,
 }) => {
   await openLedger(page)
-  const target = band(page, '11:00から12:00　新調相談・視力測定　佐藤 美咲')
+  const target = band(page, '11:00から12:00　田中 花子 様　4回目　新調相談・視力測定　佐藤 美咲')
   const detail = page.getByRole('dialog', { name: '予約の詳細' })
 
   // ① Esc
@@ -755,7 +761,7 @@ test('台帳は矢印キーで枠を移れる格子で、またぐ帯を 2 度�
 
   await expect(grid(page)).toHaveAttribute('aria-colcount', String(COLUMNS + 1))
   // 2 列にまたがる帯は先頭のセルにだけ置き、幅は aria-colspan で伝える。
-  const wide = band(page, '11:00から12:00　新調相談・視力測定　佐藤 美咲')
+  const wide = band(page, '11:00から12:00　田中 花子 様　4回目　新調相談・視力測定　佐藤 美咲')
   await expect(wide).toHaveCount(1)
   await expect(wide).toHaveAttribute('aria-colspan', '2')
 

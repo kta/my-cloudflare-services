@@ -13,6 +13,25 @@ import {
   CalendarException,
   CalendarExceptionInput,
   CalendarExceptionQuery,
+  CustomerCandidate,
+  CustomerCreate,
+  CustomerDetail,
+  CustomerList,
+  CustomerLookupQuery,
+  CustomerMergeField,
+  CustomerMergeInput,
+  CustomerMergePreview,
+  CustomerMergePreviewRequest,
+  CustomerMergeResult,
+  CustomerNote,
+  CustomerNoteInput,
+  CustomerNotePatch,
+  CustomerNotePublishInput,
+  CustomerNoteQuery,
+  CustomerNumber,
+  CustomerPatch,
+  CustomerSearchQuery,
+  CustomerSummary,
   DeletedResult,
   Equipment,
   EquipmentInput,
@@ -35,6 +54,11 @@ import {
   LocalTime,
   MaintenanceQuery,
   OrganizationSync,
+  OwnedGlasses,
+  PhoneInput,
+  PhoneNormalized,
+  PhoneSuffix,
+  Prescription,
   PurposeListQuery,
   PurposeOrderInput,
   PurposeRequirement,
@@ -1219,6 +1243,28 @@ describe('ReservationDetail', () => {
     expect(() => WebBookingCode.parse('EY-2608-0142')).toThrow()
   })
 
+  it('carries the customer shown in the ledger detail heading — three fields or none', () => {
+    // AC-CUST-25. The heading needs a person, and a walk-in-shaped reservation has none.
+    const named = ReservationDetail.parse({
+      ...reservationDetail,
+      customerId: UUID2,
+      customerName: '田中 花子',
+      visitCount: 4,
+    })
+    expect(named.customerName).toBe('田中 花子')
+    expect(named.visitCount).toBe(4)
+    const anonymous = ReservationDetail.parse({
+      ...reservationDetail,
+      customerId: null,
+      customerName: null,
+      visitCount: null,
+    })
+    expect(anonymous).toMatchObject({ customerId: null, customerName: null, visitCount: null })
+    // A visit count is never negative, and the id is a uuid or nothing.
+    expect(() => ReservationDetail.parse({ ...reservationDetail, visitCount: -1 })).toThrow()
+    expect(() => ReservationDetail.parse({ ...reservationDetail, customerId: 'G-01842' })).toThrow()
+  })
+
   it('webBookingCode は source が web のときだけ非 null になる', () => {
     expect(ReservationDetail.parse(reservationDetail).webBookingCode).toBeNull()
     expect(
@@ -1738,5 +1784,539 @@ describe('ReceptionSessionClose', () => {
       draft: null,
     })
     expect([booked.outcome, booked.reservationId, booked.draft]).toEqual(['booked', UUID2, null])
+  })
+})
+
+/* --------------------------------------------------------------------------- *
+ * P4 顧客台帳（`007-customer-records`）
+ * --------------------------------------------------------------------------- */
+
+/** CUSTOMER-DETAIL「お客様番号 G-01842」。統合で失った番号は再利用しない。 */
+const CUSTOMER_NUMBER = 'G-01842'
+/** 090-1234-5678 を数字だけにしたもの。台帳は下 4 桁、工程は先頭から引く。 */
+const PHONE_NORMALIZED = '09012345678'
+/** 筆跡そのもの。許可リストでの再直列化は Worker 側の仕事で、契約は長さだけを見る。 */
+const HANDWRITING = '<svg viewBox="0 0 320 180"><path d="M12 24 L120 96" stroke-width="2"/></svg>'
+
+const customerSummary = {
+  id: UUID,
+  customerNumber: CUSTOMER_NUMBER,
+  name: '田中 花子',
+  kana: 'たなか はなこ',
+  phone: PHONE_NORMALIZED,
+  visitCount: 4,
+  lastVisitAt: '2026-05-12',
+  memoShort: 'PC作業用・鼻パッド低め',
+}
+
+const prescription = {
+  id: UUID,
+  measuredAt: '2026-05-12',
+  rSph: -2.25,
+  lSph: -2,
+  rCyl: -0.5,
+  lCyl: -0.75,
+  rAxis: 180,
+  lAxis: 175,
+  pd: 62,
+  isCurrent: true,
+}
+
+const ownedGlasses = {
+  id: UUID,
+  purchasedAt: '2025-04-20',
+  frameName: 'クラシック TR-88 マットブラウン 52□17',
+  lensName: '遠近両用',
+  usageLabel: 'お出かけ用',
+  isCurrent: true,
+}
+
+const customerNote = {
+  id: UUID,
+  kind: 'memo',
+  body: '鼻パッドを低めに',
+  authorId: UUID2,
+  authorName: '佐藤 美咲',
+  revision: 1,
+  status: 'draft',
+  storeId: UUID2,
+  createdAt: NOW,
+}
+
+const customerDetail = {
+  ...customerSummary,
+  email: 'hanako@example.com',
+  birthDate: '1979-04-02',
+  address: '東京都中央区銀座 4-1-1',
+  memo: 'PC作業用・鼻パッド低め',
+  firstVisitAt: '2024-03-15',
+  frequentStaffName: '佐藤 美咲',
+  prescriptions: [prescription],
+  glasses: [ownedGlasses],
+  notes: [customerNote],
+  version: 3,
+}
+
+/** CUSTOMER-MERGE の見比べ表の 4 項目（お名前・お電話番号・ご住所・接客のメモ）。 */
+const mergeFields = [
+  { field: 'name', primaryValue: '田中 花子', secondaryValue: '田中 花子', choice: 'primary' },
+  { field: 'phone', primaryValue: PHONE_NORMALIZED, secondaryValue: null, choice: 'primary' },
+  {
+    field: 'address',
+    primaryValue: null,
+    secondaryValue: '東京都中央区銀座 4-1-1',
+    choice: 'secondary',
+  },
+  { field: 'notes', primaryValue: '7', secondaryValue: '1', choice: 'both' },
+]
+
+const customerMergeInput = {
+  primaryId: UUID,
+  secondaryId: UUID2,
+  primaryVersion: 3,
+  secondaryVersion: 1,
+  fields: mergeFields,
+}
+
+describe('PhoneInput', () => {
+  it('accepts hyphens and full-width digits, rejects fewer than 10 characters', () => {
+    // 打たれたままの文字を受ける。数字だけへ落とすのはドメイン層（`normalizePhone`）の仕事で、
+    // 契約でハイフンを禁じると受付が打ち終わる前に欄が赤くなる。
+    expect(PhoneInput.parse('090-1234-5678')).toBe('090-1234-5678')
+    expect(PhoneInput.parse('０９０１２３４５６７８')).toBe('０９０１２３４５６７８')
+    expect(PhoneInput.parse('03-1234-5678')).toBe('03-1234-5678')
+    expect(PhoneInput.parse(' 090 1234 5678 ')).toBe('090 1234 5678')
+    // 10 文字に満たない打鍵はまだ番号として扱わない（照会も走らせない）。
+    for (const typed of ['090-1234', '0901234', '090']) {
+      expect(() => PhoneInput.parse(typed)).toThrow()
+    }
+    // 20 文字を超える貼り付けも受けない。
+    expect(() => PhoneInput.parse('0'.repeat(21))).toThrow()
+  })
+})
+
+describe('PhoneNormalized', () => {
+  it('accepts 10 and 11 digits starting with 0, rejects 9 and 12', () => {
+    expect(PhoneNormalized.parse('0312345678')).toBe('0312345678')
+    expect(PhoneNormalized.parse(PHONE_NORMALIZED)).toBe(PHONE_NORMALIZED)
+    for (const value of ['090123456', '090123456789', '9012345678', '090-1234-5678', '']) {
+      expect(() => PhoneNormalized.parse(value)).toThrow()
+    }
+  })
+})
+
+describe('PhoneSuffix', () => {
+  it('is exactly four digits — three digits fail', () => {
+    expect(PhoneSuffix.parse('5678')).toBe('5678')
+    expect(PhoneSuffix.parse('0012')).toBe('0012')
+    // 3 桁は番号ではなくお名前として扱う（`searchMode` の分かれ目と同じ境界）。
+    for (const value of ['678', '56789', '56a8', '５６７８']) {
+      expect(() => PhoneSuffix.parse(value)).toThrow()
+    }
+  })
+})
+
+describe('CustomerNumber', () => {
+  it('is G- followed by exactly five digits', () => {
+    expect(CustomerNumber.parse(CUSTOMER_NUMBER)).toBe(CUSTOMER_NUMBER)
+    expect(CustomerNumber.parse('G-02310')).toBe('G-02310')
+    for (const value of ['G-0184', 'G-018420', 'g-01842', 'G01842', 'EY-2608-0142']) {
+      expect(() => CustomerNumber.parse(value)).toThrow()
+    }
+  })
+})
+
+describe('CustomerSummary', () => {
+  it('keeps memoShort at 40 characters and leaves phone nullable', () => {
+    const parsed = CustomerSummary.parse(customerSummary)
+    expect([parsed.customerNumber, parsed.visitCount]).toEqual([CUSTOMER_NUMBER, 4])
+    expect(parsed.lastVisitAt).toBe('2026-05-12')
+    // 一覧の「覚えておくこと」は 1 行に収める列で、「…」で切ってよい唯一の欄である。
+    expect(
+      CustomerSummary.parse({ ...customerSummary, memoShort: 'あ'.repeat(40) }).memoShort,
+    ).toHaveLength(40)
+    expect(() =>
+      CustomerSummary.parse({ ...customerSummary, memoShort: 'あ'.repeat(41) }),
+    ).toThrow()
+    // お名前だけで登録できるので、お電話番号を持たないお客様も一覧に並ぶ。
+    expect(CustomerSummary.parse({ ...customerSummary, phone: null }).phone).toBeNull()
+    const bare = CustomerSummary.parse({
+      id: UUID,
+      customerNumber: 'G-02310',
+      name: '松本 一郎',
+      visitCount: 0,
+    })
+    // 来店が 0 件の行は「最後のご来店」を `—` と描くので、値そのものは null で持つ。
+    expect([bare.kana, bare.memoShort, bare.phone, bare.lastVisitAt]).toEqual(['', '', null, null])
+  })
+})
+
+describe('CustomerCreate', () => {
+  it('accepts a name alone — the phone is optional', () => {
+    const created = CustomerCreate.parse({ name: '田中 花子' })
+    expect(created.name).toBe('田中 花子')
+    expect([created.phone, created.kana, created.email, created.birthDate]).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ])
+    expect(CustomerCreate.parse({ name: '田中 花子', phone: '090-1234-5678' }).phone).toBe(
+      '090-1234-5678',
+    )
+    expect(CustomerCreate.parse({ name: '田中 花子', kana: 'たなか はなこ' }).kana).toBe(
+      'たなか はなこ',
+    )
+  })
+
+  it('rejects an empty name', () => {
+    for (const name of ['', '   ', undefined]) {
+      expect(() => CustomerCreate.parse({ name })).toThrow()
+    }
+    expect(() => CustomerCreate.parse({ name: 'あ'.repeat(41) })).toThrow()
+    // お客様番号はサーバが採番する。端末から送らせない。
+    expect(() =>
+      CustomerCreate.parse({ name: '田中 花子', customerNumber: CUSTOMER_NUMBER }),
+    ).toThrow()
+  })
+})
+
+describe('CustomerPatch', () => {
+  it('requires version', () => {
+    expect(CustomerPatch.parse({ version: 3, name: '田中 花子' }).version).toBe(3)
+    expect(() => CustomerPatch.parse({ name: '田中 花子' })).toThrow()
+    expect(() => CustomerPatch.parse({ version: -1 })).toThrow()
+    expect(() => CustomerPatch.parse({ version: 1.5 })).toThrow()
+    // 版だけの保存は「何も変えない保存」で、拒まない（画面の「保存」は 1 つしかない）。
+    expect(CustomerPatch.parse({ version: 3 }).name).toBeUndefined()
+  })
+})
+
+describe('CustomerSearchQuery', () => {
+  it('defaults sort to kana and limit to 50', () => {
+    const query = CustomerSearchQuery.parse({})
+    expect([query.sort, query.limit]).toEqual(['kana', 50])
+    expect([query.query, query.cursor, query.staffId]).toEqual([undefined, undefined, undefined])
+    expect(CustomerSearchQuery.parse({ sort: 'visits' }).sort).toBe('visits')
+    // クエリ文字列は数値も**文字列**で届く（`?limit=8&visitCountMin=2`）。
+    expect(CustomerSearchQuery.parse({ limit: '8' }).limit).toBe(8)
+    const filtered = CustomerSearchQuery.parse({ visitCountMin: '2', visitCountMax: '4' })
+    expect([filtered.visitCountMin, filtered.visitCountMax]).toEqual([2, 4])
+  })
+
+  it('rejects a limit above 200', () => {
+    expect(CustomerSearchQuery.parse({ limit: 200 }).limit).toBe(200)
+    for (const limit of [201, 0, -1, 1.5]) {
+      expect(() => CustomerSearchQuery.parse({ limit })).toThrow()
+    }
+    // 並べ方は「お名前順」と「ご来店の回数順」の 2 つだけ（CUSTOMER-LIST の segmented）。
+    expect(() => CustomerSearchQuery.parse({ sort: 'lastVisit' })).toThrow()
+  })
+})
+
+describe('CustomerLookupQuery', () => {
+  it('rejects a query whose four fields are all empty', () => {
+    // 4 つとも空の照会は台帳の全走査になる。400 で止める（`04-api.md` §4.7）。
+    expect(() => CustomerLookupQuery.parse({})).toThrow()
+    expect(() => CustomerLookupQuery.parse({ name: '', kana: '' })).toThrow()
+    expect(() => CustomerLookupQuery.parse({ name: '   ' })).toThrow()
+    expect(CustomerLookupQuery.parse({ phone: '090-1234-5678' }).phone).toBe('090-1234-5678')
+    // 台帳と受付は下 4 桁の**完全一致**、工程は正規化した番号の**前方一致**で、欄そのものが別である。
+    expect(CustomerLookupQuery.parse({ phoneLast4: '5678' }).phoneLast4).toBe('5678')
+    expect(CustomerLookupQuery.parse({ kana: 'たなか' }).kana).toBe('たなか')
+    expect(CustomerLookupQuery.parse({ name: '花子' }).name).toBe('花子')
+  })
+})
+
+describe('CustomerCandidate', () => {
+  it('is a two-step confidence: strong or weak, nothing else', () => {
+    const strong = CustomerCandidate.parse({ customer: customerSummary, match: 'strong' })
+    expect(strong.match).toBe('strong')
+    expect([strong.currentPrescription, strong.lastStaffName, strong.lastVisitAt]).toEqual([
+      null,
+      null,
+      null,
+    ])
+    expect(strong.attentionSummary).toBe('')
+    expect(CustomerCandidate.parse({ customer: customerSummary, match: 'weak' }).match).toBe('weak')
+    // 「よく一致しています」と「確かめが必要です」の 2 語しか画面に無い。
+    // 3 段目を作ると札の文言が無く、自動確定への逃げ道にもなる。
+    for (const match of ['exact', 'partial', 'none', 'maybe', null]) {
+      expect(() => CustomerCandidate.parse({ customer: customerSummary, match })).toThrow()
+    }
+    const full = CustomerCandidate.parse({
+      customer: customerSummary,
+      match: 'strong',
+      lastVisitAt: '2026-05-12',
+      currentPrescription: prescription,
+      lastStaffName: '佐藤 美咲',
+      attentionSummary: '強い光がまぶしいとのこと',
+    })
+    expect(full.currentPrescription?.pd).toBe(62)
+  })
+})
+
+describe('Prescription', () => {
+  it('takes sph in 0.25 steps and axis as an integer 0..180', () => {
+    const parsed = Prescription.parse(prescription)
+    expect([parsed.rSph, parsed.lSph]).toEqual([-2.25, -2])
+    expect([parsed.rAxis, parsed.lAxis]).toEqual([180, 175])
+    expect(Prescription.parse({ ...prescription, rSph: -2.5, rAxis: 0 }).rAxis).toBe(0)
+    // 0.25 の格子に載らない度数は測定機が出さない。text で持たないので、ここで落とす。
+    expect(() => Prescription.parse({ ...prescription, rSph: -2.3 })).toThrow()
+    expect(() => Prescription.parse({ ...prescription, rAxis: 90.5 })).toThrow()
+    // 測っていない目・PD は null のまま置ける（片目だけの測定がある）。
+    const bare = Prescription.parse({ id: UUID, measuredAt: '2026-05-12', isCurrent: false })
+    expect([bare.rSph, bare.rCyl, bare.rAxis, bare.rAdd, bare.pd]).toEqual([
+      null,
+      null,
+      null,
+      null,
+      null,
+    ])
+    expect(bare.note).toBe('')
+    // 測定日は暦日だけを持つ（時刻を持たない）。
+    expect(() => Prescription.parse({ ...prescription, measuredAt: '2026-5-12' })).toThrow()
+  })
+
+  it('rejects an axis of 181 and a pd of 39.5', () => {
+    expect(() => Prescription.parse({ ...prescription, rAxis: 181 })).toThrow()
+    expect(() => Prescription.parse({ ...prescription, lAxis: -1 })).toThrow()
+    expect(() => Prescription.parse({ ...prescription, pd: 39.5 })).toThrow()
+    expect(Prescription.parse({ ...prescription, pd: 40 }).pd).toBe(40)
+    expect(Prescription.parse({ ...prescription, pd: 62.5 }).pd).toBe(62.5)
+    // PD は 0.5 刻み。0.25 刻みは度数の側だけである。
+    expect(() => Prescription.parse({ ...prescription, pd: 62.25 })).toThrow()
+    expect(() => Prescription.parse({ ...prescription, pd: 85.5 })).toThrow()
+  })
+})
+
+describe('CustomerNote', () => {
+  it('is memo or attention, and draft, published or hidden', () => {
+    const parsed = CustomerNote.parse(customerNote)
+    expect([parsed.kind, parsed.status]).toEqual(['memo', 'draft'])
+    // 「注意ごと N件」に数えるのは attention かつ published の行だけ。
+    expect(
+      CustomerNote.parse({ ...customerNote, kind: 'attention', status: 'published' }).kind,
+    ).toBe('attention')
+    expect(CustomerNote.parse({ ...customerNote, status: 'hidden' }).status).toBe('hidden')
+    for (const kind of ['note', 'warning', 'handwriting', null]) {
+      expect(() => CustomerNote.parse({ ...customerNote, kind })).toThrow()
+    }
+    for (const status of ['archived', 'deleted', 'pending', null]) {
+      expect(() => CustomerNote.parse({ ...customerNote, status })).toThrow()
+    }
+    // 取得の絞り込みも同じ語彙で書く。クエリ文字列はカンマ区切りで届く。
+    const query = CustomerNoteQuery.parse({ status: 'draft,published' })
+    expect(query.status).toEqual(['draft', 'published'])
+    expect(CustomerNoteQuery.parse({ status: ['hidden'] }).status).toEqual(['hidden'])
+    expect(() => CustomerNoteQuery.parse({ status: 'draft,archived' })).toThrow()
+    // 他店で書かれた 1 枚も既定で見せる（丸の内店の 1 枚を銀座店の端末が読む）。
+    expect(CustomerNoteQuery.parse({}).includeOtherStores).toBe(true)
+    expect(CustomerNoteQuery.parse({ includeOtherStores: 'false' }).includeOtherStores).toBe(false)
+    // 筆跡は本体を載せる。R2 のキーも署名付き URL も契約に出さない。
+    const drawn = CustomerNote.parse({ ...customerNote, handwritingSvg: HANDWRITING })
+    expect(drawn.handwritingSvg).toBe(HANDWRITING)
+    expect(parsed.handwritingSvg).toBeNull()
+    expect(() =>
+      CustomerNote.parse({ ...customerNote, handwritingKey: `notes/${ORG}/${UUID}/${UUID2}.svg` }),
+    ).toThrow()
+  })
+})
+
+describe('CustomerNoteInput', () => {
+  it('rejects a note that has neither body nor handwriting', () => {
+    // 空のメモを残せると、手書きの面が「1枚」と数えたまま中身が無い行ができる。
+    expect(() => CustomerNoteInput.parse({ kind: 'memo', storeId: UUID2 })).toThrow()
+    expect(() => CustomerNoteInput.parse({ kind: 'memo', storeId: UUID2, body: '   ' })).toThrow()
+    expect(() =>
+      CustomerNoteInput.parse({ kind: 'memo', storeId: UUID2, body: '', handwritingSvg: null }),
+    ).toThrow()
+    // 書いた店舗は必ず持つ（「丸の内店 記入 中村 彩」を出すため）。
+    expect(() => CustomerNoteInput.parse({ kind: 'memo', body: '鼻パッドを低めに' })).toThrow()
+  })
+
+  it('accepts handwriting alone — a drawing with no transcription is still a note', () => {
+    const drawn = CustomerNoteInput.parse({
+      kind: 'memo',
+      storeId: UUID2,
+      handwritingSvg: HANDWRITING,
+    })
+    expect([drawn.body, drawn.handwritingSvg]).toEqual(['', HANDWRITING])
+    // 手書きが使えない人は同じ画面の「読み取った文字」から文字だけで残せる（AC-CUST-23）。
+    expect(
+      CustomerNoteInput.parse({ kind: 'attention', storeId: UUID2, body: '強い光がまぶしい' })
+        .handwritingSvg,
+    ).toBeNull()
+    const limit = 512 * 1024
+    expect(
+      CustomerNoteInput.parse({ kind: 'memo', storeId: UUID2, handwritingSvg: 'x'.repeat(limit) })
+        .handwritingSvg,
+    ).toHaveLength(limit)
+    // 1 枚 3〜12KB の想定なので、512KB を超える筆跡は受け取らない。
+    expect(() =>
+      CustomerNoteInput.parse({
+        kind: 'memo',
+        storeId: UUID2,
+        handwritingSvg: 'x'.repeat(limit + 1),
+      }),
+    ).toThrow()
+  })
+})
+
+describe('CustomerNotePatch', () => {
+  it('requires revision and allows only draft or hidden as a status', () => {
+    expect(CustomerNotePatch.parse({ revision: 2, body: '直した文字' }).revision).toBe(2)
+    expect(() => CustomerNotePatch.parse({ body: '直した文字' })).toThrow()
+    expect(CustomerNotePatch.parse({ revision: 2, status: 'draft' }).status).toBe('draft')
+    expect(CustomerNotePatch.parse({ revision: 2, status: 'hidden' }).status).toBe('hidden')
+    // `published` へ上げるのは承認の面（P10）の仕事で、読み取った文字を直す経路からは上げない。
+    expect(() => CustomerNotePatch.parse({ revision: 2, status: 'published' })).toThrow()
+    // 筆跡は書いたときのまま残す。直せるのは読み取った文字だけである（AC-CUST-19）。
+    expect(() => CustomerNotePatch.parse({ revision: 2, handwritingSvg: HANDWRITING })).toThrow()
+    // 申し込みは本文を伴う（空の申し込みを承認の面へ流さない）。
+    expect(CustomerNotePublishInput.parse({ revision: 2, body: '強い光がまぶしい' }).body).toBe(
+      '強い光がまぶしい',
+    )
+    expect(() => CustomerNotePublishInput.parse({ revision: 2, body: '' })).toThrow()
+    expect(() => CustomerNotePublishInput.parse({ body: '強い光がまぶしい' })).toThrow()
+  })
+})
+
+describe('CustomerMergePreviewRequest', () => {
+  it('rejects the same id on both sides', () => {
+    expect(
+      CustomerMergePreviewRequest.parse({ primaryId: UUID, secondaryId: UUID2 }).primaryId,
+    ).toBe(UUID)
+    // 同じ行を両側に置くと、残さない側に自分自身を統合先として書ける。
+    expect(() =>
+      CustomerMergePreviewRequest.parse({ primaryId: UUID, secondaryId: UUID }),
+    ).toThrow()
+  })
+})
+
+describe('CustomerMergeField', () => {
+  it("allows 'both' only for notes", () => {
+    // 接客のメモだけは寄せ合わせる（7 + 1 = 8 件）。
+    expect(
+      CustomerMergeField.parse({
+        field: 'notes',
+        primaryValue: '7',
+        secondaryValue: '1',
+        choice: 'both',
+      }).choice,
+    ).toBe('both')
+    for (const field of ['name', 'kana', 'phone', 'email', 'address', 'birthDate', 'memo']) {
+      expect(
+        CustomerMergeField.parse({
+          field,
+          primaryValue: 'A',
+          secondaryValue: 'B',
+          choice: 'secondary',
+        }).field,
+      ).toBe(field)
+      // お名前を 2 つ持つ行は作れない。'both' はこの 7 項目では意味を持たない。
+      expect(() =>
+        CustomerMergeField.parse({
+          field,
+          primaryValue: 'A',
+          secondaryValue: 'B',
+          choice: 'both',
+        }),
+      ).toThrow()
+    }
+    // 値の無い側を残す選択もある（結果は「ご登録がありません」と描く）。
+    expect(
+      CustomerMergeField.parse({
+        field: 'address',
+        primaryValue: null,
+        secondaryValue: '東京都中央区銀座 4-1-1',
+        choice: 'primary',
+      }).primaryValue,
+    ).toBeNull()
+    expect(() =>
+      CustomerMergeField.parse({
+        field: 'visitCount',
+        primaryValue: '4',
+        secondaryValue: '1',
+        choice: 'primary',
+      }),
+    ).toThrow()
+  })
+})
+
+describe('CustomerMergeInput', () => {
+  it('requires both versions', () => {
+    const parsed = CustomerMergeInput.parse(customerMergeInput)
+    expect([parsed.primaryVersion, parsed.secondaryVersion]).toEqual([3, 1])
+    expect(parsed.fields).toHaveLength(4)
+    for (const key of ['primaryVersion', 'secondaryVersion']) {
+      const { [key]: _dropped, ...rest } = customerMergeInput as Record<string, unknown>
+      expect(() => CustomerMergeInput.parse(rest)).toThrow()
+    }
+    // 下見と実行で同じ守りを掛ける（実行だけ素通しにしない）。
+    expect(() => CustomerMergeInput.parse({ ...customerMergeInput, secondaryId: UUID })).toThrow()
+  })
+})
+
+describe('CustomerList', () => {
+  it('carries items, nextCursor and total', () => {
+    // 「当てはまるお客様 42名」と 8 行の一覧は別の数である（`total` は絞り込み後の総数）。
+    const list = CustomerList.parse({
+      items: [customerSummary],
+      nextCursor: 'a2FuYToxMTExMTExMQ',
+      total: 42,
+    })
+    expect([list.items.length, list.total]).toEqual([1, 42])
+    expect(list.nextCursor).toBe('a2FuYToxMTExMTExMQ')
+    // 続きが無ければ null。0 件でも器の形は変えない（表を空のまま残さないため）。
+    const empty = CustomerList.parse({ items: [], total: 0 })
+    expect([empty.items, empty.nextCursor, empty.total]).toEqual([[], null, 0])
+    expect(() => CustomerList.parse({ items: [], total: -1 })).toThrow()
+  })
+})
+
+describe('customer schemas', () => {
+  it('reject an unknown key so a stale field never lands silently', () => {
+    const cases: [{ parse: (input: unknown) => unknown }, Record<string, unknown>][] = [
+      [CustomerSummary, customerSummary],
+      [CustomerDetail, customerDetail],
+      [Prescription, prescription],
+      [OwnedGlasses, ownedGlasses],
+      [CustomerNote, customerNote],
+      [CustomerCreate, { name: '田中 花子' }],
+      [CustomerPatch, { version: 3 }],
+      [CustomerSearchQuery, {}],
+      [CustomerLookupQuery, { phoneLast4: '5678' }],
+      [CustomerCandidate, { customer: customerSummary, match: 'strong' }],
+      [CustomerList, { items: [customerSummary], total: 42 }],
+      [CustomerNoteQuery, {}],
+      [CustomerNoteInput, { kind: 'memo', storeId: UUID2, body: '鼻パッドを低めに' }],
+      [CustomerNotePatch, { revision: 2, body: '直した文字' }],
+      [CustomerNotePublishInput, { revision: 2, body: '強い光がまぶしい' }],
+      [CustomerMergePreviewRequest, { primaryId: UUID, secondaryId: UUID2 }],
+      [
+        CustomerMergePreview,
+        {
+          fields: mergeFields,
+          result: customerSummary,
+          noteCount: 8,
+          losingCustomerNumber: 'G-02310',
+        },
+      ],
+      [CustomerMergeField, mergeFields[0]],
+      [CustomerMergeInput, customerMergeInput],
+      [
+        CustomerMergeResult,
+        { customer: customerDetail, mergedId: UUID2, movedReservations: 3, movedNotes: 1 },
+      ],
+    ]
+    for (const [schema, valid] of cases) {
+      expect(() => schema.parse(valid)).not.toThrow()
+      // R2 のキーも、綴りの古い欄も、黙って通さない。
+      for (const stale of [{ handwritingKey: 'notes/x.svg' }, { customerCode: CUSTOMER_NUMBER }]) {
+        expect(() => schema.parse({ ...valid, ...stale })).toThrow()
+      }
+    }
   })
 })

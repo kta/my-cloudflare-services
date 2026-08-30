@@ -1,6 +1,7 @@
 import type {
   AvailabilityResponse,
   AvailabilitySlot,
+  CustomerCandidate,
   Hold,
   LedgerAxis,
   ReservationDetail,
@@ -62,6 +63,12 @@ export type BookingScreenProps = {
   now?: string
   /** 最初に開く工程。省くと、受けかけの下書きから中断した工程へ着地する。 */
   initialStep?: BookingStepKey
+  /**
+   * 顧客台帳の「この方のご予約を取る」（AC-CUST-26）から来たときの、その方。
+   * 工程 4 のお名前・ふりがな・お電話番号をこれで埋め、打ち直させない。
+   * 新しい受付（再開ではない）のときだけ効く。
+   */
+  initialCustomer?: { name: string; kana: string; phone: string | null }
   /** 受付を閉じた／あとで続けるでトップへ戻る。 */
   onExit: () => void
   /** 完了の面の「台帳で見る」。省くとトップへ戻る。 */
@@ -108,6 +115,7 @@ export function BookingScreen({
   storeName,
   now,
   initialStep,
+  initialCustomer,
   onExit,
   onOpenLedger,
   onSessionExpired,
@@ -118,7 +126,16 @@ export function BookingScreen({
   const [phase, setPhase] = useState<'starting' | 'ready' | 'failed'>('starting')
   const [attempt, setAttempt] = useState(0)
   const [step, setStep] = useState<BookingStepKey>(initialStep ?? 'datetime')
-  const [draft, setDraft] = useState<ReceptionSessionDraft>(emptyDraft)
+  const [draft, setDraft] = useState<ReceptionSessionDraft>(() =>
+    initialCustomer === undefined
+      ? emptyDraft()
+      : {
+          ...emptyDraft(),
+          nameTyped: initialCustomer.name,
+          kanaTyped: initialCustomer.kana,
+          phoneTyped: initialCustomer.phone ?? '',
+        },
+  )
   const [confirming, setConfirming] = useState(false)
   const confirmRef = useRef<HTMLDivElement>(null)
   const openerRef = useRef<HTMLElement | null>(null)
@@ -348,6 +365,23 @@ export function BookingScreen({
   )
 
   const onSlotChange = useCallback((choice: SlotChoice) => setSlot(choice), [])
+
+  /**
+   * 同じお電話番号のご登録を照会する（AC-CUST-04）。`GET /api/staff/customers/lookup` は
+   * query を zValidator で受けない（`04-api.md` の決め）ので、`CustomerScreen` の一覧と
+   * 同じ道 —— 型だけ `hc` に借り、query 文字列は fetch の側で足す。
+   */
+  const onCustomerLookup = useCallback(
+    async (phoneDigits: string): Promise<readonly CustomerCandidate[]> => {
+      const res = await client.api.staff.customers.lookup.$get(undefined, {
+        fetch: (input: RequestInfo | URL, init?: RequestInit) =>
+          auth.authFetch(`${String(input)}?phone=${encodeURIComponent(phoneDigits)}`, init),
+      })
+      if (!res.ok) throw new Error('customer_lookup_failed')
+      return (await res.json()) as CustomerCandidate[]
+    },
+    [],
+  )
 
   /* --- 工程 4 の下書き ---------------------------------------------------- */
 
@@ -864,6 +898,7 @@ export function BookingScreen({
             }}
             writer={writer}
             now={clock}
+            onLookup={onCustomerLookup}
             isOffline={offline}
           />
         ) : (

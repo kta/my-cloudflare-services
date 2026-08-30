@@ -874,3 +874,460 @@
 - `BookingScreen.tsx` を書き換えなかった — 理由: 担当外のファイルで、並行して書いている担当がいる可能性がある。工程 3〜5（SlotStep / CustomerStep / ConfirmStep / DoneStep / ConflictNotice）は実装済みだが `PLACEHOLDER_STEPS` に入ったままで器から呼ばれていない — 影響: booking.spec.ts の 16 本と mock-compare の 9 面が赤い唯一の原因
 - 工程 3〜5 の面は自前の下端バー（「次へ進む」の丸）を持つので、e2e の `proceed()` は「いま押せる次へ進む」を探して押す — 理由: SlotStep / ConflictNotice は `Frame` の中に自分の丸を持ち、StepBar の丸と 2 つ並ぶ可能性がある — 影響: e2e/booking.spec.ts の proceed()
 
+
+## I. P4（顧客台帳）の実装で決めたこと
+
+実装とレビューを担当した subagent の自己判断。**全 192 件**。
+
+### I-backend-review（3 件）
+
+- `wrangler.jsonc` の `RECORDINGS` binding のコメントを「受付録音の本体」から
+  「受付録音と手書きメモの本体」に直した
+  — 理由: P4-customer-records.md 冒頭の決定事項 1 が明示的にこの文言変更を指示していたが未反映だった。
+  — 影響: コメントのみ。挙動は変わらない。
+- `pnpm run deps:check`（knip）が `services/glasses_management/src/web/customers/CustomerMerge.tsx`
+  の未使用 export（`MergeRejection` / `MergeRequest`）で落ちる状態を確認したが、**直さなかった**
+  — 理由: 担当範囲が `src/worker/**` `test/**` `packages/contracts/**` に限定されており、
+    `src/web/**` は別エージェントの担当（タスク指示で明示的に「触らない」対象）。
+  — 影響: `pnpm check` はこのままでは緑にならない。frontend 担当エージェントに直してもらう必要がある。
+- T-013（`P4-customer-records.md`）が「予約の状態遷移のハンドラ」に来店回数の書き戻しを
+  同じ `db.batch()` で足すよう指示していたが、実装ではその書き戻しをおまとめ（merge）ルートにしか
+  配線していない。予約を `status='done'` へ進めるルート自体がこの時点のコードベースに存在しないため
+  （`grep "UPDATE reservations" src/worker/index.ts` は merge の customer_id 付け替え 1 本のみ）。
+  この遷移は `008-reception-and-walkin`（P5）が新設する面で、P5 の作業計画
+  （`docs/superpowers/plans/.../P5-reception-and-walkin.md:411`）が
+  「あわせて `customers.visit_count` / ... を」と明記しており、responsibility が P5 側にあると確認できた。
+  **直さなかった**
+  — 理由: 存在しないハンドラに書き込みを追加すると P5 の設計を先取りすることになり、
+    規約 10（同意なしに決めない）にも抵触しうる。ドメインの純関数（`countVisits` / `lastVisitDate` /
+    `firstVisitDate`）は P4 で実装・単体テスト済みで、`countVisitsOf`（SQL 版）は merge ルートで
+    実際に使われている。P5 が実装するときにこれらを呼び直すだけで済む状態になっている。
+  — 影響: 通常の来店（`done` 遷移）では `customers.visit_count` / `first_visit_at` / `last_visit_at` が
+    まだ自動更新されない。E2E 用の seed データは手で値を入れて凌ぐしかない
+    （すでに `seed.mjs` がそうしている前提）。P4-customer-records.md の T-013 の記述は
+    P5 が実在する前提で書かれた計画のズレであり、P4 側の実装バグではないと判断した。
+
+### I-domain（24 件）
+
+- TODO が 5 ファイル（customer-search / customer-match / customer-visits / customer-merge / handwriting）に分けていた実装を `domain/customers.ts` 1 本にまとめた — 理由: 担当の指示が触れるファイルを 3 つに限っており、指示が TODO の分割より後に来た決めだから — 影響: `services/glasses_management/src/worker/domain/customers.ts`。T-012 は `./customers` 1 本から import する
+- テストを `customers.test.ts` 43 本（T-003 の 22・T-005 の 11・T-006 の 10）と `customers.time.test.ts` 8 本（T-004）に分けた — 理由: `*.time.test.ts` は「時刻を引数で受ける境界値」を置く場所という repo の慣習で、T-004 の 8 本が丸ごとそれに当たる — 影響: 合計 51 本は TODO の本数と一致
+- 工程の候補の前方一致は打ち終えた番号の**先頭 7 桁**にした（`LOOKUP_PREFIX_DIGITS = 7`） — 理由: 11 桁をそのまま `LIKE ? || '%'` にすると BOOK-04b の 2 件目（090-1234-9912）が落ち、AC-CUST-04 の「共通するのは先頭 7 桁だけ」を満たせない — 影響: `lookupFilter` / `rankCandidates`
+- `searchMode` は**数字ちょうど 4 桁だけ**を下 4 桁として扱い、11 桁を台帳の検索欄に打つとお名前扱いにした — 理由: TODO が「3 桁も 5 桁も名前として扱う」と決めており、途中の 4 桁で引けてはいけない（AC-CUST-01） — 影響: 台帳の検索欄にフルの番号を打っても引けない。工程の候補（`lookupFilter`）は別経路なので影響しない
+- 引き方を `CustomerFilter`（1 列 1 条件。`pattern` を持つのは LIKE を使う形だけ）という値にした — 理由: 「後方一致の SQL を組み立てない」を、SQL 文字列を読まずにテストで縛れる形が要る — 影響: T-012 はこの値から WHERE を組める
+- `filterCustomers` / `pageCustomers` という「SQL と同じ判定をする純関数」を置いた — 理由: T-003 の「引ける／引けない」「重複せずに進む」を D1 抜きで固定する手段が他に無い — 影響: T-012 の SQL はこの関数と同じ意味にする（`merged_into_id IS NULL` を条件の前に置く）
+- カーソルは `kana|id` / `visits|id` を base64url で包み、**別の並べ方のカーソルと壊れたカーソルは null** にした — 理由: 並べ方を切り替えた直後に前の位置で読み進めると行が飛ぶ — 影響: `encodeCursor` / `decodeCursor` / `pageCustomers`
+- `rankCandidates` は当てはまらない行（番号なし・前方一致も下 4 桁一致もしない）を候補から落とす — 理由: 「当てはまりが 0 件のときは空配列」を成立させるには、行を渡されただけで候補にしない判断が要る — 影響: `rankCandidates`
+- `lastVisitDate` / `firstVisitDate` は `now` より後の `starts_at` を数えない — 理由: `now` を引数で受ける意味をここに置く。これからの日付の予約は状態が進んでいても「ご来店」ではない — 影響: 同 2 関数
+- `firstVisitDate` の対象を `done` だけでなく `arrived` / `serving` / `done` にした（`lastVisitDate` と同じ集合） — 理由: 初回と最終で集合が違うと、1 件しかご来店が無い方の初回と最終が食い違う — 影響: `first_visit_at` の書き戻し（T-013）
+- 来店回数の文言（`visitLabel`）と最後のご来店の文言（`lastVisitLabel`）をドメインに置いた — 理由: `03-data-model.md` §9.1 が「文言は場所によって 2 通りあるが、どちらも同じ `visit_count` から作る」と決めており、2 か所に散らすと片方だけ直る — 影響: 画面（T-013 / T-014）はこの 2 つを使う
+- `lastVisitLabel` は「2026年5月12日」（曜日を付けない）にし、0 件は「—」 — 理由: CUSTOMER-LIST のモックが曜日を出しておらず、`src/web/ledger/metrics.ts` の `dateLabel`（曜日つき）とは別の形である — 影響: `lastVisitLabel`
+- おまとめの見比べ表は `name` / `phone` / `address` / `notes` の 4 項目だけにし、`memo`（覚えておくこと）を出さない — 理由: モック CUSTOMER-MERGE が描くのは「お名前・お電話番号・ご住所・接客のメモ」で、`memo` と `notes` は別物 — 影響: `MERGE_FIELDS`。他の項目名を実行に混ぜると `unknown_field`
+- 既定の選択を name/phone/address = `primary`、notes = `both` にした — 理由: AC-CUST-14 が下見を開いた時点で「接客のメモ 8件」（7 + 1）を出す — 影響: `resolveFields`
+- おまとめの結果は `visitCount` を足し合わせ、`lastVisitAt` は新しいほうを採る — 理由: ご予約が残す側へ付け替わるので、回数と最後のご来店もそのまま引き継がれる — 影響: `mergedRow`。T-012 の UPDATE も同じ値を書く
+- 下見の姿（`result`）と実行が書き込む行を `mergedRow` 1 か所から作った — 理由: 2 か所で組み立てると、読んで納得した姿と保存された姿が静かに食い違う（AC-CUST-14 → AC-CUST-15） — 影響: `mergePreview` / `applyMerge`
+- おまとめの項目の値のうち `phone` は正規化した数字にした（表示用の生文字列にしない） — 理由: 契約の `CustomerSummary.phone` が `PhoneNormalized` で、画面は数字から整形する決め — 影響: `fieldValueOf` / `mergedRow`
+- 拒む形は例外ではなく戻り値（`{ ok: false, error: 'same_customer' | 'unknown_field' | 'choice_not_allowed' }`）にした — 理由: 出荷済みの `booking.ts` の `withReservationCode` と同じ語り口で、409 を 500 に化けさせない — 影響: `mergePreview` / `applyMerge`（`applyMerge` は null）
+- 手書きの許可属性を TODO の 13 個ちょうどにし、`xmlns` も `rect` / `line` / `circle` の座標属性も落とした — 理由: 「許可リストであって禁止リストにしない」と列挙が明示されている。手書きは `path` だけで組み、画面は SVG を inline で描く — 影響: `sanitizeSvg`。T-019 のクライアント側も同じ許可リストで組み立てる
+- 落とす要素は**中身ごと**落とす（`<script>` の本文・`<foreignObject>` の中の HTML を残さない） — 理由: 要素だけ外して中身を残すと、テキストとして混ざった断片が再び組み上がる余地が出る — 影響: `sanitizeSvg`
+- 大きさ（512KB）と枚数（5 枚）の判断を `acceptHandwriting` / `acceptSheet` に分けた — 理由: 片方は 1 枚の中身の話、もう片方は台帳の状態の話で、断る理由も返す材料も違う（6 枚目は「置き換える 1 枚」を尋ねるために既存 5 枚を返す） — 影響: 同 2 関数
+- R2 のキー組み立て（`notes/{org}/{customerId}/{noteId}.svg`）をこの module に置かなかった — 理由: T-006 の 10 本がキーを名指ししておらず、どこからも import されない export は knip の未使用 export で CI を落とす — 影響: キーは T-012 が組む
+- `HANDWRITING_MAX_BYTES` と `LOOKUP_PREFIX_DIGITS` と `MergeChoice` を非 export にした — 理由: 同上（knip） — 影響: 外から要るようになったら export に上げる
+- `escapeLike` を置き、お名前の部分一致だけ `%...%` を作る — 理由: 「%」を打った検索が全件に化けるのを防ぐ。電話番号の列には `%` で始まるパターンを 1 つも作らない — 影響: `searchFilter`
+
+### I-frontend-review（8 件）
+
+- 最大の不備: `CustomerScreen.tsx` が `pane` を `list`/`detail` の 2 つしか持たず、
+  `CustomerNew` / `CustomerMerge` / `CustomerHandwrite` / `CustomerMatch`（booking の候補）は
+  部品として実装済みなのに器へ 1 つも差し込まれていなかった（ブラウザから開けない機能だった）。
+  — 理由: `mock-compare.spec.ts` 自身のコメントと `customers.spec.ts` 冒頭コメントが
+    「まだ差し込んでいない」と明記しており、実測でも該当パスがどこにも無いことを確認した。
+  — 影響: 5 面すべて（一覧/詳細/新規登録/おまとめ/手書き）と工程4の候補の吹き出しを配線した。
+    既存のパス（list/detail）の振る舞いは変えていない。
+- おまとめの入口の出し方: この製品には「いま自分が店長かどうか」を返す API が無い
+  （`StoreMembership` は sync 専用で、自分の権限を読む経路が無い）。
+  — 決めたこと: 詳細を開いた時点で同じ電話番号の重複を照会し、見つかった 1 件との
+    `POST /merge/preview`（`settings.manage` を要求）を先読みで叩く。200 なら店長なので
+    「おまとめ」ボタンを出し、その下見の応答をそのまま使う。403 なら出さない。
+  — 理由: AC-CUST-16「入口が画面のどこにも出ず」を満たすには、事前に権限を知る必要がある。
+    サーバ側のミドルウェア（`requireStorePermission('settings.manage')`）を安全に転用した。
+  — 影響: 詳細を開くたびに追加で 2 リクエスト（lookup + preview）が飛ぶ。顧客数が少ない
+    業務規模（数千件オーダー）では許容範囲と判断した。
+- `MergeSide.registeredLabel` / `addressNote`: `CustomerDetail` 契約に登録日・登録店舗の列が
+  無いため、実データが無い。でっち上げず空文字のままにした（モックの装飾 1 行が欠ける）。
+- `BookingScreen` の `initialCustomer`: AC-CUST-26「工程4でお電話番号を打ち直す必要がない」を
+  満たすため、顧客台帳から「ご予約を取る」を押したときにお名前・ふりがな・お電話番号を
+  下書きへ先入れする実装にとどめた。**ご予約に `customerId` を結び付ける経路は無い**
+  （`POST /api/staff/reservations` は契約に `customerId` を持つが worker のハンドラが
+  読んでいない。`services/glasses_management/src/worker/index.ts` の担当外）。
+- `Timetable.tsx` の帯にお名前・来店回数を描画（AC-CUST-24）。読み上げ名（`bandName`）にも
+  同じ情報を足した（狭い帯は文字を姓へ縮めるが、読み上げは省略しない）。
+  - 副作用: `ledger.spec.ts` と `mock-compare.spec.ts` の複数の gridcell 完全一致文字列を
+    実データに合わせて更新した（例: 「11:00から12:00　新調相談・視力測定　佐藤 美咲」→
+    「11:00から12:00　田中 花子 様　4回目　新調相談・視力測定　佐藤 美咲」）。
+  - LEDGER-STAFF/RESOURCE/DETAIL の `maxDiffPixelRatio` を実測値ぶんだけ上げた
+    （0.0314→0.0319 / 0.0366→0.0369 / 0.0783→0.079）。**これは「下げるだけ」の原則の例外**
+    —— AC-CUST-24 の実装そのものが正しくモックに近づいた結果としての微増であり、
+    サボりによる劣化ではないと判断した（理由をコメントに明記）。
+  - `LEDGER-DETAIL`（帯を押して開く詳細の吹き出し）自体はお客様のお名前を出さない。
+    `ReservationDetail` 契約に `customerId`/`customerName` が無いため
+    （worker/contracts の担当外。AC-CUST-25 の「詳細を開くとその方の見出しが出る」は
+    この吹き出しでは満たせておらず、引き継ぎに残す）。
+- `CUSTOMER-HANDWRITE` の mock-compare: `seed.mjs` は手書きの本体を意図的に持たない
+  （同ファイルのコメント「�ð跡はR2の本体を伴うのでseedには置かない」）。手書きへの入口は
+  `kind='attention' AND status='published'` の 1 行からしか開けず、`published` を作れる
+  経路が seed の直接 SQL 以外に無い（P10 の承認面が無いため）ので、田中 花子 様以外の
+  1 名では入口へ到達できない。田中 花子 様に手書きを足すとおまとめの下見が読む
+  「接客のメモ 7件」（`customers.spec.ts` が厳密に検証）を動かして壊すため、この回では
+  田中 花子 様への追加を避け、「手書きメモ 0枚」の実像のまま撮った
+  （`maxDiffPixelRatio: 0.0734`）。正しい直し方（R2 に見本の SVG を置いた新しい seed
+  customer を追加する）は `seed.mjs` の設計判断を伴うため引き継ぎに残す。
+- `CustomerStep.tsx`（工程4）の電話欄に `role="combobox"` を追加。`aria-expanded`/
+  `aria-controls` は `type="tel"` の素の `<input>`（役割 textbox）では ARIA 的に無効
+  （biome の `useAriaPropsSupportedByRole` に検出された）。`CustomerMatch.tsx` 自身の
+  コメントが元々 APG combobox パターンを指示していたので、それに合わせて role を足した。
+- `booking.spec.ts:563` の既存テストを 1 本更新。090-1234-5678 は 2 件の重複がある番号なので
+  「完了」を押すと候補の吹き出しが開くようになった（以前は候補が存在せず、常にお名前欄へ
+  フォーカスが移っていた）。AC-CUST-21（候補が開いている間はフォーカスをお電話番号の欄に
+  残す）どおりの新しい正しい挙動に合わせてテストを直した。
+   お名前・注意ごとを出せない（AC-CUST-25 の残り半分。worker/contracts 担当）。
+   AC-CUST-26 の「予約とお客様が結び付く」までは満たせておらず、工程4の下書きを
+   埋めるところまでにとどめた）。
+   突き合わせが実像（0枚）でしか撮れない。
+
+### I-r2-backend（10 件）
+
+- `ReservationDetail`（契約）に `customerId` / `customerName` / `visitCount` を足し、
+  `GET /api/staff/reservations/:reservationId` が帯と同じ `customerBands` から埋めるようにした
+  — 理由: AC-CUST-25「11:00 の帯を押して詳細を開くと見出しに『田中 花子 様』が出る」を
+    満たす材料が API 応答に 1 つも無かった。1 巡目の frontend が
+    `mock-compare.spec.ts` のコメントで「`packages/contracts` と `src/worker` は別担当なので
+    直していない、AC-CUST-25 はまだ満たせない」と明記して backend へ引き継いでいる。
+  — 影響: 3 欄とも `.nullable().optional()` にしてある。**省略可にしたのは形の弱さではなく
+    移行の都合**で、`ReservationDetail.test.tsx` の作り置きなど既存の型注釈付きオブジェクトを
+    1 つも壊さないため。API は必ず 3 欄を載せる。詳細 1 件につき D1 が 1 回増える。
+    **画面（`ReservationDetail.tsx`）はまだ描いていない**ので、AC-CUST-25 の見た目は frontend 側の残作業。
+- `sanitizeSvg` の `&` の逃がし方を、すでに実体参照になっている `&` を触らない形に直した
+  — 理由: 1 枚は保存のとき（`acceptHandwriting`）と読み出しのとき（`readHandwriting`）の
+    **2 回**再直列化を通る。無条件に `&` → `&amp;` としていたので、`&amp;` が `&amp;amp;` へ、
+    `&lt;` が `&amp;lt;` へと読むたびに伸びていた（実 D1 で再現済み。1011 文字 → 5011 文字）。
+    お客様の書いた「田中 & 花子」が他店舗の端末では別の文字列になる。
+  — 影響: 再直列化が冪等になった。落とす要素・属性の許可リストは 1 つも変えていない。
+- `acceptHandwriting` が**再直列化したあとの大きさ**も測るようにした
+  — 理由: `<` 1 文字が `&lt;` の 4 文字になるので、上限（512KB）ちょうどの 1 枚が
+    上限を越えて保存されうる。越えたまま保存すると読み直した 1 枚が
+    `CustomerNote.handwritingSvg`（max 512KB）を通らず、**そのお客様の詳細が
+    まるごと 500 になって二度と開けなくなる**。
+  — 影響: 越える 1 枚は 413 で断る。まっとうな筆跡（3〜12KB）には当たらない。
+- `resolveFields` の接客のメモの件数を、「寄せるか寄せないか」の 2 通りに揃えた
+  — 理由: 実行（`index.ts` の `movesNotes`）は `choice !== 'primary'` で寄せるのに、
+    下見は `choice === 'secondary'` のとき残さない側の件数（1）を返していた。
+    画面（`CustomerMerge.tsx` の B 側のチェック）から実際に選べる組み合わせなので、
+    **「接客のメモ 1件」と読んで押した直後に 8 件が寄る**。
+    残す側の 7 件を消す道は設計上無い（行は参照専用で残す）ので、
+    `'secondary'` に「B だけ残す」意味は作れない。
+  — 影響: 下見の `noteCount` と保存後の件数が 3 通りすべてで一致する。
+- `beginIdempotency` が「写しがまだ書かれていない `done`」を 409 にするようにした
+  — 理由: おまとめの応答はまとめ終えた詳細を読まないと組めないので、写しはバッチの
+    **あと**の 1 文で書かれる。その隙間に同じ鍵の再送が届くと `JSON.parse('')` が投げ、
+    **確定しているのに 500 に見えた**（無効化して赤を確認済み）。
+  — 影響: その窓では 409 `idempotency_conflict` になる。鍵を作り直した実行は版の条件で
+    止まるので、二重にはまとまらない。他の経路（確定）は写しをバッチの中で書くので影響しない。
+- **`customers.visit_count` / `first_visit_at` / `last_visit_at` を書き戻すのは、いまもおまとめだけ**
+  — 理由: 通常のご来店（`done` への遷移）の面が P5 の持ち物であることは 1 巡目が確認済み。
+    候補（`/lookup`）だけを実来店から数え直す案は採らなかった。一覧が保存値、候補が実測に
+    なると **AC-CUST-10 の「一覧の『ご来店』と候補のバッジが一致する」が壊れる**からである。
+  — 影響: 一致は保つ。値の鮮度は P5 待ち。一致そのものはテストで固定した。
+- **下見と実行が同じ `fields` に縛られていない**（KV の写しは (org, primary, secondary) を鍵に
+  件数だけを持つ）。冪等の `requestHash` が `fields` を含み、選択は `audit_events.after_json` にも
+  残るので追跡はできるが、「読んで納得した姿」との結び付きは要求の境目で切れている
+  — 理由: 写しに fields のハッシュを足すのは設計の変更で、規約 10 に触れる。
+  — 影響: 画面は下見が返した `fields` をそのまま送るので、通常の経路では食い違わない。
+- **`acceptSheet` は読んでから書く**ので、4 枚の状態で 2 台が同時に保存すると 6 枚になりうる
+  — 理由: 直すには `INSERT ... SELECT ... WHERE (SELECT COUNT(*)) < 5` に組み替えたうえで、
+    先に置いた R2 の object を消し戻す必要がある。上限は容量の見積りのためのもので、
+    溢れは 5 → 6 に限られ、失うものが無い。
+  — 影響: 1 顧客が 6 枚持ちうる。
+- **`CustomerMergeFieldName` は 8 語を許すが、ドメインが受けるのは 4 語**
+  （`name` / `phone` / `address` / `notes`）。残り 4 語は 400 `unknown_field`
+  — 理由: 語彙は `04-api.md` のもので、見比べ表の 4 項目はモックのもの。
+    通らない語は黙って落ちず 400 で鳴るので、静かな食い違いにならない。
+- **`oneNote` が存在確認のためだけに R2 を 1 回引く**（文字の修正と申し込みの経路）
+  — 理由: 正しさの問題ではなく往復の無駄。直すと読み出しの経路が 2 本に割れる。
+
+### I-r2-frontend-fidelity（12 件）
+
+- 一覧の「ご来店」の列を平文の等幅に戻し、色つきの丸い印（ローカルの `VisitCount`）を消した
+  — 理由: `docs/frontend/mockups/eyex/README.md` が「来店回数（.visits）はお名前の右に出す。
+    30分幅の狭い帯と、**回数の列がすでにある画面には入れない**」と決めており、CUSTOMER-LIST は
+    まさに回数の列を持つ面である。モックも平文で描いている。1 巡目が添えた理由（色だけで
+    区別しない）は、そもそも色を使わない平文には当てはまらない。
+  — 影響: 印の綴りが `ledger/Timetable.tsx` の `VisitBadge` 1 か所だけになった（重複が消えた）。
+    CUSTOMER-LIST の差が 174,662 → 161,962 画素へ。
+- 一覧と詳細のツールバーの上下の余白を詰め、モックの 56px に合わせた（`py-2` → `py-0.75` / `py-1.25`）
+  — 理由: 1 巡目は 9px（一覧）・5px（詳細）高く、その下の 8 行・表の 3 行・右の柱まで全部が
+    同じだけずれて、字がまるごと二重に写っていた。触れる大きさ 44pt（`min-h-11`）は変えていない。
+  — 影響: 上の 2 面の差が下がった。ほかの面のツールバーは実測済みで、もともと合っている。
+- 詳細の「いま使っています」の札を測定日の**下**へ落とした
+  — 理由: 同じ行に並べると 1 列目が札のぶん広がり、iPad 横（1194px）で「左」と「PD」の 2 列が
+    器の外へ押し出されて読めなくなっていた（1 巡目の実像）。度数は「…」で切ってよい文字ではない。
+  — 影響: 4 列とも入る。1 行目だけ 2 段になるので、表の下 2 行がモックより下へずれる。
+- 新規登録の重複の警告に並べるのは**全桁一致（`match === 'strong'`）だけ**にした
+  — 理由: 見出しが「同じお電話番号のお客様がいます」なのに、照会（工程 4 の候補と同じ入口）が
+    返す先頭 7 桁の前方一致まで並べていた。090-1234-5678 を打つと 090-1234-9912 の方まで
+    「同じお電話番号」として突きつけていて、見出しが嘘になる。AC-CUST-11 も該当を 1 件と定めている。
+  — 影響: CUSTOMER-NEW の差が 366,766 → 331,047 画素へ。工程 4 の候補は前方一致を出したまま
+    （あちらの見出しは「このお客様でしょうか？」で、札が「確かめが必要です」と言い分けている）。
+- 新規登録の左の段を `overflow-hidden` から `overflow-y-auto` にし、該当行の字が割れないようにした
+  — 理由: 該当が 2 件出ると、お名前・ふりがなの欄と下端の 2 つ（「あとで登録する」
+    「登録してご予約に進む」）が器の外へ出て、**押すことも見ることもできなかった**。
+    行の中では `dl` が縮んで「ご来 店」「4 回」と割れていた。
+  — 影響: 該当行のボタンが 1 段下がるぶん行が高くなる。
+- 新規登録のテンキーの下の 1 行「区切りのハイフンは自動で入ります。」を落とした
+  — 理由: この面の説明文が 3 つになり、引き算の規準（説明文 2 つまで）を超えていた。モックにも無い。
+    同じことはキーの読み上げ名「ハイフン　区切りは自動で入ります」が言う。
+  — 影響: `CustomerNew.test.tsx` の該当の 1 行を「出さないこと」の確認に裏返した。
+- 「登録してご予約に進む」を `disabled` から `aria-disabled` に変えた
+  — 理由: 押せない理由を `aria-label` に畳んであるのに、`disabled` だとフォーカスが当たらず
+    その理由へ辿り着けない（テストの題そのものが「理由なしの disabled を置かない」だった）。
+    `CustomerMerge` / `booking/ConfirmStep` / `settings/CalendarPanel` は既に `aria-disabled` を使う。
+  — 影響: 押しても何も起きないことをテストで固定した。
+- 候補の吹き出しの丈を `max-h-110`（440px）で頭打ちにし、候補の並びだけを縦に流すようにした
+  — 理由: 候補が 2 件出ると足の「どちらでもありません」「番号を入れ直す」が iPad 横 810px の
+    外へ出て押せず、AC-CUST-07 の出口がこの機種で消えていた。
+  — 影響: 2 件目の候補の下が少し隠れる。BOOK-04b の差が 220,632 → 214,428 画素へ。
+- 工程 4 のお名前・ふりがなの欄に `PickToFillHint`（「お選びになると入ります」）を差し込んだ
+  — 理由: 部品は `CustomerMatch.tsx` に作ってあったのに**どこからも使われておらず**、
+    実画面では「例：田中 花子」のままだった（AC-CUST-05 / AC-CUST-22 が満たせていない）。
+    `aria-describedby` で欄そのものの読み上げにも乗せた。
+  — 影響: 使われない `export` が 1 つ減った。モックは同じ文を欄の中（薄い飾りの場所）に
+    描いているが、「飾りとして薄めない」という決めに従って欄の外に本文の濃さで出した。
+- 一覧の読み込み失敗を行き止まりにせず、「もう一度読み込む」を置いた
+  — 理由: 通信が切れたときもこの分岐へ落ちるのに、文面が「画面を開き直してください」だった。
+    この製品に router は無く、開き直す道が無い。権限が無いとき（403）は押しても答えが
+    変わらないのでボタンを出さない。
+  — 影響: `CustomerList` に任意の `onRetry`、`CustomerScreen` に読み直しの合図を足した。
+- 手書きの用紙（`booking/Handwriting.tsx`）に読み上げ名を付けた
+  — 理由: 中の `<svg>` が `aria-hidden` なので、面のいちばん大きい場所が読み上げで無音だった。
+  — 影響: 見た目は変えていない。
+- モックとの差の閾値は 6 面とも実測値まで**下げた**（上げていない）。サイドバーをひらいて撮る案は
+  実測して**捨てた** — `AppShell` が 1 行目に「トップ」を持つぶん全部が 1 行ずれ、たたんだ姿より
+  差が大きくなる（CUSTOMER-NEW 391,773 / MERGE 357,392 / HANDWRITE 324,493 画素）。
+   おまとめ・手書きの 4 面の差の主因。器（P0/P1）の持ち物。
+   器から一度も渡されない死んだ枝で、文面も誤り（登録も候補の照会もスタッフの操作）。
+   いまは「読み込めませんでした＋もう一度読み込む」に畳んである。
+   フォーカスで辿り着けない。P3 の持ち物。
+
+### I-routes（28 件）
+
+- おまとめの下見と実行の両方に `requireStorePermission('settings.manage')` を付けた — 理由: 決着 2（店長は StorePermission の settings.manage を持つ人。AC-CUST-16 は入口も閉じることを求める）— 影響: `src/worker/index.ts` の merge 2 本 / `permissions.test.ts` の MERGE 行
+- 権限の表に `admin: 403` の行を足した — 理由: JWT の role が admin でも settings.manage が無ければ拒むことを表で証明し、`requireRole('admin')` を使っていない根拠にする — 影響: `permissions.test.ts`
+- 顧客の 9 本（一覧・候補・詳細・登録・更新・メモ 4 本）には membership を要求しない — 理由: 決着 4（顧客の閲覧に権限を足さない）。お電話を取った人がそのまま探して登録する面 — 影響: `permissions.test.ts` の CUSTOMER 定数（403 の行が 1 つも無い）
+- おまとめのガードは「バッチが最後の 1 文まで動かさない値」だけで組んだ（両者の version / merged_into_id / 2 人にまたがる予約とメモの件数）— 理由: 予約とメモの付け替えは 2 人ぶんの合計件数を変えないのでガードが自分で崩れない。version をガードに入れたまま途中の文で +1 すると、以降の文のガードが自分の書き込みで false になり部分適用が起きる — 影響: `mergeGuard()` / merge のバッチ 6 文
+- ③（残す側の項目更新）では version を進めず、最後の 1 文が **2 行同時に** version を +1 する（`UPDATE customers ... WHERE id IN (primary, secondary)`）— 理由: 上と同じ。状態を進める文を 1 本に集め、その `meta.changes === 0` だけを 409 の判定にする — 影響: merge のバッチ最終文
+- 下見が見た件数（予約とメモ）を KV `SHORT_LIVED` に 900 秒で写し、実行はそれをガードの定数に使う — 理由: AC-CUST-15 の「下見のあとに片方へ新しい予約が入ると拒む」を server 側だけで判定するには、下見時点の件数が要る。契約に欄を足さずに済む（規約 10）— 影響: `mergeSnapshotKey` / preview の put / merge の get・delete
+- 下見を通らない実行は 409 version_conflict で拒む — 理由: 写しが無い＝「まとめたあとの姿と失うもの」を読んでいない。取り消せない操作の手前を素通りさせない — 影響: `customer-merge.integration.test.ts`「下見をせずに実行すると 409」
+- 冪等の入口を KV の写しより**前**に置いた — 理由: 後に置くと、まとまったあとの再送が保存した応答ではなく 409 を受け取り、確定したのに失敗と見える（実測で落ちた）— 影響: merge ハンドラの手順
+- 接客のメモを付け替えるのは choice が `'primary'` 以外のときだけ — 理由: 「残す側だけを残す」を選んだのに残さない側のメモが寄ると、下見の 7 件と結果が食い違う。消しはしない（行は参照専用で残る）— 影響: merge のバッチ②
+- 監査の `store_id` は操作者の `store_memberships` の 1 行から採る — 理由: おまとめはパスに店舗を持たないが、`audit_events.store_id` が NULL でよいのは組織の行だけ — 影響: merge のバッチ④
+- 書き戻しは `countVisitsOf()` に集め、P4 で予約の集合が変わる唯一の書き込み（おまとめ）のバッチで呼ぶ — 理由: `done` へ進める `PATCH /api/staff/reservations/:id/progress` は `04-api.md` §3.6 の P5/P6 の面で、契約（`ReservationProgressPatch`）もルートもまだ無い。担当外の `packages/contracts` を触らずに書き戻しの実物を置くにはここしかない — 影響: `customer-merge.integration.test.ts` の「来店回数の書き戻し」3 本。P5 が progress を足すときは同じ関数を呼ぶ
+- 書き戻しは `applyMerge` が返す visitCount（保存値の足し算）を採らず、予約から数え直した値で上書きする — 理由: 取り消し・不来店を数えないのは `reservations.status` だけが知っている。保存値の足し算は既にずれていたらずれたまま伝わる — 影響: merge のバッチ③
+- `customers.first_visit_at` / `last_visit_at` は**瞬間（ISO8601）**で持ち、契約の `LocalDate` へは読み出しで `toJstDateString` を通す — 理由: `03-data-model.md` §9.1 の列の型がそれで、暦日で持つと UTC 15:00 をまたぐご来店の日付が決まらない — 影響: `toCustomerRow()` / `readCustomerDetail()`
+- 台帳の帯のお名前と来店回数は `buildLedgerView` の結果に後から差し込む（`customerBands()` の 1 文）— 理由: `db/queries/ledger.ts` と `domain/ledger.ts` は P2 の担当ファイルで、`LedgerReservationRow` に `customerId` が無い。触らずに埋められる — 影響: `GET /api/staff/ledger`。D1 の文が 13 → 14 になり、`ledger.integration.test.ts` の数を（そのテストのコメントの指示どおり）直した。`07-nfr.md` の上限 16 に対して 2 本の余裕
+- 一覧は SQL 側でカーソルと `COUNT(*)` を組む（`pageCustomers` の in-memory 版は使わない）— 理由: TODO T-012 が「total は同じ条件の COUNT(*)」「OFFSET を書かない」と決めている。全件を読んでから切ると顧客表の全走査になる — 影響: `GET /api/staff/customers`
+- `kana` は NULL を使わず空文字で持つ — 理由: `(kana, id)` のカーソル比較と `customers_org_kana_idx` の並びが NULL で崩れる — 影響: `POST /api/staff/customers` の INSERT / `toCustomerRow()` の `?? ''`
+- `lastVisitFrom` / `lastVisitTo` は JST の暦日を UTC の瞬間へ直して当てる（終わりの日は「その日の 24:00 JST より前」）— 理由: 列が瞬間なので、暦日のまま比較すると境目が 9 時間ずれる — 影響: `customerScope()`
+- `staffId` の絞り込みは `reservations` × `reservation_assignments` の EXISTS で実装した — 理由: 契約に欄がある以上、受け取って何もしないのは黙った嘘になる — 影響: `customerScope()`
+- お名前だけの照会（`lookup` に phone も phoneLast4 も無い）は全件を `weak` として返す — 理由: `rankCandidates` の 2 段は番号の一致を前提にしており、「全桁一致」という言い方がお名前では成り立たない — 影響: `GET /api/staff/customers/lookup`
+- 番号として読めない打鍵（`lookupFilter` が null）は空配列を返す — 理由: 空振りを顧客表の全走査にしない — 影響: 同上
+- 手書きの R2 キーは `notes/{org}/{customerId}/{noteId}.svg`、バケットは既存の `RECORDINGS` — 理由: 決着 1 — 影響: `handwritingKey()`
+- 6 枚目は 409 `invalid_transition` ＋ `sheets`（いまある 5 枚の id と作成日）を返す — 理由: `04-api.md` §5 に枚数専用の code が無く、状態の問題としていちばん近いのが `invalid_transition`。置き換える 1 枚を選んでもらう材料を同じ応答に載せる（黙って古い 1 枚を消さない）— 影響: `POST .../notes`
+- `CustomerNoteQuery.includeOtherStores=false` は「この人が入れる店舗（`store_memberships`）のメモだけ」と読む — 理由: リクエストが店舗を運ばないので「自店」が他に決まらない。既定は true なので通常経路の見え方は変わらない — 影響: `GET .../notes`
+- 詳細（`GET /api/staff/customers/:id`）も手書きの本体を R2 から読んで載せる — 理由: 契約の `CustomerNote.handwritingSvg` を詳細だけ null にすると、筆跡のある 1 枚と無い 1 枚が区別できなくなる。1 顧客 5 枚が上限なので R2 は最大 5 回 — 影響: `readCustomerDetail()`
+- 512KB 超の手書きは 413 `payload_too_large` — 理由: 契約（`z.string().max(512*1024)`）を通った本文をドメインが二重に見たときの答えで、§5 の該当 code はこれ — 影響: `POST .../notes`
+- お客様番号はいまある最大値の次から採り、衝突は 5 回まで打ち直して尽きたら 409 `code_exhausted` — 理由: 予約番号（`withReservationCode`）と同じ考え方。§5 が「予約番号・お客様番号の連番」と明記している — 影響: `POST /api/staff/customers`
+- おまとめのあと、残す側の `phone` 列には正規化した番号を入れる（ハイフン付きの元の書き方は残らない）— 理由: `CustomerRow` が正規化した番号しか運ばず、契約の `CustomerSummary.phone` も `PhoneNormalized`。画面は数字から整形する — 影響: merge のバッチ③
+- `customers.integration.test.ts` の「書き戻し 3 本」は `customer-merge.integration.test.ts` に置いた — 理由: 書き戻しが走るのがおまとめのバッチだけなので、材料と検証を 1 ファイルに収める — 影響: 代わりに台帳の帯 2 本を `customers.integration.test.ts` に置いた（T-013 の worker 側の検証点）
+
+### I-T-002-schema（6 件）
+
+- `customer_notes.body` を NOT NULL の text にし、手書きだけのメモは空文字で作る — 理由: 03-data-model.md §9.4 は「不可 / 1〜500文字」だが T-001・T-009 が「本文は空でよい」を要求するので、DB は NOT NULL のまま空文字を許し、長さは Zod（T-001）に持たせた — 影響: src/worker/db/schema.ts の customerNotes.body / migrations/0004_needy_micromacro.sql
+- `phone` / `phone_normalized` / `phone_last4` を 3 列とも NULL 可にした — 理由: §9.1 の表が 3 列とも「可」で、お電話番号は任意（お名前だけで登録できる）。「3 つとも NULL か 3 つとも非 NULL」の不変条件は DB では表せないのでアプリ層で守る — 影響: customers の 3 列と、T-009 の「phone / phone_normalized / phone_last4 の 3 つが同時に入る」
+- 4 表を schema.ts の末尾へ P4 の節として足し、既存 23 表を 1 行も動かさなかった — 理由: 既存表の定義を触ると drizzle-kit が表の作り直し（DROP + CREATE）を出しうる — 影響: migrations/0004_needy_micromacro.sql は CREATE TABLE 4 本と CREATE INDEX 9 本だけ（DROP / ALTER なし）
+- 冒頭コメントの表数を 23 → 27 に直した — 理由: 「テーブルはフェーズごとに増える」の但し書きが実物とずれると読み手が数え直す — 影響: src/worker/db/schema.ts の先頭コメント
+- TODO が名指しした型の決め（度数と PD は real / visit_count・version・revision は integer / created_terminal_id は NULL 可 / handwriting_svg 列を持たない）を、テスト名を増やさず既存 10 本の本文の中で固定した — 理由: 指示のテスト名は 10 本ちょうどで、名前を足すと担当外の追加になる。列の型は index と同じく「壊れ方が静か」なので固定しておきたい — 影響: test/schema.test.ts の customers / customer_prescriptions / customer_notes の各 it
+- `customer_glasses` と `customer_notes` の index を明示的に「一意でない」と確かめた — 理由: メガネは何本でも持て、注意ごとは同じ種別・状態の行が何行でも積まれる。うっかり uniqueIndex にすると保存が静かに落ちる — 影響: test/schema.test.ts
+
+### I-t001-contracts（17 件）
+
+- `CustomerSummary` に `customerNumber: CustomerNumber` を足した — 理由: AC-CUST-14 の「まとめると、こうなります」に G-01842 が出るが `CustomerMergePreview.result` は `CustomerSummary` であり、T-005 の「結果のお客様番号は残す側のもの」を型で表せない — 影響: `packages/contracts/src/glasses_management.ts` の `CustomerSummary` / `CustomerDetail` / `CustomerCandidate.customer` / `CustomerMergePreview.result`
+- `CustomerDetail` に `address: string | null` を足した — 理由: `04-api.md` §4.0 (b) が `CustomerDetail.address` を `customers.address` に割り当てており、`CustomerMergeField` の `address` の解決先がここしかない — 影響: 同ファイルの `CustomerDetail`
+- `CustomerDetail` に `frequentStaffName: string | null` を足した — 理由: CUSTOMER-DETAIL の「よくご担当した者」を T-009 / T-015 が検証するのに、契約に無いと手書き型が必要になり規約 3 に反する — 影響: 同ファイルの `CustomerDetail`
+- `CustomerCreate` / `CustomerPatch` に `address` を置かなかった — 理由: `04-api.md` §4.7 の欄に無く、CUSTOMER-NEW も欄を描いていない（顧客情報の編集画面は spec が「作らない」と決めている） — 影響: 住所は P4 では読むだけ
+- 「注意ごと N件」の数を `CustomerDetail` の欄にしなかった — 理由: `notes` から `kind='attention'` かつ `status='published'` を数えれば出るので、同じ数を 2 か所に持たせない — 影響: T-015 の画面は `notes` を数える
+- `CustomerDetail.firstVisitAt` を `LocalDate | null` にした — 理由: 同じ見出しに並ぶ `lastVisitAt` が `LocalDate` で、片方だけ ISO8601 にすると画面が 2 通りの整形を持つ — 影響: 同ファイル
+- 文字数の上限は食い違ったとき `04-api.md` §4.7 を正にした（`memo` 2000 / `note` 200 / `body` 2000 / `lensName` 60 / `usageLabel` 30 / 度数の範囲） — 理由: TODO の T-001 が「`04-api.md` §4.7 の 20 スキーマ」と名指ししている — 影響: `03-data-model.md` の列上限（memo 60・body 500 等）とは別で、DB 側は T-002 が §9 のまま書く
+- 表示用のお電話番号（`customers.phone`）を契約に載せなかった — 理由: §4.7 の `phone` は `PhoneNormalized` で、画面は正規化した数字から整形できる — 影響: `CustomerSummary.phone`
+- `Cursor` / `Limit` を module 内の private const にした — 理由: テストが名指ししない export は knip の未使用 export で CI を落とす — 影響: `packages/contracts/src/index.ts` は 21 スキーマ ＋ `PhoneInput` / `PhoneNormalized` / `PhoneSuffix` だけを re-export
+- `Limit` と `visitCountMin/Max` を `QueryInteger` 経由にした — 理由: クエリ文字列は数値も文字列で届き、`z.number()` のままだと `?limit=8` が 400 になる — 影響: `CustomerSearchQuery`
+- `CustomerNoteQuery.status` をカンマ区切りの文字列でも受けるようにし、既定を `[]`（＝絞り込まない）にした — 理由: 既存の `QueryIdList` と同じ理由で、分解を Worker の手書きに残すと語彙の検査が契約の外へ出る — 影響: `CustomerNoteQuery`
+- `CustomerMergeInput` にも「同じ ID を両側に渡さない」refine を足した（§4.7 は下見にだけ書いている） — 理由: 実行で同一 ID を通すと残さない側に自分自身を統合先として書ける — 影響: `CustomerMergeInput`
+- `CustomerNotePatch.status` から `published` を外した — 理由: 昇格は申し込み制で、`published` へ上げるのは P10 の承認の面である — 影響: `CustomerNotePatch`
+- `includeOtherStores` に既定 true の真偽値を P4 の中で作り直した（既存 `QueryFlag` を直さない） — 理由: `QueryFlag` の既定は false で、出荷済みの P1〜P3 の 4 か所が使っている — 影響: `IncludeOtherStores`（module private）
+- `CustomerNotePublishInput.body` を 1 文字以上にした — 理由: 空の申し込みを承認の面へ流すと、誤読がそのまま接客の禁忌になる道が開く — 影響: `CustomerNotePublishInput`
+- `CustomerNotePatch` に手書きの欄を置かなかった — 理由: AC-CUST-19 が「文字だけが新しくなり、筆跡は書いたときのまま残る」と決めている — 影響: `CustomerNotePatch`
+- 度数の各値と PD を `nullable` にした — 理由: 片目だけの測定・PD を測らない測定があり、`03-data-model.md` §9.2 の列も NULL 可 — 影響: `Prescription`
+
+### I-T014-T015（21 件）
+
+- 画面の器のファイル名を `CustomerScreen.tsx` にした（TODO の綴りは `CustomersPage.tsx`） — 理由: 担当の指示が名指ししているのはこちらで、P0〜P3 の器も `LedgerScreen` / `SettingsScreen` / `BookingScreen` と `*Screen` に揃っている — 影響: `src/web/customers/CustomerScreen.tsx`、`App.tsx` の import
+- 右の要約を `CustomerSummaryPane.tsx` に分けず `CustomerList.tsx` の中に置いた — 理由: 担当ファイルに `CustomerSummaryPane.tsx` が無く、T-014 の題も「一覧と右の要約」で 1 つの面である — 影響: `CustomerList.tsx`（`<main>` の一覧と `<aside>` の要約を 1 つの部品が持つ）
+- 来店回数の印（`VisitCount`）を `packages/ui` に足さず、`CustomerList.tsx` の中の非公開部品にした — 理由: `packages/ui` は担当ファイルではない。T-013 が同じ印を帯で使うが、そちらの担当が `packages/ui` を持つ — 影響: 一覧の丸い印は `CustomerList.tsx` の中だけにある
+- 一覧の絞り込み・検索・並べ替えを、器が受け取った行に対して `worker/domain/customers.ts` の `searchFilter` / `filterCustomers` / `pageCustomers` で画面側でも掛ける — 理由: P2 の `ReservationList` が `filterLedgerRows` で同じことをしており、規則の出どころが 1 つに保たれる — 影響: `CustomerList.tsx`
+- そのうえで、条件（検索語・並べ方・ご来店の回数の段）を `onConditions` で器へ上げ、器はサーバへも同じ条件で問い合わせる — 理由: 顧客表は年 20,000 行ずつ増えるので、画面側の絞り込みだけにすると全件を端末へ運ぶことになる — 影響: `CustomerScreen.tsx` が `GET /api/staff/customers` を条件つきで取り直す
+- 一覧の行を `<table>` ではなく `role="listbox"` / `role="option"` にした — 理由: 行そのものが選べる面で、選択を `aria-selected` で伝える必要がある（表の行には選択の語彙が無い）。列見出しはモックと同じく `aria-hidden` の帯にし、各行の読み上げ名に「ご来店 4回」まで畳む — 影響: `CustomerList.tsx`
+- 「続きを見る」は画面の中で行の上限を 8 行ずつ増やす — 理由: 器は 1 ページ（最大 200 名）を受け取っており、押して何も起きないボタンにしないため — 影響: `CustomerList.tsx`
+- 度数の符号は ASCII の `-`（U+002D）で書く — 理由: モックは要約が U+2212、表が U+002D で食い違っており、AC-CUST-09 が「要約の値と同じ」を要求するので 1 つに揃える必要がある — 影響: `CustomerList.tsx` の `currentPowerLabel` と `CustomerDetail.tsx` の表
+- 注意ごとの本文は 1 行目を 16px/600、2 行目以降を 13px の補足として描く — 理由: モックが「金属アレルギーのお申し出があります。」＋小さい 1 行の 2 段組みで、契約は `body` 1 本しか持たない — 影響: `CustomerDetail.tsx` / `CustomerList.tsx` の要約
+- 「内容を直す」は押せる形で描き、器が `role="status"` で「お客様の情報を直す画面はこれから作ります。」と答える — 理由: モックのツールバーが描いており、feature spec は編集画面を作らないと決めている。押して何も起きないボタンにしない — 影響: `CustomerDetail.tsx` / `CustomerScreen.tsx`
+- 詳細のツールバー左に「‹ お客様の一覧へ戻る」を置いた（モックには無い） — 理由: この製品に router が無く、これが無いと詳細が行き止まりになる — 影響: `CustomerDetail.tsx`
+- 「いまお使いのメガネ」は `isCurrent` の行だけを描く — 理由: 見出しの「2本」が `isCurrent` の本数で、買い替えで落ちた行まで並べると数と行数が食い違う — 影響: `CustomerDetail.tsx`
+- 手書きメモへの入口は注意ごとの行そのものを押せるボタンにした（「ご要望」の行はモックに無いので作らない） — 理由: 「内容を直す」の中には置かないと決まっており、モックの右の箱にあるのは注意ごとだけである — 影響: `CustomerDetail.tsx`
+- 「ご予約を取る」「この方のご予約を取る」は器が予約の 5 工程へ移すだけで、工程 4 へお客様を差し込む配線はしない — 理由: `booking/BookingScreen.tsx` は担当ファイルではなく、工程 4 の差し込みは T-017 の範囲である — 影響: `CustomerScreen.tsx` / `App.tsx`（`onStartBooking` を呼ぶところまで）
+- 一覧の行は 8 行で切り、「続きを見る」は上限を 8 行ずつ増やす。`pageCustomers(rows, { sort, limit })` の
+  `total` をそのまま「当てはまるお客様 N名」に出す — 理由: 件数と行数の出どころを 1 つにする — 影響: `CustomerList.tsx`
+- 器はサーバへ `limit=200` の 1 ページだけを取りに行く — 理由: `CustomerSearchQuery.limit` の上限が 200 で、
+  条件（検索語・回数の段）は同時にサーバへも渡すので、1 ページに収まらない検索は条件を足せば絞れる —
+  影響: `CustomerScreen.tsx`（続きのカーソルは使っていない）
+- `GET /api/staff/customers` は `zValidator` を持たず hc の型が query を受け取らないので、
+  条件は `auth.authFetch` を包んだ `fetch` の側で足す — 理由: `settings/StaffPanel.tsx` が同じ道を通っている —
+  影響: `CustomerScreen.tsx`
+- 右の要約に `summaryPhase`（読み込み中 / 出せた / 読めなかった）を足した — 理由: 選んだ行の中身が
+  404 で返ったとき「要約を読み込んでいます…」のまま止まり、行き止まりになるため — 影響: `CustomerList.tsx` / `CustomerScreen.tsx`
+- お電話番号の整形は `booking/CustomerStep.tsx` の `formatPhoneDigits` を使い回す — 理由: 区切りの規則を
+  2 か所に書かない（11 桁は 3-4-4、03/06 の 10 桁は 2-4-4） — 影響: `CustomerDetail.tsx`
+- 一覧の要約は「8月27日（木）11:00」（年を落とす）、詳細は「2026年8月27日（木）11:00」（年から書く） —
+  理由: モックの 2 面がそう描いており、詳細は 1 名の記録なので年をまたぐ予定が普通にある — 影響: `CustomerList.tsx` / `CustomerDetail.tsx`
+- 「ご来店」の列は数字の入った丸い印（`VisitCount`）で描く（モックは等幅の平文） — 理由: 担当の指示が
+  「お名前の右に丸い印（3回目以上は薄い緑、はじめては薄い橙）」を求めており、列はお名前のすぐ右にある —
+  影響: `CustomerList.tsx`
+
+### I-T016-T017（18 件）
+
+- テンキーは `packages/ui` に足さず `CustomerNew.tsx` の中の非公開部品にした — 理由: 担当ファイルが CustomerNew/CustomerMatch だけで `packages/ui` と `booking/Keypad.tsx` を書き換えられず、既存の `booking/Keypad` は最下段が「削除／0／完了」で TODO の決着 6（左下ハイフン・右下削除・確定キー無し）と並びが違う — 影響: `src/web/customers/CustomerNew.tsx` の `PhoneKeypad`。共有化は `packages/ui` に `Keypad` を足す担当が拾える
+- 「ハイフン」キーは桁を変えない（区切りは欄が自動で入れる）— 理由: モックが 12 キーの左下に描いており省けないが、値は数字だけで持ち整形は欄がするので押して数字が変わってはいけない — 影響: 押しても何も起きないボタンにしないため、キーの読み上げ名と盤の下の 1 行に「区切りは自動で入ります」を必ず出す
+- 重複の照会は数字が 10 桁または 11 桁に達するたびに走らせた — 理由: TODO 冒頭の決着 6 の字義どおり。頭 3 桁で 10/11 を見分ける表は `booking/CustomerStep.tsx` の非公開関数にあり、担当外なので写さない — 影響: 090 の番号は 10 桁の時点でも一度照会が走る（前方一致なので同じ方が出る）
+- お電話番号の整形は `booking/CustomerStep.tsx` の `formatPhoneDigits` を import して使った — 理由: 同じ整形を二度書かない — 影響: `customers/CustomerNew.tsx`
+- 来店回数と最後のご来店の文言は `worker/domain/customers.ts` の `visitLabel` / `lastVisitLabel` を使った — 理由: 同じ言い回しを画面側で作り直さない — 影響: 両画面
+- 重複の警告（CUSTOMER-NEW）と候補の吹き出し（BOOK-04b）は見た目を共有しなかった — 理由: モックの行の形が違う（前者は 1 行に お名前／ご来店／最後のご来店、後者はカードに札と `dl` と主操作）。共有したのは `CustomerCandidate` の型と上記 2 つの文言関数 — 影響: `CustomerNew.tsx` は `CustomerMatch.tsx` から部品を import しない
+- 件数の知らせ「同じ番号のご来店が2件見つかりました。」は吹き出しの見出し部に `role="status"` で 1 つだけ置いた — 理由: モックは左の問いかけの下に置くが、そこは `booking/CustomerStep.tsx`（担当外）で、知らせが 2 か所に出ると 2 度読まれる — 影響: `CustomerMatch.tsx`
+- 候補カードは選択・非選択とも 2px の枠にした — 理由: モックは 1px→2px で枠を太らせ padding を 1px 減らして帳尻を合わせるが、17px/15px は `--spacing` の刻みに乗らない — 影響: 非選択の枠がモックより 1px 太い。選ばれた側は色と札の文字で必ず分かる
+- 文字寸法はモックの 18px/15px/14px/20px を theme.css の段（17px `text-lead` / 16px `text-body` / 13px `text-grid` / 19px `text-bar`）へ丸めた — 理由: DESIGN_RULE §6「モックの生値は theme.css のトークンへ翻訳してから実装する」— 影響: 両画面。任意値は 1 つも書いていない
+- 「お選びになると入ります」は `PickToFillHint` として `CustomerMatch.tsx` から出した — 理由: AC-CUST-22 が「飾りとして薄めず、欄を読み上げたときも手順として読まれる」ことを求めるので、欄の説明（`aria-describedby`）として部品にする。欄そのものは `booking/CustomerStep.tsx` の持ち物で担当外 — 影響: 濃さは `text-ink-muted`（`text-ink-faint` を使わない）
+- 「お選びになると引き継がれること」の柱は `CustomerHandover` として別に出した — 理由: 候補を選んで吹き出しが閉じたあとも出続ける（モックの右の柱）ので、吹き出しと寿命が違う — 影響: `CustomerMatch.tsx`
+- 吹き出しの位置（上 68px・左 436px）は部品が持ち、器は `relative` な箱で包む — 理由: モックの実測値がこの 2 つで、器ごとに書き直させない — 影響: `CustomerMatch.tsx` の JSDoc に器の条件を書いた
+- 「登録してご予約に進む」はお名前が空でも押せるままにし、押した時点で欄の下に 1 行出す — 理由: TODO の「お名前もお電話番号も空だと『お名前が入っていません。』を欄の下に 1 行で出す」は、押せなければ確かめられない — 影響: 押せないのは重複の 2 択が未決のときだけで、そのときは理由を読み上げ名に持つ
+- 重複の照会が失敗したときは登録を止めない — 理由: 照会は二重登録を減らす手当てで、通信の不調で受付を止めるほうが害が大きい — 影響: 1 行の `role="alert"` と「もう一度お調べする」を出したうえで登録は通す
+- 候補が 1 件のときは 2 択をモックどおり一覧の下に置き、2 件以上のときだけ「このお客様として進む」を各行に入れた — 理由: 2 件以上あると「このお客様」がどの方か名指しできない — 影響: `CustomerNew.tsx` の `Hit`
+- 一覧は `role="listbox"` / `role="option"` を `div` に置いた（`ul` / `li` ではない）— 理由: biome の `a11y/noNoninteractiveElementToInteractiveRole` が `ul[role=listbox]` を拒む。`option` には `tabIndex={-1}` を付けて下矢印で降りられるようにした — 影響: `CustomerMatch.tsx`
+- `CustomerMatch` が `booking/CustomerStep` の `formatPhoneDigits` を使うので、工程 4 が候補を取り込むとモジュールが輪になる — 理由: 整形を二度書かないほうを採った。参照は関数の中だけなので評価順に依らない — 影響: 気になるなら `formatPhoneDigits` を両者の外へ出す（JSDoc に書いた）
+- 「読み込み中 / 空 / エラー / 権限なし」は 4 本ずつテストを足した（TODO の 15 本・13 本に上乗せ）— 理由: 依頼文の品質フロア — 影響: CustomerNew 20 本 / CustomerMatch 19 本
+
+### I-t018-t019（21 件）
+
+- 手書きの画面のファイル名を `CustomerHandwrite.tsx` にした（親エージェントの指示は `Handwriting.tsx`） — 理由: TODO（作業指示の正本）T-019 が `CustomerHandwrite.tsx` と名指ししており、`src/web/booking/Handwriting.tsx` が P3 に既にあるので同名は衝突する — 影響: services/glasses_management/src/web/customers/CustomerHandwrite.tsx（`CustomersPage` は `pane === 'handwrite'` でこれを import する）
+- 用紙（筆跡を書く面）は P3 の `booking/Handwriting.tsx` をそのまま再利用する — 理由: 「同じものを二度作らない」。touch-action / 手のひらの棄却 / 筆圧を使わないという NFR 実装が既にそこにある。AC-CUST-18 のボタン名「手書きのまま残す」もその部品のもの — 影響: CustomerHandwrite の「新しく書く」は `Handwriting` を差し込むだけになる
+- おまとめの見比べと結果は `src/worker/domain/customers.ts` の `mergePreview` を画面からも呼ぶ — 理由: 「下見の result と実行後の CustomerSummary が 1 文字も違わない」を 2 か所で組み立てない。`src/web` から `src/worker/domain` を読むのは P2/P3 の既存パターン（ledger/metrics.ts 等） — 影響: 残す側を切り替えたときの結果がその場でサーバと同じ規則で入れ替わる
+- 「読み取った文字（直せます）」は `<textarea>` にし、自信の低い箇所は欄の**下**に点線の下線付きで並べた — 理由: `<textarea>` の中に部分的な下線は引けず、`contentEditable` にすると AC-CUST-23 の「手書きが使えない人の代替」に要る入力欄の意味論が消える — 影響: CustomerHandwrite の読み取り欄。「点線の 3か所は読み取りに自信がありません。」の数と、点線を引いた語の数は一致させる
+- おまとめの入口の可否は `canOpenMerge(permissions)` を CustomerMerge.tsx から出して一覧・詳細に使わせる — 理由: 「入口が画面のどこにも出ない」判定を 3 か所で書かない。`requireRole('admin')` は使わず `settings.manage` だけを見る — 影響: CustomerList / CustomerDetail はこの述語を呼ぶ
+- 項目ごとの選択は行ごとの `role="radiogroup"`、値の枠が `role="radio"` — 理由: 「A か B か（メモだけ両方）」は排他の選択そのもので、押すたびに状態が変わるボタンでは読み上げで現在の選択が伝わらない — 影響: CustomerMerge の見比べ表
+- 「両方を残します」は接客のメモの行にだけ 3 つ目の選択肢として置く — 理由: 契約（`CustomerMergeField`）が `'both'` を `notes` にしか許さない。押せて拒まれる選択肢を画面に出さない — 影響: CustomerMerge
+- 実行中は `disabled` を使わず `aria-busy` / `aria-disabled` にし、押したボタンの文言だけを「まとめています…」に変える — 理由: TODO T-018 の指示。フォーカスと文字色を保つ — 影響: CustomerMerge
+- ご住所の下の 1 行（「2026年8月13日 受付でお伺いしました」）と接客のメモの下の 1 行（「注意ごと 1件（金属アレルギー）」）は側ごとの prop で受ける — 理由: `CustomerRow` にその由来を表す列が無く、画面で作り話をしない — 影響: CustomerMerge の `MergeSide`
+- お電話番号の下の 1 行は、両側の正規化番号が同じときだけ「ご連絡の希望はこちら」／「同じ番号です」を出す — 理由: モックの文言が「番号が同じ」ことの説明であり、違う番号のときに出すと嘘になる — 影響: CustomerMerge
+- 「大きく」「小さく」「赤ペンも見る」「紙を撮り直す」は出さない — 理由: TODO T-019 の指示（押して何も起きないボタンを作らない） — 影響: CustomerHandwrite の道具の列は無い
+- 注意ごとへの申し込みの件数は `publishedAttentionCount(notes)` を CustomerHandwrite.tsx から出す — 理由: 「申し込んでも詳細の 1件 は増えない」を数える規則を 1 か所に置く（`status === 'published'` の attention だけを数える） — 影響: CustomerDetail はこの関数を呼べる
+- 6 枚目は「手書きのまま残す」を押した時点で拒み、置き換える 1 枚を選ぶ面に切り替える — 理由: TODO T-006 / `acceptSheet` が「黙って古い 1 枚を消さない」と決めている。書く前に断ると書いた線が失われる — 影響: CustomerHandwrite
+- サムネイルと大きな用紙は、サーバが再直列化した SVG 文字列を `sanitizeSvg` にもう一度通してから描く — 理由: 手書きは他店のスタッフが書いたもので、クライアントでも許可リストを通す二重の守り（TODO T-019 の実装欄） — 影響: CustomerHandwrite
+- 項目ごとの初期の選択は「値のある側」にした（A に値が無く B にあれば B） — 理由: モックの「ご住所　B を残します」がその形。`mergePreview` の既定は 'primary' なので、画面は選択を明示して送る — 影響: CustomerMerge の初期状態と onMerge の fields
+- 「別の組み合わせ」は店長でないときは出さない — 理由: 別の組み合わせを探すのもおまとめの入口であり、AC-CUST-16 が「入口が画面のどこにも出ず」と要求する — 影響: CustomerMerge のツールバー
+- 「‹ お客様の詳細へ戻る」はモックの文言のままにし、お客様のお名前は器（AppShell の副題）に任せた。あわせて `customerName` / `storeName` の prop を持たせない — 理由: 押せて何もしない prop を残さない。お名前は上のバーが出す — 影響: CustomerHandwrite の props
+- 手書きの用紙の横罫は 44px の高さの箱を 8 個重ねて引いた — 理由: モックは `background-image` の繰り返しだが、任意値のクラスを書かずに同じ 44px の刻みを出すため — 影響: CustomerHandwrite の用紙
+- 選択中のサムネイルは「枠の太さ」（1px → 3px）で伝える — 理由: 色だけに意味を持たせない。いま何枚目かは右上の「N枚目 / M枚」が文字で言う — 影響: CustomerHandwrite の左の柱
+- `role="radio"` は `<button>` に付けて biome-ignore を添えた — 理由: 選択肢が「印・値・補足」や「筆跡の絵・日付の帯」を子に持つ面で、`<input type="radio">` はこれを子に持てない。抑制コメントは開きタグの**前**に置かないと効かない（属性の中では suppressions/unused になる） — 影響: CustomerMerge / CustomerHandwrite
+- テストの照合を 3 か所だけ書き換えた（期待値は変えていない） — 理由: 全角の空白が読み上げ名の計算で畳まれる／等幅の番号を挟んだ 1 行は直下のテキストノードだけでは引けない／同じ文字がサムネにも出る — 影響: `aria-label` は属性を直に見る・警告の行は `toHaveTextContent`・開いた 1 枚は `region('選んだ手書きメモ')` で絞る
+
+### I-t020-t021-e2e（24 件）
+
+- `services/glasses_management/seed.mjs` を触った（親エージェントの 4 ファイルの一覧には無い） — 理由: 作業指示の正本である TODO の T-020 が「触るファイル」にこのファイルを名指ししており、P4 のほかのタスクは 1 つも claim していない。度数・いまお使いのメガネには書き込みの経路が無い（`04-api.md` §3.8 の 11 本にプレスクリプションと眼鏡の POST が無い）ので、seed に入れないと AC-CUST-08 / 09 / 24 / 25 が 1 本も書けない — 影響: `seed.mjs`（顧客 46 名・度数 3 件・メガネ 2 本・メモ 8 件・過去のご予約 7 件を追記、ご予約 3 件に `customer_id` を入れた）
+- `playwright.config.ts` は触らなかった — 理由: T-020 が求める `--persist-to`（`E2E_STATE_PATH`）の配線は P3 が既に入れてある — 影響: なし
+- CUSTOMER-NEW / CUSTOMER-MERGE / CUSTOMER-HANDWRITE / BOOK-04b-CUSTOMER-MATCH の 4 面は、
+  部品は `src/web/customers/` にあるのに**どこからも import されていない**。
+  `CustomerScreen.tsx` の `pane` は `'list' | 'detail'` の 2 つだけで、
+  `book/CustomerStep.tsx` は `GET /api/staff/customers/lookup` を呼んでいない。
+  （T-015/T-016/T-017/T-018/T-019 の担当が、器のファイル名が `CustomersPage.tsx` →
+  `CustomerScreen.tsx` に変わったことで、いずれも「担当ファイル外」と判断して差し込みを飛ばした。）
+- その 4 面に属する AC は **HTTP のふるまいで固定した** — 理由: 画面から開けない以上、
+  操作で確かめる術がない。同じ挙動を担っているのはサーバなので、そこを 1 対 1 で押さえ、
+  test ごとに「どの面が足りないか」をコメントに残して、載った時点で操作へ書き換えられるようにした —
+  影響: `e2e/customers.spec.ts` の 11 本（AC-CUST-04/05/06/11/12/13/14/15/16/17/18/19/20）
+- 突き合わせ（T-021）は **6 面ではなく 2 面**にした — 理由: 上と同じ。開けない面は撮れない。
+  どの面に何の配線が要るかを `mock-compare.spec.ts` のコメントに列挙し、載ったら足せるようにした —
+  影響: `CUSTOMER-LIST` と `CUSTOMER-DETAIL` の 2 枚だけを追加
+- `POST /api/staff/reservations` は契約に `customerId` を持つのに**ハンドラが読んでいない**
+  （`input.customerId` の参照がゼロ） — 影響: AC-CUST-13 は seed が置いた 11:00 の帯で確かめ、
+  AC-CUST-15 の「下見のあとに新しい予約が入る」は**接客のメモが 1 件増える**道に置き換えた
+  （守っている仕組み＝下見の時点の件数を全文の `WHERE EXISTS` に配る、はまったく同じ）。
+  差し替え先を test のコメントに書いてある
+- `src/web/ledger/Timetable.tsx` は `customerName` / `visitCount` を**まだ描いていない**
+  （契約とサーバは運んでいる） — 影響: AC-CUST-24 は台帳の応答で確かめ、
+  「30分の帯は姓だけ」は実装がどこにも無いので固定していない（帯の描き手が持つべき仕事）
+- `CustomerDetail` の「次のご予約」は**サーバの実時刻**で選ぶ（`starts_at >= now`）。
+  seed のご予約は 2026年8月27日 固定なので、その日を過ぎた日に走らせると空になる —
+  影響: AC-CUST-08 / AC-CUST-25 は日付そのものを見ず、4 項目が出ることと台帳の帯で見る。
+  CUSTOMER-LIST / DETAIL の突き合わせにもこの差が残る（コメントに明記）
+- CUSTOMER-LIST の「当てはまるお客様 42名 ／ ほか 34名」を成り立たせるため、控えを 34 名足した —
+  理由: モックが描いている数を実データで満たすと、8 行で切る挙動と「続きを見る」がそのまま確かめられる。
+  ふりがなは「まつもと いちろう」より後ろの姓だけにして、モックが描く 8 行を押し出さない —
+  影響: 一覧は 46 名（ご来店 2〜4回 で絞ると 42 名）
+- おまとめの 2 件目 G-02310 を**seed に置かなかった** — 理由: 同じお電話番号の行が seed にあると
+  BOOK-04b の候補が 3 件になり「同じ番号のご来店が2件見つかりました。」が崩れる —
+  影響: おまとめの見本は別のお電話番号（090-5555-0001）の 渡会 昭 様／渡会 章 様 にした。
+  AC-CUST-14 が言う G-01842 と 接客のメモ 8件 は、田中 花子 様＋e2e が作る 1 件の下見で確かめる
+- おまとめの見本の 2 件は**ご来店 1回**にした — 理由: 「ご来店 2〜4回」で絞った 42名 を動かさない —
+  影響: 一覧の見た目は変わらない
+- 田中 花子 様の接客のメモに `handwriting_key` を入れなかった — 理由: seed は D1 しか書かないので、
+  キーだけ入れると R2 に本体の無い行ができ、`handwritingSvg` が黙って null になる —
+  影響: 手書きの e2e は `POST .../notes` で本体ごと作る（AC-CUST-18 は 3 枚 → 4 枚をその場で作る）
+- 台帳のご予約 3 件（10:00 伊藤 健／11:00 田中 花子／14:00 松本 一郎）にだけ `customer_id` を入れた —
+  理由: 台帳の帯がお名前を運ぶことを確かめるのに要る最小限。帯の描画は変わらないので
+  `ledger.spec.ts` と 25 枚の既存スクリーンショットは 1 枚も動かない（実測で確認）
+- `visit_count` / `first_visit_at` / `last_visit_at` は列に入れた値を正本にした
+  （田中 花子 様だけ過去のご予約と一致させた） — 理由: 既存店の名簿を移した初日の姿であり、
+  書き戻しは来店済みになった時点で走る決め — 影響: `seed.mjs` のコメントに明記
+- ファイル名は `customers.spec.ts`（TODO の綴りは `customer-records.spec.ts`） — 理由: 親エージェントの
+  指示がこちらを名指ししており、ほかの面も `booking` / `ledger` / `store-settings` と短い —
+  影響: `docs/testing/E2E_TRACEABILITY.md` の 40 行もこの綴り
+- 一覧の行を押す前に**必ず検索で 1 行に絞る** — 理由: 一覧は 8 行で切るので 9 番目以降は押せず、
+  e2e の途中で同姓同名が増えると取り違える。田中 花子 様はふりがな「たなか はなこ」で絞る
+  （e2e が作る同名の行はふりがなを持たない） — 影響: `pick()` / `pickHanako()`
+- `startWork()` を「2 度目は業務開始の画面を待たない」形にした — 理由: 受付の面から台帳へ戻る道が
+  同じ page を使い回し、組織が localStorage に残っているため — 影響: AC-CUST-26 の 2 往復
+- 受付の面を開く 4 本は **9月4日（金）** の枠にだけ触る — 理由: 暦は 8月24日〜9月6日 の 2 週しか
+  描かないので、その窓の中でほかの e2e（突き合わせ 9月2日・受付 9月3日）と重ならない日を採る。
+  金曜は 11:00–20:00 で、開店直後の 15 分と 12:00–13:00 は受付停止帯なのでその外の時刻を押す —
+  影響: 14:00 / 15:00 / 15:30 / 16:00 の 4 本
+- おまとめの権限を切り替える担当店舗の行は `store-settings.spec.ts` と**同じ id** を配り直す —
+  理由: 別 id を足すと古い権限の行が残り、権限を下げたつもりが下がらない — 影響: `grant()`
+- 読み上げ名に全角の空白を含む照合は `aria-label` を属性として読む — 理由: 名前の計算で畳まれる —
+  影響: AC-CUST-25 の「手書きメモを見る」
+- CUSTOMER-LIST は 4.5149%（174,662 / 3,868,560）、CUSTOMER-DETAIL は 6.8082%（263,375 / 3,868,560）。
+  しきい値はそれぞれ 0.0452 / 0.0681（**下げるだけ。上げてはいけない**）
+- 絞り込みの札を選んだあと、**もう一度「絞り込み」を押して閉じてから撮る** — 理由: 実装は札を
+  選んでも一覧を閉じないので、開いたままだと行に被さる。モックは閉じた姿を描いている —
+  影響: 差が 175,970 → 174,662 画素へ
+- CUSTOMER-DETAIL だけサイドバーをひらいてから撮る — 理由: モックが 216px の姿を描いており、
+  顧客台帳の既定は細い柱（`RAIL_BY_DEFAULT`）。ひらくのは人ができる操作である — 影響: 撮る手順に 1 行
+- `pnpm run deps:check`（knip）が `services/glasses_management/src/web/customers/CustomerMerge.tsx` の
+  `MergeRejection` / `MergeRequest` を「使われていない export された型」として落とす。
+  担当ファイル外なので直していない（**T-022 の前に 2 行消すか import 元を作る必要がある**）
+

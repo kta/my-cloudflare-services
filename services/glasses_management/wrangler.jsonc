@@ -25,7 +25,7 @@
   // 短命な状態（冪等キー・受付中の下書き）だけを置く。正本は D1。
   // id は Terraform 出力 `glasses_management_short_lived_kv_namespace_id`。
   "kv_namespaces": [{ "binding": "SHORT_LIVED", "id": "00000000000000000000000000000000" }],
-  // 受付録音の本体。非公開のまま Worker が仲介し、ダウンロード URL は発行しない。
+  // 受付録音と手書きメモの本体。非公開のまま Worker が仲介し、ダウンロード URL は発行しない。
   "r2_buckets": [{ "binding": "RECORDINGS", "bucket_name": "glasses-management-recordings" }],
   // 予約確定メールと管理コード発行メールは notifier へ同期送信する
   // （service binding + x-internal-key）。Queues は使わない。

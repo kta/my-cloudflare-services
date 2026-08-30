@@ -1,7 +1,8 @@
+import type { LedgerEntry, LedgerView } from '@app/contracts'
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { closedView, resourceView, staffView } from './fixtures'
+import { at, closedView, resourceView, staffView } from './fixtures'
 import { Timetable } from './Timetable'
 
 /*
@@ -350,5 +351,99 @@ describe('定休日', () => {
     render(<Timetable view={closedView()} />)
     expect(screen.queryByRole('grid')).not.toBeInTheDocument()
     expect(screen.getByText('9月1日（火）は定休日です。')).toBeInTheDocument()
+  })
+})
+
+describe('お名前と来店回数（AC-CUST-24）', () => {
+  function customerLane(entries: LedgerEntry[]): LedgerView {
+    return staffView({
+      lanes: [
+        {
+          kind: 'staff',
+          id: 'b0000000-0000-4000-8000-000000000099',
+          name: '佐藤 美咲',
+          subtitle: '視力測定・加工',
+          entries,
+          blocks: [],
+        },
+      ],
+    })
+  }
+
+  it('60分（2 列）の帯はお名前フルネームと来店回数の印を出す', () => {
+    render(
+      <Timetable
+        view={customerLane([
+          {
+            reservationId: 'a0000000-0000-4000-8000-000000000101',
+            startsAt: at('11:00'),
+            endsAt: at('12:00'),
+            customerName: '田中 花子',
+            visitCount: 4,
+            purposeLabel: '新調相談・視力測定',
+            source: 'phone',
+            status: 'confirmed',
+            isUnassigned: false,
+          },
+        ])}
+      />,
+    )
+    const band = bandOf('11:00から12:00　田中 花子 様　4回目　新調相談・視力測定　佐藤 美咲')
+    expect(within(band).getByText('田中 花子 様')).toBeVisible()
+    expect(within(band).getByText('4回目')).toBeVisible()
+  })
+
+  it('30分（1 列）の帯は印を出さず、姓だけに落として「松本 様」と出す', () => {
+    render(
+      <Timetable
+        view={customerLane([
+          {
+            reservationId: 'a0000000-0000-4000-8000-000000000102',
+            startsAt: at('14:00'),
+            endsAt: at('14:30'),
+            customerName: '松本 一郎',
+            visitCount: 3,
+            purposeLabel: '受け取り',
+            source: 'phone',
+            status: 'confirmed',
+            isUnassigned: false,
+          },
+        ])}
+      />,
+    )
+    // 読み上げ名はフルネームのまま省略しない（画面表示の文字数で読み上げを削らない）。
+    const band = bandOf('14:00から14:30　松本 一郎 様　3回目　受け取り　佐藤 美咲')
+    expect(within(band).getByText('松本 様')).toBeVisible()
+    expect(within(band).queryByText('松本 一郎 様')).not.toBeInTheDocument()
+    expect(within(band).queryByText('3回目')).not.toBeInTheDocument()
+  })
+
+  it('来店が 0 件のお客様の印は「初めて」', () => {
+    render(
+      <Timetable
+        view={customerLane([
+          {
+            reservationId: 'a0000000-0000-4000-8000-000000000103',
+            startsAt: at('11:00'),
+            endsAt: at('12:00'),
+            customerName: '山口 真央',
+            visitCount: 0,
+            purposeLabel: '視力測定',
+            source: 'web',
+            status: 'confirmed',
+            isUnassigned: false,
+          },
+        ])}
+      />,
+    )
+    const band = bandOf('11:00から12:00　山口 真央 様　初めて　視力測定　佐藤 美咲　Web予約')
+    expect(within(band).getByText('初めて')).toBeVisible()
+  })
+
+  it('お客様の付いていない帯（ウォークインの受付前など）はお名前も印も出さない', () => {
+    render(<Timetable view={staffView()} />)
+    // 既定の作り置きは P2 のまま customerName が null（このテストで壊れていないことの確認）。
+    const band = bandOf('11:00から12:00　新調相談・視力測定　佐藤 美咲')
+    expect(within(band).queryByText('様')).not.toBeInTheDocument()
   })
 })

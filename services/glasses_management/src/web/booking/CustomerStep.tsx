@@ -1,10 +1,13 @@
+import type { CustomerCandidate } from '@app/contracts'
 import { focusRing } from '@app/ui'
 import {
   type CompositionEvent as ReactCompositionEvent,
   type ReactNode,
+  useEffect,
   useRef,
   useState,
 } from 'react'
+import { CustomerHandover, CustomerMatch, PickToFillHint } from '../customers/CustomerMatch'
 import { Handwriting, HandwrittenInk, type HandwrittenNote, signature } from './Handwriting'
 import { Keypad } from './Keypad'
 import type { StepGuard } from './steps'
@@ -22,14 +25,20 @@ import type { StepGuard } from './steps'
  *   お名前とふりがなは 2 列・間 26px・最大 700px・最小高 60px。
  *   ご要望の箱は最小高 168px・最大 700px・内側 16px 18px。
  *
- * **候補の吹き出し（BOOK-04b-CUSTOMER-MATCH）はここで作らない。**候補の元になる
- * `customers` は P4（`007-customer-records`）で初めてできるので、この工程は
- * 「番号を打ち終えたらお名前の欄へ進める」ところまでを持ち、
- * `GET /api/staff/customers/lookup` を呼ばない。同じ理由で、モックの右下の
- * 「初めてのお客様として登録する」も出さない —— 押しても行き先が無いからである。
+ * **候補の吹き出し（BOOK-04b-CUSTOMER-MATCH）**は `customers/CustomerMatch.tsx` の部品を
+ * ここへ差し込む（P4・`007-customer-records`）。「完了」を押して 10/11 桁が揃った瞬間に
+ * `onLookup` を呼び、返った候補を吹き出しで出す。**1 件でも自動では確定しない**
+ * （AC-CUST-05）ので、選ぶまでお名前・ふりがなの欄は空のままにする。
+ * 吹き出しはモーダルにしない —— フォーカスはお電話番号の欄に残したまま開き
+ * （AC-CUST-21）、Esc・外側クリック・「どちらでもありません」のどれでも同じフォーカスへ戻る。
+ * 「番号を入れ直す」は打った桁を捨ててテンキーを開き直す。
  *
  * 伺ったお名前・ふりがな・お電話番号は `reception_sessions.draft_json` の
- * 打ちかけの文字（`nameTyped` / `kanaTyped` / `phoneTyped`）に置き、顧客台帳とは結びつけない。
+ * 打ちかけの文字（`nameTyped` / `kanaTyped` / `phoneTyped`）に置く。候補を選んだときだけ
+ * それらを埋めるが、**この工程自身は顧客 id を持たない** —— 選んだ 1 名を予約へ結び付ける
+ * 経路（`POST /api/staff/reservations` の `customerId`）はまだ書き込まれないので
+ * （worker 側の既知の欠落。`e2e/customers.spec.ts` の頭のコメントを参照）、ここでは
+ * お名前・ふりがなを引き継ぐところまでを持つ。
  */
 
 /** 工程 4 が持つ下書き。`ReceptionSessionDraft` の打ちかけの欄と同じ名前にする。 */
@@ -62,9 +71,19 @@ export type CustomerStepProps = {
   writer: string
   /** いまの時刻。端末の時計を読まない（引数で受ける）。 */
   now: string
+  /** 同じ番号のご登録を照会する（AC-CUST-04）。10 桁・11 桁が揃った時点で器が呼ぶ。 */
+  onLookup: (phoneDigits: string) => Promise<readonly CustomerCandidate[]>
   phase?: CustomerStepPhase
   isOffline?: boolean
 }
+
+/** 候補の吹き出しの状態。 */
+type MatchState =
+  | { kind: 'closed' }
+  | { kind: 'loading' }
+  | { kind: 'failed' }
+  | { kind: 'open'; candidates: readonly CustomerCandidate[] }
+  | { kind: 'selected'; candidate: CustomerCandidate }
 
 /* --- お電話番号 ----------------------------------------------------------- */
 
@@ -137,25 +156,41 @@ export function CustomerStep({
   soFar,
   writer,
   now,
+  onLookup,
   phase = 'ready',
   isOffline = false,
 }: CustomerStepProps) {
   const [padOpen, setPadOpen] = useState(false)
   const [writing, setWriting] = useState(false)
   const [autoFilled, setAutoFilled] = useState(false)
+  const [match, setMatch] = useState<MatchState>({ kind: 'closed' })
   const nameRef = useRef<HTMLInputElement>(null)
   const noteRef = useRef<HTMLTextAreaElement>(null)
+  const phoneRef = useRef<HTMLInputElement>(null)
   // 変換確定中は `input` の値を読まない（`07-nfr.md` §2.9）。
   const composing = useRef(false)
   // 変換前に打たれた読み。`compositionend` の `data` は変換後の漢字なので読みにならない。
   const reading = useRef('')
   // 人が一度でも直したふりがなは、そのあと自動で上書きしない（§7.7）。
   const kanaTouched = useRef(false)
+  // 打ち直しの途中で古い照会の答えが着かないよう、最後の 1 回だけを採る。
+  const lookupTicket = useRef(0)
 
   const digits = value.phoneTyped
   const target = phoneTarget(digits)
   const missing = Math.max(0, target - digits.length)
   const remainingLabel = digits.length === 0 || missing === 0 ? null : `あと${missing}桁`
+  /*
+   * 候補が出ていて、まだどれも押されていない間は、お名前とふりがなの欄に
+   * 「お選びになると入ります」を添える（AC-CUST-05 / AC-CUST-22）。**飾りではなく手順**
+   * なので `aria-describedby` で欄そのものの読み上げにも乗せる。
+   */
+  const pickToFill = match.kind === 'open' && match.candidates.length > 0 && value.nameTyped === ''
+
+  // 番号を打ち直したら、いま出ている候補・選んだ候補は捨てる（違う番号の答えを引きずらない）。
+  useEffect(() => {
+    if (missing !== 0) setMatch({ kind: 'closed' })
+  }, [missing])
 
   function patch(next: Partial<CustomerDraft>) {
     onChange({ ...value, ...next })
@@ -166,9 +201,36 @@ export function CustomerStep({
     patch({ phoneTyped: `${digits}${digit}` })
   }
 
+  async function lookup(typed: string) {
+    const mine = lookupTicket.current + 1
+    lookupTicket.current = mine
+    setMatch({ kind: 'loading' })
+    try {
+      const candidates = await onLookup(typed)
+      if (lookupTicket.current !== mine) return
+      if (candidates.length === 0) {
+        // 当てはまりが無ければ、そのまま手入力へ進める（行き止まりにしない）。
+        setMatch({ kind: 'closed' })
+        nameRef.current?.focus()
+        return
+      }
+      setMatch({ kind: 'open', candidates })
+    } catch {
+      if (lookupTicket.current === mine) setMatch({ kind: 'failed' })
+    }
+  }
+
   function finishPhone() {
     setPadOpen(false)
-    nameRef.current?.focus()
+    if (missing === 0 && digits.length > 0) {
+      // AC-CUST-21: 候補が開いている間はフォーカスをお電話番号の欄に残す
+      // （番号を入れ直す・読み上げで欄をたどる、どちらも欄にフォーカスがある前提のため）。
+      // 当てはまりが無かったときだけ、答えが着いた時点でお名前の欄へ移す。
+      phoneRef.current?.focus()
+      void lookup(digits)
+    } else {
+      nameRef.current?.focus()
+    }
   }
 
   /** 変換が確定した（または欄を離れた）ときに 1 度だけ埋める。 */
@@ -259,7 +321,7 @@ export function CustomerStep({
         )}
 
         <div className="grid gap-8">
-          <div>
+          <div className="relative">
             <label
               htmlFor="booking-phone"
               className="mb-1.5 block text-grid font-semibold text-ink-muted"
@@ -269,12 +331,24 @@ export function CustomerStep({
             <div className={padOpen ? 'relative w-130' : 'relative w-105'}>
               <input
                 id="booking-phone"
+                ref={phoneRef}
                 type="tel"
                 inputMode="none"
                 autoComplete="off"
                 enterKeyHint="next"
                 value={formatPhoneDigits(digits)}
-                onFocus={() => setPadOpen(true)}
+                // APG の combobox パターン（`customers/CustomerMatch.tsx` の頭のコメント）。
+                // 候補は自動確定しない一覧なので `aria-autocomplete="list"` にする。
+                role="combobox"
+                aria-autocomplete="list"
+                aria-expanded={match.kind === 'open' || match.kind === 'loading'}
+                aria-controls={
+                  match.kind === 'open' || match.kind === 'loading'
+                    ? 'booking-customer-match'
+                    : undefined
+                }
+                // タップだけでテンキーを開く。フォーカスでは開かない —— 候補を退けた・
+                // 選んだあとにこの欄へフォーカスを戻すたびにテンキーが被さって出ないようにする。
                 onClick={() => setPadOpen(true)}
                 onChange={(event) => {
                   // 物理キーボードがつないである端末のための道。無くても完結する。
@@ -294,6 +368,30 @@ export function CustomerStep({
                 </span>
               )}
             </div>
+
+            {(match.kind === 'open' || match.kind === 'loading' || match.kind === 'failed') && (
+              <CustomerMatch
+                listboxId="booking-customer-match"
+                candidates={match.kind === 'open' ? match.candidates : []}
+                phase={
+                  match.kind === 'loading' ? 'loading' : match.kind === 'failed' ? 'error' : 'ready'
+                }
+                returnFocusTo={phoneRef}
+                onSelect={(candidate) => {
+                  setMatch({ kind: 'selected', candidate })
+                  patch({
+                    nameTyped: candidate.customer.name,
+                    kanaTyped: candidate.customer.kana,
+                  })
+                }}
+                onDismiss={() => setMatch({ kind: 'closed' })}
+                onReenter={() => {
+                  setMatch({ kind: 'closed' })
+                  patch({ phoneTyped: '' })
+                  setPadOpen(true)
+                }}
+              />
+            )}
           </div>
 
           <div className="grid max-w-175 grid-cols-2 gap-6.5">
@@ -327,8 +425,10 @@ export function CustomerStep({
                   // 経路があるので、欄を離れたときにもう一度拾う（`07-nfr.md` §2.9）。
                   if (!composing.current) fillKana()
                 }}
+                aria-describedby={pickToFill ? 'booking-name-pick-hint' : undefined}
                 className={`${FIELD} min-h-15 w-full`}
               />
+              {pickToFill && <PickToFillHint id="booking-name-pick-hint" />}
             </div>
             <div>
               <label
@@ -349,8 +449,10 @@ export function CustomerStep({
                   setAutoFilled(false)
                   patch({ kanaTyped: event.target.value })
                 }}
+                aria-describedby={pickToFill ? 'booking-kana-pick-hint' : undefined}
                 className={`${FIELD} min-h-15 w-full`}
               />
+              {pickToFill && <PickToFillHint id="booking-kana-pick-hint" />}
               {autoFilled && <p className="mt-1.5 text-grid text-ink-muted">自動で入れました</p>}
             </div>
           </div>
@@ -426,6 +528,8 @@ export function CustomerStep({
             />
           </div>
         </aside>
+      ) : match.kind === 'open' || match.kind === 'loading' || match.kind === 'selected' ? (
+        <CustomerHandover candidate={match.kind === 'selected' ? match.candidate : null} />
       ) : (
         <aside
           aria-label="ここまでのご予約"

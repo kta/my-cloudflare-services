@@ -7,6 +7,10 @@ import { getTableConfig } from 'drizzle-orm/sqlite-core'
 import { describe, expect, it } from 'vitest'
 import {
   auditEvents,
+  customerGlasses,
+  customerNotes,
+  customerPrescriptions,
+  customers,
   equipment,
   equipmentMaintenance,
   idempotencyRecords,
@@ -627,6 +631,145 @@ describe('外部キー', () => {
     ]
     expect(added).toHaveLength(16)
     for (const t of added) {
+      const table = getTableConfig(t)
+      expect(table.foreignKeys, `${table.name} が外部キーを宣言している`).toHaveLength(0)
+      // 全ドメイン行が organization_id を持つ（テナントスコープの前提）。
+      expect(
+        table.columns.map((c) => c.name),
+        table.name,
+      ).toContain('organization_id')
+    }
+  })
+})
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * P4 顧客台帳（0004_*.sql）
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+describe('customers', () => {
+  const table = getTableConfig(customers)
+
+  it('組織と正規化した番号で引ける（工程の前方一致）', () => {
+    // BOOK-04b は伺いながら打つので phone_normalized の前方一致で候補を出す。
+    expect(columnsOf(table, 'customers_org_phone_idx')).toEqual([
+      'organization_id',
+      'phone_normalized',
+    ])
+    // 同じ番号を持つご家族が並ぶので一意にしない。
+    expect(isUnique(table, 'customers_org_phone_idx')).toBe(false)
+  })
+
+  it('組織と下 4 桁で引ける（台帳と受付の完全一致）', () => {
+    // 後方一致（LIKE '%' || ?）は B-tree が効かず顧客表の全走査になるので、
+    // 末尾 4 桁を写した列を持って完全一致で引く。
+    expect(columnsOf(table, 'customers_org_phone_last4_idx')).toEqual([
+      'organization_id',
+      'phone_last4',
+    ])
+    // お電話番号は任意なので 3 列とも NULL 可（3 つとも NULL か 3 つとも非 NULL）。
+    for (const name of ['phone', 'phone_normalized', 'phone_last4']) {
+      expect(table.columns.find((c) => c.name === name)?.notNull, name).toBe(false)
+    }
+  })
+
+  it('組織とふりがなで五十音順に並べられる', () => {
+    // CUSTOMER-LIST の既定の並び。カーソルは (kana, id) の複合で OFFSET を使わない。
+    expect(columnsOf(table, 'customers_org_kana_idx')).toEqual(['organization_id', 'kana'])
+    expect(isUnique(table, 'customers_org_kana_idx')).toBe(false)
+  })
+
+  it('お客様番号は組織の中で一意', () => {
+    // G-NNNNN の採番衝突をここで検出する。統合で失った番号は再利用しない。
+    expect(isUnique(table, 'customers_org_customer_number_idx')).toBe(true)
+    expect(columnsOf(table, 'customers_org_customer_number_idx')).toEqual([
+      'organization_id',
+      'customer_number',
+    ])
+    // reservations.code / recordings.code と紛れないよう code とは呼ばない。
+    expect(table.columns.map((c) => c.name)).not.toContain('code')
+  })
+
+  it('組織と最終来店で並べ替えられる', () => {
+    expect(columnsOf(table, 'customers_org_last_visit_idx')).toEqual([
+      'organization_id',
+      'last_visit_at',
+    ])
+    // 来店回数は status='done' の件数から書き戻す値。読むたびに COUNT(*) しない。
+    expect(table.columns.find((c) => c.name === 'visit_count')?.columnType).toBe('SQLiteInteger')
+    expect(table.columns.find((c) => c.name === 'version')?.columnType).toBe('SQLiteInteger')
+    // まとめられた行は削除せず、この列で検索・一覧から外す。
+    expect(table.columns.find((c) => c.name === 'merged_into_id')?.notNull).toBe(false)
+    // 登録端末は terminals（P10）が来るまで常に NULL。列だけ先に置く。
+    expect(table.columns.find((c) => c.name === 'created_terminal_id')?.notNull).toBe(false)
+  })
+})
+
+describe('customer_prescriptions', () => {
+  const table = getTableConfig(customerPrescriptions)
+
+  it('顧客ごとに測定日で引ける（詳細の履歴表）', () => {
+    expect(columnsOf(table, 'customer_prescriptions_org_customer_measured_idx')).toEqual([
+      'organization_id',
+      'customer_id',
+      'measured_at',
+    ])
+    // 度数と PD を text で持たない（表示のときに小数 2 桁・PD は 1 桁へ整形する）。
+    for (const name of ['r_sph', 'r_cyl', 'r_add', 'l_sph', 'l_cyl', 'l_add', 'pd']) {
+      expect(table.columns.find((c) => c.name === name)?.columnType, name).toBe('SQLiteReal')
+    }
+    for (const name of ['r_axis', 'l_axis']) {
+      expect(table.columns.find((c) => c.name === name)?.columnType, name).toBe('SQLiteInteger')
+    }
+  })
+})
+
+describe('customer_glasses', () => {
+  const table = getTableConfig(customerGlasses)
+
+  it('顧客ごとにお渡し日で引ける', () => {
+    expect(columnsOf(table, 'customer_glasses_org_customer_purchased_idx')).toEqual([
+      'organization_id',
+      'customer_id',
+      'purchased_at',
+    ])
+    // いまお使いのメガネは何本でもよい（モックの田中 花子 様は 2 本）ので一意にしない。
+    expect(isUnique(table, 'customer_glasses_org_customer_purchased_idx')).toBe(false)
+  })
+})
+
+describe('customer_notes', () => {
+  const table = getTableConfig(customerNotes)
+
+  it('顧客ごとに作成順で引ける（手書きのサムネイル）', () => {
+    expect(columnsOf(table, 'customer_notes_org_customer_created_idx')).toEqual([
+      'organization_id',
+      'customer_id',
+      'created_at',
+    ])
+    // SVG の本体は R2（binding RECORDINGS、前置 notes/）に置き、D1 はキーだけを持つ。
+    expect(table.columns.find((c) => c.name === 'handwriting_key')?.notNull).toBe(false)
+    expect(table.columns.map((c) => c.name)).not.toContain('handwriting_svg')
+    // 読み取った文字を人が直すたびに +1 する。
+    expect(table.columns.find((c) => c.name === 'revision')?.columnType).toBe('SQLiteInteger')
+  })
+
+  it('種別と状態で「注意ごと N件」を数えられる', () => {
+    // 数えるのは kind='attention' かつ status='published' の行だけ（draft は数えない）。
+    expect(columnsOf(table, 'customer_notes_org_customer_kind_idx')).toEqual([
+      'organization_id',
+      'customer_id',
+      'kind',
+      'status',
+    ])
+    expect(isUnique(table, 'customer_notes_org_customer_kind_idx')).toBe(false)
+  })
+})
+
+describe('顧客の 4 表', () => {
+  it('外部キーを 1 つも宣言しない', () => {
+    const tables = [customers, customerPrescriptions, customerGlasses, customerNotes]
+    expect(tables).toHaveLength(4)
+    for (const t of tables) {
       const table = getTableConfig(t)
       expect(table.foreignKeys, `${table.name} が外部キーを宣言している`).toHaveLength(0)
       // 全ドメイン行が organization_id を持つ（テナントスコープの前提）。

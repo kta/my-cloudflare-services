@@ -41,7 +41,7 @@ idempotency ID を検証するためだけに使う。production Worker にテ�
 
 ## 現在の基準線
 
-Approved かつ UC/AC を持つ spec は次の 6 本である。`admin` の service spec と
+Approved かつ UC/AC を持つ spec は次の 7 本である。`admin` の service spec と
 infrastructure-only の文書には UC/AC がないため、分母には入らない（機械的な免除ではなく、
 そもそも product behavior を定義していない）。新しい production behavior は Approved spec
 に UC/AC を付け、この表と E2E mapping を同じ変更で追加する。
@@ -51,7 +51,15 @@ infrastructure-only の文書には UC/AC がないため、分母には入ら�
 そのフェーズの E2E が緑になってから Approved へ上げる（`specs/glasses_management/design/08-traceability.md`）。
 P1（`004-store-settings`）はこの表の 36 行が、P2（`005-availability-and-ledger`）は
 続く 33 行（UC-LEDGER-01..11 / AC-LEDGER-01..22）が、P3（`006-booking-flow`）はさらに続く
-37 行（UC-BOOK-01..15 / AC-BOOK-01..22）がそろった時点で Approved にした。
+37 行（UC-BOOK-01..15 / AC-BOOK-01..22）が、P4（`007-customer-records`）はさらに続く
+40 行（UC-CUST-01..14 / AC-CUST-01..26）がそろった時点で Approved にした。
+
+`007-customer-records` の 26 本のうち、新しいお客様の登録・おまとめ・手書き・候補の吹き出しに
+属するものは**画面ではなく HTTP のふるまいで固定してある**。部品（`src/web/customers/`）は
+実装済みだが、器（`CustomerScreen.tsx`）と受付の工程 4（`book/CustomerStep.tsx`）がまだ
+差し込んでおらず、ブラウザから開けないためである。どの面が足りないかは
+`services/glasses_management/e2e/customers.spec.ts` の先頭と各 test のコメントに書いてある。
+面が器に載ったら、同じ ID の test を操作へ書き換える（行は増えない）。
 
 | Spec ID | Playwright scenario |
 |---|---|
@@ -173,6 +181,46 @@ P1（`004-store-settings`）はこの表の 36 行が、P2（`005-availability-a
 | AC-BOOK-20 | `services/glasses_management/e2e/booking.spec.ts` — テンキーを使っている間も iPadOS のソフトキーボードは出ず、帯は見えている |
 | AC-BOOK-21 | `services/glasses_management/e2e/booking.spec.ts` — 変換が確定するまでふりがなは入らず、人が直したふりがなは上書きされない |
 | AC-BOOK-22 | `services/glasses_management/e2e/booking.spec.ts` — 2 台が同じ枠を同時に確定すると一方だけが成立し、もう一方に行は増えない |
+| UC-CUST-01 | `services/glasses_management/e2e/customers.spec.ts` — 台帳の検索は下 4 桁で引け、0 件でも行き止まりにしない |
+| AC-CUST-01 | `services/glasses_management/e2e/customers.spec.ts` — 台帳の検索は下 4 桁で引け、0 件でも行き止まりにしない |
+| AC-CUST-02 | `services/glasses_management/e2e/customers.spec.ts` — 名前の一部でもふりがなでも同じお客様が残る |
+| UC-CUST-02 | `services/glasses_management/e2e/customers.spec.ts` — 並べ方と絞り込みで人数が変わり、選んでいた行の選択が外れない |
+| AC-CUST-03 | `services/glasses_management/e2e/customers.spec.ts` — 並べ方と絞り込みで人数が変わり、選んでいた行の選択が外れない |
+| UC-CUST-05 | `services/glasses_management/e2e/customers.spec.ts` — 11 桁を打ち終えると候補が 2 件返る |
+| AC-CUST-04 | `services/glasses_management/e2e/customers.spec.ts` — 11 桁を打ち終えると候補が 2 件返る |
+| AC-CUST-05 | `services/glasses_management/e2e/customers.spec.ts` — 候補は自動で確定せず、2 段の札で分かれる |
+| UC-CUST-06 | `services/glasses_management/e2e/customers.spec.ts` — 候補を選ぶと入る名前と、引き継がれる 4 項目が候補に載っている |
+| AC-CUST-06 | `services/glasses_management/e2e/customers.spec.ts` — 候補を選ぶと入る名前と、引き継がれる 4 項目が候補に載っている |
+| AC-CUST-07 | `services/glasses_management/e2e/customers.spec.ts` — 候補を退けてもお名前を手で入れて先へ進める |
+| UC-CUST-03 | `services/glasses_management/e2e/customers.spec.ts` — 行を選ぶと 4 項目の要約が出て、度数の履歴表は出ない |
+| AC-CUST-08 | `services/glasses_management/e2e/customers.spec.ts` — 行を選ぶと 4 項目の要約が出て、度数の履歴表は出ない |
+| UC-CUST-04 | `services/glasses_management/e2e/customers.spec.ts` — 詳細の度数は新しい順で、いま有効な 1 行に「いま使っています」が付く |
+| AC-CUST-09 | `services/glasses_management/e2e/customers.spec.ts` — 詳細の度数は新しい順で、いま有効な 1 行に「いま使っています」が付く |
+| AC-CUST-10 | `services/glasses_management/e2e/customers.spec.ts` — 来店回数の表記が一覧・候補・受付で一致する |
+| UC-CUST-07 | `services/glasses_management/e2e/customers.spec.ts` — 新規登録の途中で同じお電話番号のお客様を知らせる |
+| AC-CUST-11 | `services/glasses_management/e2e/customers.spec.ts` — 新規登録の途中で同じお電話番号のお客様を知らせる |
+| UC-CUST-08 | `services/glasses_management/e2e/customers.spec.ts` — 「別の方なので、新しく登録する」を選んだときだけ 2 件目ができる |
+| AC-CUST-12 | `services/glasses_management/e2e/customers.spec.ts` — 「別の方なので、新しく登録する」を選んだときだけ 2 件目ができる |
+| AC-CUST-13 | `services/glasses_management/e2e/customers.spec.ts` — 候補から 1 名を選んで確定しても、もう 1 件の登録は残る |
+| UC-CUST-09 | `services/glasses_management/e2e/customers.spec.ts` — おまとめの下見が結果と失うものを同じ応答で返す |
+| AC-CUST-14 | `services/glasses_management/e2e/customers.spec.ts` — おまとめの下見が結果と失うものを同じ応答で返す |
+| AC-CUST-15 | `services/glasses_management/e2e/customers.spec.ts` — まとめると寄り、下見のあとに片方が動いていたら実行を拒む |
+| AC-CUST-16 | `services/glasses_management/e2e/customers.spec.ts` — 店長でないと入口が出ず、直接叩いても拒まれる |
+| AC-CUST-17 | `services/glasses_management/e2e/customers.spec.ts` — 別の会社のお客様 ID は 404 として扱われる |
+| UC-CUST-10 | `services/glasses_management/e2e/customers.spec.ts` — 手書きを 1 枚足すと 1 枚増え、他店で書かれた 1 枚も読める |
+| AC-CUST-18 | `services/glasses_management/e2e/customers.spec.ts` — 手書きを 1 枚足すと 1 枚増え、他店で書かれた 1 枚も読める |
+| UC-CUST-11 | `services/glasses_management/e2e/customers.spec.ts` — 読み取った文字を直しても筆跡は書いたときのまま残る |
+| AC-CUST-19 | `services/glasses_management/e2e/customers.spec.ts` — 読み取った文字を直しても筆跡は書いたときのまま残る |
+| UC-CUST-12 | `services/glasses_management/e2e/customers.spec.ts` — 申し込みだけでは注意ごとにならない |
+| AC-CUST-20 | `services/glasses_management/e2e/customers.spec.ts` — 申し込みだけでは注意ごとにならない |
+| UC-CUST-13 | `services/glasses_management/e2e/customers.spec.ts` — お客様を伺う面が開いている間も録音の表示が読み上げから外れない |
+| AC-CUST-21 | `services/glasses_management/e2e/customers.spec.ts` — お客様を伺う面が開いている間も録音の表示が読み上げから外れない |
+| AC-CUST-22 | `services/glasses_management/e2e/customers.spec.ts` — お名前の欄の手順は飾りではなく読める濃さで描かれる |
+| AC-CUST-23 | `services/glasses_management/e2e/customers.spec.ts` — 用紙をなぞる間は背後がスクロールせず、文字でも同じ内容を残せる |
+| AC-CUST-24 | `services/glasses_management/e2e/customers.spec.ts` — 台帳の帯はお名前と来店回数を運び、お客様の付かない帯は運ばない |
+| AC-CUST-25 | `services/glasses_management/e2e/customers.spec.ts` — 帯を押して開く詳細の見出しと注意ごとがその方のものになる |
+| UC-CUST-14 | `services/glasses_management/e2e/customers.spec.ts` — 顧客台帳からそのままご予約を取り始められる |
+| AC-CUST-26 | `services/glasses_management/e2e/customers.spec.ts` — 顧客台帳からそのままご予約を取り始められる |
 
 validator 自体は `scripts/check-e2e-traceability.test.mjs` で unit test する。通常の実行は次の
 とおり。

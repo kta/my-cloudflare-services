@@ -1,7 +1,8 @@
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import type { CustomerCandidate } from '@app/contracts'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { ConfirmStep } from './ConfirmStep'
 import { type CustomerDraft, CustomerStep, customerStepReady } from './CustomerStep'
 import { nextButtonLabel } from './steps'
@@ -48,7 +49,13 @@ const EMPTY: CustomerDraft = {
  * 工程のあいだの持ち回りは器の仕事である。器がどう配線すればよいかをここで固定する。
  * 「次へ進む」の押せる・押せないは `customerStepReady` が決める（同じ判断を器で書き直さない）。
  */
-function Flow({ initial = EMPTY }: { initial?: CustomerDraft }) {
+function Flow({
+  initial = EMPTY,
+  onLookup = async () => [],
+}: {
+  initial?: CustomerDraft
+  onLookup?: (phoneDigits: string) => Promise<readonly CustomerCandidate[]>
+}) {
   const [value, setValue] = useState<CustomerDraft>(initial)
   const [step, setStep] = useState<4 | 5>(4)
   const gate = customerStepReady(value)
@@ -79,6 +86,7 @@ function Flow({ initial = EMPTY }: { initial?: CustomerDraft }) {
         soFar={SO_FAR}
         writer="山田 大輔（店長）"
         now={NOW}
+        onLookup={onLookup}
       />
       <footer>
         <ol aria-label="予約の工程　全5工程">
@@ -177,12 +185,12 @@ describe('テンキー', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
-  it('「完了」を押すとフォーカスがお名前の欄へ移る', async () => {
+  it('同じお電話番号のご登録が無ければ、フォーカスがお名前の欄へ移る', async () => {
     render(<Flow />)
     await openKeypad()
     await press('0', '9', '0', '1', '2', '3', '4', '5', '6', '7', '8')
     await press('完了')
-    expect(document.activeElement).toBe(screen.getByLabelText('お名前'))
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('お名前')))
     expect(screen.queryByRole('group', { name: '電話番号のテンキー' })).not.toBeInTheDocument()
   })
 
@@ -191,10 +199,152 @@ describe('テンキー', () => {
     await openKeypad()
     await press('0', '9', '0', '1', '2', '3', '4', '5', '6', '7', '8')
     await press('完了')
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('お名前')))
     await userEvent.click(screen.getByRole('button', { name: '次へ進む' }))
     const summary = screen.getByRole('complementary', { name: '確保する内容' })
     expect(within(summary).getByText('田中 花子 様')).toBeVisible()
     expect(within(summary).getByText('090-1234-5678')).toBeVisible()
+  })
+})
+
+const HANAKO: CustomerCandidate = {
+  customer: {
+    id: 'c0000000-0000-4000-8000-000000000008',
+    customerNumber: 'G-01842',
+    name: '田中 花子',
+    kana: 'たなか はなこ',
+    phone: '09012345678',
+    visitCount: 4,
+    lastVisitAt: '2026-05-12',
+    memoShort: '',
+  },
+  match: 'strong',
+  lastVisitAt: '2026-05-12',
+  currentPrescription: null,
+  lastStaffName: '佐藤 美咲',
+  attentionSummary: '金属アレルギー',
+}
+
+const ICHIRO: CustomerCandidate = {
+  customer: {
+    id: 'c0000000-0000-4000-8000-000000000009',
+    customerNumber: 'G-02180',
+    name: '田中 一郎',
+    kana: '',
+    phone: '09012349912',
+    visitCount: 1,
+    lastVisitAt: null,
+    memoShort: '',
+  },
+  match: 'weak',
+  lastVisitAt: null,
+  currentPrescription: null,
+  lastStaffName: null,
+  attentionSummary: '',
+}
+
+describe('候補の吹き出し（BOOK-04b-CUSTOMER-MATCH）', () => {
+  it('11 桁を打ち終えて「完了」を押すと候補が開き、フォーカスはお電話番号の欄に残る', async () => {
+    const onLookup = vi.fn().mockResolvedValue([HANAKO, ICHIRO])
+    render(<Flow onLookup={onLookup} />)
+    await openKeypad()
+    await press('0', '9', '0', '1', '2', '3', '4', '5', '6', '7', '8')
+    await press('完了')
+    expect(onLookup).toHaveBeenCalledWith('09012345678')
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(2))
+    const dialog = screen.getByRole('dialog', { name: 'お客様の候補' })
+    expect(within(dialog).getByText('同じ番号のご来店が2件見つかりました。')).toBeVisible()
+    // AC-CUST-21: 候補が開いてもフォーカスはお電話番号の欄に残る。
+    expect(document.activeElement).toBe(screen.getByLabelText('お電話番号'))
+    // お名前の欄はまだ「お選びになると入ります」のまま（自動で確定しない）。
+    expect(screen.getByLabelText('お名前')).toHaveValue('')
+  })
+
+  it('候補が出ている間、お名前とふりがなの欄は「お選びになると入ります」を手順として持つ', async () => {
+    // AC-CUST-05 / AC-CUST-22。飾りではなく手順なので、欄を読み上げたときにも読まれる
+    // （`aria-describedby`）ところまでを固定する。
+    const onLookup = vi.fn().mockResolvedValue([HANAKO, ICHIRO])
+    render(<Flow onLookup={onLookup} />)
+    await openKeypad()
+    await press('0', '9', '0', '1', '2', '3', '4', '5', '6', '7', '8')
+    await press('完了')
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(2))
+
+    expect(screen.getByLabelText('お名前')).toHaveAccessibleDescription('お選びになると入ります')
+    expect(screen.getByLabelText('ふりがな')).toHaveAccessibleDescription('お選びになると入ります')
+    // 薄い飾り（`text-ink-faint`）で描かない。
+    for (const hint of screen.getAllByText('お選びになると入ります')) {
+      expect(hint).toHaveClass('text-ink-muted')
+    }
+
+    // 1 件を選ぶと欄が埋まるので、手順の 1 行は消える。
+    await userEvent.click(
+      screen.getAllByRole('button', { name: 'このお客様で進む' })[0] as HTMLElement,
+    )
+    expect(screen.queryByText('お選びになると入ります')).not.toBeInTheDocument()
+  })
+
+  it('候補を選ぶとお名前とふりがなが入り、引き継がれる内容が右に出る', async () => {
+    const onLookup = vi.fn().mockResolvedValue([HANAKO, ICHIRO])
+    render(<Flow onLookup={onLookup} />)
+    await openKeypad()
+    await press('0', '9', '0', '1', '2', '3', '4', '5', '6', '7', '8')
+    await press('完了')
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(2))
+
+    await userEvent.click(
+      screen.getAllByRole('button', { name: 'このお客様で進む' })[0] as HTMLElement,
+    )
+    expect(screen.getByLabelText('お名前')).toHaveValue('田中 花子')
+    expect(screen.getByLabelText('ふりがな')).toHaveValue('たなか はなこ')
+    expect(
+      screen.getByRole('complementary', { name: 'お選びになると引き継がれること' }),
+    ).toHaveTextContent('佐藤 美咲')
+    expect(screen.queryByRole('dialog', { name: 'お客様の候補' })).not.toBeInTheDocument()
+  })
+
+  it('Esc または「どちらでもありません」で閉じ、フォーカスがお電話番号の欄へ戻る', async () => {
+    const onLookup = vi.fn().mockResolvedValue([HANAKO, ICHIRO])
+    render(<Flow onLookup={onLookup} />)
+    await openKeypad()
+    await press('0', '9', '0', '1', '2', '3', '4', '5', '6', '7', '8')
+    await press('完了')
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(2))
+
+    await userEvent.click(screen.getByRole('button', { name: 'どちらでもありません' }))
+    expect(screen.queryByRole('dialog', { name: 'お客様の候補' })).not.toBeInTheDocument()
+    expect(document.activeElement).toBe(screen.getByLabelText('お電話番号'))
+    // 退けても打った番号は消えない。
+    expect(screen.getByLabelText('お電話番号')).toHaveValue('090-1234-5678')
+    // お名前は手で入れられる。
+    await userEvent.type(screen.getByLabelText('お名前'), '田中 花子')
+    expect(screen.getByLabelText('お名前')).toHaveValue('田中 花子')
+  })
+
+  it('「番号を入れ直す」は打った桁を捨ててテンキーを開き直す', async () => {
+    const onLookup = vi.fn().mockResolvedValue([HANAKO])
+    render(<Flow onLookup={onLookup} />)
+    await openKeypad()
+    await press('0', '9', '0', '1', '2', '3', '4', '5', '6', '7', '8')
+    await press('完了')
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(1))
+
+    await userEvent.click(screen.getByRole('button', { name: '番号を入れ直す' }))
+    expect(screen.getByLabelText('お電話番号')).toHaveValue('')
+    expect(keypad()).toBeVisible()
+  })
+
+  it('録音の表示は候補が開いている間も読み上げから外れない（非モーダル）', async () => {
+    const onLookup = vi.fn().mockResolvedValue([HANAKO])
+    render(<Flow onLookup={onLookup} />)
+    await openKeypad()
+    await press('0', '9', '0', '1', '2', '3', '4', '5', '6', '7', '8')
+    await press('完了')
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(1))
+    expect(screen.getByRole('dialog', { name: 'お客様の候補' })).not.toHaveAttribute('aria-modal')
+    expect(screen.getAllByRole('status').some((el) => el.textContent?.includes('録音中'))).toBe(
+      true,
+    )
   })
 })
 
@@ -261,6 +411,7 @@ describe('工程 4 の状態', () => {
         soFar={SO_FAR}
         writer="山田 大輔（店長）"
         now={NOW}
+        onLookup={async () => []}
         phase="loading"
       />,
     )
@@ -276,6 +427,7 @@ describe('工程 4 の状態', () => {
         soFar={SO_FAR}
         writer="山田 大輔（店長）"
         now={NOW}
+        onLookup={async () => []}
         isOffline
       />,
     )
@@ -291,6 +443,7 @@ describe('工程 4 の状態', () => {
         soFar={SO_FAR}
         writer="山田 大輔（店長）"
         now={NOW}
+        onLookup={async () => []}
         phase="error"
       />,
     )
@@ -304,6 +457,7 @@ describe('工程 4 の状態', () => {
         soFar={SO_FAR}
         writer="山田 大輔（店長）"
         now={NOW}
+        onLookup={async () => []}
         phase="forbidden"
       />,
     )

@@ -468,12 +468,13 @@ describe('GET /api/staff/ledger', () => {
     }
     expect(batched).toHaveLength(1)
     expect(batched[0]).toBeLessThanOrEqual(16)
-    // 台帳 1 画面の初回描画で叩く D1 の文は 13 文 —— バッチの 11 文に、
-    // 組織が同期済みかを見る 1 文（`requireActiveOrg`）と店舗の実在を見る 1 文が付く。
+    // 台帳 1 画面の初回描画で叩く D1 の文は 14 文 —— バッチの 11 文に、
+    // 組織が同期済みかを見る 1 文（`requireActiveOrg`）と店舗の実在を見る 1 文、
+    // **帯のお名前と来店回数を読む 1 文**（P4。`04-api.md` §3.6 が数える `customers`）が付く。
     // バッチが 11 文なのは、ご用件の短い名前を**別の 1 文**で読むためである
     // （帯 1 本ごとに `visit_purposes` を引き直すと、読む行数が帯の数だけ掛け算になる）。
-    // 07-nfr.md の上限は 16 本なので 3 本の余裕がある。増やすときはここを直す。
-    expect(prepared).toBe(13)
+    // 07-nfr.md の上限は 16 本なので 2 本の余裕がある。増やすときはここを直す。
+    expect(prepared).toBe(14)
   })
 
   it('知らない axis は 400 で落ちる（URL に乗る語は resource）', async () => {
