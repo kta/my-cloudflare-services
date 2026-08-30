@@ -20,7 +20,9 @@ import {
   INTERNAL_HEADERS,
   insertBusinessHours,
   insertReservation,
+  insertShift,
   insertSlotRules,
+  insertStaff,
   insertStore,
   insertVisitPurpose,
   JSON_HEADERS,
@@ -57,6 +59,11 @@ const fixture = {
   // わざと未設定のままにしてある。同じ店舗を使い回すと表の行の順序に依存する。
   ledgerStoreId: '',
   reservationId: '',
+  // P3 の 6 ルートが 200 で返る足場。受付セッションは 1 行を使い回すもの（下書きの保存）と、
+  // 1 回しか閉じられないもの（やめる）を分けて持つ。
+  ledgerPurposeId: '',
+  receptionSessionId: '',
+  closableSessionIds: [] as string[],
 }
 
 /** dev グラントが載せる `sub`。membership の `userId` はこれに合わせる。 */
@@ -201,11 +208,19 @@ beforeAll(async () => {
   fixture.ledgerStoreId = await insertStore(ORG, 'EYEX 台帳確認店')
   await insertBusinessHours(ORG, fixture.ledgerStoreId)
   await insertSlotRules(ORG, fixture.ledgerStoreId)
-  const ledgerPurpose = await insertVisitPurpose(ORG, fixture.ledgerStoreId, {
+  fixture.ledgerPurposeId = await insertVisitPurpose(ORG, fixture.ledgerStoreId, {
     nameInternal: '今のメガネを調整したい',
     nameShort: '調整',
     durationMinutes: 20,
   })
+  const ledgerPurpose = fixture.ledgerPurposeId
+  // ご予約の確定は 8 条件（`domain/availability.ts`）を通るので、接客できる担当が
+  // 1 名は勤務している必要がある。居ないと 409 `purpose_unavailable` になり、
+  // この表が見たい「権限では落ちない」がその 409 に隠れる。
+  const ledgerStaffId = await insertStaff(ORG, fixture.ledgerStoreId, {
+    displayName: '中村 彩',
+  })
+  await insertShift(ORG, fixture.ledgerStoreId, ledgerStaffId)
   fixture.reservationId = await insertReservation(ORG, {
     storeId: fixture.ledgerStoreId,
     startsAt: jstAt(LEDGER_DATE, '11:00'),
@@ -213,7 +228,26 @@ beforeAll(async () => {
     staffId: null,
     purposes: [{ id: ledgerPurpose }],
   })
+
+  // 受付セッションは進行中の行が要る。下書きの保存は同じ行を何度でも受けるので 1 行、
+  // やめるのは 1 行につき 1 度しか通らないので、表が叩く回数（主体 5 種）ぶん用意する。
+  const startSession = async (): Promise<string> => {
+    const id = crypto.randomUUID()
+    await env.DB.prepare(
+      'INSERT INTO reception_sessions (id, organization_id, store_id, reservation_id, terminal_id, actor_id, started_at, ended_at, outcome, draft_json, created_at) VALUES (?,?,?,NULL,NULL,NULL,?,NULL,NULL,NULL,?)',
+    )
+      .bind(id, ORG, fixture.ledgerStoreId, NOW, NOW)
+      .run()
+    return id
+  }
+  fixture.receptionSessionId = await startSession()
+  for (const _ of [0, 1, 2, 3, 4]) fixture.closableSessionIds.push(await startSession())
 })
+
+/** やめるの表が 1 行ずつ食べる受付。使い切ったら「無い受付」を指す（401 の主体も 1 つ食べる）。 */
+function nextClosableSession(): string {
+  return fixture.closableSessionIds.shift() ?? crypto.randomUUID()
+}
 
 function headersFor(actor: ActorName): HeadersInit {
   if (actor === 'none') return JSON_HEADERS
@@ -243,6 +277,8 @@ type Row = {
   method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'
   path: () => string
   body?: () => Promise<unknown> | unknown
+  /** 主体のトークンに足すヘッダー（`Idempotency-Key` など）。 */
+  headers?: () => Record<string, string>
   expected: Partial<Record<ActorName, number>>
 }
 
@@ -279,6 +315,32 @@ const LEDGER_READ = {
   expired: 401,
   'wrong-secret': 401,
 } as const
+
+/**
+ * ご予約の受付（P3 の 6 ルート）は**店長限定ではない**。お電話を取った人がそのまま
+ * 受け切る面なので、`store_memberships` の許可リストを見ない。403 の行は 1 つも無く、
+ * 落ちるのは未認証・期限切れ・別 secret 署名の 401 だけである。
+ */
+const BOOKING = {
+  none: 401,
+  staff: 200,
+  admin: 200,
+  expired: 401,
+  'wrong-secret': 401,
+} as const
+/** 対象が無いときは 404。**権限では落とさない**（403 で存在を漏らさないのと同じ考え）。 */
+const BOOKING_MISSING = {
+  none: 401,
+  staff: 404,
+  admin: 404,
+  expired: 401,
+  'wrong-secret': 401,
+} as const
+
+/** 置いていない押さえ。どの主体が消しにきても 404 になる。 */
+const MISSING_HOLD_ID = crypto.randomUUID()
+/** 確定の表が使い回す冪等キー。2 人目からは保存した応答がそのまま返る。 */
+const PERMISSION_BOOKING_KEY = crypto.randomUUID()
 
 const sevenRows = () =>
   [0, 1, 2, 3, 4, 5, 6].map((weekday) => ({
@@ -560,6 +622,61 @@ const TABLE: Row[] = [
     expected: LEDGER_READ,
   },
 
+  /* --- 電話・店頭からの予約受付（P3。店長限定にしない） --- */
+  {
+    name: '枠の仮の押さえは店舗の誰でも打てる',
+    method: 'POST',
+    path: () => '/api/staff/holds',
+    body: () => ({
+      storeId: fixture.ledgerStoreId,
+      startsAt: jstAt(LEDGER_DATE, '15:00'),
+      durationMinutes: 60,
+    }),
+    expected: BOOKING,
+  },
+  {
+    name: '無い押さえの取り消しは 404（権限では落とさない）',
+    method: 'DELETE',
+    path: () => `/api/staff/holds/${MISSING_HOLD_ID}`,
+    expected: BOOKING_MISSING,
+  },
+  {
+    name: 'ご予約の確定は店舗の誰でも通る',
+    method: 'POST',
+    path: () => '/api/staff/reservations',
+    // 同じ鍵・同じ本文なので、2 人目からは保存した応答がそのまま返る（どちらも 200）。
+    headers: () => ({ 'idempotency-key': PERMISSION_BOOKING_KEY }),
+    body: () => ({
+      storeId: fixture.ledgerStoreId,
+      startsAt: jstAt(LEDGER_DATE, '16:00'),
+      purposeIds: [fixture.ledgerPurposeId],
+      staffId: null,
+      source: 'phone',
+    }),
+    expected: BOOKING,
+  },
+  {
+    name: '受付を始めるのは店舗の誰でもできる',
+    method: 'POST',
+    path: () => '/api/staff/reception-sessions',
+    body: () => ({ storeId: fixture.ledgerStoreId }),
+    expected: BOOKING,
+  },
+  {
+    name: '下書きの保存は店舗の誰でもできる',
+    method: 'PATCH',
+    path: () => `/api/staff/reception-sessions/${fixture.receptionSessionId}`,
+    body: () => ({ draft: { purposeIds: [fixture.ledgerPurposeId], phoneTyped: '090' } }),
+    expected: BOOKING,
+  },
+  {
+    name: '受付をやめるのは店舗の誰でもできる',
+    method: 'POST',
+    path: () => `/api/staff/reception-sessions/${nextClosableSession()}/close`,
+    body: () => ({ outcome: 'discarded' }),
+    expected: BOOKING,
+  },
+
   /* --- 保存の前に見せる影響（読み取り専用なので店長を要求しない） --- */
   {
     name: '影響の試算は読み取りなので店長を要求しない',
@@ -585,7 +702,7 @@ describe('権限マトリクス', () => {
         const body = row.body === undefined ? undefined : await row.body()
         const res = await SELF.fetch(`${BASE}${row.path()}`, {
           method: row.method,
-          headers: headersFor(actor),
+          headers: { ...headersFor(actor), ...(row.headers?.() ?? {}) },
           ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         })
         expect(res.status).toBe(expected)

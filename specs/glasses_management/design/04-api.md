@@ -406,7 +406,7 @@ LEDGER-LIST のヘッダーには**セグメントが 2 つ**ある（`aria-labe
 応答に `serverNow`（ISO8601）を必ず含める。現在時刻線（LEDGER-STAFF の 11:08）と
 EX-OFFLINE の「いまご覧の内容は 11:02 現在 のものです。」は端末時計ではなくこの値から描く。
 
-### 3.7 staff — ウォークインと来店（7 本）
+### 3.7 staff — ウォークインと来店（10 本）
 
 | メソッド | パス | 認証 | 入力 | 出力 | 主なエラー | 使う画面 |
 |---|---|---|---|---|---|---|
@@ -417,6 +417,9 @@ EX-OFFLINE の「いまご覧の内容は 11:02 現在 のものです。」は�
 | GET | `/api/staff/visits/board` | JWT | query `VisitBoardQuery` | `VisitBoard` | — | RECEPTION-JOURNEY（ご来店中 4名） |
 | GET | `/api/staff/reception-sessions` | JWT | query `ReceptionHistoryQuery` | `ReceptionHistoryList` | — | HISTORY-LIST（46件・絞り込み）／HISTORY-EMPTY |
 | GET | `/api/staff/reception-sessions/:sessionId` | JWT | param | `ReceptionHistoryDetail` | 404 `not_found` | HISTORY-LIST 右（経緯 + 録音） |
+| POST | `/api/staff/reception-sessions` | JWT | `ReceptionSessionStart` | `ReceptionSession` | 404 `not_found`（他テナント・無い店舗） | BOOK-01〜05 の入口（「新しい予約を取る」を押したところ） |
+| PATCH | `/api/staff/reception-sessions/:sessionId` | JWT | `ReceptionSessionDraftPatch` | `ReceptionSession` | 404 `not_found` / 409 `invalid_transition`（終わった受付） | BOOK-01〜05 の工程を移るたび（下書きを**丸ごと 1 つ**送る） |
+| POST | `/api/staff/reception-sessions/:sessionId/close` | JWT | `ReceptionSessionClose`（`discarded` のみ） | `ReceptionSession` | 404 `not_found` / 409 `invalid_transition` | BOOK の「入力をやめる」／HOME「受けかけのご予約」を畳むとき |
 
 - `walk_ins.ticket_no` はサーバが採番する（店舗 × 日ごとの連番。表示は 3 桁ゼロ詰め = 「ウォークイン 004」）。
   クライアントから採番値を受け取らない。LEDGER-WALKIN が受付前に「ウォークイン 005」と**次の番号を予告する**ため、
@@ -427,6 +430,14 @@ EX-OFFLINE の「いまご覧の内容は 11:02 現在 のものです。」は�
   `walk_ins` だけを作ると、LEDGER-WALKIN が台帳に点線で描く「ここに入ります 11:30–12:30」の枠が
   空き枠エンジンから見て空いたままになり、同じ瞬間に電話予約が同じ担当を取れてしまう。
   `WalkinCreate` が `staffId` / `startsAt` / `durationMinutes` を受けるのはこのためである。
+- **受付セッションを書く 3 本は `006-booking-flow`（P3）が足した。**読む 2 本（上）は履歴の面のもので、
+  書く 3 本は予約フローの下書き置き場である。`outcome='booked'` は**確定の 1 バッチだけが書く**ので、
+  `POST .../close` は `discarded` しか受け取らない（端末から送れると、予約の無い受付を成立として残せてしまう）。
+  下書きは**欄ごとの差分ではなく丸ごと 1 つ**を送る。差分にすると「この欄を消した」と「この欄は触っていない」が
+  同じ形になり、工程を戻ったときの復元が端末ごとに変わる。
+- `DELETE /api/staff/holds/:holdId` は `?storeId=` を**任意で**受ける。鍵は
+  `hold:<orgId>:<storeId>:<holdId>` の 1 通りなので、店舗が分かっていれば `KV.list` を 1 回節約できる
+  （分からない呼び出しは `hold:<orgId>:` を 1 回 list して探す。§6.3 の list 1,000 回/日がこの設計で最初に当たる上限である）。
 - `GET /api/staff/reception-sessions` は 0 件のとき **`relaxations`（条件を 1 つ緩めたときの件数）を必ず添える**。
   HISTORY-EMPTY が「期間を「今月（8月1日 〜 8月27日）」まで広げる → 12件」「担当の「佐藤 美咲」を外す → 7件」を
   0 件の応答と同時に表示するため、**追加の往復を発生させない**。

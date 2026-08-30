@@ -41,16 +41,17 @@ idempotency ID を検証するためだけに使う。production Worker にテ�
 
 ## 現在の基準線
 
-Approved かつ UC/AC を持つ spec は次の 5 本である。`admin` の service spec と
+Approved かつ UC/AC を持つ spec は次の 6 本である。`admin` の service spec と
 infrastructure-only の文書には UC/AC がないため、分母には入らない（機械的な免除ではなく、
 そもそも product behavior を定義していない）。新しい production behavior は Approved spec
 に UC/AC を付け、この表と E2E mapping を同じ変更で追加する。
 
-`glasses_management` は 0 から作り直している最中で、P3 以降の feature spec は
+`glasses_management` は 0 から作り直している最中で、P4 以降の feature spec は
 **`- ステータス: Draft` のまま置いてある**。Approved にした瞬間に E2E が必須になるので、
 そのフェーズの E2E が緑になってから Approved へ上げる（`specs/glasses_management/design/08-traceability.md`）。
 P1（`004-store-settings`）はこの表の 36 行が、P2（`005-availability-and-ledger`）は
-続く 33 行（UC-LEDGER-01..11 / AC-LEDGER-01..22）がそろった時点で Approved にした。
+続く 33 行（UC-LEDGER-01..11 / AC-LEDGER-01..22）が、P3（`006-booking-flow`）はさらに続く
+37 行（UC-BOOK-01..15 / AC-BOOK-01..22）がそろった時点で Approved にした。
 
 | Spec ID | Playwright scenario |
 |---|---|
@@ -135,6 +136,43 @@ P1（`004-store-settings`）はこの表の 36 行が、P2（`005-availability-a
 | AC-LEDGER-20 | `services/glasses_management/e2e/ledger.spec.ts` — 台帳は矢印キーで枠を移れる格子で、またぐ帯を 2 度読ませない |
 | AC-LEDGER-21 | `services/glasses_management/e2e/ledger.spec.ts` — トップに本日わたしが担当するご予約が時間順に並び、1 行から台帳の詳細へ行ける |
 | AC-LEDGER-22 | `services/glasses_management/e2e/ledger.spec.ts` — 定休日は目盛りだけの空の格子を出さず、事実と「本日」だけを出す |
+| UC-BOOK-01 | `services/glasses_management/e2e/booking.spec.ts` — 工程 1 は日付と時刻をどちらも選ぶまで進めず、定休と満席は押せない |
+| UC-BOOK-02 | `services/glasses_management/e2e/booking.spec.ts` — 工程 2 でご用件を押すと所要が決まり、収まる時刻なら進める |
+| UC-BOOK-03 | `services/glasses_management/e2e/booking.spec.ts` — 収まらない時刻には理由が 1 文で出て、代わりの時刻が 3 つまで並ぶ |
+| UC-BOOK-04 | `services/glasses_management/e2e/booking.spec.ts` — 工程 3 で先約に重なると帯が重なり、右に先約のお名前が出て進めない |
+| UC-BOOK-05 | `services/glasses_management/e2e/booking.spec.ts` — 縦軸を設備・場所へ入れ替えても、担当者へ戻すと選んでいた担当が残る |
+| UC-BOOK-06 | `services/glasses_management/e2e/booking.spec.ts` — 帯をつかんで別の担当・時刻へ運べ、置けない場所には理由が添えられる |
+| UC-BOOK-07 | `services/glasses_management/e2e/booking.spec.ts` — 担当も設備もあとで決めたまま確定でき、予約は「決めてください」と出る |
+| UC-BOOK-08 | `services/glasses_management/e2e/booking.spec.ts` — 工程 4 はテンキーで番号を打ち切るまで「完了」も「次へ進む」も押せない |
+| UC-BOOK-09 | `services/glasses_management/e2e/booking.spec.ts` — お電話番号を伺えなくても、お名前とふりがなだけで工程 5 まで進める |
+| UC-BOOK-10 | `services/glasses_management/e2e/booking.spec.ts` — ご要望を手書きのまま残し、文字に変換するボタンは出さない |
+| UC-BOOK-11 | `services/glasses_management/e2e/booking.spec.ts` — 復唱の文を読み上げて確定すると、予約番号と控えのお願いが出る |
+| UC-BOOK-12 | `services/glasses_management/e2e/booking.spec.ts` — 確定の瞬間に枠が埋まっていたら、伺った内容を残したまま選び直せる |
+| UC-BOOK-13 | `services/glasses_management/e2e/booking.spec.ts` — 工程 4 から工程 3 へ戻ってももう一度進めば、打ち込んだ内容が残っている |
+| UC-BOOK-14 | `services/glasses_management/e2e/booking.spec.ts` — 「やめる」は 2 択の確認を出し、続ければ工程に留まり、やめればトップへ戻る |
+| UC-BOOK-15 | `services/glasses_management/e2e/booking.spec.ts` — 工程の帯は順番といまの位置を読み上げに渡し、押せる操作にはしない |
+| AC-BOOK-01 | `services/glasses_management/e2e/booking.spec.ts` — 工程 1 は日付と時刻をどちらも選ぶまで進めず、定休と満席は押せない |
+| AC-BOOK-02 | `services/glasses_management/e2e/booking.spec.ts` — 工程 2 でご用件を押すと所要が決まり、収まる時刻なら進める |
+| AC-BOOK-03 | `services/glasses_management/e2e/booking.spec.ts` — 収まらない時刻には理由が 1 文で出て、代わりの時刻が 3 つまで並ぶ |
+| AC-BOOK-04 | `services/glasses_management/e2e/booking.spec.ts` — 代わりの時刻を押しても目的と所要はそのまま残る |
+| AC-BOOK-05 | `services/glasses_management/e2e/booking.spec.ts` — 工程 3 で先約に重なると帯が重なり、右に先約のお名前が出て進めない |
+| AC-BOOK-06 | `services/glasses_management/e2e/booking.spec.ts` — 同じ時刻で受けられる担当の候補を押すと重なりが消えて進める |
+| AC-BOOK-07 | `services/glasses_management/e2e/booking.spec.ts` — 縦軸を設備・場所へ入れ替えても、担当者へ戻すと選んでいた担当が残る |
+| AC-BOOK-08 | `services/glasses_management/e2e/booking.spec.ts` — 帯をつかんで別の担当・時刻へ運べ、置けない場所には理由が添えられる |
+| AC-BOOK-09 | `services/glasses_management/e2e/booking.spec.ts` — 担当も設備もあとで決めたまま確定でき、予約は「決めてください」と出る |
+| AC-BOOK-10 | `services/glasses_management/e2e/booking.spec.ts` — 工程 4 はテンキーで番号を打ち切るまで「完了」も「次へ進む」も押せない |
+| AC-BOOK-11 | `services/glasses_management/e2e/booking.spec.ts` — お電話番号を伺えなくても、お名前とふりがなだけで工程 5 まで進める |
+| AC-BOOK-12 | `services/glasses_management/e2e/booking.spec.ts` — ご要望を手書きのまま残し、文字に変換するボタンは出さない |
+| AC-BOOK-13 | `services/glasses_management/e2e/booking.spec.ts` — 復唱の文を読み上げて確定すると、予約番号と控えのお願いが出る |
+| AC-BOOK-14 | `services/glasses_management/e2e/booking.spec.ts` — 確定を続けて 2 度押しても、予約は 1 件で同じ予約番号が返る |
+| AC-BOOK-15 | `services/glasses_management/e2e/booking.spec.ts` — 確定の瞬間に枠が埋まっていたら、伺った内容を残したまま選び直せる |
+| AC-BOOK-16 | `services/glasses_management/e2e/booking.spec.ts` — 工程 4 から工程 3 へ戻ってももう一度進めば、打ち込んだ内容が残っている |
+| AC-BOOK-17 | `services/glasses_management/e2e/booking.spec.ts` — 「やめる」は 2 択の確認を出し、続ければ工程に留まり、やめればトップへ戻る |
+| AC-BOOK-18 | `services/glasses_management/e2e/booking.spec.ts` — 録音の置き場所は工程 1 から 4 まで動かず、工程 5 では右下へ移る |
+| AC-BOOK-19 | `services/glasses_management/e2e/booking.spec.ts` — 工程の帯は順番といまの位置を読み上げに渡し、押せる操作にはしない |
+| AC-BOOK-20 | `services/glasses_management/e2e/booking.spec.ts` — テンキーを使っている間も iPadOS のソフトキーボードは出ず、帯は見えている |
+| AC-BOOK-21 | `services/glasses_management/e2e/booking.spec.ts` — 変換が確定するまでふりがなは入らず、人が直したふりがなは上書きされない |
+| AC-BOOK-22 | `services/glasses_management/e2e/booking.spec.ts` — 2 台が同じ枠を同時に確定すると一方だけが成立し、もう一方に行は増えない |
 
 validator 自体は `scripts/check-e2e-traceability.test.mjs` で unit test する。通常の実行は次の
 とおり。

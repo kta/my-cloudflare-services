@@ -580,3 +580,185 @@ describe('予約台帳と空き枠は組織をまたがない', () => {
     }
   })
 })
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * P3 電話・店頭からの予約受付
+ * 押さえ（KV）・受付セッション・冪等キーは、どれも**鍵に組織が入っている**ことだけで
+ * 隔離が成り立っている。鍵の組み立てが 1 か所でも org を落とすと、他社の枠が塞がるか、
+ * 他社の再送がこちらの応答を受け取る。ここはその 1 か所を潰しにいく。
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+/** 仮の押さえを 1 本置く。 */
+async function holdAs(
+  token: string,
+  input: { storeId: string; startsAt?: string; durationMinutes?: number },
+) {
+  const res = await SELF.fetch(`${BASE}/api/staff/holds`, {
+    method: 'POST',
+    headers: authed(token),
+    body: JSON.stringify({
+      storeId: input.storeId,
+      startsAt: input.startsAt ?? jstAt(LEDGER_DATE, '11:00'),
+      durationMinutes: input.durationMinutes ?? 60,
+    }),
+  })
+  return { status: res.status, body: (await res.json().catch(() => null)) as { id: string } }
+}
+
+/** ご予約を 1 件確定する。 */
+async function confirmAs(
+  token: string,
+  key: string,
+  body: Record<string, unknown>,
+): Promise<{ status: number; body: { id?: string; code?: string; error?: string } }> {
+  const res = await SELF.fetch(`${BASE}/api/staff/reservations`, {
+    method: 'POST',
+    headers: { ...authed(token), 'idempotency-key': key },
+    body: JSON.stringify(body),
+  })
+  return { status: res.status, body: (await res.json().catch(() => null)) as { id?: string } }
+}
+
+/** その組織が持つ行の数。 */
+async function countOf(table: string, org: string): Promise<number> {
+  const row = await env.DB.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE organization_id = ?`)
+    .bind(org)
+    .first<{ n: number }>()
+  return row?.n ?? 0
+}
+
+/** KV に置かれている押さえの鍵。 */
+async function holdKeysOf(prefix: string): Promise<string[]> {
+  return (await env.SHORT_LIVED.list({ prefix })).keys.map((key) => key.name)
+}
+
+describe('予約の受付は組織をまたがない', () => {
+  it('他テナントの店舗 id で枠を押さえても、その組織の鍵空間にしか書かれない', async () => {
+    const [mine, theirs] = [await ledgerTenant(), await ledgerTenant('B 店')]
+
+    // 押さえは表示のためだけの仕組みで、KV に CAS が無いので**常に 200** を返す
+    // （店舗の実在を D1 に問い合わせない）。隔離は鍵の前置きだけで成り立つ。
+    const held = await holdAs(mine.token, { storeId: theirs.storeId })
+    expect(held.status).toBe(200)
+
+    expect(await holdKeysOf(`hold:${mine.org}:${theirs.storeId}:`)).toEqual([
+      `hold:${mine.org}:${theirs.storeId}:${held.body.id}`,
+    ])
+    // 相手の鍵空間には 1 本も入らない。相手の空き枠は 1 枠も塞がらない。
+    expect(await holdKeysOf(`hold:${theirs.org}:`)).toEqual([])
+  })
+
+  it('他テナントの holdId を消そうとしても 404 で、相手の押さえは残る', async () => {
+    const [mine, theirs] = [await ledgerTenant(), await ledgerTenant('B 店')]
+    const held = await holdAs(theirs.token, { storeId: theirs.storeId })
+    const prefix = `hold:${theirs.org}:${theirs.storeId}:`
+
+    const intruded = await SELF.fetch(
+      `${BASE}/api/staff/holds/${held.body.id}?storeId=${theirs.storeId}`,
+      { method: 'DELETE', headers: authed(mine.token) },
+    )
+    expect(intruded.status).toBe(404)
+    expect(await holdKeysOf(prefix)).toHaveLength(1)
+
+    // 持ち主なら店舗を渡さなくても消せる（404 は「無い」ではなく「あなたのものではない」）。
+    const owner = await SELF.fetch(`${BASE}/api/staff/holds/${held.body.id}`, {
+      method: 'DELETE',
+      headers: authed(theirs.token),
+    })
+    expect(owner.status).toBe(200)
+    expect(await holdKeysOf(prefix)).toEqual([])
+  })
+
+  it('他テナントの receptionSessionId を指した確定は 404 で、予約はできない', async () => {
+    const [mine, theirs] = [await ledgerTenant(), await ledgerTenant('B 店')]
+    const started = await SELF.fetch(`${BASE}/api/staff/reception-sessions`, {
+      method: 'POST',
+      headers: authed(theirs.token),
+      body: JSON.stringify({ storeId: theirs.storeId }),
+    })
+    const session = (await started.json()) as { id: string }
+
+    const intruded = await confirmAs(mine.token, crypto.randomUUID(), {
+      storeId: mine.storeId,
+      startsAt: jstAt(LEDGER_DATE, '11:00'),
+      purposeIds: [mine.purposeId],
+      staffId: mine.staffId,
+      source: 'phone',
+      receptionSessionId: session.id,
+    })
+    expect(intruded.status).toBe(404)
+
+    // 自分の側に予約は 1 件もできず、相手の受付は進行中のまま閉じられていない。
+    expect(await countOf('reservations', mine.org)).toBe(0)
+    const row = await env.DB.prepare(
+      'SELECT outcome, reservation_id AS reservationId FROM reception_sessions WHERE id = ?',
+    )
+      .bind(session.id)
+      .first<{ outcome: string | null; reservationId: string | null }>()
+    expect(row?.outcome).toBeNull()
+    expect(row?.reservationId).toBeNull()
+  })
+
+  it('同じ Idempotency-Key を 2 テナントが同時に使っても互いに衝突しない', async () => {
+    const [mine, theirs] = [await ledgerTenant(), await ledgerTenant('B 店')]
+    const key = crypto.randomUUID()
+    const body = (tenant: { storeId: string; purposeId: string; staffId: string }) => ({
+      storeId: tenant.storeId,
+      startsAt: jstAt(LEDGER_DATE, '11:00'),
+      purposeIds: [tenant.purposeId],
+      staffId: tenant.staffId,
+      source: 'phone',
+    })
+
+    const [a, b] = await Promise.all([
+      confirmAs(mine.token, key, body(mine)),
+      confirmAs(theirs.token, key, body(theirs)),
+    ])
+    expect([a.status, b.status]).toEqual([200, 200])
+
+    // 主キーが `<組織>:<scope>:<鍵>` なので、同じヘッダーでも行が分かれる。
+    // （前方が `%` の LIKE は D1 が `LIKE or GLOB pattern too complex` で断るので、
+    // 組み立てた鍵をそのまま 2 本引く。)
+    for (const org of [mine.org, theirs.org]) {
+      const row = await env.DB.prepare(
+        'SELECT status FROM idempotency_records WHERE key = ? AND organization_id = ?',
+      )
+        .bind(`${org}:reservation.create:${key}`, org)
+        .first<{ status: string }>()
+      expect(row?.status).toBe('done')
+    }
+    expect(await countOf('reservations', mine.org)).toBe(1)
+    expect(await countOf('reservations', theirs.org)).toBe(1)
+  })
+
+  it('他テナントの予約 id で監査を引けない', async () => {
+    const [mine, theirs] = [await ledgerTenant(), await ledgerTenant('B 店')]
+    const created = await confirmAs(theirs.token, crypto.randomUUID(), {
+      storeId: theirs.storeId,
+      startsAt: jstAt(LEDGER_DATE, '11:00'),
+      purposeIds: [theirs.purposeId],
+      staffId: theirs.staffId,
+      source: 'phone',
+    })
+    expect(created.status).toBe(200)
+
+    const auditsFor = async (org: string): Promise<number> => {
+      const row = await env.DB.prepare(
+        'SELECT COUNT(*) AS n FROM audit_events WHERE organization_id = ? AND target_id = ?',
+      )
+        .bind(org, created.body.id)
+        .first<{ n: number }>()
+      return row?.n ?? 0
+    }
+    expect(await auditsFor(theirs.org)).toBe(1)
+    // 監査は追記した組織の名前空間にしか無い。こちらの org で引くと 0 件である。
+    expect(await auditsFor(mine.org)).toBe(0)
+
+    // 監査を出す面（`GET /api/staff/reservations/:id/history`）は P10 が足すが、
+    // その手前のご予約 1 件がすでに 404 なので、他テナントの id は経路に載らない。
+    const intruded = await SELF.fetch(`${BASE}/api/staff/reservations/${created.body.id}`, {
+      headers: authed(mine.token),
+    })
+    expect(intruded.status).toBe(404)
+  })
+})

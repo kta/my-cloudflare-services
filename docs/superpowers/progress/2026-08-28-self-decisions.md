@@ -518,3 +518,359 @@
 - 絞り込み（`filter`）は画面の中だけで効かせ、取り直さない — 理由: 応答の `counts` は 3 つとも載り、ルートも `filter` で行を落とさない（`worker/index.ts` のコメント） — 影響: `LedgerScreen.tsx`
 - 詳細のポップオーバー（`ReservationDetail`）と通信断の帯（`OfflineBanner`）は繋がずに口だけ開けた — 理由: 1 件取得・場所と担当の名寄せ・帯の座標が要り、T-018 / T-019 の範囲。`Timetable` の `onSelectEntry` が押した帯を渡す — 影響: `Timetable.tsx` / `LedgerScreen.tsx`
 
+
+## H. P3（電話・店頭からの予約受付）の実装で決めたこと
+
+実装とレビューを担当した subagent の自己判断。**全 263 件**。
+
+### H-backend-review（9 件）
+
+- `StaffReservationCreate.purposeIds` / `.equipmentIds` と `HoldInput.equipmentIds` に
+  `noDuplicates` の `.refine` を足した — 理由: 同じ設備 id を 2 回送ると 1 予約でその設備の
+  占有行が 2 倍（実測: 5 → 10 行）積まれ、空きが 1 予約で 2 つ減る。同じ目的を 2 回送ると
+  所要が倍（60 → 120 分）になり復唱の文にも二度出る。`reservation_slot_locks` に一意 index が
+  無いので D1 は止めず、200 で通ってしまう — 影響: `packages/contracts/src/glasses_management.ts`。
+  400 で落ちる。`noDuplicates` は同ファイルに既にあり、`PurposeOrderInput` などが同じ形で使っている
+- 上を契約側で落とし、DB に一意 index を足さない — 理由: T-002 が完了・コミット済みで
+  「スキーマを触らない・migration を新しく生成しない」が非交渉。契約は 1 か所で、
+  ルートは `zValidator` インラインなのでここで閉じられる — 影響: migration は 0003 のまま
+- 枠のガード `LOCKED` に `organization_id = ?` を足した — 理由: ①「全 D1 クエリを
+  `organization_id` でスコープ」（ルート AGENTS.md 6）をこの 1 文だけ外していた
+  ②`reservation_slot_locks_org_reservation_idx` は `(organization_id, reservation_id)` の複合で、
+  先頭列が無いと索引に載らず確定 1 回につき全走査が枠の本数ぶん走る — 影響:
+  `domain/booking.ts` の 6 文すべて（一字一句同じは保った）。bind に `organizationId` を 1 つずつ増やした
+- 予期しない失敗（500）でも冪等の `in_progress` を消すようにした — 理由: `domain/booking.ts` の
+  `releaseIdempotency` の doc が「500 のときだけ」と書いているのに、確定ルートは 409 の 2 経路でしか
+  呼んでいなかった。残ると同じ `Idempotency-Key` の再送が 24 時間ずっと 409 `idempotency_conflict` になり、
+  伺った内容を持ったままの端末が確定できなくなる — 影響: `src/worker/index.ts` の
+  `withReservationCode(...).catch(...)`。**採番の打ち直しはここを通らない**（`withReservationCode` の中で吸収）
+- 上の `.catch` に専用のテストを書かなかった — 理由: テストは `SELF.fetch` で Worker の別 isolate を叩くので
+  `env.DB.batch` に spy を挿せず、入力から 500 を確実に起こす道が無い（重複 id は上の refine で 400、
+  所要の総和が上限を越える本文は先に 409 `store_closed` になる）— 影響: この 2 行は uncovered。
+  4 指標の合計は 80% を上回ったまま（statements 95.58 / branches 86.46 / functions 98.53 / lines 98.46）
+- `test/reception-session.integration.test.ts` を新しく書いた（6 本） — 理由: T-005 が要求する 2 ファイルの
+  うち受付セッション側が 1 本も無く、`POST` / `PATCH` / `close` の 3 ルートは権限表とテナント分離の
+  足場としてしか叩かれていなかった（`outcome` / `ended_at` / `draft_json` の中身を誰も見ていない）— 影響:
+  6 本すべて緑。611 本
+- 受付を読み直す確認は `GET` ではなく D1 を直に引いた — 理由: `GET /api/staff/reception-sessions/:sessionId` は
+  `04-api.md` §3.7 で `ReceptionHistoryDetail` を返す履歴の面の持ちもので、P3 の T-010 の 6 ルートに入っていない。
+  無いルートをこのフェーズで生やさない — 影響: `readSession()` が `reception_sessions` を直に引く
+- `evaluateSlot`（8 条件）が冪等の入口より前にある順序をそのままにした — 理由: `04-api.md` §6.2 は
+  ①を先に置くが、先に置くと 404 の本文でも `in_progress` が残る。二度押しのあいだに営業時間が変わることは
+  実務上無く、AC-BOOK-14 の再送は現在の順序で緑 — 影響: 確定ルートの順序は変えない
+- `deleteHold` の list フォールバックが cursor を追わないこと・`?storeId=` を任意で受けることを
+  そのままにした — 理由: 先行担当が理由つきで決めており、1 店舗が 420 秒で 1,000 件の押さえを持つことは無い —
+  影響: 変更なし（報告のみ）
+
+### H-batch-routes（30 件）
+
+- 着手時に `domain/booking.ts` / `domain/holds.ts` / `domain/reservation-code.ts` / `domain/idempotency.ts` / `db/constraint.ts` が 1 つも無かったので、T-009 の `domain/booking.ts` に加えて T-007 / T-008 のファイルも計画どおりのパス・関数名で作った — 理由: 指示は「前のタスクでできている」と書くが実物が無く、作らないと担当の 6 ルートが 1 本も動かず完了条件（カバレッジ 80%）に届かない — 影響: `src/worker/db/constraint.ts` / `src/worker/domain/{reservation-code,idempotency,holds,booking}.ts`
+- 上の判断を撤回し、`domain/*` と `db/constraint.ts` を並行エージェントへ返した — 理由: 途中でそのエージェントが同じ 5 ファイルを書き直し始め、T-003/T-004 のテストが `domain/booking.ts` の別の関数名（`withReservationCode` / `idempotencyDecision`）を要求していると分かった。2 人で同じ形を奪い合うと `pnpm check` が永久に赤い — 影響: 私が書くのは `src/worker/index.ts` と 3 つのテストだけ
+- 確定は `bookingStatements()` を index.ts の `db.batch()` に渡し、**1 本目の `meta.changes === 0`** を 409 `slot_taken` の合図にする — 理由: 判定を 1 か所（`db/slot-locks.ts` のガード）へ閉じ込め、確定前の読み直しを 1 度も置かない — 影響: `POST /api/staff/reservations`
+- `Idempotency-Key` ヘッダーが無い確定は **400**（`rejected()` の形）にする — 理由: 再送で予約が 2 件になる面で、鍵の無い要求を黙って通す道を作らない。型エラーと同じ 400 の形にして自前の code を増やさない — 影響: `POST /api/staff/reservations`、権限マトリクスの期待値
+- 確定の入口で `evaluateSlot` を呼ぶが、**塞がり系の理由（`staff_busy` / `equipment_busy` / `max_parallel`）では 409 を返さずバッチへ進む** — 理由: T-009 の「確定前に枠を読み直す再検査を置かない」を守りつつ、`store_closed` / `purpose_unavailable` は 409 で返す決め（`04-api.md` §5）も満たすため — 影響: `POST /api/staff/reservations`
+- 冪等の記録を立てる／返す 2 つの小関数（`claimIdempotency` / `releaseIdempotency`）は `index.ts` のルート補助に置いた — 理由: `domain/idempotency.ts` は並行エージェントが純関数だけの形に決めた。D1 を触る手順まで持ち込むと衝突する — 影響: `src/worker/index.ts`
+- 期限切れの冪等キーは DELETE してから INSERT し直す — 理由: UPDATE で立て直すと、隙間で行が消えていたとき「予約は書けたのに記録が無い」形が残り、再送が二重予約になる — 影響: `claimIdempotency`
+- `DELETE /api/staff/holds/:holdId` は組織の接頭辞で `KV.list` を 1 回叩いて鍵を探す — 理由: パスに店舗が無く、鍵は `hold:<org>:<store>:<holdId>` の 1 通りだけと決まっている（`04-api.md` §6.3）。組織で閉じているので他テナントの押さえには当たらない — 影響: `DELETE /api/staff/holds/:holdId`（実装は `domain/holds.ts` の `deleteHold`）
+- `GET /api/staff/availability` に仮の押さえを混ぜた（P2 は `holds: []` だった） — 理由: 押さえを作る経路がこのフェーズで生えたので、混ぜないと押さえが画面に効かない。`/api/public/**` からは読まない決めはそのまま — 影響: `GET /api/staff/availability`
+- 確定が成功しても KV の押さえを消さない — 理由: 420 秒で自然に切れる。消す 1 本を足しても、確定した枠は `reservation_slot_locks` が既に塞いでいるので見える結果は変わらず、delete の無料枠（1,000/日）だけを削る — 影響: `POST /api/staff/reservations`
+- 占有行の本数は「担当 1 + 設備 2 = 9 行」に加えて**店舗レーンの 3 行**を数える — 理由: P2 の `slotLockRequests` が同時受付上限のために店舗レーンを必ず 1 行足す。TODO の 9 行は P2 出荷前に書かれた数なので、テストは 9 行（`kind <> 'store'`）と店舗 3 行を別々に見る — 影響: `booking.integration.test.ts`
+- 「他テナントの予約 id で監査を引けない」は D1 を直に見て確かめる — 理由: 監査を読む API は P10（`013-terminal-and-audit`）で、このフェーズにルートが 1 本も無い — 影響: `tenant-isolation.test.ts`
+- 着手直後に `test/booking.integration.test.ts`（T-005 の 17 本）・`test/booking.test.ts`・`test/booking.time.test.ts` が別の担当の手で先に置かれていることに気づき、**それを正本として実装側に回った** — 理由: 同じテストを二度書くと片方が必ず古くなる。Red は既に立っているので、自分は Green を作る側に徹する — 影響: `test/booking.integration.test.ts` は自分では書かない（既にある 17 本をそのまま緑にする）
+- いったん作った `db/constraint.ts` / `domain/reservation-code.ts` / `domain/idempotency.ts` を削除した — 理由: 先行の `test/booking.test.ts` / `booking.time.test.ts` が `constraintTable` / `nextReservationCode` / `withReservationCode` / `beginIdempotency` / `requestHash` を**すべて `domain/booking.ts` から** import しており、置き場が 2 通りできる — 影響: T-007 の関数は `domain/booking.ts` に集約。自分は同ファイルの `bookingStatements`（T-009 の 1 バッチ）だけを持つ
+- **`db/slot-locks.ts`（P2 の出荷済みファイル）の上限判定を `UNION ALL` の派生表から `json_each` へ書き換えた** — 理由: D1 の compound SELECT は **5 項まで**（実測: 6 項で `too many terms in compound SELECT`）。設計 03 §7.6 の SQL どおりに書くと、60 分・刻み 30 分・設備 2 台のごく普通のご予約が 12 項になり確定が丸ごと 500 で落ちる。複数行 `VALUES` も内部は compound SELECT なので同じ壁 — 影響: `src/worker/db/slot-locks.ts` の `capacityReached`。判定の意味は変えていない（P2 の `slot-locks.integration.test.ts` 18 本はそのまま緑）
+- 枠のガードは設計 §7.6 の `COUNT(*) = ?N` ではなく TODO どおりの `EXISTS (SELECT 1 … WHERE reservation_id = ?)` を採った — 理由: 先行担当が `domain/booking.ts` に実装済みで、新規作成では両者の意味が同じ（自分の古い行が存在しない） — 影響: `domain/booking.ts` の `bookingStatements`
+- 確定の前に `evaluateSlot`（8 条件）を 1 回だけ掛け、**動かない事実だけ**を 409 にした（`closed`/`outside_hours`/`break` → `store_closed`、`no_skill`/`staff_off`/`no_equipment`/`maintenance` → `purpose_unavailable`）。埋まり具合（`staff_busy`/`equipment_busy`/`max_parallel`）は素通りさせてバッチに決めさせる — 理由: 埋まり具合で断ると「読んで判定して書く」形になり窓が空く。動かない事実は競合しない — 影響: `src/worker/index.ts` の `BLOCKING_REASON`
+- `POST /api/staff/reservations` は**過去の日時を拒まない** — 理由: 仕様に受け入れ条件が無く、伺った内容をあとから入れる運用がある。空き枠エンジンも `now` を判定に使っていない（表示のためだけ） — 影響: 確定ルート。将来 lead_time を掛けるなら spec を先に直す
+- `Idempotency-Key` ヘッダーが無い確定は**冪等の記録を作らずに素通り**させた（400 にしない） — 理由: 契約もヘッダーを必須にしていない。画面は工程 1 で作った鍵を成功まで送り続ける決め（T-018） — 影響: 確定ルート
+- `DELETE /api/staff/holds/:holdId` は `?storeId=` を**任意**で受ける — 理由: 鍵が `hold:<org>:<store>:<holdId>` なので、店舗が分かれば `KV.list` を 1 回節約できる（list は 1,000 回/日でこの設計の最初の上限）。無くても `hold:<org>:` の list で消せるので、設計の「入力 = param」は保ったまま — 影響: `index.ts` の DELETE ルート、`design/04-api.md` §3.7 の注記
+- `POST /api/staff/holds` は**店舗の実在を確かめない**（D1 を 1 本も引かない） — 理由: KV だけの操作で、常に 200 を返す決め。他テナントの店舗 id を書いても自分の組織の鍵空間にしか入らず、誰の枠も塞がない — 影響: 押さえルート、テナント分離の 1 本目
+- `GET /api/staff/availability` の `holds: []` を `listHoldOccupancies` の結果に差し替えた（T-008 の残り） — 理由: 押さえを作る経路がこのフェーズでできたので、P2 が置いた「押さえを数えるのは P3 から」の宿題を閉じる — 影響: 空き枠の面。`KV.list` は空き枠 1 回につき 1 回
+- 権限の表の DELETE は**置いていない押さえ**を指して 404 に固定し、成功する DELETE はテナント分離側で見た — 理由: 既存の表が「行の順序に依存しない」を明示して守っているので、1 度しか成功しない操作を表に置かない — 影響: `test/permissions.test.ts` / `test/tenant-isolation.test.ts`
+- 「やめる」の行だけは受付セッションを 5 本用意して 1 呼び出しにつき 1 本消費する形にした — 理由: 閉じた受付は 2 度目が 409 になるので、主体ごとに新しい行が要る。表の期待値は 5 主体とも同じままにできる — 影響: `test/permissions.test.ts` の `nextClosableSession`
+- テナント分離の冪等の確認で `key LIKE '%…'` をやめ、組み立てた鍵を 2 本そのまま引いた — 理由: D1 が前方 `%` の LIKE を `LIKE or GLOB pattern too complex` で断る — 影響: `test/tenant-isolation.test.ts`
+- `design/04-api.md` §3.7 の本数を 7 → 10 に直し、受付セッションを書く 3 行と holds の `?storeId` の注記を足した — 理由: T-010 の「表に載せないままルートを増やさない」 — 影響: `specs/glasses_management/design/04-api.md`
+- `Idempotency-Key` が無い確定を 400 にする → **素通り**に変えた（契約がヘッダーを必須にしていないため）。
+- 冪等の 2 つの小関数を `index.ts` に置く → 先行担当の `domain/booking.ts` の `beginIdempotency` /
+  `releaseIdempotency` を呼ぶ形に変えた（同じものを二度作らない）。
+- 期限切れの冪等キーを DELETE → INSERT し直す → `ON CONFLICT(key) DO UPDATE … WHERE expires_at < ?` の
+  1 文に変えた（2 文にすると隙間で別の再送が入る）。
+- `DELETE /api/staff/holds/:holdId` は必ず `KV.list` で探す → `?storeId=` があれば `get` + `delete` で
+  済ませ、無いときだけ list する形に変えた（list は 1,000 回/日で最初に当たる上限）。
+
+### H-booking-holds（15 件）
+
+- T-007 が挙げる 3 ファイル（`db/constraint.ts` / `domain/reservation-code.ts` / `domain/idempotency.ts`）を `domain/booking.ts` 1 本にまとめた — 理由: 担当の指示が触ってよいファイルを booking.ts / holds.ts の 2 本に限っているため — 影響: `constraintTable` / 採番 / 冪等が `src/worker/domain/booking.ts` の 3 節に並ぶ（節見出しで区切り、メッセージ依存は 1 関数に閉じたまま）
+- T-003 の 2 ファイル（`reservation-code.test.ts` / `constraint.test.ts`）を `test/booking.test.ts` 1 本にまとめた — 理由: 同上（担当ファイルが 2 本） — 影響: 予約番号 7 本と制約違反 4 本が同じファイルの 2 describe に入る
+- ドメイン関数は throw せず結果オブジェクトを返す（`{ ok: false, error: 'code_exhausted' }`） — 理由: 出荷済みの P0〜P2 が `c.json({ error }, status)` をルートで返し、ドメイン層は例外を投げない書き方で揃っている — 影響: `withReservationCode` の戻り値・ルート側の分岐
+- 予約番号の連番は `MAX(CAST(substr(code, 9) AS INTEGER))` で採る — 理由: `MAX(code)` の文字列比較は `EY-2608-10000 < EY-2608-9999` になり、桁上げした月に連番が 9999 へ巻き戻る — 影響: `nextReservationCode` の SQL、5 桁の月の採番
+- 採番の連番は `reservations` だけを見る（`idempotency_records` の予約済み番号を数えない） — 理由: 予約番号は確定のバッチで初めて行になる。取り置きの表を増やさない — 影響: 同時確定で同じ番号を引き当てたときは UNIQUE 違反 → +1 の再試行（最大 5 回）で解く
+- `withReservationCode` は `constraintTable(err) === 'reservations'` のときだけ打ち直し、ほかの例外はそのまま投げ直す — 理由: 握りつぶさない（`04-api.md` §5） — 影響: `idempotency_records` の PK 衝突は呼び出し側へ抜けて 409 idempotency_conflict になる
+- 冪等の判定は純関数 `idempotencyDecision(record, hash, now)` に切り出し、D1 を触る `beginIdempotency` がそれを呼ぶ — 理由: 24 時間ちょうど / +1 秒の境界を実時刻なしで縛るため（T-004） — 影響: `booking.time.test.ts` の冪等 2 本が D1 を使わない
+- 期限切れの冪等行は同じ鍵を上書きして新しく実行する（DELETE + INSERT ではなく UPDATE 1 文） — 理由: `04-api.md` §6.2 の「期限切れは新しく実行」を満たしつつ、PK の衝突窓を作らないため — 影響: `beginIdempotency` の 2 文目
+- 仮の押さえの KV metadata は `{ kind, targetId, startsAt, endsAt, receptionSessionId }` に **`equipmentIds` を足した形**にする — 理由: `HoldInput` は担当 1 と設備 0〜5 を 1 件で受けるので、平らな `kind`/`targetId` 1 組では設備のレーンが metadata に載らず、`KV.list` だけを読む空き枠エンジンから設備の押さえが消える。押さえを鍵ごとに分けると `DELETE /api/staff/holds/:holdId` が 1 鍵で消せなくなる — 影響: `holdMetadata` / `holdOccupancies`（1 件を 1〜6 本の `HoldOccupancy` へ展開する）
+- 押さえが塞ぐレーンの決め: 担当が決まっている、または設備を 1 台も名指ししていない押さえは担当レーン（`targetId=null` は未定レーン）を塞ぐ。設備だけを名指しした押さえは設備レーンだけを塞ぐ — 理由: 画面は担当 1 + 設備 0〜2 を別々の `POST /api/staff/holds` で打つ（T-014）ので、設備の押さえにも担当レーンを付けると 1 予約で未定レーンを 3 重に数える — 影響: `holdMetadata` の分岐、空き枠の満席判定
+- 期限切れの押さえは `KV.list` が返す `expiration`（秒）で落とす — 理由: metadata に期限を二重に持たせない。KV の TTL と判定の出どころを 1 つにする — 影響: `holdOccupancies(keys, now)`
+- `KV.list` はページ送りしない（`limit: 1000` の 1 回だけ） — 理由: list は無料枠 1,000 回/日で最初に当たる上限（`04-api.md` §6.3）。押さえは TTL 420 秒で数十件に収まり、仮に溢れても押さえは表示のためだけの仕組みで排他ではない — 影響: `listHolds`
+- `holdWarning` は残り 60 秒以下かつ期限内のときだけ真 — 理由: 期限を過ぎた押さえは「まだ入力中です」で取り直す面ではなく、切れた面の受け持ちだから — 影響: `holdWarning`、BOOK-05 の `role="status"`
+- `renewHold` は 10 回を超えたら `null` を返す（例外を投げない） — 理由: ドメイン層の書き方をほかの関数と揃える — 影響: 取り直しの上限（Q-06 のいまの前提）
+- T-008 の完了条件「`KV.list` が空き枠 1 回につき 1 回」を `booking.test.ts` の 12 本目に置いた — 理由: T-005 の `booking.integration.test.ts` は担当外のファイルで、数えるテストの置き場が担当ファイルにこれしか無い — 影響: `booking.test.ts` が 12 本（T-003 の 11 本＋この 1 本）
+
+### H-contracts-verify（3 件）
+
+- 着手時点で T-001 は別のエージェントが完了済みだった（`decisions-p3-contracts.md` / `git diff` の
+  511 行追加 / 14 本の英語テストが緑）ので、**自分が書いた同じ内容の追記を取り消して既存の成果を残した**
+  — 理由: 「同じものを二度作らない」。`holdInput` / `receptionDraft` が二重宣言になり、
+  ファイルがパースエラーで丸ごと落ちていた — 影響: `packages/contracts/test/glasses_management.contract.test.ts`
+  （自分の追記 270 行を削除。既存の 1388〜1718 行はそのまま）
+- 既存成果の `ReceptionSessionDraft.phoneTyped` に数字とハイフンだけの正規表現を足さなかった
+  — 理由: TODO の 14 本はどれもそれを要求しておらず、緑で 100% の他人の担当ぶんを後から広げない
+  — 影響: `ReceptionSessionDraft.phoneTyped` は `z.string().trim().max(20)` のまま
+- 完了条件を自分で検証し直した（`pnpm --filter @app/contracts test` = 133 本緑・カバレッジ 4 指標 100%、
+  `typecheck` 緑、`biome check packages/contracts` 緑）— 理由: 引き継いだ成果でも「完了」と言う前に実際に回す
+  — 影響: なし（確認のみ）
+
+### H-contracts（14 件）
+
+- `customerDraft` の排他を `.refine` で書かず、`strictObject` の未知キー拒否に任せた — 理由: 欄そのものを P4 まで足さないので、参照する refine は死んだ枝になりカバレッジも落ちる — 影響: `packages/contracts/src/glasses_management.ts` の `StaffReservationCreate`（`customerId` + `customerDraft` の同時指定は 400 のまま）
+- `HoldInput` / `Hold` に `receptionSessionId` を足した（`04-api.md` §4.5 の表に無い） — 理由: KV metadata に載せる値の出どころが他に無く、無いと `excludeReceptionSessionId`（自分の押さえを塞がりに数えない）が実装できない — 影響: `HoldInput` / `Hold`、T-008 の KV metadata
+- `Hold` に `storeId` を足さなかった — 理由: 鍵の組み立ては Worker 側で JWT の org と入力の storeId から作れ、応答に増やす理由が無い — 影響: `Hold`
+- `HoldInput.staffId` は `null` 既定にし、`StaffReservationCreate.staffId` だけ「未指定」と `null` を分けた — 理由: 押さえは表示のための仕組みで意図の区別が要らないが、確定は「あとで決める」を押したかどうかが `reservation_assignments` の作り方に効く — 影響: 2 スキーマの既定値、T-009
+- `ReceptionSessionStart` は `storeId` 1 欄だけにした — 理由: 受付を始めた時点で決まっているのは店舗だけで、出どころ（source）は確定の本文が持つ — 影響: `ReceptionSessionStart`、T-010 の `POST /api/staff/reception-sessions`
+- `ReceptionSessionDraftPatch` を欄ごとの差分ではなく `{ draft }` の丸ごと置き換えにした — 理由: 差分だと「欄を消した」と「触っていない」が同じ形になり、工程を戻ったときの復元が端末ごとに変わる — 影響: `ReceptionSessionDraftPatch`、T-011 の `useReception`
+- `ReceptionSession` に §8.1 の 3 不変条件（outcome↔endedAt / booked→reservationId / 終了→draft=null）の refine を置かなかった — 理由: 既存 `ReservationDetail.purposes` の 0 件と同じ考え方で、読む側で強いると 1 列の食い違いで「受けかけのご予約」からの復帰が丸ごと 500 になる。守るのは書く側（T-010） — 影響: `ReceptionSession`
+- `ReceptionSessionOutcome`（booked/discarded）を非 export の内部 const にした — 理由: TODO が名指しした 5 スキーマ以外を index の公開面に増やさない — 影響: `packages/contracts/src/index.ts`
+- `ReceptionSession` に `createdAt` を載せた — 理由: `03-data-model.md` §8.1 の列表をそのまま写す方針 — 影響: `ReceptionSession`
+- 文字数の上限は `phoneTyped` 20 / `nameTyped` 40 / `kanaTyped` 40 / `noteTyped` 500 符号位置 / `handwritingKeys` は 1 件 200 文字・5 件まで — 理由: `noteTyped` は P2 の `ReservationDetail.noteCustomer`（§7.1 の列 = 500）に揃える（§4.5 の 2000 は採らない）。鍵は `notes/{org}/sessions/{sessionId}/{noteId}.svg` で 200 文字に収まる — 影響: `ReceptionSessionDraft`
+- `StaffReservationCreate.noteCustomer` / `noteInternal` も 500 符号位置にした — 理由: 読む側（`ReservationDetail`）と書く側で上限を違えると、保存できた本文が読めなくなる — 影響: `StaffReservationCreate`
+- 既存の `ReservationCode` 正規表現を触らなかった（`EY-2608-0142\n` のような末尾改行を通す穴が残る） — 理由: P2 が出荷済みの原始型で、T-001 の 14 本にその要求が無い — 影響: `ReservationCode`（P2 の持ち物として据え置き）
+- TODO の 14 本をそのままの英語名で書き、既存の日本語テストと題材が重なる 3 本（ReservationAssignment / ReservationDetail ×2）も指示どおり足した — 理由: 「書いてあることは全部やる」。重なる分は P3 が要る観点（未定でも枠を消費する・復唱と台帳で語を変える）に寄せた — 影響: `packages/contracts/test/glasses_management.contract.test.ts`
+- 未使用の 3 スキーマ（`ReceptionSessionStart` / `ReceptionSessionDraftPatch` / `ReceptionSession`）を既存の 2 テストの中で使った — 理由: knip の未使用 export に引っかけないまま、テスト名を増やさない — 影響: `ReceptionSessionDraft` と `ReceptionSessionClose` のテスト本文
+
+### H-frontend-review（19 件）
+
+- 工程 3・BOOK-CONFLICT が自前で下端の帯（`min-h-19` + `.fab`）を持っていたのを外し、器の `StepBar` 1 本に寄せた — 理由: 承認済みモック BOOK-03/03b/03c/CONFLICT の下端は工程の帯 1 本きりで、2 本あると盤が 76px 縮み録音の位置も動く（AC-BOOK-18） — 影響: `SlotStep.tsx` / `ConflictNotice.tsx` / それぞれの test / `BookingScreen.tsx` / e2e の `proceed`
+- `SlotStep` / `ConflictNotice` の可否は `onGuardChange` で器へ上げ、`onNext` は器の帯が持つ — 理由: 工程 1・2・4 がすでにこの形（`StepGuard`）で、同じ判断を 2 通り書かない — 影響: 3 ファイルの props
+- `SlotStep` は置き場所（`SlotChoice`）を**マウント時にも** `onChange` で上げる — 理由: 何も触らずに「次へ」を押した受付でも器が担当・設備を知らないと押さえも確定も打てない — 影響: `SlotStep.tsx`
+- 仮の押さえは 1 予約 1 本（`POST /api/staff/holds` は staffId と equipmentIds を 1 本で受ける） — 理由: TODO T-014 の「担当 1 + 設備 0〜2 の本数ぶん」は `HoldInput` の形と合わない（サーバが 1 本の KV に両方を載せる） — 影響: `BookingScreen.tsx`
+- 手書きは R2 へ上げず端末に持つ（`draft.handwritingKeys` は空のまま） — 理由: 筆跡を上げる API が worker に無い（P3 の 6 ルートに含まれていない） — 影響: `BookingScreen.tsx`。**未達として報告する**
+- 受付の再開（`GET /api/staff/reception-sessions/:sessionId`）は worker に無いので、器の復帰は常に新しい受付を始める — 理由: T-010 の 6 ルートに GET が無い — 影響: `BookingScreen.tsx` の `readReceptionSession`。**未達として報告する**
+- 工程 5 の「復唱を終えて予約を確定する」を面から帯の右端へ移した（`ConfirmAction`） — 理由: 承認済みモック BOOK-05-CONFIRM は丸い「次へ」を持たず、`.btn.primary.big` が帯に入る — 影響: `ConfirmStep.tsx` / `StepBar.tsx`（`action` スロット）/ `BookingScreen.tsx` / 2 つの test
+- 仮の押さえは**工程 5 のあいだだけ**持ち、工程 5 を出る・承る・受付を閉じるときに `DELETE` する — 理由: 盤を眺めただけで 420 秒その枠が誰にも取れなくなるのは設計自身（04-api §6.3）が避けたかったこと。「仮の押さえ」を出す面は BOOK-05 の 1 面きりで、T-008 の目的も「復唱の間」である — 影響: `BookingScreen.tsx`。TODO T-014 の「工程 3 で打つ」から外れる
+- 承ったあとの上のバーを「予約台帳／トップへ戻る」に替えた — 理由: BOOK-06-DONE のバーがそう描かれており、止める入力も破棄する下書きも無い — 影響: `BookingScreen.tsx` / `App.tsx`（`onOpenLedger`）
+- 工程 3 の「もとの場所」は工程 3 を**開いたときの**置き場所で固定した（`slotOrigin`） — 理由: 器が動かすたびに origin を書き換えると「もとの 11:00 に戻す」が現在地を指す — 影響: `BookingScreen.tsx`
+- 完了の面はサーバの `POST /api/staff/reservations` の応答をそのまま描く（`GET /:id` を打たない） — 理由: 同じ `ReservationDetail` が返っており、往復を 1 本減らせる — 影響: `BookingScreen.tsx`
+- 手書きの道具を 44pt → 48pt（`min-h-12`）に上げた — 理由: TODO T-017 が 48pt と書いている — 影響: `Handwriting.tsx`
+- `subjectFromToken` を `settings/SettingsScreen.tsx` から `web/client.ts` へ移した — 理由: 手書きの記入者にも要るので、設定の中に閉じ込めない — 影響: `client.ts` / `SettingsScreen.tsx` / `BookingScreen.tsx`
+- e2e: 工程 3 の既定の置き場所が先約と重なるのは**モックどおり**なので、歩く helper に `clearClash` を足した — 理由: BOOK-03 の 佐藤 美咲 は先約と重なった状態で描かれている。重なりを見る test は `walkToSlot` で止まるので通らない — 影響: `e2e/booking.spec.ts`
+- e2e: `occupyStaff` から空き枠の事前確認を外した — 理由: 仮の押さえは排他ではないので `isAvailable=false` でも予約は取れる。2 度目は 409 `slot_taken` になるだけ — 影響: `e2e/booking.spec.ts`
+- 通信断（`isOffline`）を器が立てる：`fetch` が**届かなかった**ときだけ true、応答が返ってきた 400/409 では立てない — 理由: 4 つの工程が `isOffline` を受け口として持っていたのに、だれも渡していなかった（死んだ経路） — 影響: `BookingScreen.tsx` → `SlotStep`(phase='offline') / `CustomerStep` / `ConfirmStep` / `ConfirmAction` / `DoneStep`
+- e2e mock-compare: BOOK-03c の運び先を 13:00 → 14:00 に変えた — 理由: seed の 佐藤 美咲 は 9月2日 の 13:00–14:00 が休憩で、モックの盤面（休憩なし）と食い違う。置けない先へ運ぶと破線の枠が出ない — 影響: `e2e/mock-compare.spec.ts`
+- e2e mock-compare: `openCustomer` に `clearClash` を足した — 理由: BOOK-05-CONFIRM が復唱のまま終わって 11:00 の押さえを残すので、次に撮る BOOK-06-DONE が同じ 11:00 で重なる — 影響: `e2e/mock-compare.spec.ts`
+- `maxDiffPixelRatio` を 12 面すべて実測値へ下げた（0.08 の据え置きを 1 つも残さない） — 理由: 「値は下げるだけ」の決め — 影響: `e2e/mock-compare.spec.ts`
+
+### H-numbering-holds（17 件）
+
+- 3 ファイル（`db/constraint.ts` / `domain/reservation-code.ts` / `domain/idempotency.ts`）を `domain/booking.ts` 1 本にまとめた — 理由: 担当の指示が触れてよいファイルを `booking.ts` / `holds.ts` の 2 本に限っているため — 影響: `constraintTable` / `nextReservationCode` / 冪等の 4 手順がすべて `src/worker/domain/booking.ts` にある
+- T-003 の 2 ファイル（`reservation-code.test.ts` / `constraint.test.ts`）を `test/booking.test.ts` 1 本にまとめた — 理由: 同上（担当ファイルが `booking.test.ts` / `booking.time.test.ts` の 2 本） — 影響: 11 本は `describe('予約番号')` と `describe('制約違反')` に分けて同じ名前で残した
+- `domain/availability.ts` を書き換えなかった — 理由: P2 が `AvailabilityInput.holds` / `excludeReceptionSessionId` / `buildOccupancy` の押さえ除外まで実装済みで、足すものが 1 行も無い（担当外ファイルでもある） — 影響: T-008 の「availability に押さえを混ぜる」は KV → `HoldOccupancy[]` の変換（`holds.ts` の `listHoldOccupancies`）だけになり、ルートへ渡すのは T-010 の仕事
+- 仮の押さえは **1 押さえ = 1 鍵 = 1 KV 行**にした（04 §6.3 の metadata が単数 `kind` / `targetId` なのを、`staffId` / `equipmentIds` に変えた） — 理由: 契約の `Hold` は id を 1 つしか持たず、`DELETE /api/staff/holds/:holdId` はその 1 つの id で押さえまるごとを返せなければならない。レーンごとに鍵を分けると設備のレーンが返せず 420 秒残る。書き込みも 1 予約 3 write から 1 write に減る — 影響: `holds.ts` の `HoldEntry` / `putHold` / `holdOccupancies`（読むときに担当 1 ＋ 設備 N へ展開する）
+- `DELETE /api/staff/holds/:holdId` が店舗を持たない穴を、`deleteHold(kv, org, holdId, storeId?)` で埋めた — 理由: 04 §3.6 の DELETE は path に `holdId` しか持たないのに、§6.3 の鍵は `hold:<org>:<store>:<holdId>` で店舗を要る。店舗が分かるなら直に消し、分からないなら `hold:<org>:` を 1 回 list して探す — 影響: 店舗を渡さない呼び方は delete 1 回につき list 1 回を使う（1 日 360 delete で list の 1,000 回/日を削る）。**設計文書の穴として報告する**
+- `KV.list` の cursor を追わない（1 回で打ち切る） — 理由: 無料枠の list は 1,000 回/日で最初に当たる上限であり、1 店舗が 420 秒のあいだに 1,000 件の押さえを持つことはない — 影響: `listHoldOccupancies` の呼び出しは空き枠 1 回につき必ず 1 回。テストで数えて固定した
+- 押さえの取り直し上限（10 回）を純関数 `renewHold(state, now)` にした — 理由: 延長の API を作らない決めなので、回数を持てるのは画面か下書きだけで、サーバに状態が無い — 影響: T-018 が回数を持って呼ぶ。テストは T-004 の「押さえ直すと残り時間が 420 秒に戻る」1 本に上限まで畳んだ
+- 採番の再試行は **5 回が「試す番号の総数」**（最初の 1 本 + 打ち直し 4 本）とした — 理由: 「最大 5 回まで打ち直す」と「5 回打ち直しても取れなければ」を同じ数で読めるのはこれだけ — 影響: `RESERVATION_CODE_ATTEMPTS = 5`。6 本目の番号は試さない
+- 採番の失敗を throw ではなく戻り値（`{ ok: false, error: 'code_exhausted' }`）にした — 理由: 「500 にしない」を型で保証したい。ルートは既存の `c.json({ error }, 409)` の書き方をそのまま使える — 影響: `withReservationCode` の戻り値を捨てると 409 が 200 になるので、名前と doc で戻り値を見ることを明示した
+- `MAX(code)` ではなく `MAX(CAST(SUBSTR(code, 9) AS INTEGER))` で採る — 理由: 文字列の MAX は `EY-2608-9999` > `EY-2608-10000` になり、9999 の次に 5 桁へ桁上げした月の採番が 10000 へ戻り続けて必ず衝突する — 影響: 桁上げ後も連番が伸びる。`code LIKE 'EY-YYMM-%'` で組織 × 月に絞るので `reservations_org_code_idx` に載る
+- `constraintTable` が見るのは `Error` の `message` だけにした — 理由: 「Error でないものにも null を返して落ちない」を素直に満たし、推測で表名を作らない — 影響: D1 が Error 以外を投げる日が来たら 500 になるが、黙って別の表名を作るより安全
+- 制約違反の 2 本は**本物の D1 に違反を起こさせて**確かめる — 理由: 文字列リテラルを自分で書いて自分で読むテストは、D1 の文言が変わっても緑のままで、409 が黙って 500 に化けるのを検知できない — 影響: `test/booking.test.ts` が `reservations` と `idempotency_records` へ二重 INSERT を打つ
+- 予約番号を狙って置く INSERT をテストの中に持った — 理由: `test/helpers.ts` の `insertReservation` は連番を自分で振るので `EY-2608-9999` を置けない — 影響: `booking.test.ts` の `insertCode`。店舗・担当・設備など既存のヘルパーがあるものは発明していない
+- 冪等の期限切れは「同じ鍵の行を上書きして新しく始める」ことにした — 理由: 04-api §6.2 は期限切れの扱いを書いていない。消してから入れると 2 文になり、その間に別の再送が入る窓が空く — 影響: `beginIdempotency` は期限切れの行を `UPDATE` で `in_progress` へ戻す
+- `KV.list` を数えるテスト 1 本を `booking.test.ts` に足した（T-003 の 11 本 + 1 = 12 本） — 理由: T-008 の完了条件が「`KV.list` の呼び出しが空き枠 1 回につき 1 回であることをテストのモックで数えて確かめる」を要求しており、担当ファイルの中でこれを置けるのはここだけ — 影響: `describe('仮の押さえ')` の 1 本
+- ルート（T-010）の import に名前と引数を合わせた: `listHoldOccupancies(kv, org, storeId, now)` / `putHold(kv, {..., holdId}, now) -> HoldEntry` / `deleteHold(kv, org, holdId, storeId?)` — 理由: 消費側が先に決まっていたので、こちらが合わせるほうが差分が小さい。`pnpm exec tsc -p` が緑になることまで確かめた — 影響: `holds.ts` の 3 本の署名
+- §6.2 ③ の `completeIdempotency` を置かないことにした — 理由: `done` の UPDATE は**枠のガードを同じ 1 文に配らないと**、占有行が 1 行も入らなかったバッチでも `done` になり、409 のあとの `releaseIdempotency`（`status='in_progress'` が条件）が効かなくなる。ガードを持っているのは確定のバッチだけなので、T-009 の `bookingStatements` が組み立てる 1 か所に寄せた — 影響: `booking.ts` にはコメントだけを残した
+
+### H-r2-adversarial（5 件）
+
+- 検査のために `services/glasses_management/test/zz-adversarial-probe*.test.ts` を一時的に作って走らせ、終わったら全部消した — 理由: 「実 D1 のテストで再現」は vitest-pool-workers の中でしか成り立たず、scratchpad からは D1 バインディングに触れない — 影響: リポジトリのファイルは 1 つも書き換えていない（`git status` は検査前と同じ）
+- `.dev.vars` は 4 サービスぶんまとめて `.dev.vars.bak-adv` へ退避し、typecheck と deps:check を走らせてから戻した — 理由: 指示どおり「CI で落ちる芽」を CI と同じ条件で見るため — 影響: 検査後に 4 本とも元の位置へ復帰済み
+- 「重大」を「CI `verify` を赤にするもの」＋「実データに害が出るもの」の 2 種に絞り、無料枠と上限の話は「中」に落とした — 理由: 粗探しの結論を件数で伝えるとき、直せば緑になるものと設計判断の再考が要るものを混ぜない — 影響: 報告の並び順のみ
+- 並行の再現は Miniflare の workerd + SQLite を「実 D1」として扱った — 理由: このリポジトリで D1 の batch 意味論を実際に走らせられる唯一の場所で、P2 のテストも同じ土俵に立っている — 影響: 本番 D1 の複数リージョン挙動までは保証しないと報告に明記した
+- 計画（`src/web/book/`・`BookingFlow.tsx` など）と実物（`src/web/booking/`・`BookingScreen.tsx` など）のファイル名の食い違いは、決定ログに理由が残っているものは「逸脱」として列挙するだけにして指摘の重みを与えなかった — 理由: 挙動が変わらず、`decisions-p3-*.md` に記録が残っている — 影響: 報告の末尾の一覧のみ
+
+### H-r2-fidelity（7 件）
+
+- 実測は使い捨ての playwright config（`playwright.measure.config.ts` + `e2e-measure/measure.spec.ts`、maxDiffPixelRatio を 0 に落とした写し）で取り、実行後に削除した — 理由: リポジトリのファイルを書き換えずに実差分を測る唯一の手段 — 影響: services/glasses_management に一時ファイルを作って消しただけ。git status は検査前と同一
+- 「重大」は「T-021 / このフェーズの非交渉に真正面から反するもの」と定義し、見た目の好みは重大に入れない — 理由: 検査の基準を一定にする — 影響: 重大 6 件・主要 10 件・軽微 10 件の内訳
+- 厳密比較の閾値を「RGB のいずれかの差 > 8」にした — 理由: Playwright 既定の threshold 0.2 が surface/surface-2 の差を 0 と数えることを示すため。8 は目視で区別できる下限に近い — 影響: 報告の「厳密比較」列
+- 引き算の規準は `specs/glasses_management/design/05-screen-flow.md` §2.0 の表を正本にした（DESIGN_RULE.md には無い） — 理由: 指示の「主役1/白い箱3/説明文2/選択の札8/状態の札3」がこの表と一致 — 影響: 主要 #11 / #12 の判定
+- 承認済みモック自身が上限を超えている箇所（BOOK-02 の 6+4=10 枚）は指摘しない — 理由: モックは承認済みで「見た目の正」。実装がモックより悪化した箇所だけを挙げる — 影響: 主要 #11（18枚 vs 8枚）と #12（13枚 vs 9枚）だけを立てた
+- テンキー最下段（削除/0/完了）は TODO 違反として数えない — 理由: 実物のモック BOOK-04c が削除/0/完了で、TODO の「左下ハイフン」と「削除は3行目の左」が同時に成り立たない。Keypad.tsx に根拠が明記済み — 影響: 軽微 #25 に妥当として記録
+- BOOK-05 の実測値が記録値とずれる件は「主要」でなく「軽微 #23（余裕が薄い/flaky）」に入れた — 理由: 閾値は超えていないため — 影響: 重大の件数
+
+### H-r3-backend（16 件）
+
+- 確定のルートで `input.holdId` を受けたら `deleteHold` を best-effort で呼ぶ（B-1） — 理由: 契約に在って誰も読まない欄を残さない／確定した予約とその押さえが同じ枠を二重に数える — 影響: services/glasses_management/src/worker/index.ts（`POST /api/staff/reservations` の成功経路）
+- 押さえの解放は**成功のときだけ**にした（`slot_taken` の 409 では返さない） — 理由: 選び直す端末は自分の受付の押さえを塞がりに数えないので実害が無く、経路を増やさない — 影響: 同上
+- `deleteHold` に `input.storeId` を渡す — 理由: `KV.list` を 1 回節約できる（list は無料枠 1,000 回/日でこの設計の最初の天井） — 影響: 同上
+- `Idempotency-Key` の検証を `domain/booking.ts` の `readIdempotencyKey` に置いた（B-2） — 理由: 純関数にして境界値（0 / 255 / 256 文字）を unit で固定するため — 影響: services/glasses_management/src/worker/domain/booking.ts / test/booking.test.ts
+- 空文字・空白だけの `Idempotency-Key` は「送っていない」と同じ扱いにした（400 にしない） — 理由: 400 にすると、ヘッダーを付け忘れた端末が確定できなくなる。鍵として使わなければ replay も起きない — 影響: 同上
+- 通す文字は印字できる ASCII（`0x21`〜`0x7E`）1〜255 文字だけ、外れたら 400 `invalid_input` — 理由: 主キーにそのまま入るので長さと文字種を閉じる（10 万文字の鍵で D1 を膨らませられた） — 影響: services/glasses_management/src/worker/index.ts
+- 400 の形は既存の `rejected([...])`（`{ error: 'invalid_input', messages }`）に揃えた — 理由: 新しいエラー語彙を作らない（`04-api.md` §5） — 影響: 同上
+- 確定の入口で受付セッションの `outcome !== null` を 409 `invalid_transition` にした（B-3） — 理由: PATCH / close と同じ語彙。0 行の UPDATE はバッチを止めないので、断らないと 200 のまま経緯だけが黙って切れる — 影響: 同上
+- 取り直しの回数は `ReceptionSessionDraft.holdRenewals` に載せ、`POST /api/staff/holds` が上限を数える（C-2） — 理由: 端末の state だけだとタブを読み込み直すたびに 0 に戻り、上限が消える — 影響: packages/contracts/src/glasses_management.ts / services/glasses_management/src/worker/index.ts
+- `holdRenewals` は `.default(0)`（`.optional()` にしない） — 理由: 併走している web が `draft.holdRenewals + 1` を必須の数として読む。`.optional()` にすると型が割れる — 影響: packages/contracts/src/glasses_management.ts
+- 上限の境界は `holdRenewals > HOLD_RENEW_MAX`（10 回目ちょうどは通す） — 理由: 画面は打ち直しの**前**に下書きを送るので、この数は「いま押した 1 回」を含む。`renewHold()` をそのまま使うと 9 回で止まる — 影響: services/glasses_management/src/worker/index.ts
+- 受付を持たない押さえ（工程 3 の下見）は D1 を引かず素通り — 理由: 数えようが無い／押さえ 1 本ごとの D1 読み取りを増やさない — 影響: 同上
+- 担当レーンの `subtitle` を「肩書き ＋ 技能」にした（fidelity 主要 #9） — 理由: 肩書きを持たない担当（世界観データでは 6 名中 5 名）の行が全部空になり、盤で「誰に何ができるか」が読めない — 影響: services/glasses_management/src/worker/db/queries/ledger.ts
+- 技能の語は `domain/store-settings.ts` の `staffSubline()` に置いた（`SKILL_LABELS` は非公開のまま） — 理由: 語彙の単一ソースを増やさない。`domain/availability.ts` は「技能の語をここで作らない」と自分で書いている — 影響: services/glasses_management/src/worker/domain/store-settings.ts
+- **台帳（LEDGER）の担当レーンは肩書きのままにした** — 理由: P2 出荷済みの面で、指摘は BOOK-03 の盤についてのもの — 影響: services/glasses_management/src/worker/domain/ledger.ts（触っていない）
+- `capacityReached()` の二乗の代償を doc comment に 1 行足した（D-1） — 理由: 実害は無いが、所要と設備の上限を緩めるときに最初に見る場所 — 影響: services/glasses_management/src/worker/db/slot-locks.ts
+
+### H-r3-frontend（27 件）
+
+- 工程の面の根を `flex h-full min-h-0` から `flex h-full w-full min-h-0` にした — 理由: 行方向 flex の子は `flex:0 1 auto` で伸びず、右の柱が画面右端から最大 270px 浮いていた（忠実度 重大 #1） — 影響: ConfirmStep / CustomerStep / DoneStep / Handwriting / ConflictNotice / SlotStep の根（6 ファイル）
+- 盤が既定で帯を乗せた行を「選んだ担当」として確定させた（`useEffect` で `staffId` を書き留める） — 理由: 担当の行を押していない受付が、設備の軸へ切り替えた瞬間に担当未定へ落ちていた（忠実度 重大 #2） — 影響: `SlotStep.tsx`。「あとで決める」（null）は書き換えない
+- 軸をまたぐ名前を `SlotStep` の ref に覚えさせた — 理由: 担当の軸に居るあいだ設備の行は応答に無く、「確保するもの」が名前を言えない（忠実度 軽微 #22） — 影響: `SlotStep.tsx` の「確保するもの」の担当・設備の行
+- 「1つとも空いています」を、押さえる先が 2 つ以上のときだけの言い方にした — 理由: 「〜とも」は 2 つ以上の言い方で、設備を選んでいない受付では日本語にならない（忠実度 重大 #5） — 影響: `ConfirmStep.tsx`（1 つ以下は「この枠は空いています」）
+- 仮の押さえの残り時間を 420 秒で頭打ちにし、秒まで数えるようにした — 理由: 端末とサーバの時計がずれると「あと5290分」が出る／分だけの丸めでは残り時間が動かない（忠実度 重大 #6） — 影響: `ConfirmStep.tsx`。`WARN_SECONDS`（警告の閾値）と `SECONDS_PER_MINUTE` を分けた
+- ソフトキーボードのぶんだけ器の高さを `visualViewport.height` に追従させた — 理由: iPadOS の Safari は layout viewport を縮めないので、帯と録音がキーボードの下へ潜る（AC 重大 AC-BOOK-18） — 影響: `BookingScreen.tsx`（`data-booking-frame`）
+  - 観測するテストは `CustomerStep.test.tsx` ではなく `BookingScreen.test.tsx` に置いた — 理由: 帯と録音を描くのは器であって工程 4 ではない
+- 候補が 1 件も無いときに「時刻を選び直す」（48px）を足した — 理由: 1 文で終わると行き止まりになる（AC 中 UC-BOOK-04 例外 E2） — 影響: `SlotStep.tsx`
+- IDX-BOOK-06 例外 E2（重なった状態へ戻す）は**採らず、置かせない**ままにした — 理由: 重なりを作ってから解かせるより、置く前に断るほうが指の数が少ない — 影響: `SlotStep.test.tsx` にその差をコメントで残し、固定するテストを 1 本足した
+- 時刻の札を 1 画面 8 枚までにし、残りを「ほかの時刻も見る（あとN件）」で開くようにした — 理由: サーバの格子をそのまま並べると 18 枚になり、選択の札は 8 つまでという規準を割る（忠実度 主要 #11） — 影響: `DateTimeStep.tsx` と、時刻を押す e2e のヘルパー 2 か所
+- 収まらないときは「お取りする時間」の 4 列を落とした — 理由: 承認済みモック BOOK-02b と同じで、残すと警告の箱と代替の札が帯の下へ隠れる（忠実度 主要 #12） — 影響: `PurposeStep.tsx`（所要はご用件を押し直せば決まり直す）
+- 盤の窓にちょうど 8 列が入る最小幅の式にした — 理由: 列の幅を先に決めて余りを流すと 9・10 列目が右の柱へ食い込んで切れる（忠実度 主要 #13） — 影響: `SlotBoard.tsx` の `boardMinWidth`。`SLOT_MIN_WIDTH_PX` は不要になったので消した
+- 運んでいる帯を左右へ広げ、行き先の札を `whitespace-nowrap` にした — 理由: セル幅に閉じ込めると「いま置いているご／メガネを新しく作」で切れる（忠実度 主要 #13） — 影響: `SlotBoard.tsx`
+- 凡例の色見本を盤の実物に合わせ、運んでいる間は「動かしているご予約／置く先」に差し替えた — 理由: 重なりが無いときの帯は緑なのに凡例だけ赤で、色の対応表が嘘になっていた（忠実度 主要 #14） — 影響: `SlotStep.tsx`
+- 設備の行の塞がりを「受付停止」「営業時間外」と言い換えた — 理由: 機械は休憩も勤務もしない（忠実度 主要 #15） — 影響: `SlotBoard.tsx`（`EQUIPMENT_BAND_TITLE`）
+- 工程の帯に `done` を足し、BOOK-CONFLICT で工程 4 の ✓ を残した — 理由: 工程 5 から差し戻した面でお名前を伺い直すように見える（忠実度 主要 #16） — 影響: `StepBar.tsx` / `BookingScreen.tsx`
+- ✓ を工程の名前の**うしろ**へ移した — 理由: 承認済みモックは「1　日時 ✓」で、前に置くと札の中の名前が右へずれる — 影響: `StepBar.tsx`。12 面のうち 6 面で差が減った
+- 空の技能では括弧ごと落とすようにした — 理由: 「担当を 小林 学（）に変える」が画面に出ていた（忠実度 主要 #8） — 影響: `ConflictNotice.tsx`
+- `DELETE /api/staff/holds/:holdId` に `?storeId=` を載せた — 理由: 渡さないとサーバが `KV.list` で店舗を探し、無料枠で最初に当たる上限を削る（敵対 C-1） — 影響: `BookingScreen.tsx`。**`hc<AppType>` にこのクエリの口が無い**（ルートが `param` だけ）ので、受けかけの受付を読むところと同じく `auth.authFetch` で投げた
+- 取り直した回数を下書き（`draft.holdRenewals`）へ移し、打ち直しの**前に**送るようにした — 理由: 端末の state だけだとタブの読み込み直しで 0 に戻り、上限 10 回の抜け道になる（敵対 C-2） — 影響: `BookingScreen.tsx`。数を数えるのはサーバ（409 `renew_limit`）で、画面はその同じ数を見せる
+- 409 `idempotency_conflict` でも `Idempotency-Key` を作り直すようにした — 理由: `in_progress` が残ると 24 時間ずっと確定できない（敵対 D-3） — 影響: `BookingScreen.tsx`
+- 敵対 B-1 / B-2 / B-3 / D-1 / D-4、忠実度 主要 #9（担当の技能が空）— `src/worker/**` の担当。3 巡目の別の担当が直しており、#9 は実際に埋まったので突き合わせのコメントを書き換えた
+- 敵対 A-2（spec を Approved に上げる）— `specs/**` は担当外。人の確認が要る
+- AC 軽 AC-BOOK-22（同時に押した経路で 4 表を数える）— `test/**` は担当外
+- AC 軽 AC-BOOK-18 のマイク — `onStartBooking` に P7 用の口を作るのは仕様外の先取り。録音そのものは P7
+- 忠実度 主要 #10（記入者が「ご担当者（スタッフ）」）— dev グラントの `sub` が `staff.admin_user_id` と一致しないためで、画面側で名前を作れない。突き合わせのコメントに残した
+- 忠実度 軽微 #17（暦の見出しが単月）/ #21（運んでいる間の「もとの…に戻す」）— モックと同じ姿を保つほうが差が小さい。コメントに残した
+- BOOK-CONFLICT だけ 0.0287→**0.0289 へ上げた** — 理由: 工程 4 の札に ✓ を戻した 1 文字ぶん（実測 +506px）。
+  ✓ を落とせば 0.0287 に収まるが、済んだ工程との違いが色だけになる — 影響: `mock-compare.spec.ts` に理由を 8 行で残した
+
+### H-slot（30 件）
+
+- ファイルは `src/web/booking/` に置く（TODO 本文の `src/web/book/` ではなく） — 理由: 担当の指示が明示した置き場所を正とした — 影響: SlotStep.tsx / SlotBoard.tsx / slot-drag.ts / ConflictNotice.tsx
+- ドラッグは `SlotDrag.tsx` を作らず、判定を `slot-drag.ts` の純関数に、面を `SlotStep`/`SlotBoard` に置く — 理由: 担当の指示のファイル一覧がそう分けている。座標の判定に `Date.now()` も DOM も要らない — 影響: slot-drag.ts
+- 盤は `@app/ui` の `Appointment` / `TimeGrid` を使わず `SlotBoard.tsx` に素の Tailwind で組む — 理由: その 2 つは `packages/ui` にまだ無く、`packages/ui` は担当外で触れない — 影響: SlotBoard.tsx（P2 の Timetable と同じ書き方に揃えた）
+- 盤の role は `table`（台帳の `grid` ではない） — 理由: 枠を選ぶ操作が無く、押せるのはつまみのボタンだけ。APG の grid は矢印キーでの焦点移動を要求するので、選べない盤に付けると約束だけが残る — 影響: SlotBoard.tsx。キーボードの道は候補のボタン（T-014 実装欄の明記どおり）
+- 空いている枠に「ここに置けます」の札を出さない（モックは出している） — 理由: 非交渉の「『空き』の大きな札を置かない。空き枠は薄い線だけ」 — 影響: SlotBoard.tsx。運んでいる先の破線だけは出す（置き場所の合図であって空きの札ではない）
+- 「この用件は承れません」の行は、全枠の理由が `no_skill` のレーンとして描く — 理由: 画面は `GET /api/staff/availability` 1 本で描く決めなので、技能の無い担当を別の呼び出しで取りに行かない — 影響: SlotBoard.tsx。**いまの worker は技能の無い担当を `lanes` に入れないので、この行は実際には出ない**（worker 側の穴。担当外なので報告のみ）
+- 盤の列は応答の枠をそのまま並べ、モックの 8 列（10:00–14:00）に間引かない — 理由: T-012 の「枠を間引く分岐を画面側に書かない」と同じ決め — 影響: SlotBoard.tsx（列が多い日は盤だけ横に流れる）
+- 「次へ進む」（`.fab`）は工程の面が自分で描く — 理由: 押せる条件が工程ごとに違い、TODO も工程ごとの test で `.fab` を見る書き方をしている — 影響: SlotStep.tsx / ConflictNotice.tsx
+- 「次へ進む」が押せない条件は ①重なっている ②運んでいる最中 の 2 つだけ — 理由: 開いた時点で帯はもう置かれている（AC-BOOK-05）ので、担当を選び直さなくても進めて構わない。TODO が求める読み上げも 2 つだけ — 影響: SlotStep.tsx
+- 「…はあとで決める」は未定にするだけで工程を進めない — 理由: 「設備はあとで決める」を押しても担当が残ることを見せる必要があり（T-014）、進んでしまうと見せられない — 影響: SlotStep.tsx
+- 「もとの N:NN に戻す」は運んでいる間だけでなく、置き直したあとも出す — 理由: 指を離したあとでないと押せない（運んでいる間は指が塞がっている） — 影響: SlotStep.tsx
+- 軸の切り替えは `onAxisChange` で親に引き直させ、選んだ担当・設備は SlotStep が自分で覚える — 理由: 軸を戻したとき選択が保たれること（AC-BOOK-07）を面の責任にする — 影響: SlotStep.tsx
+- 日付の見出しは「8月27日（木）」（年を落とす） — 理由: モックの実測。`ledger/metrics.ts` の `dateLabel` は年を含む別用途 — 影響: SlotStep.tsx に 3 行の整形を持つ
+- 14px / 15px / 26px はトークンに無いので `text-grid`(13px) / `text-body`(16px) / `text-hero`(28px) に寄せる — 理由: 任意値を書かない — 影響: SlotBoard.tsx / ConflictNotice.tsx
+- 先約の帯にお客様のお名前を出さず「先約」と時刻だけにする — 理由: 空き枠の応答はお名前を持たない（`customers` は P4） — 影響: SlotBoard.tsx
+- 軸の切り替えの `Segmented` を `LedgerScreen.tsx` から取り出さず、SlotStep に同じ形の小さな部品を書く — 理由: `LedgerScreen.tsx` は担当外で触れない — 影響: SlotStep.tsx
+- BOOK-CONFLICT で候補を押すと、その場で `onChoose` を呼びつつ「次へ進む」も押せるようにする — 理由: 押さえ直しが飛んでいる間に面が止まらないようにする。AC-BOOK-15 の「どれかを選ぶまで押せない」も満たす — 影響: ConflictNotice.tsx
+- 盤の帯は連続する同じ理由の枠をつなぎ、置いている帯と運んでいる先だけ先に取り置く — 理由: 「休憩 12:00–13:00」を 1 本で描きつつ、先約の上に重ねる場所を確保する — 影響: SlotBoard.tsx `segmentsOf`
+- 先約以外（営業時間の外・使える設備が無い等）は盤に帯を描かず、右の相談欄が理由を言う — 理由: モックも描いていない。盤を灰色で埋めると空きが読めなくなる — 影響: SlotBoard.tsx `bandKindOf` の default
+- 斜線（承れない担当の行）は Tailwind の任意値ではなく inline style の `repeating-linear-gradient` で、色は `var(--color-line)` を指す — 理由: `bg-[...]` を書かない決めと、生 hex を貼らない決めの両立 — 影響: SlotBoard.tsx `HATCH`
+- 盤の列は応答の枠のうち**いちばん本数の多いレーン**から取る — 理由: レーンごとに本数がずれても列が欠けない — 影響: SlotStep.tsx `columnSlots`
+- 工程 3 を開いた時点の帯は先頭の行に置く（下書きに担当があればその行） — 理由: AC-BOOK-05 が「開いた時点で帯が置かれている」ことを前提にしている。モックも佐藤の行に置いている — 影響: SlotStep.tsx `rowOf`
+- 「次へ進む」の押せない理由は ①通信断 ②運搬中 ③重なり の 3 つ。担当を選び直さなくても進める — 理由: 未定でも予約できる仕様（AC-BOOK-09）と矛盾させない — 影響: SlotStep.tsx `disabledReason`
+- 押さえの打ち直しは `onChange` 1 本の合図にまとめ、API はこの面から叩かない — 理由: `client.ts` を持つのは器（BookingFlow / BookingScreen）で、担当外のファイル — 影響: SlotStep.tsx / ConflictNotice.tsx（`onChoose`）
+- `shortDate` は SlotStep から export して ConflictNotice が使う — 理由: 同じ「8月27日（木）」を 2 度書かない。BOOK-CONFLICT は工程 3 へ差し戻す面なので同じ組 — 影響: SlotStep.tsx / ConflictNotice.tsx
+- ドラッグの座標は `pointermove` のたびに盤の rect を測り直す — 理由: つかんでから盤が動く（帯の入れ替えで行の高さが変わる）ことがあり、つかんだ瞬間の寸法を覚えると行がずれる — 影響: SlotStep.tsx `geometry()`
+- ポインタは `pointerId` の一致だけで受け、ペンが触れている間は指の pointerdown を捨てる — 理由: 手のひらが盤に触れても帯が飛ばないようにする（TODO の指示） — 影響: SlotStep.tsx `penDown`
+- テストの照合で全角空白（U+3000）は `\s` の正規表現にする — 理由: testing-library / jest-dom は要素側だけ空白を潰し、照合文字列は潰さないので、全角空白を含む文字列は必ず外れる — 影響: SlotStep.test.tsx / ConflictNotice.test.tsx
+- BOOK-CONFLICT の「次へ進む」は候補を押した時点で押せるようにする — 理由: 押さえ直しが飛んでいる間に面が行き止まりにならない — 影響: ConflictNotice.tsx
+- `takenAt` が変わったら選び直しの印を捨てる — 理由: 選び直した枠もまた埋まっていたときは、この面はやり直しである — 影響: ConflictNotice.tsx
+
+### H-T-002（6 件）
+
+- テスト名「store_id だけが NULL 可（組織同期の行のため）」の「だけ」を、**骨格の列の中で**と読んだ — 理由: 設計 §10.3 の列表では actor_id / terminal_id / before_json / after_json / correlation_id も NULL 可なので、文字通り取ると成り立たない — 影響: `test/schema.test.ts` の同名テストは `store_id` が NULL 可であることに加え、organization_id / actor_type / action / target_type / target_id / occurred_at の 6 列が NOT NULL であることを確かめる形にした。
+- 新しい 3 つの `describe` を、末尾ではなく `describe('予約の 4 表')` の直前へ差し込んだ — 理由: このテストファイルは `schema.ts` の表の並び順どおりに書かれており、末尾の 2 つは横断的な集約テストだから — 影響: `test/schema.test.ts` の並びだけ。挙動は変わらない。
+- 既存の集約テスト（`外部キー` の 16 表 / `予約の 4 表`）に P3 の 3 表を足さなかった — 理由: TODO T-002 が指定するテストはちょうど 8 本で、「書いてある以上のことをしない」に従った。FK を宣言していないことは `db:generate` の出力（`audit_events` / `idempotency_records` / `reception_sessions` とも `0 fks`）と生成 SQL で確かめた — 影響: `test/schema.test.ts`。
+- `schema.ts` 冒頭のコメントの表数を 20 → 23 に直した — 理由: 表を足したのにコメントが古いままだと次のフェーズが数を信じられない — 影響: `src/worker/db/schema.ts` のコメントのみ。
+- migration のファイル名は drizzle-kit が付けた `0003_wild_shatterstar.sql` をそのまま採った — 理由: TODO の指定は `0003_*.sql` で、既存の 0000〜0002 も生成された名前のままである — 影響: `services/glasses_management/migrations/0003_wild_shatterstar.sql`。
+- `idempotency_records` の index を設計どおり `(expires_at)` の 1 本だけにし、`organization_id` を先頭に足さなかった — 理由: 設計 §10.4 の index 表がこの形で、用途は「期限切れ行を消す Cron」＝全組織横断の走査だから — 影響: 期限切れの掃除は組織で絞らずに引く。
+
+### H-t011-t013（24 件）
+
+- ファイルの置き場所を `src/web/booking/` にした（TODO 本文は `src/web/book/`） — 理由: 担当指示が触ってよいファイルとして `src/web/booking/**` を名指ししているため — 影響: BookingScreen.tsx / StepBar.tsx / RecordingBadge.tsx / steps.ts / DateTimeStep.tsx / PurposeStep.tsx
+- `StepBar` と `RecordingBadge` を `@app/ui` へ出さず `src/web/booking/` に置いた — 理由: 担当指示の触ってよいファイルに `packages/ui` が入っていないため（他フェーズが共有化する余地は残る） — 影響: StepBar.tsx / RecordingBadge.tsx
+- 器の名前を `BookingScreen`（TODO は `BookingFlow`）、下書きの型置き場を `steps.ts`（TODO は `types.ts` / `useReception.ts`）にした — 理由: 担当指示のファイル名に合わせた — 影響: booking/ 以下すべて
+- ルーティングは `App.tsx` の `current === 'book'` で切り替える（`/book/*` の 6 ルートを足さない） — 理由: このアプリはまだ router を持たず、P0/P1/P2 が `current` の文字列で画面を切り替えているため。router の導入はアーキ変更で人間承認が要る（ルール 10） — 影響: App.tsx / BookingScreen.tsx
+- 予約フローは `AppShell` を通さず、BookingScreen が自分で上のバーを描く — 理由: `AppShell` は必ずサイドバーを出すが、予約フローはサイドバーを出さない（05 §3.3 の「サイドバー なし」） — 影響: BookingScreen.tsx
+- 受付セッションの復帰は `GET /api/staff/reception-sessions/:sessionId` を `auth.authFetch` + `ReceptionSession.safeParse` で読む — 理由: T-010 が足した 6 本にこの GET が無く、`hc<AppType>` から型が出ないため。読めない／形が違うときは新しい受付を始めるので、ルートが無いいまでも壊れない — 影響: BookingScreen.tsx（**要報告**: 04-api §3.7 はこのパスを P8 の `ReceptionHistoryDetail` に割り当てている。受付の復帰用に別の読み口が要る）
+- 復帰したときの工程は下書きから導く（`startsAt` が null → 工程1、`purposeIds` が空 → 工程2、それ以外 → 工程3） — 理由: `ReceptionSessionDraft` は「どの工程で止めたか」を持たないため。担当・お客様は未定でも成り立つので、工程3より先へは進めない — 影響: steps.ts の `stepFromDraft`
+- 工程 3・4・5 は「この工程はこれから作ります。」の置き札にし、「次へ進む」は押せる状態にした — 理由: T-014 / T-016 / T-018 が差し込むまで器の 5 工程を通しで歩けるようにするため — 影響: BookingScreen.tsx（差し込み時に消える）
+- 録音の帯は既定を「録音していません　--:--」（`off`）にした — 理由: P3 は録音そのものを持たない（P7）。「録音中」と書くと嘘になる。AC-BOOK-18 が求めるのは「置く場所が同じ位置で確保されていること」なので、状態は正直な側へ倒す — 影響: BookingScreen.tsx / RecordingBadge.tsx（T-021 のモック突き合わせで既知差分になる）
+- 「あとで続ける」は受付を閉じず、下書きを送ってトップへ戻すところまでにした（下の 23 行目も参照） — 理由: 押さえを打つのは工程 3（T-014）で、器はまだ押さえ id を 1 本も持たないため — 影響: BookingScreen.tsx の `pause()`
+- 工程 1 は `GET /api/staff/availability` のほかに `GET /api/staff/stores/:storeId/business-hours` を店舗ごと 1 度だけ読む — 理由: 暦の札に「定休」と書く手立てがほかに無い（`calendar-exceptions` のルートは存在しない）。空き枠は 1 日ぶんしか返さないので 14 日ぶんの定休は分からない — 影響: DateTimeStep.tsx
+- 工程 1 は日付を最初から選ばない（本日は「本日」と書くだけ） — 理由: AC-BOOK-01 が「日付と時刻をどちらも選んでいない」状態から始まると決めているため — 影響: DateTimeStep.tsx
+- 暦は本日を含む週の月曜から 14 日ぶんを出す — 理由: モック BOOK-01 が 8/24（月）〜9/6（日）の 2 週で、本日 8/27 を含む週の月曜から始まっているため — 影響: DateTimeStep.tsx
+- 受け付けられない時刻の札はどの理由でも「満席」と書く — 理由: モック BOOK-01 が「満席」の 1 語しか描いておらず、工程 1 では理由を出す置き場が無いため（理由は工程 2 の警告の箱で出す） — 影響: DateTimeStep.tsx
+- モックの 18px / 19px / 15px / 14px / 10px は、いちばん近いトークン（`text-lead` 17px / `text-bar` 19px / `text-body` 16px / `text-grid` 13px / `text-fine` 11px）へ翻訳した — 理由: `theme.css` は 8 段しか持たず、任意値を書かない決めがあるため — 影響: DateTimeStep.tsx / PurposeStep.tsx / StepBar.tsx
+- 「お取りする時間」は 45 / 60 / 75 / 90 分の固定 4 択で、目的を押したらその所要時間**以上**でいちばん小さい札を選ぶ — 理由: モックと 05 §5.1 が 4 値を固定で書いているため。20 分の目的では 45 分になる（短くしすぎない側へ倒す） — 影響: PurposeStep.tsx
+- 収まらない理由の文は `AvailabilityReason` の値ごとに 1 文を持ち、設備名・時刻を入れない — 理由: `AvailabilitySlot.reason` は enum だけで、塞いでいる設備の名前も点検の開始時刻も応答に載っていないため（モックの「視力測定機が 11:30 から点検です。」は名前を必要とする） — 影響: PurposeStep.tsx（**要報告**: 名前を出すには `AvailabilitySlot` に理由の細目が要る）
+- 右の要約は工程ごとにその工程の中で組む（共通部品にしない） — 理由: 工程で出す行と最後の 1 文が違い、器へ出すと工程 3〜5 の担当と持ち場が重なるため — 影響: DateTimeStep.tsx / PurposeStep.tsx
+- 工程を移るときだけ下書きを `PATCH` する — 理由: 04-api §3.7 が「工程を移るたび」と書いており、1 打鍵ごとに送ると無料枠の書き込みを使い切るため — 影響: BookingScreen.tsx
+- 破棄の確認は `@app/ui` の `Dialog`（`<dialog>`）ではなく、面の中の `role="alertdialog"` の覆いにした — 理由: jsdom は `showModal` を持たず web テストが落ちる。取り消しの確認だけ `alertdialog` にするという 05 §7.6 の決めにも合う（焦点は見出しへ移し、閉じたら開いた操作へ戻す） — 影響: BookingScreen.tsx
+- 押さえ id の受け皿（`onHoldsChange`）を器に置かなかった — 理由: 押さえを打つのは工程 3（T-014）で、いま置くと誰も呼ばない状態（死んだ分岐）になるため。解放は工程 3 が入るときに一緒に入れる — 影響: BookingScreen.tsx の `pause()`
+- 札の群は `<div role="group">` ではなく `<fieldset aria-label>` にした — 理由: biome の `a11y/useSemanticElements` が role="group" を禁じ、P1 の `Segmented` も fieldset を使っているため — 影響: PurposeStep.tsx
+- 器に `initialStep` を足した — 理由: 受けかけの受付は下書きから工程 3 までしか導けず、工程 4・5 から開き直す道が要る（`LedgerScreen` の `initialDate` / `initialReservationId` と同じ形） — 影響: BookingScreen.tsx
+- 工程 1 は日を選ぶまで時刻の札を出さず「お日にちをお選びください。」と言う — 理由: 日が決まらないと空き枠を尋ねる先が無く、AC-BOOK-01 は「どちらも選んでいない」状態から始まると決めているため — 影響: DateTimeStep.tsx
+
+### H-T016-T018（27 件）
+
+- 置き場所を `src/web/booking/` にした（TODO 本文は `src/web/book/`）— 理由: 起動時の指示が「触ってよいファイル」として `src/web/booking/` を名指ししており、並行して動く T-011〜T-015 と衝突させないため — 影響: CustomerStep.tsx / Keypad.tsx / Handwriting.tsx / ConfirmStep.tsx / DoneStep.tsx とその test
+- 手書きの部品名を `Handwriting.tsx` にした（TODO 本文は `Handwrite.tsx`）— 理由: 同上（起動時の指示のファイル名に従う）— 影響: booking/Handwriting.tsx
+- `Keypad` を `packages/ui` ではなく `src/web/booking/Keypad.tsx` に置いた — 理由: 起動時の指示が packages/ui を触ってよいファイルに含めておらず、他エージェントと同じファイルを書き換えないため — 影響: booking/Keypad.tsx（将来 PIN 画面が要るときに packages/ui へ引き上げられる形にしてある）
+- テンキーの最下段を モックどおり「削除／0／完了」にした（TODO は「左下ハイフン／中央下 0／右下完了」かつ「削除は 3 行目の左」）— 理由: TODO の根拠文「承認済みモック 7 面のうち 5 面が左下ハイフン・右下削除」を実測したところ**逆**で、7 面中 5 面（BOOK-04c / LOGIN-SHARED-PIN / LOGIN-PIN-ERROR / LOGIN-STAFF-PIN / MODE-PERSONAL）が**左下「削除」・右下「確定/完了」**、ハイフンを持つのは CUSTOMER-NEW / EX-PERMISSION の 2 面だけ。根拠が崩れているうえ、3 列 4 行に 13 キーは入らず「左下ハイフン」と「削除は 3 行目の左」は同時に成り立たない。T-021 の BOOK-04c 画素比較（0.04 以下）も承認済みモックが基準になる — 影響: booking/Keypad.tsx の最下段。確定キーの語は電話番号の面が「完了」（TODO どおり）
+- ハイフンのキーを作らない — 理由: 欄が桁数から自動で整形する（090-1234-5678）ので、押しても意味の無いキーになる — 影響: booking/Keypad.tsx / CustomerStep.tsx の `formatPhoneDigits`
+- 電話番号の桁数は 070/080/090/050 で始まれば 11 桁、それ以外は 10 桁、3 桁未満のうちは 11 桁と見なす — 理由: 受付で伺うのは携帯が大半で、モックの「090-1234-5」→「あと3桁」が 11 桁を前提にしている — 影響: CustomerStep.tsx の `phoneTarget`
+- 工程 4 の「次へ進む」（`.fab`）を CustomerStep が描かない。代わりに `customerStepReady(value)` を export し、押せる／押せない理由を工程が決める — 理由: `.fab` は 5 工程で共有する帯（stepbar）の部品で T-011 の持ち物であり、同じ丸を 2 つ描かないため — 影響: CustomerStep.tsx（器の配線は CustomerStep.test.tsx の `Flow` 模型が固定する）
+- 工程 5 の「復唱を終えて予約を確定する」は ConfirmStep が描く — 理由: モック BOOK-05 は `.fab` をこのボタンに置き換えており、`aria-busy` の状態も確定の呼び出しと一体だから — 影響: ConfirmStep.tsx
+- 「初めてのお客様として登録する」（モック BOOK-04 の右下）を出さない — 理由: `customers` は P4（0004_*.sql）で初めてできるので押しても行き先が無い。「押しても何も起きないボタンを画面に出さない」（AC-BOOK-12 と同じ考え方）— 影響: CustomerStep.tsx の右の柱
+- 「文字に変換する」を出さない（TODO どおり）。右の柱の「文字にするとこうなります」の下書きも出さない — 理由: 端末側にもサーバ側にも手書き認識が無く、出せる読み取り結果が存在しないため。空欄だけを置くと「読み取りに失敗した」と誤解される — 影響: Handwriting.tsx の右の柱（「伺ったことばのまま残します。文字には直しません。」の 1 文に置き換えた）
+- 手書きは R2 へ上げず、`onSave(note)` で親へ渡す。`note` は `{ id, svg, description, writtenBy, writtenAt }` — 理由: R2 へ上げる API（`draft_json.handwritingKeys`）は器（T-011）と Worker 側の受け持ちで、この 5 ファイルの外にある — 影響: Handwriting.tsx / CustomerStep.tsx
+- ふりがなの自動入力は `compositionupdate` の**かなだけの綴り**を控えて `compositionend` で 1 回だけ埋める — 理由: `compositionend.data` は変換後の漢字なので読みにならない。変換前のかなを控える以外に読みを得る手立てが無い（端末側の形態素解析を持たない）— 影響: CustomerStep.tsx の `useFurigana`
+- 仮の押さえの取り直しは 10 回まで。使い切ったら「まだ入力中です」を出さず、「お預かりの上限です。枠を選び直してください。」の 1 文に替える — 理由: Q-06 の前提が「10 回まで」と決めているが、11 回目に押せないボタンを置くと理由の無い disabled になる（`07-nfr.md` §2.3）— 影響: ConfirmStep.tsx
+- 復唱の文でお電話番号を伺えなかったときは「お電話番号は…」の節ごと落とす — 理由: 空欄を読み上げると「お電話番号はでお間違いないでしょうか」になる。AC-BOOK-11 はお名前だけで進める道を認めている — 影響: ConfirmStep.tsx の `recitation`
+- 読み込み中 / エラー / 権限なし / 通信断 の 4 状態を `phase` + `isOffline` で持たせ、その確認テストを 6 本足した（TODO の 12 / 7 / 13 本に追加）— 理由: 起動時の指示が「読み込み中 / 空 / エラー / 権限なし / 通信断 を必ず持つ」と要求しており、持たせた状態を誰も見ていないと web 側カバレッジ 60% にも届かない — 影響: 3 画面の test
+- theme.css に無い文字寸法（34px の番号欄 / 24px の復唱文 / 30px の完了見出し）は `calc(var(--spacing) * n)` のインライン style で書いた — 理由: 任意値クラス（`text-[34px]`）を書かない決めがあり、theme.css は他エージェントの持ち物で列を足せないため — 影響: CustomerStep.tsx / ConfirmStep.tsx / DoneStep.tsx
+- `customerStepReady` の戻り値を、T-011 が置いた `booking/steps.ts` の `StepGuard`（`canProceed` / `blockedReason`）に合わせた — 理由: 「次へ進む」の読み上げ名を作る `nextButtonLabel` が既にそこにあり、同じ判断を二度書かないため — 影響: CustomerStep.tsx / CustomerStep.test.tsx
+- 工程 4 の下書きの欄名を `ReceptionSessionDraft` と同じ `phoneTyped` / `nameTyped` / `kanaTyped` / `noteTyped` にした — 理由: 器が `draft_json` へ丸ごと送るときに名前を付け替えずに済む — 影響: `CustomerDraft`
+- お電話番号は**数字だけ**を下書きに持ち、画面と復唱で整形する — 理由: 「-」の有無で同じ番号が 2 通りになると、P4 の候補照会が引けなくなる — 影響: CustomerStep.tsx / ConfirmStep.tsx / DoneStep.tsx
+- モックに無い「お客様」の行を工程 5 の「確保する内容」へ足した（上 3 行は動かさない）— 理由: AC-BOOK-11 が「工程 5 の『確保する内容』にそのお名前が出る」と明記しているため。T-021 の BOOK-05 は既知差 3 件のほかにこの 1 行ぶんの差が出る — 影響: ConfirmStep.tsx の右の柱
+- 「3つとも空いています」の数は 担当 1 + 設備の本数 で数える（固定の「3」にしない）— 理由: IDX-BOOK-11 手順 3 が「札の『3つ』は確保する担当 1 + 設備 2 の合計である」と言っているため — 影響: ConfirmStep.tsx
+- 「まだ入力中です」と残り時間の警告は右の柱（確保する内容）の中に置いた — 理由: モックは残り 60 秒の状態を描いておらず、仮の押さえの行のすぐ下が一番近い場所だから — 影響: ConfirmStep.tsx
+- 消しゴムは「最後の 1 本を取り下げる」道具にした（白で塗り重ねない）— 理由: 筆跡を白い線で覆うと R2 の SVG に消したはずの線が残り、あとから読める — 影響: Handwriting.tsx
+- `role="group"` ではなく `<fieldset aria-label>` を使った — 理由: biome の `lint/a11y/useSemanticElements` が `role="group"` を落とし、既存の `ReservationDetail` も `<fieldset>` を使っているため — 影響: 5 ファイルすべての操作のまとまり
+- 完了画面のお伝えごとの ✓ は `aria-hidden` の飾りにした — 理由: 読み上げで「チェック」が 3 回鳴るのを避ける。テスト側で先頭の ✓ を落として比べる — 影響: DoneStep.tsx / DoneStep.test.tsx
+- テストで全角の空白（U+3000）を含む文字列を探すときは `normalizer: (t) => t.trim()` を渡す — 理由: testing-library の既定の normalizer が U+3000 を半角へ畳むので、書いたとおりの文字列では一致しない — 影響: Handwriting.test.tsx
+- 使われていない export（`spokenDateTime` / 6 つの型）を非 export に戻した — 理由: knip が未使用 export で `deps:check` を落とすため — 影響: ConfirmStep.tsx / CustomerStep.tsx / DoneStep.tsx
+
+### H-t020-t021-e2e（14 件）
+
+- E2E のファイル名を `e2e/booking.spec.ts` にする（計画書は `booking-flow.spec.ts`） — 理由: 親エージェントの指示が担当ファイルとして `booking.spec.ts` を名指しし、traceability の validator は `services/**/e2e/*.spec.ts` を全部読むのでどちらでも緑になる — 影響: services/glasses_management/e2e/booking.spec.ts
+- モック突き合わせは計画書どおり **12 面**にする（親の指示は「13 面」） — 理由: 計画 T-021 が「BOOK-04b-CUSTOMER-MATCH は P4 T-021 が撮る（候補の元になる customers がまだ無い）」と名指しで除いている — 影響: e2e/mock-compare.spec.ts
+- 予約フローの e2e は **2026年9月3日（木）** に書く — 理由: 台帳の e2e が固定している 8月27日・28日 の盤面へ 1 行も足さないため。seed の staff_shifts は 8月27日 から 35 日ぶんあるので同じ木曜の顔になる — 影響: e2e/booking.spec.ts 全体
+- モック突き合わせの受付 5 工程は **2026年9月2日（水）** で撮る — 理由: 台帳の 8月27日 とも業務 e2e の 9月3日 とも重ならない日にして、BOOK-06-DONE が書く 1 件と工程 3 が置く仮の押さえ（420 秒）をどちらの盤面からも外すため — 影響: e2e/mock-compare.spec.ts
+- 端末の時計は **2026年8月27日（木）11:08 JST** に据えたまま、暦から 9月3日（木）／9月2日（水）を押す — 理由: 暦は本日を含む週の月曜から 2 週（8月24日〜9月6日）を描くので両日とも押せる。時計を未来へ動かすと仮の押さえ（サーバの実時刻で切れる）の残り時間が負になり、工程 5 に警告が出てモックと違う姿になる — 影響: 両 e2e のセットアップ
+- 予約の e2e は **設備を 1 つも付けない**（設備軸の 1 本だけが視力測定機 A を先約で塞ぐ） — 理由: 設定の e2e が「視力測定機 B・検査室 1 を止めても影響するご予約は 0 件」を固定しているため — 影響: e2e/booking.spec.ts の createReservation / occupyStaff
+- 「担当が未定」の枠を上限まで埋めるヘルパーを捨てた — 理由: 同時受付上限は担当の割当行を**全部**数えるので、未定を 3 件入れるとその時刻そのものが全レーン満席になり、工程 1 で時刻を選べなくなる — 影響: e2e/booking.spec.ts（AC-BOOK-05/06/07 の前提づくり）
+- AC-BOOK-22 の「3 件目まで成立する」は、同じ時刻に先に成立した担当つき 1 件を 1 件目として数える — 理由: 上限が担当の割当行を全部数える実装（AC-LEDGER-17）とそろえるため。2 件目・3 件目が通り 4 件目で 409 slot_taken になることを見る — 影響: e2e/booking.spec.ts
+- Playwright の読み上げ名は全角空白を半角へ正規化するので、`getByRole` の name には半角空白を書く（`toHaveAttribute` は生の値なので全角のまま） — 理由: 実測で `11:00　あと3枠` が `11:00 あと3枠` に正規化されて一致しなかった — 影響: e2e/booking.spec.ts 全体
+- 盤の枠の座標は「列見出しの中心 × 行見出しの中心」から採る — 理由: 空き枠の帯は連続する枠をまとめて 1 セルにするので、`13:00から13:30` という読み上げ名のセルは存在しないことがある。`snapToCell` は盤の実寸を等分するので、見出しの中心がそのまま枠の中心になる — 影響: e2e/booking.spec.ts の boardPoint / placedRow
+- AC-BOOK-02 の「11:00–12:00 で受け付けられます。」は文言どおり、AC-BOOK-03 の収まらない時刻は 11:00 でなく **18:00** で撮る — 理由: seed の盤面で 60 分がちょうど入らない時刻は閉店前しか無く、同じ 11:00 で「収まる」と「収まらない」の両方は作れない。先約を仕込むと AC-BOOK-02 と順序で結びついてしまう — 影響: e2e/booking.spec.ts の AC-BOOK-03/04、mock-compare の BOOK-02b
+- 006 spec のステータスを **Draft のまま残した** — 理由: 指示が「全部緑になってから Approved に上げる」であり、工程 3〜5 が器に差し込まれていないため 22 本中 16 本が赤い。上げると traceability は緑になるが、緑でない spec を Approved と宣言することになる — 影響: specs/glasses_management/features/006-booking-flow/spec.md（未変更）／`check-e2e-traceability.mjs` は 37 件の Unknown E2E mapping で赤いまま
+- `BookingScreen.tsx` を書き換えなかった — 理由: 担当外のファイルで、並行して書いている担当がいる可能性がある。工程 3〜5（SlotStep / CustomerStep / ConfirmStep / DoneStep / ConflictNotice）は実装済みだが `PLACEHOLDER_STEPS` に入ったままで器から呼ばれていない — 影響: booking.spec.ts の 16 本と mock-compare の 9 面が赤い唯一の原因
+- 工程 3〜5 の面は自前の下端バー（「次へ進む」の丸）を持つので、e2e の `proceed()` は「いま押せる次へ進む」を探して押す — 理由: SlotStep / ConflictNotice は `Frame` の中に自分の丸を持ち、StepBar の丸と 2 つ並ぶ可能性がある — 影響: e2e/booking.spec.ts の proceed()
+

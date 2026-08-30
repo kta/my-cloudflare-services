@@ -1,8 +1,7 @@
 import type { StaffMember } from '@app/contracts'
-import { auth } from '@app/shared'
 import { cn, focusRing } from '@app/ui'
 import { type ComponentType, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { client } from '../client'
+import { client, subjectFromToken } from '../client'
 import { CalendarPanel } from './CalendarPanel'
 import { EquipmentPanel } from './EquipmentPanel'
 import { HoursPanel } from './HoursPanel'
@@ -285,18 +284,4 @@ function useViewer(storeId: string): {
   }, [staff])
 
   return { actor, staff }
-}
-
-/** JWT の本文から `sub` だけを読む。署名は確かめない（サーバが確かめる）。 */
-function subjectFromToken(): string | null {
-  const token = auth.getToken()
-  const payload = token?.split('.')[1]
-  if (!payload) return null
-  try {
-    const decoded: unknown = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/')))
-    const sub = (decoded as { sub?: unknown }).sub
-    return typeof sub === 'string' ? sub : null
-  } catch {
-    return null
-  }
 }

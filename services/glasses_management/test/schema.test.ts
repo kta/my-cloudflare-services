@@ -6,10 +6,13 @@
 import { getTableConfig } from 'drizzle-orm/sqlite-core'
 import { describe, expect, it } from 'vitest'
 import {
+  auditEvents,
   equipment,
   equipmentMaintenance,
+  idempotencyRecords,
   organizations,
   purposeRequirements,
+  receptionSessions,
   reservationAssignments,
   reservationPurposes,
   reservationSlotLocks,
@@ -503,6 +506,87 @@ describe('reservation_slot_locks', () => {
         'created_at',
       ]),
     )
+  })
+})
+
+describe('audit_events', () => {
+  const table = getTableConfig(auditEvents)
+
+  it('組織と発生時刻で時系列に引ける index を持つ', () => {
+    expect(columnsOf(table, 'audit_events_org_occurred_idx')).toEqual([
+      'organization_id',
+      'occurred_at',
+    ])
+    // 追記専用の表なので一意にしない（同じ時刻に何行でも積まれる）。
+    expect(isUnique(table, 'audit_events_org_occurred_idx')).toBe(false)
+  })
+
+  it('1 予約の履歴を対象種別と対象 id で引ける index を持つ', () => {
+    // HISTORY-LIST の「そのあとの変更」タイムラインが 1 予約分をこの順で引く。
+    expect(columnsOf(table, 'audit_events_org_target_idx')).toEqual([
+      'organization_id',
+      'target_type',
+      'target_id',
+      'occurred_at',
+    ])
+  })
+
+  it('store_id だけが NULL 可（組織同期の行のため）', () => {
+    // admin からの組織同期（target_type='organization'）だけが店舗に紐づかない。
+    // それ以外の骨格の列は NOT NULL にして、誰が何にいつ何をしたかを必ず残す。
+    expect(table.columns.find((c) => c.name === 'store_id')?.notNull).toBe(false)
+    for (const name of [
+      'organization_id',
+      'actor_type',
+      'action',
+      'target_type',
+      'target_id',
+      'occurred_at',
+    ]) {
+      expect(table.columns.find((c) => c.name === name)?.notNull, name).toBe(true)
+    }
+  })
+})
+
+describe('idempotency_records', () => {
+  const table = getTableConfig(idempotencyRecords)
+
+  it('冪等キーそのものが主キーで、追加の一意 index を張らない', () => {
+    // INSERT の衝突がそのまま排他になる。同じことを二重に張らない。
+    expect(table.columns.filter((c) => c.primary).map((c) => c.name)).toEqual(['key'])
+    expect(table.indexes.filter((i) => i.config.unique)).toHaveLength(0)
+  })
+
+  it('期限切れを掃除する Cron のための expires_at の index を持つ', () => {
+    // この表だけは物理削除する（created_at + 24h を過ぎた行）。
+    expect(columnsOf(table, 'idempotency_records_expires_idx')).toEqual(['expires_at'])
+  })
+})
+
+describe('reception_sessions', () => {
+  const table = getTableConfig(receptionSessions)
+
+  it('店舗と開始日時で日別に引ける index を持つ', () => {
+    expect(columnsOf(table, 'reception_sessions_org_store_started_idx')).toEqual([
+      'organization_id',
+      'store_id',
+      'started_at',
+    ])
+  })
+
+  it('予約 id から受付をたどれる index を持つ', () => {
+    // 予約詳細から受付と録音へたどる。
+    expect(columnsOf(table, 'reception_sessions_org_reservation_idx')).toEqual([
+      'organization_id',
+      'reservation_id',
+    ])
+  })
+
+  it('下書き・終了・結果は NULL 可（進行中の行が成り立つ）', () => {
+    // 受付を始めた瞬間の行は「まだ終わっていない」ので 3 列とも NULL になる。
+    for (const name of ['draft_json', 'ended_at', 'outcome']) {
+      expect(table.columns.find((c) => c.name === name)?.notNull, name).toBe(false)
+    }
   })
 })
 

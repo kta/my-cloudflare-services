@@ -26,6 +26,8 @@ const ORG = 'org-eyex-seed'
 /** seed.mjs が固定 id で入れる EYEX 銀座店と、その 1 人目の担当（佐藤 美咲）。 */
 const GINZA = '11111111-1111-4111-8111-111111111111'
 const SATO = 'c0010000-0000-4000-8000-000000000000'
+/** ご来店の目的の 1 件目（メガネを新しく作る・60 分）。 */
+const PURPOSE_NEW_GLASSES = 'e0010000-0000-4000-8000-000000000000'
 /** dev グラントが載せる `sub`。個人トップの「わたし」はこれと突き合わせて決まる。 */
 const VIEWER = `dev:${ORG}`
 /**
@@ -465,5 +467,404 @@ test.describe('承認済みモックとの突き合わせ', () => {
     } finally {
       await beMe(request, null)
     }
+  })
+
+  /* --- 予約の受付（BOOK-01〜06 / BOOK-CONFLICT） -------------------------- */
+
+  /**
+   * 受付の 5 工程は **2026年9月2日（水）** で撮る。台帳が見る 8月27日・28日 とも、
+   * 業務の e2e（`booking.spec.ts`）が書く 9月3日 とも重ならない日である。水曜は
+   * 佐藤 美咲 を含む 5 名が 10:00–19:00 で出るので、担当の行が並ぶ姿は木曜と変わらない。
+   * 暦は本日を含む週の月曜から 2 週（8月24日〜9月6日）を描くので、この日も同じ面から押せる。
+   */
+  const BOOK_DAY = '9月2日（水）'
+
+  /** 受付の工程 1 を開く。時計は台帳と同じ 11:08 に据える（暦の「本日」がそこで決まる）。 */
+  async function openBooking(page: Page): Promise<void> {
+    await pinTo1108(page)
+    await startWork(page)
+    await page.getByRole('button', { name: /新しい予約を取る/ }).click()
+    await expect(
+      page.getByRole('heading', { name: 'お日にちはいつがよろしいですか？' }),
+    ).toBeVisible()
+  }
+
+  /** 工程 1。お日にちとお時間を選ぶ。時刻の窓（8 枚）の外は「ほかの時刻も見る」で開く。 */
+  async function pickDateTime(page: Page, hhmm: string): Promise<void> {
+    await page.getByRole('button', { name: new RegExp(`^${BOOK_DAY}`) }).click()
+    const slot = page.getByRole('button', { name: new RegExp(`^${hhmm} `) })
+    const more = page.getByRole('button', { name: /^ほかの時刻も見る/ })
+    await expect(slot.or(more).first()).toBeVisible()
+    if ((await slot.count()) === 0) await more.click()
+    await expect(slot).toBeEnabled()
+    await slot.click()
+  }
+
+  /** 「次へ進む」を押す。丸は 5 工程を通して帯の 1 つきり（承認済みモックの `.stepbar`）。 */
+  async function proceed(page: Page): Promise<void> {
+    const next = page.locator('[data-booking-stepbar]').getByRole('button', { name: /^次へ進む/ })
+    await expect(next).toBeEnabled()
+    await next.click()
+  }
+
+  /**
+   * 既定の置き場所が先約・仮の押さえと重なっていたら、同じ時刻で受けられる担当へ移す。
+   * BOOK-05-CONFIRM は復唱のまま終わるので 11:00 の押さえを持ったままになり、
+   * そのあとの BOOK-06-DONE が同じ 11:00 で重なる。撮る順に依らせないための手当て。
+   */
+  async function clearClash(page: Page): Promise<void> {
+    const board = page.getByRole('table', { name: 'ご予約を置く盤' })
+    if ((await board.getByText('重なっています').count()) === 0) return
+    await page
+      .getByRole('button', { name: /\d{2}:\d{2}–\d{2}:\d{2} が空いています$/ })
+      .first()
+      .click()
+    await expect(board.getByText('重なっています')).toHaveCount(0)
+  }
+
+  /** 工程 2 まで歩き、ご用件を押す。 */
+  async function openPurpose(page: Page, hhmm: string): Promise<void> {
+    await openBooking(page)
+    await pickDateTime(page, hhmm)
+    await proceed(page)
+    await expect(
+      page.getByRole('heading', { name: '本日はどのようなご用件でしょうか？' }),
+    ).toBeVisible()
+  }
+
+  /** 工程 3 まで歩く。 */
+  async function openSlot(page: Page, hhmm: string): Promise<void> {
+    await openPurpose(page, hhmm)
+    await page.getByRole('button', { name: /^メガネを新しく作る/ }).click()
+    await expect(page.getByText('✓ 選んでいます')).toBeVisible()
+    await proceed(page)
+    await expect(page.getByRole('table', { name: 'ご予約を置く盤' })).toBeVisible()
+  }
+
+  /** 工程 4 まで歩く。 */
+  async function openCustomer(page: Page, hhmm: string): Promise<void> {
+    await openSlot(page, hhmm)
+    await clearClash(page)
+    await proceed(page)
+    await expect(page.getByRole('heading', { name: 'お電話番号を伺えますか？' })).toBeVisible()
+  }
+
+  /** 工程 5 まで歩く。お名前とお電話番号はモックと同じ「田中 花子」で伺う。 */
+  async function openConfirm(page: Page, hhmm: string): Promise<void> {
+    await openCustomer(page, hhmm)
+    await page.getByLabel('お名前').fill('田中 花子')
+    await page.getByLabel('ふりがな').fill('たなか はなこ')
+    await proceed(page)
+    await expect(page.getByRole('heading', { name: 'この文をそのまま読み上げます' })).toBeVisible()
+  }
+
+  test('BOOK-01-DATETIME — 工程 1・お日にちとお時間', async ({ page }) => {
+    await openBooking(page)
+    await page.getByRole('button', { name: new RegExp(`^${BOOK_DAY}`) }).click()
+    await expect(page.getByRole('button', { name: /^11:00 / })).toBeEnabled()
+    /*
+     * いま残っている差:
+     *   - 暦で選んでいる日が 9月2日（水）… モックは 8月27日（木）を選んでいる。撮る日を
+     *     台帳の 8月27日 と業務 e2e の 9月3日 のどちらからも外した結果である。
+     *   - 時刻を**まだ押していない**。モックは 11:00 を押した姿（3px の緑罫）で、帯の
+     *     「次へ」も有効になっている。ここは日にちだけを選んだ姿で撮っている。
+     *   - 暦の見出しが「2026年8月」… 2 週の窓（8月24日〜9月6日）は 9 月にまたがる。
+     *   - 時刻の札は 8 枚 ＋「ほかの時刻も見る（あと10件）」。モックは 8 枠だけを描く
+     *     （うち 11:30 と 14:30 は「満席」で押せない）。サーバは営業時間ぶんの格子を
+     *     18 枠返すので、9 枚目から先はこのボタンの中にある。
+     *   - 録音の帯が「● 録音していません ▮▮▮ --:--」（灰）。モックは 12 面すべてが
+     *     「● 録音中 ▮▮▮ 01:08」（赤地）。録音そのものは P7 なので、録音していないのに
+     *     「録音中」と書かない。**12 面すべてに共通の差である。**
+     *   - 上のバーに「あとで続ける」が増えている（受付を進行中のまま残す出口）。
+     *     モックには無い。**12 面すべてに共通の差である。**
+     *   - 上のバーの「お知らせ 3」… P10 で足す。
+     * 実測は下の値のとおり。**この値は下げるだけ。上げてはいけない。**
+     */
+    // 実測 134,359 / 3,868,560 ＝ 3.4730%（2026-08-31 の 3 巡目）。**この値は下げるだけ。**
+    await expect(page).toHaveScreenshot('BOOK-01-DATETIME.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.0348,
+    })
+  })
+
+  test('BOOK-02-PURPOSE — 工程 2・ご来店の目的', async ({ page }) => {
+    await openPurpose(page, '11:00')
+    await page.getByRole('button', { name: /^メガネを新しく作る/ }).click()
+    await expect(page.getByText('11:00–12:00 で受け付けられます。')).toBeVisible()
+    /*
+     * いま残っている差:
+     *   - 目的の札が 6 枚（seed の 6 件）で並び順も seed のまま。
+     *   - 右の要約のご来店日が 2026年9月2日（水）… 上と同じ理由。
+     *   - 録音の帯・「あとで続ける」… BOOK-01 に書いた 12 面共通の差。
+     *   - 上のバーの「お知らせ 3」… P10。
+     */
+    // 実測 86,138 / 3,868,560 ＝ 2.2267%（2026-08-31 の 3 巡目）。**この値は下げるだけ。**
+    await expect(page).toHaveScreenshot('BOOK-02-PURPOSE.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.0223,
+    })
+  })
+
+  test('BOOK-02b-PURPOSE-CONFLICT — 工程 2・その時刻に収まらない', async ({ page }) => {
+    // 18:00 は 30 分なら受けられるが、閉店前の片付け（18:40–19:00）があるので 60 分は入らない。
+    await openPurpose(page, '18:00')
+    await page.getByRole('button', { name: /^メガネを新しく作る/ }).click()
+    await expect(
+      page.getByRole('heading', { name: '18:00 から60分の受付ができません' }),
+    ).toBeVisible()
+    /*
+     * いま残っている差:
+     *   - 収まらない時刻が 18:00（モックは 11:00）… seed の盤面で 60 分がちょうど入らない
+     *     時刻が閉店前しか無い。理由の 1 文も「その時間は営業時間の外です。」になる。
+     *   - 代わりの時刻の並びと件数はサーバが返したまま。
+     *   - 録音の帯・「あとで続ける」… BOOK-01 に書いた 12 面共通の差。
+     */
+    // 実測 113,711 / 3,868,560 ＝ 2.9394%（2026-08-31 の 3 巡目。モックと同じく
+    // 「お取りする時間」の 4 列を落として、その場所を警告の箱へ渡した）。**この値は下げるだけ。**
+    await expect(page).toHaveScreenshot('BOOK-02b-PURPOSE-CONFLICT.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.0295,
+    })
+  })
+
+  test('BOOK-03-SLOT-STAFF — 工程 3・担当者の軸', async ({ page }) => {
+    await openSlot(page, '11:00')
+    /*
+     * いま残っている差:
+     *   - 行は **3 行**（佐藤 美咲・小林 学・担当が未定）。「メガネを新しく作る」は
+     *     `measure` の技能を要るので、水曜に出ている 5 名のうちその技能を持つ 2 名しか
+     *     並ばない（seed の技能割り当て）。モックは 4 名を描く。
+     *   - 担当の名前の下の技能行は seed の技能をそのまま並べる（佐藤 美咲 は
+     *     「視力測定・加工・販売・受付」）。モックは「視力測定・加工」の 2 つだけを描く。
+     *   - 列は 10:00–18:30 の 18 列あり、窓には**モックと同じ 8 列**（10:00–13:30）が
+     *     ちょうど入る。残りは盤の中だけを横へ流す。
+     *   - 先約の帯が 1 本も無い（9月2日 のご予約はまだ 0 件）。モックは 佐藤 美咲 の
+     *     11:00 の先約と重なりの警告を描いている。重なりの面そのものは
+     *     `booking.spec.ts` の AC-BOOK-05 が実データで確かめる。先約が無いので、
+     *     凡例の色見本も帯と同じ緑になる（モックは重なっているので赤）。
+     *   - 録音の帯・「あとで続ける」… BOOK-01 に書いた 12 面共通の差。
+     */
+    // 実測 148,288 / 3,868,560 ＝ 3.8332%（2026-08-31 の 3 巡目）。**この値は下げるだけ。**
+    await expect(page).toHaveScreenshot('BOOK-03-SLOT-STAFF.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.0384,
+    })
+  })
+
+  test('BOOK-03b-SLOT-RESOURCE — 工程 3・設備の軸', async ({ page }) => {
+    await openSlot(page, '11:00')
+    await page.getByRole('button', { name: '設備・場所', exact: true }).click()
+    await expect(page.getByRole('columnheader', { name: '設備・場所' })).toBeVisible()
+    /*
+     * いま残っている差:
+     *   - 行は **6 行**（視力測定機 A・視力測定機 B・検査室 1・相談カウンター 1・
+     *     相談カウンター 2・フィッティング台）。「メガネを新しく作る」が要る種別
+     *     （`measure` と `counter`）の設備がすべて並ぶ。加工室は止めてあるので出ない。
+     *     モックは **4 行**（視力測定機 A/B・相談カウンター 1/2）を描く。
+     *   - 設備の行の塞がりは「点検」「受付停止」で言う（機械は休憩しない）。
+     *   - 先約の帯が無いのは BOOK-03-SLOT-STAFF と同じ理由。
+     *   - 録音の帯・「あとで続ける」… BOOK-01 に書いた 12 面共通の差。
+     */
+    // 実測 166,038 / 3,868,560 ＝ 4.2920%（2026-08-31 の 3 巡目）。**この値は下げるだけ。**
+    await expect(page).toHaveScreenshot('BOOK-03b-SLOT-RESOURCE.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.043,
+    })
+  })
+
+  test('BOOK-03c-DRAG — 工程 3・帯を運んでいる途中', async ({ page }) => {
+    await openSlot(page, '11:00')
+    const grip = page.getByRole('button', { name: /^ご予約をつかんで動かす/ })
+    const from = await grip.boundingBox()
+    const head = await page
+      .getByRole('table', { name: 'ご予約を置く盤' })
+      .getByRole('columnheader', { name: '14:00', exact: true })
+      .boundingBox()
+    await page.mouse.move((from?.x ?? 0) + 12, (from?.y ?? 0) + 12)
+    await page.mouse.down()
+    await page.mouse.move((head?.x ?? 0) + (head?.width ?? 0) / 2, (from?.y ?? 0) + 12, {
+      steps: 8,
+    })
+    await expect(page.getByText('14:00–15:00 へ')).toBeVisible()
+    /*
+     * いま残っている差:
+     *   - 先約の帯が無い（9月2日 は 0 件）。運んでいる帯・もとの場所・破線の枠は同じ形。
+     *   - 行き先が 14:00–15:00（モックは 13:00–14:00）。seed の 佐藤 美咲 は 13:00–14:00 が
+     *     休憩なので、そこへは置けない（モックの盤面と seed の勤務が違う）。
+     *   - 「もとの 11:00 に戻す」は運んでいる間には出さない（指を離してから出す）。
+     *     モックは運んでいる最中にも描いている。凡例は「動かしているご予約／置く先」
+     *     に差し替わる（モックと同じ）。
+     *   - 右の「確保するもの」は 担当 / 設備 / 時刻 の 3 行。モックの「場所」の行は
+     *     設備の行と同じものなので足していない。
+     *   - 録音の帯・「あとで続ける」… BOOK-01 に書いた 12 面共通の差。
+     */
+    // 実測 133,738 / 3,868,560 ＝ 3.4569%（2026-08-31 の 3 巡目）。**この値は下げるだけ。**
+    await expect(page).toHaveScreenshot('BOOK-03c-DRAG.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.0347,
+    })
+    await page.mouse.up()
+  })
+
+  test('BOOK-04-CUSTOMER — 工程 4・お客様', async ({ page }) => {
+    await openCustomer(page, '11:00')
+    /*
+     * いま残っている差:
+     *   - 候補の吹き出し（BOOK-04b）を出さない。`customers` は 007-customer-records
+     *     で初めてできるので、この工程は伺った文字を受付セッションに置くだけである。
+     *   - 右の要約の「担当と場所」に出るのは seed の盤面で置いた担当（モックは
+     *     佐藤 美咲／視力測定機 A）。行そのものはモックにもある。
+     *   - 手書きの記入者が「ご担当者（スタッフ）」。dev グラントの `sub` は
+     *     `staff.admin_user_id` のどれとも一致しないので名前を引き当てられない。
+     *     モックは「山田 大輔（店長）」。
+     *   - 録音の帯・「あとで続ける」… BOOK-01 に書いた 12 面共通の差。
+     */
+    // 実測 99,892 / 3,868,560 ＝ 2.5822%（2026-08-31 の 3 巡目）。**この値は下げるだけ。**
+    await expect(page).toHaveScreenshot('BOOK-04-CUSTOMER.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.0259,
+    })
+  })
+
+  test('BOOK-04c-KEYPAD — 工程 4・テンキー', async ({ page }) => {
+    await openCustomer(page, '11:00')
+    await page.getByLabel('お電話番号').click()
+    const keypad = page.getByRole('group', { name: '電話番号のテンキー' })
+    await expect(keypad).toBeVisible()
+    for (const digit of '0901234'.split('')) {
+      await keypad.getByRole('button', { name: digit, exact: true }).click()
+    }
+    await keypad.getByRole('button', { name: '5', exact: true }).click()
+    await expect(page.getByText('あと3桁', { exact: true })).toBeVisible()
+    /*
+     * いま残っている差:
+     *   - 最下段が「削除 ／ 0 ／ 完了」（承認済みモック 7 面のうち 5 面がこの並び）。
+     *     ハイフンのキーは置かない —— 欄が桁数から自動で整形するので押しても意味が無い。
+     *   - テンキーの左はお名前・ふりがな・ご要望の欄のまま。モックはここを
+     *     「ここまでの入力」の 3 行（ご来店日時／目的／担当と場所）に差し替えている。
+     *   - 録音の帯・「あとで続ける」… BOOK-01 に書いた 12 面共通の差。
+     */
+    // 実測 106,277 / 3,868,560 ＝ 2.7472%（2026-08-31 の 3 巡目）。**この値は下げるだけ。**
+    await expect(page).toHaveScreenshot('BOOK-04c-KEYPAD.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.0276,
+    })
+  })
+
+  test('BOOK-04d-HANDWRITE — 工程 4・手書き', async ({ page }) => {
+    await openCustomer(page, '11:00')
+    await page.getByRole('button', { name: '手書きで書く' }).click()
+    await expect(page.getByRole('heading', { name: 'ご要望をそのまま書き留めます' })).toBeVisible()
+    /*
+     * いま残っている差:
+     *   - 「文字に変換する」のボタンと、右の柱の「文字にするとこうなります」の下書きを
+     *     出さない（AC-BOOK-12。読み取り結果が存在しないので、空欄だけを置かない）。
+     *   - 用紙は白紙。モックは書いた筆跡を描いている。
+     *   - 記入者が「ご担当者（スタッフ）」（BOOK-04-CUSTOMER と同じ理由）。
+     *   - 録音の帯・「あとで続ける」… BOOK-01 に書いた 12 面共通の差。
+     */
+    // 実測 159,450 / 3,868,560 ＝ 4.1217%（2026-08-31 の 3 巡目）。**この値は下げるだけ。**
+    await expect(page).toHaveScreenshot('BOOK-04d-HANDWRITE.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.0413,
+    })
+  })
+
+  test('BOOK-05-CONFIRM — 工程 5・復唱', async ({ page }) => {
+    await openConfirm(page, '11:00')
+    /*
+     * いま残っている差（**許してよいと決めた差**のうちの 1 つ）:
+     *   - 復唱の文の目的が「メガネを新しく作る」… `visit_purposes.name_internal` に揃えた。
+     *     モックの「視力測定とメガネの新調」は工程 2 で押した札と違うので採らない。
+     *   - 「仮の押さえ」の**時刻**はサーバの実時刻から数えるので走るたびに変わる（端末の
+     *     時計は 8月27日 11:08 に据えてある。モックは「11:18 まで」）。**残り時間のほうは
+     *     420 秒で頭打ちにしてある**ので「あと7分」で動かない。
+     *   - 設備を選んでいない受付なので札は「この枠は空いています」。モックは
+     *     担当 1 ＋ 設備 2 で「3つとも空いています」。
+     *   - お客様の行を右の要約に足した（AC-BOOK-11 が工程 5 に名前を求めている）。
+     *   - 録音は右下の常駐表示で「録音していません」（灰）。モックは「録音中」（赤）。
+     *     上のバーの「あとで続ける」も BOOK-01 に書いたとおり。
+     */
+    // 実測 133,122〜133,174 / 3,868,560 ＝ 3.4412〜3.4425%（2026-08-31 の 3 巡目。
+    // 押さえの期限の時刻だけが走るたびに動く）。**この値は下げるだけ。**
+    await expect(page).toHaveScreenshot('BOOK-05-CONFIRM.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.0345,
+    })
+  })
+
+  test('BOOK-06-DONE — 完了', async ({ page }) => {
+    // ここだけがご予約を 1 件書く。書く日は 9月2日（水）で、台帳の e2e も業務 e2e も見ない。
+    await openConfirm(page, '11:00')
+    await page.getByRole('button', { name: '復唱を終えて予約を確定する' }).click()
+    await expect(page.getByRole('heading', { name: 'ご予約を承りました' })).toBeVisible()
+    /*
+     * いま残っている差（**許してよいと決めた差**のうちの 1 つ）:
+     *   - 「控えは 090-1234-5678 へお送りしました。」を出さない。notifier はメールだけを
+     *     送り、`to` はメールアドレス型なので、お電話番号へ控えを送る手立てが無い。
+     *     代わりに「予約番号 … をお控えいただくようお伝えください」を出す。
+     *   - 予約番号はその場で採った番号（モックは EY-2608-0142）。
+     *   - 担当・設備は工程 3 で重なりを解いた結果（モックは 佐藤 美咲／相談カウンター 2）。
+     *   - 完了の面は工程の帯を持たないので、録音の表示もここには無い。
+     */
+    // 実測 63,690 / 3,868,560 ＝ 1.6464%（2026-08-31 の 3 巡目）。**この値は下げるだけ。**
+    await expect(page).toHaveScreenshot('BOOK-06-DONE.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.0166,
+    })
+  })
+
+  test('BOOK-CONFLICT — 確定の瞬間に枠が埋まっていた', async ({ page, request }) => {
+    await openConfirm(page, '14:00')
+    // ほかの端末が同じ担当の同じ時刻を先に取る。
+    const holding = await page.getByRole('complementary', { name: '確保する内容' }).innerText()
+    const staffId = holding.includes('佐藤 美咲') ? SATO : null
+    const token = await request.post('/api/auth/token', {
+      data: { organizationId: ORG, role: 'staff' },
+    })
+    const { token: bearer } = (await token.json()) as { token: string }
+    const taken = await request.post('/api/staff/reservations', {
+      headers: { authorization: `Bearer ${bearer}` },
+      data: {
+        storeId: GINZA,
+        startsAt: new Date(Date.parse('2026-09-02T14:00:00.000+09:00')).toISOString(),
+        purposeIds: [PURPOSE_NEW_GLASSES],
+        durationMinutes: 60,
+        staffId,
+        equipmentIds: [],
+        source: 'phone',
+      },
+    })
+    expect(taken.status()).toBe(200)
+
+    await page.getByRole('button', { name: '復唱を終えて予約を確定する' }).click()
+    await expect(
+      page.getByRole('heading', { name: 'この枠は、ほかの端末で先に確定されました' }),
+    ).toBeVisible()
+    /*
+     * いま残っている差:
+     *   - 埋まった時刻が 14:00（モックは 11:00）。BOOK-06-DONE が 11:00 を使ったあとなので、
+     *     同じ面をもう一度歩ける時刻へずらしている。
+     *   - 「時刻を変えたくない場合」の担当の入れ替え案は、代わりの担当が居るときだけ出る。
+     *     出る担当は seed の勤務しだいで、技能もそのぶん長い（モックは
+     *     「担当を 小林 学（視力測定）に変える」）。代わりの時刻の札の設備の補足行は、
+     *     この受付が設備を押さえていないので空になる（モックは「相談カウンター 2」）。
+     *   - 録音の帯・「あとで続ける」… BOOK-01 に書いた 12 面共通の差。
+     */
+    /*
+     * 実測 111,483 / 3,868,560 ＝ 2.8818%（2026-08-31 の 3 巡目）。
+     *
+     * **12 面で唯一、前の巡（0.0287）より上げた値である。**上げた理由は 1 つだけ:
+     * 工程 4 の札に ✓ を戻したこと。この面は工程 5 から工程 3 へ差し戻したもので、
+     * お客様は伺い終えている（モックの帯も「4 お客様」を done で描く）。ただし
+     * モックは done の札に ✓ を描かないので、その 1 文字ぶん（実測 +506px）だけ
+     * 差が増える。✓ を落とせば 110,977px（2.8687%）で前の値に収まるが、そうすると
+     * 「済んだ工程」と「まだの工程」の違いが**色だけ**になる（§2.5 に反する）。
+     * 増分は ✓ 1 文字ぶんに限られ、ほかの 11 面はすべて下がっている。
+     */
+    await expect(page).toHaveScreenshot('BOOK-CONFLICT.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.0289,
+    })
   })
 })

@@ -10,7 +10,8 @@ import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqli
  * - 時間順の並びは created_at で取る（UUID v4 は並び替えに使えない）。
  *
  * テーブルはフェーズごとに増える（specs/glasses_management/design/03-data-model.md）。
- * P0（基盤）の 3 つに、P1（店舗の受付条件）の 16 と P2（枠の一次排他）の 1 を足した 20 表がここにある。
+ * P0（基盤）の 3 つに、P1（店舗の受付条件）の 16 と P2（枠の一次排他）の 1、
+ * P3（電話・店頭からの予約受付）の 3 を足した 23 表がここにある。
  */
 
 /**
@@ -610,5 +611,117 @@ export const reservationSlotLocks = sqliteTable(
     ),
     // 取消・変更のときの一括 DELETE と、枠のガードの COUNT(*)。
     index('reservation_slot_locks_org_reservation_idx').on(t.organizationId, t.reservationId),
+  ],
+)
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * P3 電話・店頭からの予約受付（0003_*.sql）
+ * 予約を「書く」最初のフェーズで、確定の 1 バッチが必要とする 3 表を足す。
+ * 予約の 4 表（reservations / reservation_purposes / reservation_assignments /
+ * reservation_slot_locks）は P1・P2 が作ってあるので、ここでは作り直さない。
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * 誰が・どの端末で・何を変えたか。**追記専用で削除しない。**
+ * この表が P3 に要るのは、予約の確定が reservations / reservation_purposes /
+ * reservation_assignments と同じ `db.batch()` で監査を書く決めによる
+ * （specs/glasses_management/design/03-data-model.md §7.1 の不変条件）。
+ * 監査の追記に失敗したら本処理も成功させない。
+ *
+ * 業務の経路から UPDATE / DELETE を発行しない。訂正は打ち消しの行を足す。
+ * 行が消えるのは日次 Cron の保持期限（400 日）だけである。
+ * before_json / after_json に平文 PIN・ハッシュ・メールアドレス全文を入れない。
+ */
+export const auditEvents = sqliteTable(
+  'audit_events',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    // 店舗に紐づかない操作（admin からの組織同期）だけ NULL。
+    // NULL になるのは target_type='organization' の行に限る。
+    storeId: text('store_id'),
+    actorType: text('actor_type').notNull(), // 'staff' | 'terminal' | 'system' | 'customer'
+    actorId: text('actor_id'), // staff.id 等。'system' では NULL
+    terminalId: text('terminal_id'), // terminals は P10。それまで常に NULL
+    // ドット区切り。'reservation.created' / 'reservation.cancelled' / 'settings.updated' など
+    action: text('action').notNull(),
+    // 'reservation' | 'customer' | 'recording' | 'store' | 'staff' | 'equipment' |
+    // 'visit_purpose' | 'web_booking' | 'terminal' | 'organization'
+    targetType: text('target_type').notNull(),
+    targetId: text('target_id').notNull(),
+    beforeJson: text('before_json'), // 差分表示（CHANGE-DIFF）の材料
+    afterJson: text('after_json'),
+    // 1 操作でまとまった複数行を束ねる。同じ db.batch() には同じ値を入れる。
+    correlationId: text('correlation_id'),
+    occurredAt: text('occurred_at').notNull(), // ISO8601 (UTC)
+  },
+  (t) => [
+    // 監査の時系列閲覧。追記専用なので一意にしない。
+    index('audit_events_org_occurred_idx').on(t.organizationId, t.occurredAt),
+    // HISTORY-LIST の「そのあとの変更」（1 予約の履歴）。
+    index('audit_events_org_target_idx').on(
+      t.organizationId,
+      t.targetType,
+      t.targetId,
+      t.occurredAt,
+    ),
+  ],
+)
+
+/**
+ * 再送しても同じ応答を返すための記録。予約の確定が `Idempotency-Key` ヘッダーで使う。
+ * 主キーが冪等キーそのもの（`{organizationId}:{scope}:{clientKey}`）なので、
+ * `INSERT ... ON CONFLICT DO NOTHING` の衝突がそのまま排他になる。**追加の一意 index を張らない。**
+ * 短命な排他（枠の仮押さえ）は KV（SHORT_LIVED）が担い、この表では扱わない。
+ */
+export const idempotencyRecords = sqliteTable(
+  'idempotency_records',
+  {
+    key: text('key').primaryKey(), // '{organizationId}:{scope}:{clientKey}'
+    organizationId: text('organization_id').notNull(),
+    scope: text('scope').notNull(), // 'reservation.create' | 'reservation.cancel' | 'web_booking.create' 等
+    requestHash: text('request_hash').notNull(), // SHA-256 hex（64文字）。違えば 409 idempotency_conflict
+    responseJson: text('response_json'), // status='done' のとき非 NULL
+    status: text('status').notNull(), // 'in_progress' | 'done'
+    createdAt: text('created_at').notNull(),
+    expiresAt: text('expires_at').notNull(), // created_at + 24h
+  },
+  (t) => [
+    // 期限切れ行を消す Cron のため。ドメインの表と違い、この表だけは物理削除する。
+    index('idempotency_records_expires_idx').on(t.expiresAt),
+  ],
+)
+
+/**
+ * 受付開始から予約確定または破棄までの記録単位。**破棄でも行を残す**（行は削除しない）。
+ *
+ * 予約フローの 5 工程の下書きは端末ではなくこの表の draft_json に置く。iPadOS の Safari は
+ * 裏に回ったタブを容易に捨て、戻ると読み込み直すので、端末のメモリだけに持つと伺った内容が丸ごと消える。
+ * ただし**お客様のお名前・お電話番号そのものは書かない**。選んだ id と入力途中の文字だけを持つ
+ * （07-nfr.md §6.6 の禁止表）。
+ *
+ * outcome を書くときは ended_at も同じ UPDATE で書き、draft_json は NULL に戻す。
+ * outcome='booked' なら reservation_id が非 NULL。
+ */
+export const receptionSessions = sqliteTable(
+  'reception_sessions',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    storeId: text('store_id').notNull(),
+    reservationId: text('reservation_id'), // 破棄なら NULL のまま
+    terminalId: text('terminal_id'), // terminals は P10。それまで常に NULL
+    actorId: text('actor_id'), // staff.id。共有端末で個人未確認なら NULL
+    startedAt: text('started_at').notNull(), // ISO8601 (UTC)
+    endedAt: text('ended_at'), // 進行中は NULL
+    outcome: text('outcome'), // 'booked' | 'discarded'。進行中は NULL
+    draftJson: text('draft_json'), // 進行中のみ非 NULL。確定・破棄で NULL へ戻す
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => [
+    // HISTORY-LIST の日別一覧。
+    index('reception_sessions_org_store_started_idx').on(t.organizationId, t.storeId, t.startedAt),
+    // 予約詳細から受付と録音へたどる。
+    index('reception_sessions_org_reservation_idx').on(t.organizationId, t.reservationId),
   ],
 )

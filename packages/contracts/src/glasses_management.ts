@@ -1155,3 +1155,193 @@ export const AvailabilityResponse = z.strictObject({
   serverNow: IsoDateTime,
 })
 export type AvailabilityResponse = z.infer<typeof AvailabilityResponse>
+
+/* ------------------------------------------------------------------------- *
+ * P3 電話・店頭からの予約受付（`specs/glasses_management/features/006-booking-flow`）
+ *
+ * ここに置くのは**書くための形**である。読む側（`ReservationDetail` / 台帳 /
+ * 空き枠）は P2 が持っているのでそのまま使い、同じ形を二度作らない。
+ *
+ * お客様の台帳（`customers`）は P4（`007-customer-records`）が作るので、この面では
+ * `customerId` を受けるだけで、新規登録と同時に作る `customerDraft` の欄は**まだ足さない**。
+ * 伺ったお名前・お電話番号は `reception_sessions.draft_json`（下）に打ちかけの文字として置く。
+ * ------------------------------------------------------------------------- */
+
+/* --- 予約の確定 ----------------------------------------------------------- */
+
+/**
+ * ご予約の確定（BOOK-05-CONFIRM「復唱を終えて予約を確定する」）。
+ * `Idempotency-Key` ヘッダーと合わせて 1 回だけ効かせる（`04-api.md` §6.1）。
+ *
+ * `durationMinutes` を省いたときは目的の合計を使う。**目的の合計とは限らない**ので
+ * 欄そのものを消さない（「お取りする時間」で 60 分の用件を 90 分押さえられる）。
+ */
+export const StaffReservationCreate = z
+  .strictObject({
+    storeId: Uuid,
+    startsAt: IsoDateTime,
+    purposeIds: Uuid.array().min(1).max(5),
+    durationMinutes: DurationMinutes.optional(),
+    // **null（＝「担当はあとで決める」を押した）と、欄が無い（＝まだ伺っていない）を分ける。**
+    // 既定値で null に潰すと、押していない端末の本文が「あとで決める」に化ける。
+    // どちらでも枠は消費するので `reservation_assignments` の行は作る。
+    staffId: Uuid.nullable().optional(),
+    equipmentIds: Uuid.array().max(5).default([]),
+    // `customerDraft`（新規登録と同時）は `CustomerCreate` を作る P4 が足す。
+    // それまで両方を送る本文は `strictObject` が知らないキーとして落とすので、排他は成り立つ。
+    customerId: Uuid.optional(),
+    noteCustomer: z.string().refine(codePointsAtMost(500)).default(''),
+    noteInternal: z.string().refine(codePointsAtMost(500)).default(''),
+    source: ReservationSource,
+    // 仮の押さえは表示のためだけの仕組みなので任意。期限切れの `holdId` でも確定は止めない
+    // （`04-api.md` §6.3）。枠が取れるかどうかは確定のバッチの中だけで決まる。
+    holdId: Uuid.optional(),
+    receptionSessionId: Uuid.optional(),
+  })
+  // **同じ id を 2 回受けない。**確定は受け取った並びのぶんだけ
+  // `reservation_purposes` / `reservation_assignments` / `reservation_slot_locks` を積むので、
+  // 同じ設備を 2 回送るとその設備の空きが 1 予約で 2 つ減り、同じ目的を 2 回送ると
+  // 所要が倍になって復唱の文にも二度出る（実測: 設備の占有行が 5 → 10 行）。
+  // 落とす場所は D1 ではなくここにする（`reservation_slot_locks` に一意 index は無い）。
+  .refine((value) => noDuplicates(value.purposeIds), {
+    message: '同じ目的を 2 回選ばない',
+    path: ['purposeIds'],
+  })
+  .refine((value) => noDuplicates(value.equipmentIds), {
+    message: '同じ設備を 2 回選ばない',
+    path: ['equipmentIds'],
+  })
+export type StaffReservationCreate = z.infer<typeof StaffReservationCreate>
+
+/* --- 枠の仮の押さえ（KV） ------------------------------------------------- */
+
+/**
+ * 枠の仮の押さえ（`POST /api/staff/holds`）。**排他ではない**ので常に 200 が返り、
+ * 409 `slot_taken` を返さない（KV に CAS が無く「取れなかった」を判定できない）。
+ *
+ * `receptionSessionId` を運ぶのは、空き枠エンジンが**同じ受付が置いた押さえを塞がりに
+ * 数えない**ため（`AvailabilityQuery.excludeReceptionSessionId`）。これが無いと
+ * 11:00 に置いてから 11:30 へ動かしたとき、11:00 が 7 分間だれにも取れなくなる。
+ */
+export const HoldInput = z
+  .strictObject({
+    storeId: Uuid,
+    startsAt: IsoDateTime,
+    durationMinutes: DurationMinutes,
+    // 担当も設備も決まっていない工程 3 の途中でも押さえられる（未定の枠を押さえる）。
+    // ここは「まだ伺っていない」と「あとで決める」を分ける必要が無いので null に寄せる。
+    staffId: Uuid.nullable().default(null),
+    equipmentIds: Uuid.array().max(5).default([]),
+    receptionSessionId: Uuid.nullable().default(null),
+  })
+  // 押さえも 1 台につき 1 レーンへ展開するので、同じ設備を 2 回送るとその設備が
+  // 1 つの押さえで 2 つ塞がって見える（確定と同じ数え方をここでも守る）。
+  .refine((value) => noDuplicates(value.equipmentIds), {
+    message: '同じ設備を 2 回選ばない',
+    path: ['equipmentIds'],
+  })
+export type HoldInput = z.infer<typeof HoldInput>
+
+/**
+ * 押さえ 1 本。TTL は **420 秒**（BOOK-05-CONFIRM の statusbar `11:11` と
+ * 「仮の押さえ → 11:18 まで」の差）。`expiresAt` を必ず載せるので、画面は残り時間を
+ * 別の呼び出しで聞き直さずに数えられる（端末の時計ではなくこの値で数える）。
+ * 延長の API は作らない。取り直しは `DELETE` → `POST` の 2 本で足りる。
+ */
+export const Hold = z
+  .strictObject({
+    id: Uuid,
+    startsAt: IsoDateTime,
+    endsAt: IsoDateTime,
+    expiresAt: IsoDateTime,
+    staffId: Uuid.nullable().default(null),
+    equipmentIds: Uuid.array().max(5).default([]),
+    receptionSessionId: Uuid.nullable().default(null),
+  })
+  .refine(startsBeforeEnds, { message: '終了は開始より後にする', path: ['endsAt'] })
+export type Hold = z.infer<typeof Hold>
+
+/* --- 受付セッション（5 工程の下書き） ------------------------------------- */
+
+/** 受付の結果。進行中は null で、行は破棄でも残す（`03-data-model.md` §8.1）。 */
+const ReceptionSessionOutcome = z.enum(['booked', 'discarded'])
+
+/** 受付を始める（「新しい予約を取る」）。始めた時点では店舗しか決まっていない。 */
+export const ReceptionSessionStart = z.strictObject({ storeId: Uuid })
+export type ReceptionSessionStart = z.infer<typeof ReceptionSessionStart>
+
+/**
+ * 5 工程で伺った内容の下書き（`reception_sessions.draft_json`）。
+ * 端末のメモリだけに持たない — iPadOS の Safari は裏に回ったタブを容易に破棄し、
+ * 戻ると読み込み直すので、伺った内容が丸ごと消える。
+ *
+ * **持てるのは選んだ id と打ちかけの文字だけ**である。確定したお客様のお名前・
+ * お電話番号そのものを持つ欄を作らない（`07-nfr.md` §6.6）。`nameTyped` /
+ * `phoneTyped` は工程 4 で打っている**途中の文字**で、お客様を指す値ではない
+ * （台帳と結びつけるのは P4）。
+ */
+export const ReceptionSessionDraft = z.strictObject({
+  purposeIds: Uuid.array().max(5).default([]),
+  staffId: Uuid.nullable().default(null),
+  equipmentIds: Uuid.array().max(5).default([]),
+  startsAt: IsoDateTime.nullable().default(null),
+  durationMinutes: DurationMinutes.nullable().default(null),
+  customerId: Uuid.nullable().default(null),
+  phoneTyped: z.string().trim().max(20).default(''),
+  nameTyped: z.string().trim().max(40).default(''),
+  kanaTyped: z.string().trim().max(40).default(''),
+  noteTyped: z.string().refine(codePointsAtMost(500)).default(''),
+  // 手書きは R2 に置き、ここには鍵だけを持つ（1 枚 3〜12KB を D1 に積むと、
+  // 5 枚 × 5,000 顧客で 500MB の 6 割を手書きが占める）。1 受付 5 枚まで。
+  // 鍵は `notes/{organizationId}/sessions/{receptionSessionId}/{noteId}.svg`。
+  handwritingKeys: z.string().trim().min(1).max(200).array().max(5).default([]),
+  // 「まだ入力中です」で仮の押さえを取り直した回数（Q-06 のいまの前提は 10 回まで）。
+  // **端末の state だけに持たない。**下書きをサーバに置いた理由（iPadOS の Safari は
+  // 裏に回ったタブを容易に捨てる）が、そのまま上限の抜け道になる — タブを読み込み
+  // 直すたびに 0 に戻り、いくらでも押さえ続けられる。上限そのものは Worker が数える
+  // （`POST /api/staff/holds` が 409 `renew_limit`）。
+  holdRenewals: z.number().int().nonnegative().default(0),
+})
+export type ReceptionSessionDraft = z.infer<typeof ReceptionSessionDraft>
+
+/**
+ * 下書きの保存（`PATCH /api/staff/reception-sessions/:sessionId`）。
+ * **欄ごとの差分ではなく下書きまるごと 1 つ**を送る。差分にすると「この欄を消した」と
+ * 「この欄は触っていない」が同じ形になり、工程を戻ったときに選び直しが消えるか残るかが
+ * 端末ごとに変わる。画面は 5 工程ぶんを手元に持っているので、丸ごと送れる。
+ */
+export const ReceptionSessionDraftPatch = z.strictObject({ draft: ReceptionSessionDraft })
+export type ReceptionSessionDraftPatch = z.infer<typeof ReceptionSessionDraftPatch>
+
+/**
+ * 受付 1 件。進行中は `outcome` も `endedAt` も null で、`draft` だけが載る。
+ *
+ * §8.1 の 3 つの不変条件（`outcome` と `endedAt` を同じ UPDATE で書く／`booked` なら
+ * `reservationId` が非 NULL／終わった受付の `draft` は NULL）は**書く側で守る**。
+ * 読む側で強いると、1 列が食い違っただけで「受けかけのご予約」からの復帰が丸ごと
+ * 500 になり、伺った内容へ戻る道が無くなる（`ReservationDetail.purposes` の 0 件と同じ考え方）。
+ */
+export const ReceptionSession = z.strictObject({
+  id: Uuid,
+  storeId: Uuid,
+  reservationId: Uuid.nullable().default(null),
+  // 端末は P10（`013-terminal-and-audit`）まで常に null。
+  terminalId: Uuid.nullable().default(null),
+  // 共有モードで個人が未確認なら null。
+  actorId: Uuid.nullable().default(null),
+  startedAt: IsoDateTime,
+  endedAt: IsoDateTime.nullable().default(null),
+  outcome: ReceptionSessionOutcome.nullable().default(null),
+  draft: ReceptionSessionDraft.nullable().default(null),
+  createdAt: IsoDateTime,
+})
+export type ReceptionSession = z.infer<typeof ReceptionSession>
+
+/**
+ * 受付を閉じる（`POST /api/staff/reception-sessions/:sessionId/close`）。
+ * **`discarded` しか受けない。**成立（`booked`）は確定の 1 バッチが書く値なので、
+ * 端末から送れると、予約の無い受付を成立として残せてしまう。
+ * 「あとで続ける」はこのルートを通らない（進行中のまま残し、押さえだけ解放する）。
+ */
+export const ReceptionSessionClose = z.strictObject({ outcome: z.literal('discarded') })
+export type ReceptionSessionClose = z.infer<typeof ReceptionSessionClose>

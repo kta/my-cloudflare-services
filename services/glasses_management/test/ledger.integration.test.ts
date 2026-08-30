@@ -79,7 +79,7 @@ type AvailabilityResponse = {
   cleanupMinutes: number
   durationMinutes: number
   slots: { startsAt: string; isAvailable: boolean; remaining: number; reason: string | null }[]
-  lanes: { kind: string; id: string | null; name: string }[]
+  lanes: { kind: string; id: string | null; name: string; subtitle: string }[]
   alternatives: unknown[]
   reason: string | null
   serverNow: string
@@ -652,6 +652,24 @@ describe('GET /api/staff/availability', () => {
       '中村 彩',
       '担当が未定',
     ])
+  })
+
+  it('担当のレーンの 2 行目に肩書きと技能が並ぶ（設備は役割のまま）', async () => {
+    const byStaff = await availability(
+      `storeId=${fx.storeId}&date=${LEDGER_DATE}&purposeIds=${fx.purposes.eyesight}`,
+    )
+    // 肩書きだけを写すと、肩書きを持たない担当（世界観データでは 6 名中 5 名）の
+    // 行が全部空になり、盤で「誰に何ができるか」が読めない。
+    const sato = byStaff.body.lanes.find((lane) => lane.name === '佐藤 美咲')
+    expect(sato?.subtitle).toBe('視力測定・販売・受付')
+    expect(byStaff.body.lanes.find((lane) => lane.kind === 'unassigned')?.subtitle).toBe('')
+
+    const byResource = await availability(
+      `storeId=${fx.storeId}&date=${LEDGER_DATE}&purposeIds=${fx.purposes.eyesight}&axis=resource`,
+    )
+    expect(byResource.body.lanes.find((lane) => lane.name === '相談カウンター 2')?.subtitle).toBe(
+      '接客・ご相談',
+    )
   })
 
   it('変更のときは自分自身を塞がりに数えない', async () => {
