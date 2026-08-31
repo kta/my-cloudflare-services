@@ -323,3 +323,46 @@ pnpm --filter @app/glasses_management e2e → 230 passed
 ```
 
 モック突き合わせは **46 面**。
+
+## P8 お客様向け Web 予約 — 完了
+
+ブランチ `011-web-booking`。仕様は `specs/glasses_management/features/011-web-booking/spec.md`（Approved）。
+
+作ったもの:
+
+- 契約と表: `WebPublication` / `PublicStore` / `PublicStorePurpose` / `PublicAvailabilityResponse` /
+  `PublicReservationView` ほか。マイグレーション `0007`
+- `domain/web-booking.ts` — 公開の可否、受付できる期間、目的ごとの所要時間から**空きかどうかだけ**を
+  返す計算。**誰が・どの台がという内訳は外に出さない**
+- `domain/management-code.ts` — 確認番号の採番と照合。**番号か電話のどちらが違うかは言わない**
+  （どちらが当たっているか探れてしまうため）
+- 公開ルート（`/api/public/*`）は既定拒否の**例外**として認証を通さない。テナントは slug から引く
+- 画面 7 面（iPhone 390×844）: 店舗選び・目的・日時・お客様の情報・確認・完了・ご予約の確認と変更取消
+- 設定に 7 項目目「Web予約の公開」(`WebPublishPanel`) を追加
+
+判断したこと:
+
+- 空き枠 API は **KV を 1 度も読まない**。公開面から内部の割り当てを推測されないようにするため
+- 前日の終わりを過ぎた変更・取消は画面から落とし、お電話での連絡をお願いする
+- 確認番号の照合失敗は**明細を 1 行も出さず**、どちらが違うかも示さない
+
+レビュー: subagent で **2 巡**（Opus）。
+
+確かめたこと:
+
+```
+（.dev.vars を退避した CI 相当の状態で）
+bash scripts/check-agent-compat.sh   → ok
+pnpm exec biome check .              → 緑
+pnpm run deps:check                  → 緑
+pnpm -r --if-present typecheck       → 緑
+pnpm run test                        → 緑（3,226 テスト + traceability）
+pnpm --filter @app/glasses_management e2e → 274 passed
+```
+
+検証中に直したもの（レビュー後に残っていた）:
+
+- `PublicBookingApp.tsx` の空き枠取得が `zValidator` の無いルートに `query` を渡して型が合わなかった。
+  既存の `StaffPanel` と同じ手（経路だけ型のついたクライアントに引かせ、query は `fetch` 側で足す）に揃えた
+- `publicClient` が外から使われていない export だった（knip）ので export を外した
+- 設定の第2サイドバーが 7 項目になったのに、既存テストが 6 項目のままだった

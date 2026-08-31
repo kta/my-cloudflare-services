@@ -12,7 +12,8 @@ import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-or
  * テーブルはフェーズごとに増える（specs/glasses_management/design/03-data-model.md）。
  * P0（基盤）の 3 つに、P1（店舗の受付条件）の 16 と P2（枠の一次排他）の 1、
  * P3（電話・店頭からの予約受付）の 3 と P4（顧客台帳）の 4、
- * P5（来店受付とウォークイン）の 2 と P7（受付の録音）の 2 を足した 31 表がここにある。
+ * P5（来店受付とウォークイン）の 2 と P7（受付の録音）の 2、
+ * P8（お客様向け Web 予約）の 2 を足した 33 表がここにある。
  */
 
 /**
@@ -1112,5 +1113,107 @@ export const alerts = sqliteTable(
     index('alerts_org_store_occurred_idx').on(t.organizationId, t.storeId, t.occurredAt),
     // サイドバーの未対応バッジ（resolved_at IS NULL を数える）。
     index('alerts_org_store_resolved_idx').on(t.organizationId, t.storeId, t.resolvedAt),
+  ],
+)
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * P8 お客様向け Web 予約（0007_*.sql）
+ * 店舗ごとに「出す・出さない／何を出すか／いつまで受けるか」を持つ 1 表と、
+ * お客様が Web から入れた予約の付帯情報 1 表。予約そのものは reservations
+ * （source='web'）に作り、ご用件は reservation_purposes、担当と設備は
+ * reservation_assignments に載せる。確認待ちをお店へ伝える alerts は P7 の表を
+ * そのまま使い、ここでは作り直さない。
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * Web 予約の公開設定。**1 店舗 1 行**（SETTINGS-WEB の保存先）。
+ *
+ * **行が無い店舗は「未公開」として読む**（is_published='0' と同じ）。
+ * 「ご案内のページ eyex.jp/ginza」はこの表に持たない（stores.slug から組み立てる）。
+ *
+ * opens_at < closes_at。この帯は store_business_hours の内側でなくてよい
+ * （Web だけ受付を狭められる）。'HH:MM' の文字列比較で大小を見るので、
+ * 桁落ちの '9:00' を入れない（契約の LocalTime が入口で弾く）。
+ *
+ * requires_approval に「自動で確定する」の選択肢を持たせない。列は '0' / '1' を
+ * 取るが、'0' は承認を要らなくするためではなく将来の拡張のために残してある
+ * （P8 の UI は '1' 固定で保存する）。
+ *
+ * change_deadline_days は変更・取消の締切で、**来店日の N 日前の 23:59:59.999 JST**
+ * まで受ける（既定 1 = 前日まで）。営業終了時刻を締切にしない — 店舗ごとに締切が
+ * 動くとお客様に説明できない。
+ */
+export const webBookingSettings = sqliteTable(
+  'web_booking_settings',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    storeId: text('store_id').notNull(),
+    isPublished: text('is_published').notNull(), // '0' | '1'
+    opensAt: text('opens_at').notNull(), // 'HH:MM'。SETTINGS-WEB の 10:30
+    closesAt: text('closes_at').notNull(), // 'HH:MM'。同 18:00
+    acceptFromHours: integer('accept_from_hours').notNull(), // 0〜168。既定 2
+    acceptUntilDays: integer('accept_until_days').notNull(), // 1〜180。既定 30
+    changeDeadlineDays: integer('change_deadline_days').notNull(), // 0〜30。既定 1
+    requiresApproval: text('requires_approval').notNull(), // '0' | '1'
+    message: text('message'), // 0〜120文字。お知らせを出さない店舗は NULL
+    version: integer('version').notNull(), // 楽観ロック（1 以上）
+    updatedAt: text('updated_at').notNull(),
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => [
+    // 公開 API が店舗ごとに 1 行だけ引く。2 行目を DB 側で禁じる。
+    uniqueIndex('web_booking_settings_org_store_idx').on(t.organizationId, t.storeId),
+  ],
+)
+
+/**
+ * お客様が Web から入れた予約の付帯情報。予約本体は reservations にある。
+ *
+ * **生の確認鍵・確認番号を保存しない。**列はハッシュだけで、生値はお客様への控え
+ * （作成の応答）にだけ載せる。平文で持つと一度漏れたときに全予約が開く。
+ * 画面とメールでは management_code_hash の元の値を「確認番号」と呼ぶ
+ * （「管理コード」は内部語で、お客様には出さない）。
+ *
+ * public_code は reservations.code とは**独立した採番**（組織 × YYMM 内の 4 桁
+ * ゼロ埋め連番、接頭辞 'EY-W-'）。モックの Web は EY-W-2608-0031、店内は
+ * EY-2608-0142 で、同じ連番なら同月に共存しないので系統が別だと読める。
+ *
+ * contact_email は **NOT NULL**（Q-09 のいまの前提）。承認制である以上、連絡手段の
+ * 無いお客様の予約は宙に浮く。確認メールを送れなかったときも予約は残し、
+ * ご予約番号と確認番号を控えていただく文を画面に出す。
+ *
+ * status='pending' のまま**受信日（created_at の JST 暦日）の 24:00 JST** を越えた
+ * ものは自動で取り消す。**起算日は受信日であって来店日ではない**（来店日起算にすると
+ * 3 週間先の予約が pending のまま ALERTS に居座る）。取消は reservations.status
+ * ='cancelled' / cancel_reason='store' と同じ db.batch() で書く。
+ */
+export const webBookings = sqliteTable(
+  'web_bookings',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    storeId: text('store_id').notNull(),
+    reservationId: text('reservation_id').notNull(),
+    publicCode: text('public_code').notNull(), // 'EY-W-YYMM-NNNN'
+    confirmationKeyHash: text('confirmation_key_hash').notNull(), // 確認メールのリンクの 1 回性の鍵
+    managementCodeHash: text('management_code_hash').notNull(), // 画面では「確認番号」
+    contactName: text('contact_name').notNull(), // 1〜40文字
+    contactKana: text('contact_kana'), // ひらがな・空白。無くてよい
+    contactPhone: text('contact_phone').notNull(), // 表示用の生文字列（080-2345-6789）
+    contactEmail: text('contact_email').notNull(), // RFC 準拠。Q-09 の前提で必須
+    status: text('status').notNull(), // 'pending' | 'confirmed' | 'cancelled'
+    createdAt: text('created_at').notNull(),
+    confirmedAt: text('confirmed_at'), // 確定するまで NULL
+    cancelledAt: text('cancelled_at'), // 取り消すまで NULL
+    updatedAt: text('updated_at').notNull(),
+  },
+  (t) => [
+    // 予約 1 件に Web 予約 1 件。台帳から付帯情報を引く。
+    uniqueIndex('web_bookings_org_reservation_idx').on(t.organizationId, t.reservationId),
+    // WEB-CANCEL の番号引きと採番衝突の検出。組織で通しなので店舗を含めない。
+    uniqueIndex('web_bookings_org_public_code_idx').on(t.organizationId, t.publicCode),
+    // LEDGER-LIST の「確認待ち 1件」・ALERTS の「Web予約が2件、確認待ちです」。
+    index('web_bookings_org_store_status_idx').on(t.organizationId, t.storeId, t.status),
   ],
 )

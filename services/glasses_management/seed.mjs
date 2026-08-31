@@ -977,6 +977,14 @@ const lines = [
     ),
   ),
 
+  /*
+   * 銀座店の Web 予約の受付条件 1 行（P8）。丸の内・新宿は行を置かない —— 行が無い店舗は
+   * 「公開していない」として `/api/public/stores` に最初から出ない、という決めの実データである。
+   * 値は `P8-web-booking.md` T-020 の指定どおり: 10:30–18:00 ／ 2 時間先から ／ 30 日先まで ／
+   * 変更・取消は前日まで ／ ご予約の確定は「お店が確かめてから確定する」。
+   */
+  `INSERT OR IGNORE INTO web_booking_settings (id, organization_id, store_id, is_published, opens_at, closes_at, accept_from_hours, accept_until_days, change_deadline_days, requires_approval, message, version, updated_at, created_at) VALUES (${q(uid('e0030000', 0))}, ${q(ORG)}, ${q(GINZA)}, '1', '10:30', '18:00', 2, 30, 1, '1', ${q('ご来店のご予約を承ります。当日のご来店も歓迎しております。')}, 1, ${q(NOW)}, ${q(NOW)});`,
+
   // 枠の一次排他。確定の経路（006-booking-flow）と同じ内容を刻みへ展開して置く。
   ...reservationRows.flatMap((r, i) =>
     r.locks.map(

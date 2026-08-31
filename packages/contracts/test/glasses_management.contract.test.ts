@@ -63,6 +63,13 @@ import {
   PhoneNormalized,
   PhoneSuffix,
   Prescription,
+  PublicAvailabilityQuery,
+  PublicAvailabilityResponse,
+  PublicBookingCreate,
+  PublicBookingResult,
+  PublicReservationStatus,
+  PublicReservationVerification,
+  PublicStorePurpose,
   PurposeListQuery,
   PurposeOrderInput,
   PurposeRequirement,
@@ -141,6 +148,9 @@ import {
   WalkinPatch,
   WalkinSummary,
   WebBookingCode,
+  WebBookingReviewInput,
+  WebBookingSettings,
+  WebBookingSettingsInput,
   Weekday,
 } from '@app/contracts'
 import { describe, expect, it } from 'vitest'
@@ -3404,5 +3414,425 @@ describe('AlertList', () => {
     expect(AlertList.parse({ total: 0 }).nextCursor).toBeNull()
     // `counts` の 4 分類は P10。
     expect(() => AlertList.parse({ items: [], total: 0, counts: { all: 0 } })).toThrow()
+  })
+})
+
+/* --- P8 お客様向け Web 予約（011-web-booking） ---------------------------- */
+
+const webBookingSettingsInput = {
+  isPublished: true,
+  opensAt: '10:30',
+  closesAt: '18:00',
+  acceptFromHours: 2,
+  acceptUntilDays: 30,
+  changeDeadlineDays: 1,
+  requiresApproval: true,
+  message: '9月30日（水）は棚卸しのためお休みをいただきます。',
+  publishedPurposeIds: [UUID, UUID2],
+  version: 3,
+}
+
+const webBookingSettings = {
+  ...webBookingSettingsInput,
+  storeId: UUID,
+  landingPath: 'eyex.jp/ginza',
+  updatedAt: NOW,
+}
+
+const publicBookingCreate = {
+  purposeId: UUID,
+  startsAt: START,
+  contactName: '山口 真央',
+  contactKana: 'やまぐち まお',
+  contactPhone: '080-2345-6789',
+  contactEmail: 'm.yamaguchi@example.jp',
+}
+
+const publicBookingResult = {
+  code: 'EY-W-2608-0031',
+  status: 'pending',
+  startsAt: START,
+  endsAt: END,
+  storeName: 'EYEX 銀座店',
+  purposeName: '新しいメガネを作る',
+  contactName: '山口 真央',
+  managementCode: 'K7M4PXQ2',
+  emailed: true,
+}
+
+const publicReservationStatus = {
+  code: 'EY-W-2608-0031',
+  status: 'confirmed',
+  startsAt: START,
+  endsAt: END,
+  storeName: 'EYEX 銀座店',
+  purposeName: '新しいメガネを作る',
+  durationMinutes: 60,
+  contactName: '山口 真央',
+  changeDeadlineAt: '2026-08-28T14:59:59.999Z',
+}
+
+describe('WebBookingSettingsInput', () => {
+  it('accepts a 0-character and a 120-character message and rejects 121', () => {
+    expect(WebBookingSettingsInput.parse({ ...webBookingSettingsInput, message: '' }).message).toBe(
+      '',
+    )
+    expect(
+      WebBookingSettingsInput.parse({ ...webBookingSettingsInput, message: 'あ'.repeat(120) })
+        .message,
+    ).toHaveLength(120)
+    expect(() =>
+      WebBookingSettingsInput.parse({ ...webBookingSettingsInput, message: 'あ'.repeat(121) }),
+    ).toThrow()
+    // 画面の「27文字／120文字まで」は符号位置で数える。UTF-16 の長さで見ない。
+    const { message: _dropped, ...omitted } = webBookingSettingsInput
+    expect(WebBookingSettingsInput.parse(omitted).message).toBe('')
+  })
+
+  it('accepts acceptUntilDays 1 and 180 and rejects 0 and 181', () => {
+    expect(
+      WebBookingSettingsInput.parse({ ...webBookingSettingsInput, acceptUntilDays: 1 })
+        .acceptUntilDays,
+    ).toBe(1)
+    expect(
+      WebBookingSettingsInput.parse({ ...webBookingSettingsInput, acceptUntilDays: 180 })
+        .acceptUntilDays,
+    ).toBe(180)
+    expect(() =>
+      WebBookingSettingsInput.parse({ ...webBookingSettingsInput, acceptUntilDays: 0 }),
+    ).toThrow()
+    expect(() =>
+      WebBookingSettingsInput.parse({ ...webBookingSettingsInput, acceptUntilDays: 181 }),
+    ).toThrow()
+  })
+
+  it('accepts acceptFromHours 0 and 168 and rejects -1 and 169', () => {
+    expect(
+      WebBookingSettingsInput.parse({ ...webBookingSettingsInput, acceptFromHours: 0 })
+        .acceptFromHours,
+    ).toBe(0)
+    expect(
+      WebBookingSettingsInput.parse({ ...webBookingSettingsInput, acceptFromHours: 168 })
+        .acceptFromHours,
+    ).toBe(168)
+    expect(() =>
+      WebBookingSettingsInput.parse({ ...webBookingSettingsInput, acceptFromHours: -1 }),
+    ).toThrow()
+    expect(() =>
+      WebBookingSettingsInput.parse({ ...webBookingSettingsInput, acceptFromHours: 169 }),
+    ).toThrow()
+    // 画面に項目が無かった時代の既定は 2 時間先から（目的の最長 60 分＋片付け 10 分）。
+    const { acceptFromHours: _dropped, ...omitted } = webBookingSettingsInput
+    expect(WebBookingSettingsInput.parse(omitted).acceptFromHours).toBe(2)
+  })
+
+  it('accepts changeDeadlineDays 0 and 30 and rejects 31', () => {
+    expect(
+      WebBookingSettingsInput.parse({ ...webBookingSettingsInput, changeDeadlineDays: 0 })
+        .changeDeadlineDays,
+    ).toBe(0)
+    expect(
+      WebBookingSettingsInput.parse({ ...webBookingSettingsInput, changeDeadlineDays: 30 })
+        .changeDeadlineDays,
+    ).toBe(30)
+    expect(() =>
+      WebBookingSettingsInput.parse({ ...webBookingSettingsInput, changeDeadlineDays: 31 }),
+    ).toThrow()
+    expect(() =>
+      WebBookingSettingsInput.parse({ ...webBookingSettingsInput, changeDeadlineDays: -1 }),
+    ).toThrow()
+    // WEB-CANCEL の「変更・取り消しは前日までに」は既定 1 日前。
+    const { changeDeadlineDays: _dropped, ...omitted } = webBookingSettingsInput
+    expect(WebBookingSettingsInput.parse(omitted).changeDeadlineDays).toBe(1)
+  })
+
+  it('rejects opensAt equal to or later than closesAt', () => {
+    expect(() =>
+      WebBookingSettingsInput.parse({
+        ...webBookingSettingsInput,
+        opensAt: '18:00',
+        closesAt: '18:00',
+      }),
+    ).toThrow()
+    expect(() =>
+      WebBookingSettingsInput.parse({
+        ...webBookingSettingsInput,
+        opensAt: '18:30',
+        closesAt: '18:00',
+      }),
+    ).toThrow()
+    // 桁落ちの `9:00` を通すと文字列比較の大小が壊れる。
+    expect(() =>
+      WebBookingSettingsInput.parse({ ...webBookingSettingsInput, opensAt: '9:00' }),
+    ).toThrow()
+    expect(
+      WebBookingSettingsInput.parse({ ...webBookingSettingsInput, opensAt: '09:00' }).opensAt,
+    ).toBe('09:00')
+  })
+
+  it('requires version so a blind overwrite cannot be sent', () => {
+    const { version: _dropped, ...omitted } = webBookingSettingsInput
+    expect(() => WebBookingSettingsInput.parse(omitted)).toThrow()
+    expect(WebBookingSettingsInput.parse(webBookingSettingsInput).version).toBe(3)
+  })
+
+  it('rejects an unknown key so a stale settings field never lands silently', () => {
+    expect(() =>
+      WebBookingSettingsInput.parse({ ...webBookingSettingsInput, autoConfirm: true }),
+    ).toThrow()
+    // ご案内のページは `stores.slug` から組み立てるので、保存で受け取らない。
+    expect(() =>
+      WebBookingSettingsInput.parse({ ...webBookingSettingsInput, landingPath: 'eyex.jp/ginza' }),
+    ).toThrow()
+    expect(() =>
+      WebBookingSettingsInput.parse({ ...webBookingSettingsInput, storeId: UUID }),
+    ).toThrow()
+  })
+})
+
+describe('WebBookingSettings', () => {
+  it('keeps requiresApproval true by default because there is no auto-confirm option', () => {
+    const { requiresApproval: _dropped, ...omitted } = webBookingSettings
+    expect(WebBookingSettings.parse(omitted).requiresApproval).toBe(true)
+    expect(WebBookingSettings.parse(webBookingSettings).landingPath).toBe('eyex.jp/ginza')
+    // 「自動で確定する」を選ばせる UI は作らないが、列としては `false` も持てる。
+    expect(
+      WebBookingSettings.parse({ ...webBookingSettings, requiresApproval: false }).requiresApproval,
+    ).toBe(false)
+    // 公開する目的が 0 件でも契約は通す（公開の可否は 422 で返す判断であって 400 ではない）。
+    expect(
+      WebBookingSettings.parse({ ...webBookingSettings, publishedPurposeIds: [] })
+        .publishedPurposeIds,
+    ).toEqual([])
+  })
+})
+
+describe('WebBookingCode', () => {
+  it('accepts EY-W-2608-0031 and EY-W-2608-10000 and rejects EY-2608-0031', () => {
+    expect(WebBookingCode.parse('EY-W-2608-0031')).toBe('EY-W-2608-0031')
+    // 9999 を越えた月は 5 桁へ桁上げする。
+    expect(WebBookingCode.parse('EY-W-2608-10000')).toBe('EY-W-2608-10000')
+    // 店内の採番（`reservations.code`）と混ぜない。
+    expect(() => WebBookingCode.parse('EY-2608-0031')).toThrow()
+    for (const code of ['ey-w-2608-0031', 'EY-W-2608-031', 'EY-W-268-0031', 'EY-W-2608-100000']) {
+      expect(() => WebBookingCode.parse(code)).toThrow()
+    }
+  })
+})
+
+describe('PublicStorePurpose', () => {
+  it('carries the public-facing name and the duration only — no internal name', () => {
+    const parsed = PublicStorePurpose.parse({
+      id: UUID,
+      name: '新しいメガネを作る',
+      durationMinutes: 60,
+    })
+    expect(Object.keys(parsed).sort()).toEqual(['durationMinutes', 'id', 'name'])
+    expect(parsed.name).toBe('新しいメガネを作る')
+    // 出るのは `visit_purposes.name_public` だけ。店内名・技能・設備は 1 つも出さない。
+    expect(() =>
+      PublicStorePurpose.parse({
+        id: UUID,
+        name: '新しいメガネを作る',
+        nameInternal: '新規作成',
+        durationMinutes: 60,
+      }),
+    ).toThrow()
+    expect(() =>
+      PublicStorePurpose.parse({
+        id: UUID,
+        name: '新しいメガネを作る',
+        durationMinutes: 60,
+        requiredSkills: ['refraction'],
+      }),
+    ).toThrow()
+  })
+})
+
+describe('PublicAvailabilityQuery', () => {
+  it('accepts a 7-day window and rejects an 8-day one', () => {
+    // WEB-03-DATETIME の週は「8月27日 〜 9月2日」の 7 日ぶん（両端を含める）。
+    const week = { purposeId: UUID, from: '2026-08-27', to: '2026-09-02' }
+    expect(PublicAvailabilityQuery.parse(week).to).toBe('2026-09-02')
+    expect(() => PublicAvailabilityQuery.parse({ ...week, to: '2026-09-03' })).toThrow()
+    // 逆向きの範囲は黙って 0 件にせず入力を直させる。
+    expect(() =>
+      PublicAvailabilityQuery.parse({ ...week, from: '2026-09-02', to: '2026-08-27' }),
+    ).toThrow()
+    expect(() => PublicAvailabilityQuery.parse({ from: '2026-08-27', to: '2026-09-02' })).toThrow()
+  })
+})
+
+describe('PublicAvailabilityResponse', () => {
+  it('exposes only whether a slot is open — never the staff or equipment behind it', () => {
+    const parsed = PublicAvailabilityResponse.parse({
+      days: [
+        { date: '2026-08-27', isClosed: false, isFull: false, slots: [] },
+        {
+          date: '2026-08-29',
+          isClosed: false,
+          isFull: false,
+          slots: [
+            { startsAt: START, isAvailable: true },
+            { startsAt: END, isAvailable: false },
+          ],
+        },
+        { date: '2026-09-01', isClosed: true, isFull: false, slots: [] },
+      ],
+    })
+    expect(parsed.days).toHaveLength(3)
+    expect(Object.keys(parsed.days[1]?.slots[0] ?? {}).sort()).toEqual(['isAvailable', 'startsAt'])
+    // 社内の事情（誰が・どの台が空いているか）をお客様の画面へ出さない。
+    for (const slot of [
+      { startsAt: START, isAvailable: true, staffIds: [UUID] },
+      { startsAt: START, isAvailable: true, equipmentIds: [UUID] },
+      { startsAt: START, isAvailable: true, remaining: 2 },
+    ]) {
+      expect(() =>
+        PublicAvailabilityResponse.parse({
+          days: [{ date: '2026-08-29', isClosed: false, isFull: false, slots: [slot] }],
+        }),
+      ).toThrow()
+    }
+  })
+})
+
+describe('PublicBookingCreate', () => {
+  it('requires contactEmail because an approval flow needs a way back to the customer', () => {
+    const { contactEmail: _dropped, ...omitted } = publicBookingCreate
+    expect(() => PublicBookingCreate.parse(omitted)).toThrow()
+    expect(() => PublicBookingCreate.parse({ ...publicBookingCreate, contactEmail: '' })).toThrow()
+    expect(() =>
+      PublicBookingCreate.parse({ ...publicBookingCreate, contactEmail: 'm.yamaguchi' }),
+    ).toThrow()
+    expect(PublicBookingCreate.parse(publicBookingCreate).contactEmail).toBe(
+      'm.yamaguchi@example.jp',
+    )
+    // ふりがなだけは空でもよい（お客様が自分で消せる）。
+    expect(PublicBookingCreate.parse({ ...publicBookingCreate, contactKana: '' }).contactKana).toBe(
+      '',
+    )
+  })
+
+  it('accepts a 40-character name and rejects 41', () => {
+    expect(
+      PublicBookingCreate.parse({ ...publicBookingCreate, contactName: 'あ'.repeat(40) })
+        .contactName,
+    ).toHaveLength(40)
+    expect(() =>
+      PublicBookingCreate.parse({ ...publicBookingCreate, contactName: 'あ'.repeat(41) }),
+    ).toThrow()
+    expect(() => PublicBookingCreate.parse({ ...publicBookingCreate, contactName: '' })).toThrow()
+    expect(() =>
+      PublicBookingCreate.parse({ ...publicBookingCreate, contactKana: 'あ'.repeat(41) }),
+    ).toThrow()
+  })
+
+  it('accepts a hyphenated phone number and rejects a 9-digit one', () => {
+    expect(PublicBookingCreate.parse(publicBookingCreate).contactPhone).toBe('080-2345-6789')
+    expect(
+      PublicBookingCreate.parse({ ...publicBookingCreate, contactPhone: '08023456789' })
+        .contactPhone,
+    ).toBe('08023456789')
+    // 桁が足りない番号ではご連絡できない。
+    expect(() =>
+      PublicBookingCreate.parse({ ...publicBookingCreate, contactPhone: '012345678' }),
+    ).toThrow()
+    expect(() => PublicBookingCreate.parse({ ...publicBookingCreate, contactPhone: '' })).toThrow()
+  })
+})
+
+describe('PublicBookingResult', () => {
+  it('returns the management code in plaintext exactly here and nowhere else', () => {
+    const parsed = PublicBookingResult.parse(publicBookingResult)
+    expect(parsed.managementCode).toBe('K7M4PXQ2')
+    expect(parsed.code).toBe('EY-W-2608-0031')
+    // 8 文字（誤読しない英数字）から。長い短命の鍵も同じ欄で返せるよう 32 文字まで。
+    expect(
+      PublicBookingResult.parse({ ...publicBookingResult, managementCode: 'A'.repeat(32) })
+        .managementCode,
+    ).toHaveLength(32)
+    expect(() =>
+      PublicBookingResult.parse({ ...publicBookingResult, managementCode: 'A'.repeat(7) }),
+    ).toThrow()
+    expect(() =>
+      PublicBookingResult.parse({ ...publicBookingResult, managementCode: 'A'.repeat(33) }),
+    ).toThrow()
+    const { managementCode: _dropped, ...omitted } = publicBookingResult
+    expect(() => PublicBookingResult.parse(omitted)).toThrow()
+  })
+
+  it('carries emailed so the done screen can stop claiming a mail that never left', () => {
+    expect(PublicBookingResult.parse(publicBookingResult).emailed).toBe(true)
+    expect(PublicBookingResult.parse({ ...publicBookingResult, emailed: false }).emailed).toBe(
+      false,
+    )
+    // 既定で真にすると、メールが出なかった日に「お送りしました。」が出てしまう。
+    const { emailed: _dropped, ...omitted } = publicBookingResult
+    expect(() => PublicBookingResult.parse(omitted)).toThrow()
+    // 承認待ちのまま完了画面へ進む経路があるので、`status` は 2 値を取る。
+    expect(PublicBookingResult.parse({ ...publicBookingResult, status: 'confirmed' }).status).toBe(
+      'confirmed',
+    )
+    expect(() =>
+      PublicBookingResult.parse({ ...publicBookingResult, status: 'cancelled' }),
+    ).toThrow()
+  })
+})
+
+describe('PublicReservationVerification', () => {
+  it('rejects a request that carries neither a phone number nor an email', () => {
+    expect(() => PublicReservationVerification.parse({ code: 'EY-W-2608-0031' })).toThrow()
+    expect(
+      PublicReservationVerification.parse({
+        code: 'EY-W-2608-0031',
+        contactPhone: '080-2345-6789',
+      }).contactPhone,
+    ).toBe('080-2345-6789')
+    expect(
+      PublicReservationVerification.parse({
+        code: 'EY-W-2608-0031',
+        contactEmail: 'm.yamaguchi@example.jp',
+      }).contactEmail,
+    ).toBe('m.yamaguchi@example.jp')
+    expect(() =>
+      PublicReservationVerification.parse({ code: 'EY-2608-0142', contactPhone: '080-2345-6789' }),
+    ).toThrow()
+  })
+})
+
+describe('PublicReservationStatus', () => {
+  it('never carries the management code', () => {
+    const parsed = PublicReservationStatus.parse(publicReservationStatus)
+    expect(parsed.changeDeadlineAt).toBe('2026-08-28T14:59:59.999Z')
+    // 確認番号の平文は予約を作ったときの 1 回しか返らない。
+    expect(Object.keys(parsed)).not.toContain('managementCode')
+    expect(() =>
+      PublicReservationStatus.parse({ ...publicReservationStatus, managementCode: 'K7M4PXQ2' }),
+    ).toThrow()
+    expect(() =>
+      PublicReservationStatus.parse({ ...publicReservationStatus, contactPhone: '080-2345-6789' }),
+    ).toThrow()
+    expect(
+      PublicReservationStatus.parse({ ...publicReservationStatus, status: 'cancelled' }).status,
+    ).toBe('cancelled')
+  })
+})
+
+describe('WebBookingReviewInput', () => {
+  it('requires a reason when the decision is reject', () => {
+    expect(WebBookingReviewInput.parse({ decision: 'approve' }).reason).toBe('')
+    expect(() => WebBookingReviewInput.parse({ decision: 'reject' })).toThrow()
+    expect(() => WebBookingReviewInput.parse({ decision: 'reject', reason: '' })).toThrow()
+    expect(
+      WebBookingReviewInput.parse({
+        decision: 'reject',
+        reason: '同じ時間に別のご予約が入りました',
+      }).reason,
+    ).toBe('同じ時間に別のご予約が入りました')
+    expect(() =>
+      WebBookingReviewInput.parse({ decision: 'reject', reason: 'あ'.repeat(121) }),
+    ).toThrow()
+    expect(() => WebBookingReviewInput.parse({ decision: 'cancel' })).toThrow()
   })
 })

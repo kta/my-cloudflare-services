@@ -37,6 +37,8 @@ import {
   visitEvents,
   visitPurposes,
   walkIns,
+  webBookingSettings,
+  webBookings,
 } from '../src/worker/db/schema'
 
 /** index の対象列を SQL 列名の配列で取り出す。 */
@@ -1034,5 +1036,142 @@ describe('alerts', () => {
     // 同じ code + target_id の未解決行があれば新しい行を作らない（連打しない）。
     expect(table.columns.find((c) => c.name === 'target_id')?.notNull).toBe(false)
     expect(table.columns.find((c) => c.name === 'resolved_at')?.notNull).toBe(false)
+  })
+})
+
+describe('web_booking_settings', () => {
+  const table = getTableConfig(webBookingSettings)
+
+  it('店舗ごとに 1 行しか持てない', () => {
+    // 公開 API が店舗ごとに 1 行だけ引く。2 行目は DB 側で禁じる。
+    expect(columnsOf(table, 'web_booking_settings_org_store_idx')).toEqual([
+      'organization_id',
+      'store_id',
+    ])
+    expect(isUnique(table, 'web_booking_settings_org_store_idx')).toBe(true)
+    // 張るのはこの 1 本だけ（ほかの引き方をしない）。
+    expect(table.indexes).toHaveLength(1)
+  })
+
+  it('外部キーを宣言していない', () => {
+    expect(table.name).toBe('web_booking_settings')
+    expect(table.foreignKeys).toHaveLength(0)
+    expect(table.columns.filter((c) => c.primary).map((c) => c.name)).toEqual(['id'])
+    const names = table.columns.map((c) => c.name)
+    expect(names).toEqual(
+      expect.arrayContaining([
+        'organization_id',
+        'store_id',
+        'is_published',
+        'opens_at',
+        'closes_at',
+        'accept_from_hours',
+        'accept_until_days',
+        'change_deadline_days',
+        'requires_approval',
+        'message',
+        'version',
+        'updated_at',
+        'created_at',
+      ]),
+    )
+    // 「ご案内のページ eyex.jp/ginza」はこの表に持たない（stores.slug から組み立てる）。
+    expect(names).not.toContain('landing_path')
+    // 真偽値は text の '0' | '1'。受け付ける時間は 'HH:MM' の text。
+    for (const name of ['is_published', 'requires_approval', 'opens_at', 'closes_at']) {
+      expect(table.columns.find((c) => c.name === name)?.columnType).toBe('SQLiteText')
+      expect(table.columns.find((c) => c.name === name)?.notNull).toBe(true)
+    }
+    // 受付の窓と締切は整数。
+    for (const name of [
+      'accept_from_hours',
+      'accept_until_days',
+      'change_deadline_days',
+      'version',
+    ]) {
+      expect(table.columns.find((c) => c.name === name)?.columnType).toBe('SQLiteInteger')
+      expect(table.columns.find((c) => c.name === name)?.notNull).toBe(true)
+    }
+    // お知らせ文だけ NULL 可（お知らせを出さない店舗がある）。
+    expect(table.columns.find((c) => c.name === 'message')?.notNull).toBe(false)
+    // DDL の DEFAULT に意味を持たせない（既定値はアプリ層とドメイン層が入れる）。
+    expect(table.columns.filter((c) => c.hasDefault)).toHaveLength(0)
+  })
+})
+
+describe('web_bookings', () => {
+  const table = getTableConfig(webBookings)
+
+  it('予約 1 件に Web 予約 1 件しか結び付かない', () => {
+    // 台帳から付帯情報を引く。二重に作らせない。
+    expect(columnsOf(table, 'web_bookings_org_reservation_idx')).toEqual([
+      'organization_id',
+      'reservation_id',
+    ])
+    expect(isUnique(table, 'web_bookings_org_reservation_idx')).toBe(true)
+  })
+
+  it('ご予約番号は組織の中で一意', () => {
+    // WEB-CANCEL の番号引きと、採番が衝突したことの検出を兼ねる。
+    expect(columnsOf(table, 'web_bookings_org_public_code_idx')).toEqual([
+      'organization_id',
+      'public_code',
+    ])
+    expect(isUnique(table, 'web_bookings_org_public_code_idx')).toBe(true)
+    // `reservations.code`（EY-YYMM-NNNN）とは別の採番系統なので、店舗を混ぜない。
+    expect(columnsOf(table, 'web_bookings_org_public_code_idx')).not.toContain('store_id')
+  })
+
+  it('店舗と状態で「確認待ち」を数える index を持つ', () => {
+    // LEDGER-LIST の「確認待ち 1件」・ALERTS の「Web予約が2件、確認待ちです」。
+    expect(columnsOf(table, 'web_bookings_org_store_status_idx')).toEqual([
+      'organization_id',
+      'store_id',
+      'status',
+    ])
+    expect(isUnique(table, 'web_bookings_org_store_status_idx')).toBe(false)
+    expect(table.indexes).toHaveLength(3)
+  })
+
+  it('確認鍵と確認番号はハッシュの列しか持たない', () => {
+    expect(table.name).toBe('web_bookings')
+    expect(table.foreignKeys).toHaveLength(0)
+    expect(table.columns.filter((c) => c.primary).map((c) => c.name)).toEqual(['id'])
+    const names = table.columns.map((c) => c.name)
+    expect(names).toEqual(
+      expect.arrayContaining([
+        'organization_id',
+        'store_id',
+        'reservation_id',
+        'public_code',
+        'confirmation_key_hash',
+        'management_code_hash',
+        'contact_name',
+        'contact_kana',
+        'contact_phone',
+        'contact_email',
+        'status',
+        'created_at',
+        'confirmed_at',
+        'cancelled_at',
+        'updated_at',
+      ]),
+    )
+    // 生の確認鍵・確認番号を保存しない。一度漏れると全予約が開く。
+    for (const name of ['confirmation_key', 'management_code']) {
+      expect(names).not.toContain(name)
+    }
+    for (const name of ['confirmation_key_hash', 'management_code_hash']) {
+      expect(table.columns.find((c) => c.name === name)?.notNull).toBe(true)
+    }
+    // メールアドレスは必須（承認制なので、連絡手段の無いお客様の予約は宙に浮く）。
+    expect(table.columns.find((c) => c.name === 'contact_email')?.notNull).toBe(true)
+    // ふりがなだけは無くてよい。
+    expect(table.columns.find((c) => c.name === 'contact_kana')?.notNull).toBe(false)
+    // 確定・取消はまだ起きていないので NULL 可。作成と更新は必ず値がある。
+    expect(table.columns.find((c) => c.name === 'confirmed_at')?.notNull).toBe(false)
+    expect(table.columns.find((c) => c.name === 'cancelled_at')?.notNull).toBe(false)
+    expect(table.columns.find((c) => c.name === 'updated_at')?.notNull).toBe(true)
+    expect(table.columns.filter((c) => c.hasDefault)).toHaveLength(0)
   })
 })

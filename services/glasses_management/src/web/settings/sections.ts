@@ -1,15 +1,26 @@
 import type { StaffMember } from '@app/contracts'
 
 /*
- * 設定 6 面の目次と、器（SettingsScreen）と面（*Panel）のあいだの約束。
+ * 設定 7 面の目次と、器（SettingsScreen）と面（*Panel）のあいだの約束。
  *
- * 第2サイドバーに出すのは 6 項目だけにする。承認済みモック
+ * 第2サイドバーに出すのは 7 項目だけにする。承認済みモック
  * （docs/frontend/mockups/eyex/screens/SETTINGS-STORE.html）は 14 項目を描いているが、
- * 残る 8 項目は行き先がまだ無い。押せて何も起きない行を置かない（P1 の決め #1）。
- * 「公開」は P8 が足す。
+ * 残る 7 項目は行き先がまだ無い。押せて何も起きない行を置かない（P1 の決め #1）。
+ *
+ * P8 が「Web予約」群の「公開」を 1 項目だけ足した。モックの第2サイドバーは「公開」の
+ * 1 語だが、この `label` は保存バーの見出しと 403 の断り文にもそのまま入るので
+ * （「公開を変えられるのは 店長 だけです」では何の公開か分からない）
+ * 「Web予約の公開」と書く。群の見出しはまだ 1 つなので分けない。
  */
 
-export type SettingsSectionKey = 'store' | 'calendar' | 'hours' | 'purposes' | 'staff' | 'equipment'
+export type SettingsSectionKey =
+  | 'store'
+  | 'calendar'
+  | 'hours'
+  | 'purposes'
+  | 'staff'
+  | 'equipment'
+  | 'web'
 
 export type SettingsSection = {
   key: SettingsSectionKey
@@ -27,6 +38,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { key: 'purposes', label: 'ご来店の目的' },
   { key: 'staff', label: 'スタッフと技能' },
   { key: 'equipment', label: '設備と点検' },
+  { key: 'web', label: 'Web予約の公開' },
 ]
 
 /** 保存の顛末。器の保存バーがこの 4 つを言い分ける。 */

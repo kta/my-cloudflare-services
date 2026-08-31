@@ -1683,3 +1683,258 @@ describe('録音は組織をまたがない', () => {
     expect(items.map((item) => item.title)).toEqual(['A のお知らせ'])
   })
 })
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * お客様向け Web 予約（P8）
+ *
+ * 公開面（`/api/public/**`）は**未認証**なので、テナントを絞るものが JWT に無い。
+ * 絞っているのは `stores.slug` ただ 1 つで、その 1 本が抜けると全社の予約が
+ * 誰からでも見える面になる。ここで潰すのは「slug から解決した組織以外に手が届く道」である。
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+/** きょうから N 日先の JST 暦日。受付の窓（何時間先から・何日先まで）は実時刻を見る。 */
+function futureDate(days: number): string {
+  return new Date(Date.now() + 9 * 60 * 60 * 1000 + days * 86_400_000).toISOString().slice(0, 10)
+}
+
+/** Web に出している店舗ひとそろい（営業時間・刻み・担当の勤務・目的・公開設定）。 */
+async function publishedWebStore(org: string, name: string, slug: string) {
+  const storeId = await seedStore(org, name, slug)
+  await insertBusinessHours(org, storeId, { closedWeekdays: [] })
+  await insertSlotRules(org, storeId)
+  const purposeId = await insertVisitPurpose(org, storeId, {
+    nameInternal: `${name}のメガネ新調`,
+    nameShort: '新調',
+    durationMinutes: 30,
+  })
+  const staffId = await insertStaff(org, storeId, { displayName: `${name}の担当` })
+  for (let day = 0; day <= 10; day += 1) {
+    await insertShift(org, storeId, staffId, { date: futureDate(day) })
+  }
+  await env.DB.prepare(
+    'INSERT INTO web_booking_settings (id, organization_id, store_id, is_published, opens_at, ' +
+      'closes_at, accept_from_hours, accept_until_days, change_deadline_days, requires_approval, ' +
+      "message, version, updated_at, created_at) VALUES (?,?,?,'1','10:30','18:00',2,30,1,'1',NULL,1,?,?)",
+  )
+    .bind(crypto.randomUUID(), org, storeId, NOW, NOW)
+    .run()
+  return { storeId, slug, purposeId }
+}
+
+type PublicReceipt = { code?: string; managementCode?: string; error?: string }
+
+async function publicBook(
+  store: { slug: string; purposeId: string },
+  input: { startsAt?: string; key?: string; query?: string; body?: Record<string, unknown> } = {},
+): Promise<{ status: number; body: PublicReceipt }> {
+  const res = await SELF.fetch(
+    `${BASE}/api/public/stores/${store.slug}/bookings${input.query ?? ''}`,
+    {
+      method: 'POST',
+      headers: { ...JSON_HEADERS, 'idempotency-key': input.key ?? crypto.randomUUID() },
+      body: JSON.stringify({
+        purposeId: store.purposeId,
+        startsAt: input.startsAt ?? jstAt(futureDate(7), '11:00'),
+        contactName: '山口 真央',
+        contactKana: 'やまぐち まお',
+        contactPhone: '080-2345-6789',
+        contactEmail: 'm.yamaguchi@example.jp',
+        ...(input.body ?? {}),
+      }),
+    },
+  )
+  return { status: res.status, body: (await res.json().catch(() => ({}))) as PublicReceipt }
+}
+
+async function lookup(code: string, managementCode: string) {
+  const res = await SELF.fetch(`${BASE}/api/public/reservations/verify`, {
+    method: 'POST',
+    headers: {
+      ...JSON_HEADERS,
+      'x-management-code': managementCode,
+      'cf-connecting-ip': crypto.randomUUID(),
+    },
+    body: JSON.stringify({ code, contactEmail: 'm.yamaguchi@example.jp' }),
+  })
+  return { status: res.status, body: (await res.json().catch(() => ({}))) as PublicReceipt }
+}
+
+describe('お客様向け Web 予約は組織をまたがない', () => {
+  it('3 テナントが同時に Web 予約を受けても、他社の予約は照会できない', async () => {
+    const [a, b, c] = [orgId(), orgId(), orgId()]
+    await Promise.all([tokenFor(a), tokenFor(b), tokenFor(c)])
+    const stores = await Promise.all([
+      publishedWebStore(a, 'A', `a-${crypto.randomUUID().slice(0, 12)}`),
+      publishedWebStore(b, 'B', `b-${crypto.randomUUID().slice(0, 12)}`),
+      publishedWebStore(c, 'C', `c-${crypto.randomUUID().slice(0, 12)}`),
+    ])
+    const receipts = []
+    for (const store of stores) receipts.push((await publicBook(store)).body)
+
+    // 3 社とも 1 件ずつ持っている（互いの org に混ざらない）。
+    for (const org of [a, b, c]) {
+      const row = await env.DB.prepare(
+        'SELECT COUNT(*) AS n FROM web_bookings WHERE organization_id = ?',
+      )
+        .bind(org)
+        .first<{ n: number }>()
+      expect(row?.n).toBe(1)
+    }
+    // ご予約番号は**組織の中でしか一意でない**ので、3 社とも同じ `EY-W-2608-0001` になる。
+    // それでも A の確認番号で開くのは A のご予約だけである（確認番号のハッシュに
+    // 組織とご予約番号が混ざっているので、B と C の行には当たらない）。
+    const first = receipts[0]
+    expect(receipts.map((receipt) => receipt.code)).toEqual([first?.code, first?.code, first?.code])
+    const opened = await SELF.fetch(`${BASE}/api/public/reservations/${first?.code}`, {
+      headers: { ...JSON_HEADERS, 'x-management-code': String(first?.managementCode) },
+    })
+    expect(opened.status).toBe(200)
+    expect(await opened.json()).toMatchObject({ storeName: 'A' })
+
+    // 誰も持っていない確認番号では、どの社のご予約も開かない。
+    const stranger = await lookup(String(first?.code), 'ZZZZZZZZ')
+    expect(stranger.status).toBe(401)
+    expect(stranger.body).toEqual({ error: 'invalid_management_code' })
+  })
+
+  it('stores.slug は全組織横断で一意なので、公開面の slug から解決した組織以外には触れない', async () => {
+    const [a, b] = [orgId(), orgId()]
+    await Promise.all([tokenFor(a), tokenFor(b)])
+    const slug = `ginza-${crypto.randomUUID().slice(0, 12)}`
+    const mine = await publishedWebStore(a, 'A の銀座店', slug)
+    await publishedWebStore(b, 'B の銀座店', `ginza-${crypto.randomUUID().slice(0, 12)}`)
+
+    // 2 社目は同じ slug を取れない（D1 の一意 index が先に止める）。
+    await expect(seedStore(b, 'B の二号店', slug)).rejects.toThrow()
+
+    const detail = await SELF.fetch(`${BASE}/api/public/stores/${slug}`)
+    expect(await detail.json()).toMatchObject({ slug, name: 'A の銀座店' })
+    const purposes = (await (
+      await SELF.fetch(`${BASE}/api/public/stores/${slug}/purposes`)
+    ).json()) as { id: string; name: string }[]
+    expect(purposes.map((purpose) => purpose.id)).toEqual([mine.purposeId])
+    expect(JSON.stringify(purposes)).not.toContain('B の銀座店')
+  })
+
+  it('body に他テナントの organizationId を混ぜても、slug から解決した組織のまま隔離される', async () => {
+    const [a, b] = [orgId(), orgId()]
+    await Promise.all([tokenFor(a), tokenFor(b)])
+    const store = await publishedWebStore(a, 'A', `a-${crypto.randomUUID().slice(0, 12)}`)
+
+    // 契約は `organizationId` を持たない。混ぜた本文はそこで落ちる（400）。
+    const injected = await publicBook(store, { body: { organizationId: b } })
+    expect(injected.status).toBe(400)
+
+    // クエリに混ぜても、組織は slug からしか決まらない。
+    const created = await publicBook(store, {
+      query: `?organizationId=${encodeURIComponent(b)}`,
+    })
+    expect(created.status).toBe(200)
+    const mine = await env.DB.prepare(
+      'SELECT COUNT(*) AS n FROM web_bookings WHERE organization_id = ?',
+    )
+      .bind(a)
+      .first<{ n: number }>()
+    const theirs = await env.DB.prepare(
+      'SELECT COUNT(*) AS n FROM web_bookings WHERE organization_id = ?',
+    )
+      .bind(b)
+      .first<{ n: number }>()
+    expect(mine?.n).toBe(1)
+    expect(theirs?.n).toBe(0)
+  })
+
+  it('他社のご予約番号と自社の確認番号の組み合わせでは明細が返らない', async () => {
+    const [a, b] = [orgId(), orgId()]
+    await Promise.all([tokenFor(a), tokenFor(b)])
+    const storeA = await publishedWebStore(a, 'A', `a-${crypto.randomUUID().slice(0, 12)}`)
+    const storeB = await publishedWebStore(b, 'B', `b-${crypto.randomUUID().slice(0, 12)}`)
+    const receiptA = (await publicBook(storeA)).body
+    const receiptB = (await publicBook(storeB)).body
+
+    // 同じ番号が両社に立つ（採番は組織ごと）。この組み合わせで B の明細が返ったら、
+    // ご予約番号を知っているだけで他社の予約が開くことになる。
+    expect(receiptA.code).toBe(receiptB.code)
+    const crossed = await SELF.fetch(`${BASE}/api/public/reservations/${receiptB.code}`, {
+      headers: { ...JSON_HEADERS, 'x-management-code': String(receiptA.managementCode) },
+    })
+    expect(crossed.status).toBe(200)
+    // 返るのは**自社（A）の明細**で、B の店名も B のご用件も 1 文字も出ない。
+    const detail = (await crossed.json()) as { storeName: string; purposeName: string }
+    expect(detail.storeName).toBe('A')
+    expect(JSON.stringify(detail)).not.toContain('B の')
+
+    // B の確認番号を持っていて初めて B の明細が開く。
+    const own = await lookup(String(receiptB.code), String(receiptB.managementCode))
+    expect(own.status).toBe(200)
+    const mine = await SELF.fetch(`${BASE}/api/public/reservations/${receiptB.code}`, {
+      headers: { ...JSON_HEADERS, 'x-management-code': String(receiptB.managementCode) },
+    })
+    expect(await mine.json()).toMatchObject({ storeName: 'B' })
+  })
+
+  it('冪等キーは組織名前空間を含むので、他テナントの同じ Idempotency-Key と衝突しない', async () => {
+    const [a, b] = [orgId(), orgId()]
+    await Promise.all([tokenFor(a), tokenFor(b)])
+    const storeA = await publishedWebStore(a, 'A', `a-${crypto.randomUUID().slice(0, 12)}`)
+    const storeB = await publishedWebStore(b, 'B', `b-${crypto.randomUUID().slice(0, 12)}`)
+    const key = crypto.randomUUID()
+
+    const first = await publicBook(storeA, { key })
+    const second = await publicBook(storeB, { key })
+    expect(first.status).toBe(200)
+    expect(second.status).toBe(200)
+    // 同じ鍵でも replay されない（別々の予約が 1 件ずつ立つ）。
+    for (const org of [a, b]) {
+      const row = await env.DB.prepare(
+        'SELECT COUNT(*) AS n FROM reservations WHERE organization_id = ?',
+      )
+        .bind(org)
+        .first<{ n: number }>()
+      expect(row?.n).toBe(1)
+    }
+    // 主キーは `<organization_id>:<scope>:<Idempotency-Key>`。2 本が別々に立っている。
+    const keys = await env.DB.prepare(
+      'SELECT key FROM idempotency_records WHERE key IN (?, ?) ORDER BY key',
+    )
+      .bind(`${a}:public.booking.create:${key}`, `${b}:public.booking.create:${key}`)
+      .all<{ key: string }>()
+    expect(keys.results).toHaveLength(2)
+  })
+
+  it('公開設定は他テナントの storeId を指定しても読めない・書けない', async () => {
+    const [a, b] = [orgId(), orgId()]
+    const [ta] = await Promise.all([tokenFor(a), tokenFor(b)])
+    const storeB = await publishedWebStore(b, 'B', `b-${crypto.randomUUID().slice(0, 12)}`)
+
+    const read = await SELF.fetch(`${BASE}/api/staff/web-booking-settings/${storeB.storeId}`, {
+      headers: authed(ta),
+    })
+    // 403 で他テナントの存在を漏らさない。
+    expect(read.status).toBe(404)
+
+    const write = await SELF.fetch(`${BASE}/api/staff/web-booking-settings/${storeB.storeId}`, {
+      method: 'PUT',
+      headers: authed(ta),
+      body: JSON.stringify({
+        isPublished: false,
+        opensAt: '10:30',
+        closesAt: '18:00',
+        acceptFromHours: 2,
+        acceptUntilDays: 30,
+        changeDeadlineDays: 1,
+        requiresApproval: true,
+        message: '',
+        publishedPurposeIds: [],
+        version: 1,
+      }),
+    })
+    expect(write.status).toBe(404)
+    const row = await env.DB.prepare(
+      'SELECT is_published AS isPublished, version FROM web_booking_settings WHERE store_id = ?',
+    )
+      .bind(storeB.storeId)
+      .first<{ isPublished: string; version: number }>()
+    expect(row).toEqual({ isPublished: '1', version: 1 })
+  })
+})

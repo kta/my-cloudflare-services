@@ -40,8 +40,25 @@ import {
   LedgerQuery,
   LedgerView,
   MaintenanceQuery,
+  NotificationJob,
+  NotificationResult,
   OrganizationSync,
   type Plan,
+  PublicAvailabilityQuery,
+  PublicAvailabilityResponse,
+  PublicBookingCreate,
+  PublicBookingResult,
+  PublicReservationCancel,
+  PublicReservationChange,
+  PublicReservationChangeResult,
+  PublicReservationMutationResult,
+  PublicReservationStatus,
+  PublicReservationVerification,
+  PublicReservationVerificationResult,
+  PublicStoreDetail,
+  PublicStorePurpose,
+  PublicStoreSearchQuery,
+  PublicStoreSummary,
   PurposeListQuery,
   PurposeOrderInput,
   PurposeRequirementsInput,
@@ -104,6 +121,13 @@ import {
   WalkinCreate,
   WalkinListQuery,
   WalkinPatch,
+  WebBookingReviewInput,
+  WebBookingSettings,
+  WebBookingSettingsInput,
+  WebPreviewQuery,
+  WebPreviewResult,
+  WebPublicationApplyRequest,
+  WebPublicationApplyResult,
 } from '@app/contracts'
 import {
   type AuthVariables,
@@ -123,7 +147,7 @@ import type {
   ScheduledController,
 } from '@cloudflare/workers-types'
 import { zValidator } from '@hono/zod-validator'
-import { and, asc, eq, gte, inArray, lt, lte } from 'drizzle-orm'
+import { and, asc, eq, gte, inArray, isNull, lt, lte, or } from 'drizzle-orm'
 import { type DrizzleD1Database, drizzle } from 'drizzle-orm/d1'
 import { type Context, Hono, type MiddlewareHandler } from 'hono'
 import { except } from 'hono/combine'
@@ -151,6 +175,7 @@ import {
   storeSlotRules,
   stores,
   visitPurposes,
+  webBookingSettings,
 } from './db/schema'
 import { slotLockRequests, slotLockStatements, UNASSIGNED_TARGET_KEY } from './db/slot-locks'
 import {
@@ -159,6 +184,7 @@ import {
   evaluateSlot,
   expandToSlotStarts,
   type HoldOccupancy,
+  type SlotResult,
 } from './domain/availability'
 import {
   type BookingPurposeLine,
@@ -192,6 +218,20 @@ import {
 } from './domain/customers'
 import { deleteHold, HOLD_RENEW_MAX, listHoldOccupancies, putHold } from './domain/holds'
 import { buildLedgerView } from './domain/ledger'
+import {
+  failureKey,
+  hashConfirmationKey,
+  hashManagementCode,
+  isManagementCodeLocked,
+  isShortLivedFresh,
+  issueConfirmationKey,
+  issueManagementCode,
+  MANAGEMENT_CODE_FAILURE_TTL_SECONDS,
+  MANAGEMENT_CODE_RETRY_AFTER_SECONDS,
+  shortLivedExpiresAt,
+  shortLivedKey,
+  verifyManagementCode,
+} from './domain/management-code'
 import { issueTicket, verifyTicket } from './domain/playback'
 import { buildHistoryList, type ReceptionHistoryRow } from './domain/reception-history'
 import { nextRecordingCode, nextState, r2KeyFor, uploadFailedAlert } from './domain/recording'
@@ -223,6 +263,20 @@ import {
 } from './domain/store-settings'
 import { type BoardSubjectRow, buildBoard, planBoardSteps } from './domain/visit-board'
 import { jstVisitDate, nextTicketNo, waitedMinutes } from './domain/walkin'
+import {
+  autoCancelledAlert,
+  bumpPublicCode,
+  changeDeadlineAt,
+  isChangeDeadlinePassed,
+  nextPublicCode,
+  type PublishablePurpose,
+  requiresApproval,
+  resolvePublication,
+  shouldAutoCancel,
+  type WebBookingSettingsRow,
+  type WebWindow,
+  webBookingCodeMonth,
+} from './domain/web-booking'
 
 // 明示的に import している（ambient global を使わない）ので、export した AppType は
 // それ自体で完結し、web 側が Workers の型なしに読める。SPA も同じ Worker が静的資産
@@ -239,6 +293,11 @@ export type Bindings = {
   INTERNAL_KEY: string
   /** アクセス JWT の HS256 署名鍵。admin（認証の正本）と同じ値。 */
   JWT_SECRET: string
+  /**
+   * お客様のご予約ページの公開ドメイン（`eyex.jp`）。SETTINGS-WEB の「ご案内のページ」を
+   * `stores.slug` と繋いで組み立てるためだけに使う。**この値を表に持たない。**
+   */
+  PUBLIC_WEB_ORIGIN?: string
   /** credential 無しの dev トークングラントを開ける。本番では設定しない。 */
   AUTH_DEV_GRANT?: string
 }
@@ -2632,6 +2691,508 @@ async function purgeRecordings(
   }
 
   return { examined, deleted, skippedHeld, failed }
+}
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * お客様向け Web 予約（P8）が共有する道具
+ *
+ * 公開面（`/api/public/**`）は**未認証**である。default-deny の例外に入っているので
+ * ミドルウェアは 1 つも通らず、**組織は `stores.slug` からしか解決しない**。
+ * body / query の `organizationId` を認可の根拠にしない（そもそも契約が持っていない）。
+ *
+ * 公開していない店舗・公開していない目的は、**存在も漏らさない**。
+ * 「無い slug」と「非公開の slug」は status も body も同じにする（`04-api.md` §3.12）。
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+/** ご案内のページの前置き（`eyex.jp/ginza`）。表には持たず、slug から組み立てる。 */
+const PUBLIC_ORIGIN_FALLBACK = 'eyex.jp'
+
+/**
+ * 公開面の 404。**存在しない slug と非公開の店舗で body まで同じにする。**
+ * status だけ揃えて code を分けると、slug が実在するかどうかが body から読めてしまう。
+ */
+const NOT_PUBLISHED = { error: 'not_published' as const }
+
+/** 本人確認の 401。番号違い・期限切れ・無い番号を**同じ文言**に落とす。 */
+const INVALID_MANAGEMENT_CODE = { error: 'invalid_management_code' as const }
+
+/**
+ * 確認メールを送れたことの控え。**送れなかったときは置かない** —
+ * 置くと、次にお客様が自分の予約を開いたときの再送が二度と走らない（`04-api.md` §7.2）。
+ */
+const MAIL_SENT_TTL_SECONDS = 24 * 60 * 60
+const mailSentKey = (org: string, reservationId: string): string =>
+  `mailsent:${org}:${reservationId}`
+
+/**
+ * 枠のガード。`domain/booking.ts` の `LOCKED` と**一字一句同じ**にする
+ * （あちらは export していない。写しであることを名前で示す）。
+ * この文が付いていない行は、枠を 1 つも取れなかったバッチでも書かれてしまう。
+ */
+const WEB_LOCKED =
+  'EXISTS (SELECT 1 FROM reservation_slot_locks WHERE organization_id = ? AND reservation_id = ?)'
+
+/** 公開設定の版は 0 から始まる（行がまだ無い店舗を 0 として読む）。 */
+const WEB_FIRST_VERSION = 0
+
+/** 本人確認が通ったあとの短命の鍵の寿命（`04-api.md` §6.3）。 */
+const WEB_SHORT_LIVED_TTL_SECONDS = 900
+
+/** 変更・取消の締切の既定（来店日の 1 日前 = 前日 23:59:59.999 JST まで）。 */
+const DEFAULT_CHANGE_DEADLINE_DAYS = 1
+
+/** `EY-W-YYMM-` のあと、連番が始まる位置（SQL の `SUBSTR` は 1 始まり）。 */
+const WEB_CODE_SERIAL_OFFSET = 'EY-W-YYMM-'.length
+/** ご予約番号の打ち直しの上限。尽きたら 409 `code_exhausted`（500 にしない）。 */
+const WEB_CODE_ATTEMPTS = 5
+
+type WebSettingsRow = typeof webBookingSettings.$inferSelect
+type StoreRow = typeof stores.$inferSelect
+
+/** お客様に見せる店名。`name_public` を持たない古い行だけ `name` に落ちる。 */
+const publicStoreName = (row: StoreRow): string => row.namePublic ?? row.name
+
+/** 公開設定 1 行 → ドメインが読む形。列が増えてもここだけを直す。 */
+function toWebSettingsRow(row: WebSettingsRow | undefined): WebBookingSettingsRow | null {
+  if (row === undefined) return null
+  return {
+    isPublished: isOn(row.isPublished) ? '1' : '0',
+    opensAt: row.opensAt,
+    closesAt: row.closesAt,
+    acceptFromHours: row.acceptFromHours,
+    acceptUntilDays: row.acceptUntilDays,
+    changeDeadlineDays: row.changeDeadlineDays,
+    requiresApproval: isOn(row.requiresApproval) ? '1' : '0',
+    message: row.message,
+    version: row.version,
+    updatedAt: row.updatedAt,
+  }
+}
+
+async function readWebSettings(db: Db, org: string, storeId: string) {
+  const rows = await db
+    .select()
+    .from(webBookingSettings)
+    .where(and(eq(webBookingSettings.organizationId, org), eq(webBookingSettings.storeId, storeId)))
+  return rows[0]
+}
+
+/**
+ * Web に出しうるご来店の目的。**店舗のものとチェーン共通（`store_id IS NULL`）の両方**を
+ * 登録順で返す。出すかどうかの判定はドメイン（`resolvePublication`）に任せる —
+ * 判定を SQL とドメインの 2 か所に置くと、片方だけ直した日に画面と API がずれる。
+ */
+async function readPublishablePurposes(
+  db: Db,
+  org: string,
+  storeId: string,
+): Promise<PublishablePurpose[]> {
+  const rows = await db
+    .select({
+      id: visitPurposes.id,
+      namePublic: visitPurposes.namePublic,
+      durationMinutes: visitPurposes.durationMinutes,
+      isWebPublished: visitPurposes.isWebPublished,
+      isActive: visitPurposes.isActive,
+      sortOrder: visitPurposes.sortOrder,
+    })
+    .from(visitPurposes)
+    .where(
+      and(
+        eq(visitPurposes.organizationId, org),
+        or(eq(visitPurposes.storeId, storeId), isNull(visitPurposes.storeId)),
+      ),
+    )
+    .orderBy(asc(visitPurposes.sortOrder))
+  return rows.map((row) => ({
+    id: row.id,
+    namePublic: row.namePublic,
+    durationMinutes: row.durationMinutes,
+    isWebPublished: isOn(row.isWebPublished) ? '1' : '0',
+    isActive: isOn(row.isActive) ? '1' : '0',
+    sortOrder: row.sortOrder,
+  }))
+}
+
+/**
+ * 公開面の入口。**`stores.slug` は全組織横断で一意**なので、ここで解決した組織以外に
+ * 手が届く道は無い（`stores_slug_idx`）。
+ */
+async function storeBySlug(db: Db, slug: string): Promise<StoreRow | null> {
+  const rows = await db.select().from(stores).where(eq(stores.slug, slug))
+  return rows[0] ?? null
+}
+
+/** 店舗 1 つぶんの公開の姿（設定 ＋ 出すご用件 ＋ ご案内のページ）。 */
+async function publicationOf(env: Bindings, db: Db, store: StoreRow, now: Date) {
+  return resolvePublication({
+    slug: store.slug,
+    settings: toWebSettingsRow(await readWebSettings(db, store.organizationId, store.id)),
+    purposes: await readPublishablePurposes(db, store.organizationId, store.id),
+    publicOrigin: env.PUBLIC_WEB_ORIGIN ?? PUBLIC_ORIGIN_FALLBACK,
+    now,
+  })
+}
+
+/**
+ * 公開面の盤面。業務面（`bookingBoard`）との違いは 2 つだけである。
+ *
+ * 1. **仮の押さえ（KV）を読まない。**KV の list は無料枠 1,000 回/日で、公開ページの
+ *    閲覧数がそのまま list 数になる（`04-api.md` §6.3）。二重予約は確定時の
+ *    `reservation_slot_locks` が止めるので、読まなくても壊れない。
+ * 2. 受付の窓（`opens_at`〜`closes_at` / 何時間先から / 何日先まで）を足す。
+ *    絞り込みそのものは空き枠エンジンが持つ（関数を複製しない）。
+ */
+function webBoard(input: {
+  date: string
+  now: Date
+  rows: AvailabilityDayRows
+  isSuspended: boolean
+  durationMinutes: number
+  window: WebWindow
+  preferredStartsAt?: string | null
+  excludeReservationId?: string | null
+}): AvailabilityInput {
+  return {
+    date: input.date,
+    now: input.now,
+    slotRules: input.rows.slotRules,
+    weeklyHours: input.rows.hours,
+    exceptions: input.rows.exceptions,
+    blackouts: input.rows.blackouts,
+    isSuspended: input.isSuspended,
+    purposes: input.rows.purposes,
+    durationMinutes: input.durationMinutes,
+    staff: input.rows.staff,
+    shifts: input.rows.shifts,
+    equipment: input.rows.equipment,
+    maintenances: input.rows.maintenances,
+    occupied: input.rows.occupied,
+    webWindow: input.window,
+    excludeReservationId: input.excludeReservationId ?? null,
+    preferredStartsAt: input.preferredStartsAt ?? null,
+  }
+}
+
+/**
+ * 公開面が返すエラー。業務面（`BLOCKING_REASON`）と違い、**埋まっている理由も写す** —
+ * お客様の面では「ちょうど埋まってしまいました」と代わりの時刻を出す面（WEB-03）が
+ * あり、確定のバッチまで待つ必要が無い（待っても答えは変わらない）。
+ */
+const PUBLIC_BLOCKING: Record<
+  AvailabilityReason,
+  'store_closed' | 'purpose_unavailable' | 'slot_taken'
+> = {
+  closed: 'store_closed',
+  outside_hours: 'store_closed',
+  break: 'store_closed',
+  web_window: 'store_closed',
+  lead_time: 'store_closed',
+  no_skill: 'purpose_unavailable',
+  staff_off: 'purpose_unavailable',
+  no_equipment: 'purpose_unavailable',
+  maintenance: 'purpose_unavailable',
+  staff_busy: 'slot_taken',
+  equipment_busy: 'slot_taken',
+  max_parallel: 'slot_taken',
+}
+
+/**
+ * お客様に見せる枠。**受け付ける気が無い時刻は 1 つも出さない** —
+ * 定休・営業時間の外・お昼の受付停止帯・受付の窓の外（`web_window` / `lead_time`）で
+ * 落ちた枠は、時刻そのものを返さない（AC-WEB-04「10:30 より前と 18:00 以降の時刻は
+ * 候補に 1 つも出ない」）。残った時刻だけを、空いているかどうかの真偽で返す。
+ * 「満」の札を出すのは**埋まっているとき**だけで、閉じている時間帯と混ぜない。
+ */
+const HIDDEN_FROM_PUBLIC: ReadonlySet<AvailabilityReason> = new Set<AvailabilityReason>([
+  'closed',
+  'outside_hours',
+  'break',
+  'web_window',
+  'lead_time',
+])
+
+const publicSlots = (slots: readonly SlotResult[]): { startsAt: string; isAvailable: boolean }[] =>
+  slots
+    .filter((slot) => slot.reason === null || !HIDDEN_FROM_PUBLIC.has(slot.reason))
+    .map((slot) => ({ startsAt: slot.startsAt, isAvailable: slot.isAvailable }))
+
+/** Web 予約 1 件と、その予約本体・店舗を 1 度に読む形。 */
+type WebBookingJoin = {
+  id: string
+  organizationId: string
+  storeId: string
+  reservationId: string
+  publicCode: string
+  managementCodeHash: string
+  contactName: string
+  contactEmail: string
+  webStatus: string
+  webCreatedAt: string
+  startsAt: string
+  endsAt: string
+  durationMinutes: number
+  reservationStatus: string
+  version: number
+  updatedAt: string
+  noteCustomer: string | null
+  noteInternal: string | null
+  storeSlug: string
+  storeName: string
+  storeNamePublic: string | null
+  storeIsActive: string
+}
+
+const WEB_BOOKING_COLUMNS =
+  'w.id AS id, w.organization_id AS organizationId, w.store_id AS storeId, ' +
+  'w.reservation_id AS reservationId, w.public_code AS publicCode, ' +
+  'w.management_code_hash AS managementCodeHash, w.contact_name AS contactName, ' +
+  'w.contact_email AS contactEmail, w.status AS webStatus, w.created_at AS webCreatedAt, ' +
+  'r.starts_at AS startsAt, r.ends_at AS endsAt, r.duration_minutes AS durationMinutes, ' +
+  'r.status AS reservationStatus, r.version AS version, r.updated_at AS updatedAt, ' +
+  'r.note_customer AS noteCustomer, r.note_internal AS noteInternal, ' +
+  's.slug AS storeSlug, s.name AS storeName, s.name_public AS storeNamePublic, ' +
+  's.is_active AS storeIsActive'
+
+/**
+ * ご予約番号で候補を引く。**`public_code` が一意なのは組織の中だけ**なので、
+ * 番号だけでは 1 件に絞れない。絞るのは確認番号の照合で、そこで初めて組織が決まる
+ * （他社の番号と自社の確認番号を組み合わせても、どの候補にも当たらない）。
+ */
+async function webBookingsByCode(db: D1Database, publicCode: string): Promise<WebBookingJoin[]> {
+  const found = await db
+    .prepare(
+      `SELECT ${WEB_BOOKING_COLUMNS} FROM web_bookings w ` +
+        'JOIN reservations r ON r.organization_id = w.organization_id AND r.id = w.reservation_id ' +
+        'JOIN stores s ON s.organization_id = w.organization_id AND s.id = w.store_id ' +
+        'WHERE w.public_code = ?1',
+    )
+    .bind(publicCode)
+    .all<WebBookingJoin>()
+  return found.results
+}
+
+/** 確認番号の塩。**組織とご予約番号**を混ぜる（1 件漏れても隣が開かない）。 */
+const managementSalt = (organizationId: string, publicCode: string): string =>
+  `${organizationId}:${publicCode}`
+
+/** 総当たりを数える鍵。**コード × IP**。ヘッダーが無い経路は `unknown` で数える。 */
+const clientIpOf = (c: Context<Env>): string => c.req.header('cf-connecting-ip') ?? 'unknown'
+
+async function failureCount(env: Bindings, publicCode: string, ip: string): Promise<number> {
+  const raw = await env.SHORT_LIVED.get(failureKey(publicCode, ip))
+  return raw === null ? 0 : Number.parseInt(raw, 10) || 0
+}
+
+/** 失敗したときにだけ書く（成功しても書かない）。 */
+async function countFailure(env: Bindings, publicCode: string, ip: string): Promise<void> {
+  const key = failureKey(publicCode, ip)
+  const next = (await failureCount(env, publicCode, ip)) + 1
+  await env.SHORT_LIVED.put(key, String(next), {
+    expirationTtl: MANAGEMENT_CODE_FAILURE_TTL_SECONDS,
+  })
+}
+
+/** 短命の鍵に入れる値。組織を持たせるので、番号だけの候補から 1 件に絞れる。 */
+type ShortLivedRecord = { organizationId: string; publicCode: string; expiresAt: string }
+
+/**
+ * `X-Management-Code` を照合して 1 件に絞る。通るのは 2 通りである。
+ *
+ * 1. 予約を作ったときにお渡しした**確認番号**そのもの。
+ * 2. 本人確認が通ったあとに配った**短命の鍵**（KV `mgmt:<orgId>:<code>`。900 秒）。
+ *
+ * どちらでもなければ `null`。**理由を分けない**（番号違いと期限切れを区別すると、
+ * 番号が実在するかどうかが応答から読める）。
+ */
+async function authenticateWebBooking(
+  env: Bindings,
+  input: { publicCode: string; presented: string; now: Date },
+): Promise<WebBookingJoin | null> {
+  const candidates = await webBookingsByCode(env.DB, input.publicCode)
+  for (const row of candidates) {
+    if (
+      await verifyManagementCode(
+        row.managementCodeHash,
+        input.presented,
+        managementSalt(row.organizationId, row.publicCode),
+      )
+    ) {
+      return row
+    }
+    const raw = await env.SHORT_LIVED.get(shortLivedKey(row.organizationId, input.presented))
+    if (raw === null) continue
+    const record = JSON.parse(raw) as ShortLivedRecord
+    if (record.publicCode !== row.publicCode) continue
+    if (!isShortLivedFresh(record, input.now)) continue
+    return row
+  }
+  return null
+}
+
+/** 照会の明細に載せるご用件（**対客名**）。店内名を返さない。 */
+async function webBookingPurpose(
+  db: D1Database,
+  organizationId: string,
+  reservationId: string,
+): Promise<{ name: string; durationMinutes: number }> {
+  const row = await db
+    .prepare(
+      'SELECT p.name_public AS name, rp.duration_minutes AS durationMinutes ' +
+        'FROM reservation_purposes rp JOIN visit_purposes p ON p.id = rp.purpose_id ' +
+        'WHERE rp.organization_id = ?1 AND rp.reservation_id = ?2 ORDER BY rp.sort_order LIMIT 1',
+    )
+    .bind(organizationId, reservationId)
+    .first<{ name: string; durationMinutes: number }>()
+  return row ?? { name: 'ご来店', durationMinutes: 30 }
+}
+
+/** 照会の応答。**確認番号を持たない**（平文が返るのは予約を作った 1 回だけ）。 */
+async function webReservationStatus(
+  db: D1Database,
+  row: WebBookingJoin,
+  changeDeadlineDays: number,
+) {
+  const purpose = await webBookingPurpose(db, row.organizationId, row.reservationId)
+  return {
+    code: row.publicCode,
+    status: row.webStatus,
+    startsAt: row.startsAt,
+    endsAt: row.endsAt,
+    storeName: row.storeNamePublic ?? row.storeName,
+    purposeName: purpose.name,
+    durationMinutes: purpose.durationMinutes,
+    contactName: row.contactName,
+    changeDeadlineAt: changeDeadlineAt(toJstDateString(row.startsAt), changeDeadlineDays),
+  }
+}
+
+/**
+ * 確認メールを notifier へ同期で送る。**予約の D1 書き込みは先に済ませてある。**
+ * 失敗しても予約を巻き戻さず、握りつぶした事実を 2 つの形で外に出す
+ * （`emailed: false` と `console.error`。`04-api.md` §7.2）。
+ */
+async function sendReservationMail(
+  env: Bindings,
+  input: {
+    organizationId: string
+    reservationId: string
+    to: string
+    managementCode: string
+    reservationNumber: string
+    /** **`stores.name_public`**。店内名をお客様のメールに漏らさない。 */
+    storeName: string
+    appointmentAt: string
+  },
+): Promise<boolean> {
+  const job = NotificationJob.parse({
+    // 日時変更のたびに 1 通だけ送る（同じ日時へ何度叩いても連打しない）。
+    id: `res-confirmed:${input.reservationId}:${input.appointmentAt}`,
+    organizationId: input.organizationId,
+    type: 'reservation.confirmed',
+    payload: {
+      reservationId: input.reservationId,
+      to: input.to,
+      managementCode: input.managementCode,
+      reservationNumber: input.reservationNumber,
+      storeName: input.storeName,
+      appointmentAt: input.appointmentAt,
+    },
+  })
+  let emailed = false
+  try {
+    const res = await env.NOTIFIER.fetch('http://notifier/api/internal/send', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-internal-key': env.INTERNAL_KEY },
+      body: JSON.stringify(job),
+    })
+    const parsed = NotificationResult.safeParse(await res.json().catch(() => null))
+    emailed =
+      parsed.success && (parsed.data.status === 'sent' || parsed.data.status === 'duplicate')
+  } catch (err) {
+    console.error('notify failed', { reservationId: input.reservationId, type: job.type }, err)
+    return false
+  }
+  if (!emailed) {
+    console.error('notify failed', { reservationId: input.reservationId, type: job.type })
+    return false
+  }
+  // **送れたときだけ**控えを置く。置かなければ次の照会が再送を試みる（§7.2 の再検知）。
+  await env.SHORT_LIVED.put(mailSentKey(input.organizationId, input.reservationId), job.id, {
+    expirationTtl: MAIL_SENT_TTL_SECONDS,
+  })
+  return emailed
+}
+
+/**
+ * `pending` のまま**受信日**の 24:00 JST を越えた Web 予約を自動で取り消す。
+ * 起算は受信日であって来店日ではない（来店日起算だと 3 週間先の予約が居座る）。
+ */
+async function applyWebPublications(
+  env: Bindings,
+  input: { now: Date; limit: number },
+): Promise<{ applied: number; skipped: number; autoCancelled: number }> {
+  const nowIso = input.now.toISOString()
+  const found = await env.DB.prepare(
+    'SELECT w.id AS id, w.organization_id AS organizationId, w.store_id AS storeId, ' +
+      'w.reservation_id AS reservationId, w.public_code AS publicCode, ' +
+      'w.status AS status, w.created_at AS createdAt ' +
+      "FROM web_bookings w WHERE w.status = 'pending' ORDER BY w.created_at ASC LIMIT ?1",
+  )
+    .bind(input.limit)
+    .all<{
+      id: string
+      organizationId: string
+      storeId: string
+      reservationId: string
+      publicCode: string
+      status: string
+      createdAt: string
+    }>()
+
+  let autoCancelled = 0
+  let skipped = 0
+  for (const row of found.results) {
+    if (!shouldAutoCancel({ status: row.status, createdAt: row.createdAt }, input.now)) {
+      skipped += 1
+      continue
+    }
+    const alert = autoCancelledAlert({ publicCode: row.publicCode })
+    // お客様の予約が消える唯一の自動処理なので、台帳・Web・お知らせを 1 バッチで書く。
+    await env.DB.batch([
+      env.DB.prepare(
+        "UPDATE web_bookings SET status = 'cancelled', cancelled_at = ?, updated_at = ? " +
+          "WHERE organization_id = ? AND id = ? AND status = 'pending'",
+      ).bind(nowIso, nowIso, row.organizationId, row.id),
+      env.DB.prepare(
+        "UPDATE reservations SET status = 'cancelled', cancelled_at = ?, cancel_reason = 'store', " +
+          'updated_at = ?, version = version + 1 WHERE organization_id = ? AND id = ?',
+      ).bind(nowIso, nowIso, row.organizationId, row.reservationId),
+      env.DB.prepare(
+        'DELETE FROM reservation_slot_locks WHERE organization_id = ? AND reservation_id = ?',
+      ).bind(row.organizationId, row.reservationId),
+      env.DB.prepare(
+        'INSERT INTO alerts (id, organization_id, store_id, code, severity, audience, title, body, ' +
+          'target_type, target_id, occurred_at, read_at, resolved_at, resolved_by, created_at) ' +
+          "VALUES (?,?,?,?,?,?,?,?,'reservation',?,?,NULL,NULL,NULL,?)",
+      ).bind(
+        crypto.randomUUID(),
+        row.organizationId,
+        row.storeId,
+        alert.code,
+        alert.severity,
+        alert.audience,
+        alert.title,
+        alert.body,
+        row.reservationId,
+        nowIso,
+        nowIso,
+      ),
+    ])
+    autoCancelled += 1
+  }
+  // **自動で取り消した件数を他の数に混ぜない**（0 でないことが単独で読めるようにする）。
+  return { applied: found.results.length, skipped, autoCancelled }
 }
 
 const routes = app
@@ -7385,6 +7946,1016 @@ const routes = app
         limit: input.limit,
       })
       return c.json(RecordingPurgeResult.parse(result))
+    },
+  )
+
+  /* --- Web 予約の公開設定と承認（P8。staff 4 本） -------------------------- */
+
+  /**
+   * SETTINGS-WEB の左（公開の可否・受け付ける内容・お知らせ文）。
+   *
+   * **行が無い店舗も同じ形で読める**（「公開していません」）。読むだけで行を作らない。
+   * 「ご案内のページ」は表に持たず `stores.slug` から組み立てるので、slug を直せば
+   * その場で追随する。
+   */
+  .get('/api/staff/web-booking-settings/:storeId', async (c) => {
+    const db = drizzle(c.env.DB)
+    const org = c.get('auth').org
+    const store = await findStore(db, org, c.req.param('storeId'))
+    if (!store) return c.json({ error: 'not_found' }, 404)
+    const publication = await publicationOf(c.env, db, store, new Date())
+    return c.json(
+      WebBookingSettings.parse({
+        storeId: store.id,
+        isPublished: publication.isPublished,
+        landingPath: publication.landingPath,
+        opensAt: publication.window.opensAt,
+        closesAt: publication.window.closesAt,
+        acceptFromHours: publication.window.acceptFromHours,
+        acceptUntilDays: publication.window.acceptUntilDays,
+        changeDeadlineDays: publication.changeDeadlineDays,
+        requiresApproval: publication.requiresApproval,
+        message: publication.message,
+        publishedPurposeIds: publication.purposes.map((purpose) => purpose.id),
+        version: publication.version,
+        updatedAt: publication.updatedAt,
+      }),
+    )
+  })
+
+  /**
+   * SETTINGS-WEB の「保存」。**店長だけ**（`settings.manage`）。
+   *
+   * 版の条件は `db.batch()` の**全文に配り**、`version` を +1 する文を**最後**に置く。
+   * D1 は 0 行しか当たらない `UPDATE` でバッチを止めないので、版を進める 1 文だけに
+   * 条件を置くと「409 を返しながら相手の変更を黙って巻き戻す」形になる。
+   * 409 の判定は最後の文の `meta.changes === 0`（`03-data-model.md` §2-14）。
+   *
+   * 「公開する目的」は `visit_purposes.is_web_published` を書き換えることで表す。
+   * 目的の公開・非公開を 2 か所に持たない（`04-api.md` §3.12）。
+   */
+  .put(
+    '/api/staff/web-booking-settings/:storeId',
+    requireStorePermission('settings.manage'),
+    zValidator('json', WebBookingSettingsInput),
+    async (c) => {
+      const db = drizzle(c.env.DB)
+      const { org, sub } = c.get('auth')
+      const storeId = c.req.param('storeId')
+      const store = await findStore(db, org, storeId)
+      if (!store) return c.json({ error: 'not_found' }, 404)
+      const input = c.req.valid('json')
+
+      // 目的を選べない予約画面は成立しない。400 ではなく 422（入力の型は正しい）。
+      if (input.isPublished && input.publishedPurposeIds.length === 0) {
+        return c.json(
+          rejected([
+            '公開する目的が 0 件のため公開できません。ご来店の目的を 1 つ以上 Web に出してください。',
+          ]),
+          422,
+        )
+      }
+      // 他店舗・他テナントの目的 id を混ぜた保存は通さない（無い id は「無い」として 404）。
+      const publishable = await readPublishablePurposes(db, org, storeId)
+      const known = new Set(publishable.map((purpose) => purpose.id))
+      if (input.publishedPurposeIds.some((id) => !known.has(id))) {
+        return c.json({ error: 'not_found' }, 404)
+      }
+
+      const now = new Date().toISOString()
+      // 行が無い店舗は版 0 の行を先に作る（バッチの前に済ませる。`ensureVersion` と同じ形）。
+      await c.env.DB.prepare(
+        'INSERT INTO web_booking_settings (id, organization_id, store_id, is_published, opens_at, ' +
+          'closes_at, accept_from_hours, accept_until_days, change_deadline_days, requires_approval, ' +
+          'message, version, updated_at, created_at) ' +
+          "VALUES (?,?,?,'0','10:30','18:00',2,30,1,'1',NULL,?,?,?) " +
+          'ON CONFLICT (organization_id, store_id) DO NOTHING',
+      )
+        .bind(crypto.randomUUID(), org, storeId, WEB_FIRST_VERSION, now, now)
+        .run()
+
+      const guard =
+        'EXISTS (SELECT 1 FROM web_booking_settings WHERE organization_id = ? AND store_id = ? AND version = ?)'
+      const guardParams = [org, storeId, input.version]
+      const statements: Statement[] = [
+        // 一度すべて下ろしてから、選ばれたものだけを上げる（差分を数えない）。
+        c.env.DB.prepare(
+          "UPDATE visit_purposes SET is_web_published = '0', updated_at = ? " +
+            `WHERE organization_id = ? AND (store_id = ? OR store_id IS NULL) AND ${guard}`,
+        ).bind(now, org, storeId, ...guardParams),
+      ]
+      for (const purposeId of input.publishedPurposeIds) {
+        statements.push(
+          c.env.DB.prepare(
+            "UPDATE visit_purposes SET is_web_published = '1', updated_at = ? " +
+              `WHERE organization_id = ? AND id = ? AND ${guard}`,
+          ).bind(now, org, purposeId, ...guardParams),
+        )
+      }
+      statements.push(
+        c.env.DB.prepare(
+          'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, ' +
+            'action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
+            `SELECT ?, ?, ?, 'staff', ?, NULL, 'settings.web_booking.updated', 'store', ?, NULL, ?, ?, ? WHERE ${guard}`,
+        ).bind(
+          crypto.randomUUID(),
+          org,
+          storeId,
+          await actorStaffId(db, org, storeId, sub),
+          storeId,
+          JSON.stringify({
+            isPublished: input.isPublished,
+            opensAt: input.opensAt,
+            closesAt: input.closesAt,
+            acceptFromHours: input.acceptFromHours,
+            acceptUntilDays: input.acceptUntilDays,
+            changeDeadlineDays: input.changeDeadlineDays,
+            publishedPurposeIds: input.publishedPurposeIds,
+          }),
+          crypto.randomUUID(),
+          now,
+          ...guardParams,
+        ),
+        // **必ず最後**。この 1 文の `meta.changes` だけが 409 の判定を知っている。
+        c.env.DB.prepare(
+          'UPDATE web_booking_settings SET is_published = ?, opens_at = ?, closes_at = ?, ' +
+            'accept_from_hours = ?, accept_until_days = ?, change_deadline_days = ?, ' +
+            'requires_approval = ?, message = ?, version = version + 1, updated_at = ? ' +
+            'WHERE organization_id = ? AND store_id = ? AND version = ?',
+        ).bind(
+          flag(input.isPublished),
+          input.opensAt,
+          input.closesAt,
+          input.acceptFromHours,
+          input.acceptUntilDays,
+          input.changeDeadlineDays,
+          flag(input.requiresApproval),
+          input.message === '' ? null : input.message,
+          now,
+          ...guardParams,
+        ),
+      )
+      const saved = await commitSettings(c.env.DB, statements as [Statement, ...Statement[]])
+      if (!saved) return c.json({ error: 'version_conflict' }, 409)
+
+      const publication = await publicationOf(c.env, db, store, new Date())
+      return c.json(
+        WebBookingSettings.parse({
+          storeId,
+          isPublished: publication.isPublished,
+          landingPath: publication.landingPath,
+          opensAt: publication.window.opensAt,
+          closesAt: publication.window.closesAt,
+          acceptFromHours: publication.window.acceptFromHours,
+          acceptUntilDays: publication.window.acceptUntilDays,
+          changeDeadlineDays: publication.changeDeadlineDays,
+          requiresApproval: publication.requiresApproval,
+          message: publication.message,
+          publishedPurposeIds: publication.purposes.map((purpose) => purpose.id),
+          version: publication.version,
+          updatedAt: publication.updatedAt,
+        }),
+      )
+    },
+  )
+
+  /**
+   * SETTINGS-WEB の右「お客様の画面の見え方」。**保存を伴わない** —
+   * 未保存の目的とお知らせ文をクエリで受け取り、そのまま組み立てて返す。
+   * 保存の前に「社内の言葉が漏れていないか」をその場で確かめるための面である。
+   */
+  .get('/api/staff/web-booking-settings/:storeId/preview', async (c) => {
+    const db = drizzle(c.env.DB)
+    const org = c.get('auth').org
+    const store = await findStore(db, org, c.req.param('storeId'))
+    if (!store) return c.json({ error: 'not_found' }, 404)
+    const query = validQuery(c, WebPreviewQuery, c.req.query())
+    const publication = await publicationOf(c.env, db, store, new Date())
+    const draft = new Set(query.purposeIds)
+    return c.json(
+      WebPreviewResult.parse({
+        // お客様に見せる店名（`stores.name_public`）。店内名を出さない。
+        storeName: publicStoreName(store),
+        purposes:
+          query.purposeIds.length === 0
+            ? publication.purposes
+            : publication.purposes.filter((purpose) => draft.has(purpose.id)),
+        message: query.message ?? publication.message,
+      }),
+    )
+  })
+
+  /**
+   * 確認待ちの Web 予約を確かめる（ALERTS →「内容を確認」）。**店長だけ。**
+   *
+   * `approve` は `web_bookings.status` だけを動かす（予約本体は作成の時点で
+   * `confirmed` なので、承認は台帳の予約を作り直さない）。`reject` は台帳ごと取り消す。
+   */
+  .post(
+    '/api/staff/web-bookings/:webBookingId/review',
+    requireStorePermission('settings.manage'),
+    zValidator('json', WebBookingReviewInput),
+    async (c) => {
+      const org = c.get('auth').org
+      const input = c.req.valid('json')
+      const row = await c.env.DB.prepare(
+        'SELECT id, store_id AS storeId, reservation_id AS reservationId, status, ' +
+          'public_code AS publicCode, contact_email AS contactEmail ' +
+          'FROM web_bookings WHERE organization_id = ?1 AND id = ?2',
+      )
+        .bind(org, c.req.param('webBookingId'))
+        .first<{
+          id: string
+          storeId: string
+          reservationId: string
+          status: string
+          publicCode: string
+          contactEmail: string
+        }>()
+      if (row === null) return c.json({ error: 'not_found' }, 404)
+      // `pending` 以外に叩くと 409（二重の承認・取消のあとの承認を止める）。
+      if (row.status !== 'pending') return c.json({ error: 'invalid_transition' }, 409)
+
+      const now = new Date().toISOString()
+      if (input.decision === 'approve') {
+        await c.env.DB.prepare(
+          "UPDATE web_bookings SET status = 'confirmed', confirmed_at = ?, updated_at = ? " +
+            "WHERE organization_id = ? AND id = ? AND status = 'pending'",
+        )
+          .bind(now, now, org, row.id)
+          .run()
+      } else {
+        await c.env.DB.batch([
+          c.env.DB.prepare(
+            "UPDATE web_bookings SET status = 'cancelled', cancelled_at = ?, updated_at = ? " +
+              "WHERE organization_id = ? AND id = ? AND status = 'pending'",
+          ).bind(now, now, org, row.id),
+          c.env.DB.prepare(
+            "UPDATE reservations SET status = 'cancelled', cancelled_at = ?, cancel_reason = 'store', " +
+              'updated_at = ?, version = version + 1 WHERE organization_id = ? AND id = ?',
+          ).bind(now, now, org, row.reservationId),
+          c.env.DB.prepare(
+            'DELETE FROM reservation_slot_locks WHERE organization_id = ? AND reservation_id = ?',
+          ).bind(org, row.reservationId),
+        ])
+      }
+      const detail = await reservationDetailOf(c.env, org, row.reservationId)
+      if (detail === null) return c.json({ error: 'not_found' }, 404)
+      return c.json(detail)
+    },
+  )
+
+  /* --- 公開面（P8。未認証。10 本） ---------------------------------------- */
+
+  /**
+   * WEB-01-STORE の店舗一覧。**位置情報を受け取らない**（並びは `stores.sort_order`）。
+   * 公開していない店舗と、出すご用件が 1 件も無い店舗は最初から出ない。
+   */
+  .get('/api/public/stores', async (c) => {
+    const query = validQuery(c, PublicStoreSearchQuery, c.req.query())
+    const found = await c.env.DB.prepare(
+      'SELECT s.slug AS slug, COALESCE(s.name_public, s.name) AS name, ' +
+        's.access_note AS accessNote FROM stores s ' +
+        'JOIN web_booking_settings w ON w.organization_id = s.organization_id AND w.store_id = s.id ' +
+        "WHERE w.is_published = '1' AND s.is_active = '1' " +
+        'AND EXISTS (SELECT 1 FROM visit_purposes p WHERE p.organization_id = s.organization_id ' +
+        'AND (p.store_id = s.id OR p.store_id IS NULL) ' +
+        "AND p.is_web_published = '1' AND p.is_active = '1') " +
+        'ORDER BY COALESCE(s.sort_order, 2147483647) ASC, s.created_at ASC LIMIT ?1',
+    )
+      .bind(query.limit)
+      .all<{ slug: string; name: string; accessNote: string }>()
+    return c.json(PublicStoreSummary.array().parse(found.results))
+  })
+
+  /**
+   * ヘッダーの店名・道順と、完了画面の地図。
+   * **公開していない店舗は「無い」と同じ答えを返す**（body まで同じにする）。
+   */
+  .get('/api/public/stores/:storeSlug', async (c) => {
+    const db = drizzle(c.env.DB)
+    const store = await storeBySlug(db, c.req.param('storeSlug'))
+    if (store === null) return c.json(NOT_PUBLISHED, 404)
+    const publication = await publicationOf(c.env, db, store, new Date())
+    if (!publication.isPublished || !isOn(store.isActive)) return c.json(NOT_PUBLISHED, 404)
+    return c.json(
+      PublicStoreDetail.parse({
+        slug: store.slug,
+        name: publicStoreName(store),
+        accessNote: store.accessNote,
+        phone: store.phone,
+        address: store.address,
+        message: publication.message,
+        isPublished: true,
+      }),
+    )
+  })
+
+  /** WEB-02-PURPOSE。**対客名と目安の分数だけ**で、店内名・技能・設備を持たない。 */
+  .get('/api/public/stores/:storeSlug/purposes', async (c) => {
+    const db = drizzle(c.env.DB)
+    const store = await storeBySlug(db, c.req.param('storeSlug'))
+    if (store === null) return c.json(NOT_PUBLISHED, 404)
+    const publication = await publicationOf(c.env, db, store, new Date())
+    if (!publication.isPublished || !isOn(store.isActive)) return c.json(NOT_PUBLISHED, 404)
+    return c.json(PublicStorePurpose.array().parse(publication.purposes))
+  })
+
+  /**
+   * WEB-03-DATETIME の週の空き。返すのは**空いているかどうかだけ**で、
+   * 誰が・どの台がという内訳は出さない。**KV を 1 度も読まない**（`04-api.md` §6.3）。
+   */
+  .get('/api/public/stores/:storeSlug/availability', async (c) => {
+    const db = drizzle(c.env.DB)
+    const store = await storeBySlug(db, c.req.param('storeSlug'))
+    if (store === null) return c.json(NOT_PUBLISHED, 404)
+    const query = validQuery(c, PublicAvailabilityQuery, c.req.query())
+    const now = new Date()
+    const publication = await publicationOf(c.env, db, store, now)
+    if (!publication.isPublished || !isOn(store.isActive)) return c.json(NOT_PUBLISHED, 404)
+    const purpose = publication.purposes.find((row) => row.id === query.purposeId)
+    if (purpose === undefined) return c.json({ error: 'purpose_unavailable' }, 409)
+
+    const days: { date: string; isClosed: boolean; isFull: boolean; slots: unknown[] }[] = []
+    for (let date = query.from; date <= query.to; date = addJstDays(date, 1)) {
+      const rows = await readAvailabilityDay(db, {
+        organizationId: store.organizationId,
+        storeId: store.id,
+        date,
+        purposeIds: [purpose.id],
+      })
+      const answer = computeAvailability(
+        webBoard({
+          date,
+          now,
+          rows,
+          isSuspended: !isOn(store.isActive),
+          durationMinutes: purpose.durationMinutes,
+          window: publication.window,
+        }),
+      )
+      const slots = publicSlots(answer.slots)
+      days.push({
+        date,
+        isClosed: answer.isClosed,
+        isFull: !answer.isClosed && slots.every((slot) => !slot.isAvailable),
+        slots: answer.isClosed ? [] : slots,
+      })
+    }
+    return c.json(PublicAvailabilityResponse.parse({ days }))
+  })
+
+  /**
+   * WEB-05-CONFIRM の「この内容で予約する」。
+   *
+   * 書き込みは **1 つの `db.batch()`** に入る（枠の占有 → 予約本体 → ご用件 → 割当 →
+   * 監査 → Web 予約 → 冪等の `done`）。1 本目の占有行が 1 行も入らなければ枠は取れて
+   * おらず、そのとき D1 には 1 行も書かれていない。
+   *
+   * 担当も設備も**指定しない**。お客様に社内の割り当てを選ばせないので、
+   * `kind='staff'` の割当は `target_id = NULL`（あとで決める）1 行だけになり、
+   * 二重予約は店舗の同時受付上限（`max_parallel`）が止める。
+   *
+   * 確認メールは予約を書き終えてから送る。**送れなくても予約を巻き戻さない。**
+   */
+  .post(
+    '/api/public/stores/:storeSlug/bookings',
+    zValidator('json', PublicBookingCreate),
+    async (c) => {
+      const db = drizzle(c.env.DB)
+      const store = await storeBySlug(db, c.req.param('storeSlug'))
+      if (store === null) return c.json(NOT_PUBLISHED, 404)
+      const input = c.req.valid('json')
+      const now = new Date()
+      const publication = await publicationOf(c.env, db, store, now)
+      if (!publication.isPublished || !isOn(store.isActive)) return c.json(NOT_PUBLISHED, 404)
+      const purpose = publication.purposes.find((row) => row.id === input.purposeId)
+      if (purpose === undefined) return c.json({ error: 'purpose_unavailable' }, 409)
+
+      const org = store.organizationId
+      const date = toJstDateString(input.startsAt)
+      const rows = await readAvailabilityDay(db, {
+        organizationId: org,
+        storeId: store.id,
+        date,
+        purposeIds: [purpose.id],
+      })
+      const slotRules = rows.slotRules
+      // 予約の間隔が決まっていない店舗は、そもそも Web に出せない（暗黙の既定値を作らない）。
+      if (slotRules === null) return c.json(NOT_PUBLISHED, 404)
+      if (rows.missingPurposes > 0) return c.json({ error: 'purpose_unavailable' }, 409)
+
+      const durationMinutes = purpose.durationMinutes
+      const endsAt = new Date(
+        Date.parse(input.startsAt) + durationMinutes * MS_PER_MINUTE,
+      ).toISOString()
+      const boardOf = (source: AvailabilityDayRows) =>
+        webBoard({
+          date,
+          now,
+          rows: source,
+          isSuspended: !isOn(store.isActive),
+          durationMinutes,
+          window: publication.window,
+          preferredStartsAt: input.startsAt,
+        })
+      const verdict = evaluateSlot(boardOf(rows), input.startsAt)
+      if (verdict.reason !== null) {
+        const blocked = PUBLIC_BLOCKING[verdict.reason]
+        if (blocked !== 'slot_taken') return c.json({ error: blocked }, 409)
+        const answer = computeAvailability(boardOf(rows))
+        return c.json(
+          {
+            error: 'slot_taken' as const,
+            alternatives: AvailabilitySlot.array().max(3).parse(answer.alternatives),
+          },
+          409,
+        )
+      }
+
+      // 冪等（`04-api.md` §6.2）。二度押しと回線断の再送を 1 件に畳む。
+      const header = readIdempotencyKey(c.req.header('Idempotency-Key'))
+      if (!header.ok) {
+        return c.json(
+          rejected([
+            'Idempotency-Key に使えない文字が入っているため送れませんでした。もう一度お試しください。',
+          ]),
+          400,
+        )
+      }
+      const clientKey = header.key
+      let idempotencyKey: string | null = null
+      if (clientKey !== null) {
+        const started = await beginIdempotency(c.env.DB, {
+          organizationId: org,
+          scope: 'public.booking.create',
+          clientKey,
+          requestHash: await requestHash(input),
+          now,
+        })
+        // **再実行しない。**確認番号を含む応答をそのまま返す（同じ番号が返る）。
+        if (started.state === 'replay') return c.json(PublicBookingResult.parse(started.response))
+        if (started.state === 'conflict') return c.json({ error: 'idempotency_conflict' }, 409)
+        idempotencyKey = started.key
+      }
+
+      const reservationId = crypto.randomUUID()
+      const webBookingId = crypto.randomUUID()
+      const correlationId = crypto.randomUUID()
+      const managementCode = issueManagementCode()
+      const confirmationKey = issueConfirmationKey()
+      const pending = requiresApproval(toWebSettingsRow(await readWebSettings(db, org, store.id)))
+      const month = webBookingCodeMonth(now)
+      const maxSerial = await c.env.DB.prepare(
+        `SELECT MAX(CAST(SUBSTR(public_code, ${WEB_CODE_SERIAL_OFFSET + 1}) AS INTEGER)) AS maxSerial ` +
+          'FROM web_bookings WHERE organization_id = ?1 AND public_code LIKE ?2',
+      )
+        .bind(org, `EY-W-${month}-%`)
+        .first<{ maxSerial: number | null }>()
+      let publicCode = nextPublicCode(month, maxSerial?.maxSerial ?? null)
+
+      const attempt = await withReservationCode(c.env.DB, org, now, async (code) => {
+        for (let tries = 1; tries <= WEB_CODE_ATTEMPTS; tries += 1) {
+          const result = PublicBookingResult.parse({
+            code: publicCode,
+            status: pending ? 'pending' : 'confirmed',
+            startsAt: input.startsAt,
+            endsAt,
+            storeName: publicStoreName(store),
+            purposeName: purpose.name,
+            contactName: input.contactName,
+            managementCode,
+            // 送れたかどうかは D1 を書き終えてから決まる。ここでは仮に false を置く。
+            emailed: false,
+          })
+          const statements = bookingStatements(c.env.DB, {
+            organizationId: org,
+            storeId: store.id,
+            reservationId,
+            code,
+            source: 'web',
+            startsAt: input.startsAt,
+            endsAt,
+            durationMinutes,
+            purposes: [{ purposeId: purpose.id, durationMinutes, sortOrder: 0 }],
+            staff: null,
+            equipment: [],
+            slotRules,
+            noteCustomer: '',
+            noteInternal: '',
+            actorId: null,
+            correlationId,
+            receptionSessionId: null,
+            idempotency: null,
+            now,
+          })
+          // ④ Web 予約。**生の確認番号・確認鍵を保存しない**（ハッシュだけを入れる）。
+          statements.push(
+            c.env.DB.prepare(
+              'INSERT INTO web_bookings (id, organization_id, store_id, reservation_id, public_code, ' +
+                'confirmation_key_hash, management_code_hash, contact_name, contact_kana, contact_phone, ' +
+                'contact_email, status, created_at, confirmed_at, cancelled_at, updated_at) ' +
+                `SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ? WHERE ${WEB_LOCKED}`,
+            ).bind(
+              webBookingId,
+              org,
+              store.id,
+              reservationId,
+              publicCode,
+              await hashConfirmationKey(confirmationKey, managementSalt(org, publicCode)),
+              await hashManagementCode(managementCode, managementSalt(org, publicCode)),
+              input.contactName,
+              input.contactKana === '' ? null : input.contactKana,
+              input.contactPhone,
+              input.contactEmail,
+              pending ? 'pending' : 'confirmed',
+              now.toISOString(),
+              now.toISOString(),
+              org,
+              reservationId,
+            ),
+          )
+          if (idempotencyKey !== null) {
+            // **本処理と `done` 化を別の文に分けない**（片方だけ成功する窓を作らない）。
+            statements.push(
+              c.env.DB.prepare(
+                "UPDATE idempotency_records SET status = 'done', response_json = ? " +
+                  `WHERE key = ? AND status = 'in_progress' AND ${WEB_LOCKED}`,
+              ).bind(JSON.stringify(result), idempotencyKey, org, reservationId),
+            )
+          }
+          try {
+            const results = await c.env.DB.batch(statements)
+            return { taken: (results[0]?.meta.changes ?? 0) === 0, result, exhausted: false }
+          } catch (err) {
+            // ご予約番号の衝突だけを打ち直す。ほかの制約違反は投げ直す（握りつぶさない）。
+            if (constraintTable(err) !== 'web_bookings') throw err
+            publicCode = bumpPublicCode(publicCode)
+          }
+        }
+        return { taken: false, result: null, exhausted: true }
+      }).catch(async (err: unknown) => {
+        if (idempotencyKey !== null) await releaseIdempotency(c.env.DB, idempotencyKey)
+        throw err
+      })
+
+      if (!attempt.ok || attempt.value.exhausted || attempt.value.result === null) {
+        if (idempotencyKey !== null) await releaseIdempotency(c.env.DB, idempotencyKey)
+        return c.json({ error: 'code_exhausted' }, 409)
+      }
+      if (attempt.value.taken) {
+        // 鍵を空けて、同じ鍵のまま時刻を選び直せるようにする。
+        if (idempotencyKey !== null) await releaseIdempotency(c.env.DB, idempotencyKey)
+        const fresh = await readAvailabilityDay(db, {
+          organizationId: org,
+          storeId: store.id,
+          date,
+          purposeIds: [purpose.id],
+        })
+        const answer = computeAvailability(boardOf(fresh))
+        return c.json(
+          {
+            error: 'slot_taken' as const,
+            alternatives: AvailabilitySlot.array().max(3).parse(answer.alternatives),
+          },
+          409,
+        )
+      }
+
+      // 予約はもう成立している。ここから先が失敗しても巻き戻さない（`04-api.md` §7.2）。
+      const emailed = await sendReservationMail(c.env, {
+        organizationId: org,
+        reservationId,
+        to: input.contactEmail,
+        managementCode,
+        reservationNumber: attempt.value.result.code,
+        storeName: publicStoreName(store),
+        appointmentAt: input.startsAt,
+      })
+      return c.json(PublicBookingResult.parse({ ...attempt.value.result, emailed }))
+    },
+  )
+
+  /**
+   * WEB-CANCEL の本人確認（2 手順のうち 1 つ目）。
+   *
+   * ご予約番号と確認番号（`X-Management-Code`）が合ったときだけ、**900 秒の短命の鍵**を
+   * 返す。失敗は**コード × IP** で数え、10 回で 429（15 分お待ちいただく）。
+   * **どちらが違うかを言わない** — 無い番号も番号違いも同じ status・同じ body にする。
+   */
+  .post(
+    '/api/public/reservations/verify',
+    zValidator('json', PublicReservationVerification),
+    async (c) => {
+      const input = c.req.valid('json')
+      const ip = clientIpOf(c)
+      if (isManagementCodeLocked(await failureCount(c.env, input.code, ip))) {
+        return c.json(
+          {
+            error: 'management_code_locked' as const,
+            retryAfterSeconds: MANAGEMENT_CODE_RETRY_AFTER_SECONDS,
+          },
+          429,
+        )
+      }
+      const now = new Date()
+      const row = await authenticateWebBooking(c.env, {
+        publicCode: input.code,
+        presented: c.req.header('X-Management-Code') ?? '',
+        now,
+      })
+      if (row === null) {
+        await countFailure(c.env, input.code, ip)
+        return c.json(INVALID_MANAGEMENT_CODE, 401)
+      }
+      const shortLived = issueManagementCode()
+      const expiresAt = shortLivedExpiresAt(now)
+      await c.env.SHORT_LIVED.put(
+        shortLivedKey(row.organizationId, shortLived),
+        JSON.stringify({
+          organizationId: row.organizationId,
+          publicCode: row.publicCode,
+          expiresAt,
+        }),
+        { expirationTtl: WEB_SHORT_LIVED_TTL_SECONDS },
+      )
+      return c.json(
+        PublicReservationVerificationResult.parse({ managementCode: shortLived, expiresAt }),
+      )
+    },
+  )
+
+  /**
+   * WEB-CANCEL の明細。**確認番号を 1 度も返さない**（平文が出るのは予約を作った 1 回だけ）。
+   * 確認メールを送れていなかったご予約は、ここで 1 度だけ再送を試みる（§7.2 の再検知）。
+   */
+  .get('/api/public/reservations/:code', async (c) => {
+    const publicCode = c.req.param('code')
+    const ip = clientIpOf(c)
+    if (isManagementCodeLocked(await failureCount(c.env, publicCode, ip))) {
+      return c.json(
+        {
+          error: 'management_code_locked' as const,
+          retryAfterSeconds: MANAGEMENT_CODE_RETRY_AFTER_SECONDS,
+        },
+        429,
+      )
+    }
+    const now = new Date()
+    const row = await authenticateWebBooking(c.env, {
+      publicCode,
+      presented: c.req.header('X-Management-Code') ?? '',
+      now,
+    })
+    if (row === null) {
+      await countFailure(c.env, publicCode, ip)
+      return c.json(INVALID_MANAGEMENT_CODE, 401)
+    }
+    const db = drizzle(c.env.DB)
+    const settings = toWebSettingsRow(await readWebSettings(db, row.organizationId, row.storeId))
+    const status = await webReservationStatus(
+      c.env.DB,
+      row,
+      settings?.changeDeadlineDays ?? DEFAULT_CHANGE_DEADLINE_DAYS,
+    )
+    // 控えが無い＝前に送れていない。**確認番号の平文はもう持っていない**ので、
+    // ここで送るのは「ご予約が確定しました」の 1 通だけである（番号は画面に出ている）。
+    if (
+      row.webStatus !== 'cancelled' &&
+      (await c.env.SHORT_LIVED.get(mailSentKey(row.organizationId, row.reservationId))) === null
+    ) {
+      await sendReservationMail(c.env, {
+        organizationId: row.organizationId,
+        reservationId: row.reservationId,
+        to: row.contactEmail,
+        managementCode: row.publicCode,
+        reservationNumber: row.publicCode,
+        storeName: row.storeNamePublic ?? row.storeName,
+        appointmentAt: row.startsAt,
+      })
+    }
+    return c.json(PublicReservationStatus.parse(status))
+  })
+
+  /** WEB-CANCEL「日時を変更する」の候補。WEB-03 と同じ形を返す。 */
+  .get('/api/public/reservations/:code/availability', async (c) => {
+    const publicCode = c.req.param('code')
+    const now = new Date()
+    const row = await authenticateWebBooking(c.env, {
+      publicCode,
+      presented: c.req.header('X-Management-Code') ?? '',
+      now,
+    })
+    if (row === null) {
+      await countFailure(c.env, publicCode, clientIpOf(c))
+      return c.json(INVALID_MANAGEMENT_CODE, 401)
+    }
+    const db = drizzle(c.env.DB)
+    const store = await storeBySlug(db, row.storeSlug)
+    if (store === null) return c.json(NOT_PUBLISHED, 404)
+    const query = validQuery(c, PublicAvailabilityQuery, c.req.query())
+    const publication = await publicationOf(c.env, db, store, now)
+    const purpose = publication.purposes.find((item) => item.id === query.purposeId)
+    if (purpose === undefined) return c.json({ error: 'purpose_unavailable' }, 409)
+
+    const days: { date: string; isClosed: boolean; isFull: boolean; slots: unknown[] }[] = []
+    for (let date = query.from; date <= query.to; date = addJstDays(date, 1)) {
+      const rows = await readAvailabilityDay(db, {
+        organizationId: row.organizationId,
+        storeId: row.storeId,
+        date,
+        purposeIds: [purpose.id],
+      })
+      const answer = computeAvailability(
+        webBoard({
+          date,
+          now,
+          rows,
+          isSuspended: !isOn(store.isActive),
+          durationMinutes: purpose.durationMinutes,
+          window: publication.window,
+          // いま入っているご予約自身が自分の変更を邪魔しない。
+          excludeReservationId: row.reservationId,
+        }),
+      )
+      const slots = publicSlots(answer.slots)
+      days.push({
+        date,
+        isClosed: answer.isClosed,
+        isFull: !answer.isClosed && slots.every((slot) => !slot.isAvailable),
+        slots: answer.isClosed ? [] : slots,
+      })
+    }
+    return c.json(PublicAvailabilityResponse.parse({ days }))
+  })
+
+  /**
+   * WEB-CANCEL「日時を変更する」。**締切を過ぎたら何も動かない。**
+   * 移す先が埋まっていれば 409 `slot_taken` で、元の時刻のまま残る
+   * （新しい枠を取ってから古い枠を返すので、取れなければ古い枠は空かない）。
+   */
+  .patch(
+    '/api/public/reservations/:code',
+    zValidator('json', PublicReservationChange),
+    async (c) => {
+      const publicCode = c.req.param('code')
+      const now = new Date()
+      const row = await authenticateWebBooking(c.env, {
+        publicCode,
+        presented: c.req.header('X-Management-Code') ?? '',
+        now,
+      })
+      if (row === null) {
+        await countFailure(c.env, publicCode, clientIpOf(c))
+        return c.json(INVALID_MANAGEMENT_CODE, 401)
+      }
+      if (row.webStatus === 'cancelled' || row.reservationStatus === 'cancelled') {
+        return c.json({ error: 'invalid_transition' }, 409)
+      }
+      const db = drizzle(c.env.DB)
+      const settings = toWebSettingsRow(await readWebSettings(db, row.organizationId, row.storeId))
+      const changeDeadlineDays = settings?.changeDeadlineDays ?? DEFAULT_CHANGE_DEADLINE_DAYS
+      if (
+        isChangeDeadlinePassed(
+          { visitDate: toJstDateString(row.startsAt), changeDeadlineDays },
+          now,
+        )
+      ) {
+        return c.json({ error: 'change_deadline_passed' }, 409)
+      }
+      const store = await storeBySlug(db, row.storeSlug)
+      if (store === null) return c.json(NOT_PUBLISHED, 404)
+      const publication = await publicationOf(c.env, db, store, now)
+      if (!publication.isPublished) return c.json(NOT_PUBLISHED, 404)
+
+      const input = c.req.valid('json')
+      const date = toJstDateString(input.startsAt)
+      const purposeRows = await c.env.DB.prepare(
+        'SELECT purpose_id AS purposeId, duration_minutes AS durationMinutes, sort_order AS sortOrder ' +
+          'FROM reservation_purposes WHERE organization_id = ?1 AND reservation_id = ?2 ORDER BY sort_order',
+      )
+        .bind(row.organizationId, row.reservationId)
+        .all<{ purposeId: string; durationMinutes: number; sortOrder: number }>()
+      const purposeIds = purposeRows.results.map((line) => line.purposeId)
+      const rows = await readAvailabilityDay(db, {
+        organizationId: row.organizationId,
+        storeId: row.storeId,
+        date,
+        purposeIds,
+      })
+      const slotRules = rows.slotRules
+      if (slotRules === null) return c.json(NOT_PUBLISHED, 404)
+      // ご用件の所要は**予約した時点の写し**。日時だけを動かすので読み直さない。
+      const durationMinutes = row.durationMinutes
+      const endsAt = new Date(
+        Date.parse(input.startsAt) + durationMinutes * MS_PER_MINUTE,
+      ).toISOString()
+      const boardOf = (source: AvailabilityDayRows) =>
+        webBoard({
+          date,
+          now,
+          rows: source,
+          isSuspended: !isOn(store.isActive),
+          durationMinutes,
+          window: publication.window,
+          preferredStartsAt: input.startsAt,
+          excludeReservationId: row.reservationId,
+        })
+      const verdict = evaluateSlot(boardOf(rows), input.startsAt)
+      if (verdict.reason !== null) {
+        const blocked = PUBLIC_BLOCKING[verdict.reason]
+        if (blocked !== 'slot_taken') return c.json({ error: blocked }, 409)
+        const answer = computeAvailability(boardOf(rows))
+        return c.json(
+          {
+            error: 'slot_taken' as const,
+            alternatives: AvailabilitySlot.array().max(3).parse(answer.alternatives),
+          },
+          409,
+        )
+      }
+
+      // 古い枠と新しい枠は `created_at` で見分ける。同じミリ秒に 2 度直せないようにする。
+      const batchAt = new Date(Math.max(now.getTime(), Date.parse(row.updatedAt) + 1)).toISOString()
+      const statements = buildChangeBatch({
+        db: c.env.DB,
+        organizationId: row.organizationId,
+        storeId: row.storeId,
+        reservationId: row.reservationId,
+        version: row.version,
+        batchAt,
+        requests: slotLockRequests({
+          slotStarts: expandToSlotStarts({
+            startsAt: input.startsAt,
+            endsAt,
+            slotMinutes: slotRules.slotMinutes,
+            cleanupMinutes: slotRules.cleanupMinutes,
+          }),
+          // 公開面は担当も設備も指定しない（`kind='staff'` の 1 行だけを積み直す）。
+          staff: null,
+          equipment: [],
+          maxParallel: slotRules.maxParallel,
+        }),
+        after: {
+          startsAt: input.startsAt,
+          endsAt,
+          durationMinutes,
+          noteCustomer: row.noteCustomer ?? '',
+          noteInternal: row.noteInternal ?? '',
+        },
+        purposes: purposeRows.results.map((line, index) => ({
+          purposeId: line.purposeId,
+          durationMinutes: line.durationMinutes,
+          sortOrder: index,
+        })),
+        assignments: [{ kind: 'staff', targetId: null }],
+        actorId: null,
+        correlationId: crypto.randomUUID(),
+        // 監査は追記専用。平文のお名前・お電話番号を入れない（`07-nfr.md` §6.6）。
+        audit: {
+          before: { startsAt: row.startsAt, endsAt: row.endsAt, source: 'web' },
+          after: { startsAt: input.startsAt, endsAt, source: 'web' },
+        },
+      })
+      const results = await c.env.DB.batch(statements as [Statement, ...Statement[]])
+      if ((results[results.length - 1]?.meta.changes ?? 0) === 0) {
+        const fresh = await readAvailabilityDay(db, {
+          organizationId: row.organizationId,
+          storeId: row.storeId,
+          date,
+          purposeIds,
+        })
+        const answer = computeAvailability(boardOf(fresh))
+        return c.json(
+          {
+            error: 'slot_taken' as const,
+            alternatives: AvailabilitySlot.array().max(3).parse(answer.alternatives),
+          },
+          409,
+        )
+      }
+      await c.env.DB.prepare(
+        'UPDATE web_bookings SET updated_at = ? WHERE organization_id = ? AND id = ?',
+      )
+        .bind(batchAt, row.organizationId, row.id)
+        .run()
+
+      const purpose = await webBookingPurpose(c.env.DB, row.organizationId, row.reservationId)
+      return c.json(
+        PublicReservationChangeResult.parse({
+          code: row.publicCode,
+          status: row.webStatus,
+          startsAt: input.startsAt,
+          endsAt,
+          storeName: row.storeNamePublic ?? row.storeName,
+          purposeName: purpose.name,
+          durationMinutes: purpose.durationMinutes,
+          contactName: row.contactName,
+          changeDeadlineAt: changeDeadlineAt(date, changeDeadlineDays),
+          previousStartsAt: row.startsAt,
+        }),
+      )
+    },
+  )
+
+  /**
+   * WEB-CANCEL「この予約を取り消す」。
+   *
+   * `web_bookings` と `reservations` の両方を落とし、枠の占有を返す。
+   * **取消のメールは送らない**（`notification.ts` に取消の型が無く、足すのは人間の
+   * 承認事項。`04-api.md` §7.1）。
+   */
+  .post(
+    '/api/public/reservations/:code/cancel',
+    zValidator('json', PublicReservationCancel),
+    async (c) => {
+      const publicCode = c.req.param('code')
+      const now = new Date()
+      const row = await authenticateWebBooking(c.env, {
+        publicCode,
+        presented: c.req.header('X-Management-Code') ?? '',
+        now,
+      })
+      if (row === null) {
+        await countFailure(c.env, publicCode, clientIpOf(c))
+        return c.json(INVALID_MANAGEMENT_CODE, 401)
+      }
+      // 取り消した予約をもう一度取り消させない（版だけでは 2 度目を止められない）。
+      if (row.webStatus === 'cancelled' || row.reservationStatus === 'cancelled') {
+        return c.json({ error: 'invalid_transition' }, 409)
+      }
+      const db = drizzle(c.env.DB)
+      const settings = toWebSettingsRow(await readWebSettings(db, row.organizationId, row.storeId))
+      if (
+        isChangeDeadlinePassed(
+          {
+            visitDate: toJstDateString(row.startsAt),
+            changeDeadlineDays: settings?.changeDeadlineDays ?? DEFAULT_CHANGE_DEADLINE_DAYS,
+          },
+          now,
+        )
+      ) {
+        return c.json({ error: 'change_deadline_passed' }, 409)
+      }
+
+      const cancelledAt = now.toISOString()
+      const statements = buildCancelBatch({
+        db: c.env.DB,
+        organizationId: row.organizationId,
+        storeId: row.storeId,
+        reservationId: row.reservationId,
+        version: row.version,
+        reason: 'customer',
+        now,
+        actorId: null,
+        correlationId: crypto.randomUUID(),
+        audit: { before: { startsAt: row.startsAt, source: 'web' } },
+      })
+      // **最後に置く。**台帳が取り消せていなければ、この 1 文は 0 行にしか当たらない
+      // （版を +1 する `UPDATE reservations` はドメインの配列の最後にある）。
+      statements.push(
+        c.env.DB.prepare(
+          "UPDATE web_bookings SET status = 'cancelled', cancelled_at = ?, updated_at = ? " +
+            'WHERE organization_id = ? AND id = ? AND EXISTS (SELECT 1 FROM reservations ' +
+            "WHERE organization_id = ? AND id = ? AND status = 'cancelled')",
+        ).bind(
+          cancelledAt,
+          cancelledAt,
+          row.organizationId,
+          row.id,
+          row.organizationId,
+          row.reservationId,
+        ),
+      )
+      const results = await c.env.DB.batch(statements as [Statement, ...Statement[]])
+      if ((results[results.length - 1]?.meta.changes ?? 0) === 0) {
+        return c.json({ error: 'invalid_transition' }, 409)
+      }
+      return c.json(
+        PublicReservationMutationResult.parse({
+          code: row.publicCode,
+          status: 'cancelled',
+          cancelledAt,
+        }),
+      )
+    },
+  )
+
+  /**
+   * 確認待ちのまま**受信日**の 24:00 JST を越えた Web 予約を自動で取り消す保守。
+   * 共有鍵で守られていて、テナントのトークンでは越えられない。
+   * `now` を受け取れるようにしてあるのは、日境界をテストから注入するためである。
+   */
+  .post(
+    '/api/internal/maintenance/web-publications/apply',
+    zValidator('json', WebPublicationApplyRequest),
+    async (c) => {
+      const input = c.req.valid('json')
+      const result = await applyWebPublications(c.env, {
+        now: input.now === undefined ? new Date() : new Date(input.now),
+        limit: input.limit,
+      })
+      return c.json(WebPublicationApplyResult.parse(result))
     },
   )
 

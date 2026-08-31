@@ -15,7 +15,8 @@
  * 5. 技能を持つ担当が勤務していて空いているか → `no_skill` / `staff_off` / `staff_busy`
  * 6. 要る種別の設備が点検中でなく空いているか → `maintenance` / `equipment_busy`
  * 7. 店舗の同時受付上限に達していないか → `max_parallel`
- * 8. Web 予約の公開条件（`web_window` / `lead_time`）は **P2 では掛けない**。公開面は P8。
+ * 8. Web 予約の受付の窓（`web_window` / `lead_time`）— **`webWindow` を渡したときだけ**掛ける。
+ *    店内の呼び出し（P2）は渡さないので、7 条件までで答えが決まる（挙動は 1 ミリも変わらない）。
  *
  * 決めのうち、文書に書いていないものは次のとおり（`docs/superpowers/plans` の判断記録と同じ）。
  * - **受付を止める帯は枠の開始時刻だけを塞ぐ。**ご予約の本体が帯をまたぐことは許す
@@ -38,6 +39,7 @@ import type {
 } from '@app/contracts'
 import { toJstDateString } from '@app/shared'
 import {
+  addJstDays,
   type BlackoutBand,
   type BusinessDay,
   type DayException,
@@ -125,6 +127,21 @@ export type HoldOccupancy = {
   endsAt: string
 }
 
+/**
+ * Web 予約の受付の窓（`web_booking_settings` の 4 列。`011-web-booking`）。
+ * **渡さなければ 1 文も通らない** — 店内の空き枠は P2 のときと同じ答えのままである。
+ */
+export type WebWindow = {
+  /** 受け付ける時間の始まり（`HH:MM`）。この時刻**ちょうど**から受ける。 */
+  opensAt: LocalTime
+  /** 受け付ける時間の終わり（`HH:MM`）。この時刻に**始まる**枠は出さない。 */
+  closesAt: LocalTime
+  /** 受付を開始するのは何時間先からか。`now` からちょうどの枠は受ける。 */
+  acceptFromHours: number
+  /** 何日先まで受けるか。JST の暦日で数え、ちょうどの日は丸ごと受ける。 */
+  acceptUntilDays: number
+}
+
 /** 空き枠を出すのに要るものすべて。DB も実時刻もここから先へは持ち込まない。 */
 export type AvailabilityInput = {
   /** JST の暦日。 */
@@ -158,6 +175,21 @@ export type AvailabilityInput = {
   excludeReceptionSessionId?: string | null
   /** 代わりの時刻（`alternatives`）を選ぶときの基準。省略時は最初の置ける枠。 */
   preferredStartsAt?: string | null
+  /**
+   * Web 予約の受付の窓。**公開面（`/api/public/**`）から呼ぶときだけ渡す。**
+   * 店内と Web で答えがずれないよう、Web 用のエンジンを別に作らない。
+   */
+  webWindow?: WebWindow
+  /**
+   * 仮の押さえ（`holds`）を塞がりに数えるか。**既定は数える**（店内の挙動）。
+   *
+   * 公開面は `false` で呼ぶ。KV の list は無料枠で 1,000 回/日しかなく、公開ページの
+   * 閲覧数がそのまま list 数になるので、押さえを読まない（`04-api.md` §6.3）。
+   * お客様に「他の端末が押さえ中」を見せる必要は無く、二重予約は確定時の
+   * `reservation_slot_locks` が止める。**渡された `holds` も数えない**ので、
+   * 呼び出し側が取り違えても社内の事情が外へ出ない。
+   */
+  readHolds?: boolean
 }
 
 /* --- 出力の形 ------------------------------------------------------------ */
@@ -204,6 +236,7 @@ export type AvailabilityResult = {
 /* --- 時刻の道具 ---------------------------------------------------------- */
 
 const MS_PER_MINUTE = 60_000
+const MS_PER_HOUR = 60 * MS_PER_MINUTE
 const MS_PER_DAY = 86_400_000
 const JST_OFFSET_MS = 9 * 60 * MS_PER_MINUTE
 /** 代わりの時刻は 3 件までに閉じる（4 つ目を出しても画面に置き場が無い）。 */
@@ -275,6 +308,9 @@ type Occupancy = {
 
 type Prepared = {
   date: LocalDate
+  /** `web_window` / `lead_time` の判定にだけ使う。ほかの 7 条件は `now` を見ない。 */
+  now: Date
+  webWindow: WebWindow | null
   day: BusinessDay
   bands: readonly BlackoutBand[]
   rules: SlotRules
@@ -337,7 +373,8 @@ function buildOccupancy(input: AvailabilityInput, rules: SlotRules): Occupancy {
     if (input.excludeReservationId && row.reservationId === input.excludeReservationId) continue
     add(row.kind, row.targetId, row.startsAt, row.endsAt)
   }
-  for (const hold of input.holds ?? []) {
+  // 公開面は仮の押さえを数えない（KV を読まない決め）。渡されていても捨てる。
+  for (const hold of input.readHolds === false ? [] : (input.holds ?? [])) {
     // 自分の受付が置いた押さえに自分が当たると、置き直しのたびに 7 分ずつ枠が死ぬ。
     if (
       input.excludeReceptionSessionId &&
@@ -396,6 +433,8 @@ function prepare(input: AvailabilityInput, rules: SlotRules): Prepared {
 
   return {
     date: input.date,
+    now: input.now,
+    webWindow: input.webWindow ?? null,
     day,
     bands: (input.blackouts ?? []).filter((band) => band.weekday === day.weekday),
     rules,
@@ -564,6 +603,25 @@ function judge(p: Prepared, startMs: number, lane?: LaneTarget): SlotResult {
   // ⑦ 店舗の同時受付上限。担当が未定のご予約も数に入る。
   if (covered.some((slot) => (p.occupancy.totals.get(slot) ?? 0) >= p.rules.maxParallel)) {
     return reject('max_parallel')
+  }
+
+  // ⑧ Web 予約の受付の窓。**店内の 7 条件のうしろに置く** — 満席で、かつ受付時間の
+  // 外でもある枠は「満席」と語らせる（お客様の画面は理由を出さないが、業務側の
+  // 呼び出しと理由の順序を 1 つに保つ）。
+  if (p.webWindow) {
+    const web = p.webWindow
+    // 受け付ける時間は**開始時刻**の半開区間 `[opensAt, closesAt)` で見る。
+    // 10:30 ちょうどは受け、18:00 に始まる枠は出さない（AC-WEB-04）。
+    if (startMinutes < toMinutes(web.opensAt) || startMinutes >= toMinutes(web.closesAt)) {
+      return reject('web_window')
+    }
+    // 受付開始。`now + accept_from_hours` **ちょうど**は受け、その 1 秒前は受けない。
+    if (startMs < p.now.getTime() + web.acceptFromHours * MS_PER_HOUR) return reject('lead_time')
+    // 受付終了は JST の**暦日**で数える。30 日先ちょうどの日は丸ごと受け、31 日先は
+    // 1 枠も受けない（時刻で切ると同じ日に受ける枠と受けない枠が混ざる）。
+    if (toJstDateString(startsAt) > addJstDays(toJstDateString(p.now), web.acceptUntilDays)) {
+      return reject('lead_time')
+    }
   }
 
   return {
