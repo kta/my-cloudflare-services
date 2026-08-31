@@ -1017,3 +1017,232 @@ describe('顧客台帳は組織をまたがない', () => {
     expect(objects.objects).toEqual([])
   })
 })
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * P5 来店受付とウォークイン
+ * 受付は**お客様を特定しないまま**始まるので、行を結び直せる手がかりは
+ * 整理番号と id しか無い。整理番号は店舗 × 来店日で 1 から採り直すため、
+ * 他社の行を巻き込んで数えるとその日の採番が丸ごとずれる。
+ * 店舗をまたぐ閲覧は作らない（`design/09-open-questions.md` Q-04 のいまの前提）ので、
+ * `storeId` は絞り込みにだけ使い、**認可の根拠にしない**。
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+/** 店頭のお客様を 1 名受け付ける。 */
+async function walkinAs(
+  token: string,
+  input: { storeId: string; time?: string; staffId?: string | null },
+) {
+  const time = input.time ?? '11:02'
+  const res = await SELF.fetch(`${BASE}/api/staff/walkins`, {
+    method: 'POST',
+    headers: authed(token),
+    body: JSON.stringify({
+      storeId: input.storeId,
+      purposeNote: 'フレームの相談',
+      arrivedAt: jstAt(LEDGER_DATE, time),
+      startsAt: jstAt(LEDGER_DATE, `${time.slice(0, 3)}00`),
+      durationMinutes: 20,
+      staffId: input.staffId ?? null,
+    }),
+  })
+  return {
+    status: res.status,
+    body: (await res.json().catch(() => null)) as {
+      id?: string
+      ticketNo?: number
+      version?: number
+      reservationId?: string
+    },
+  }
+}
+
+describe('来店受付は組織をまたがない', () => {
+  it('3 テナントが同時に受け付けても、整理番号は各自の店舗で 1 から始まる', async () => {
+    const tenants = [
+      await ledgerTenant('A 銀座店'),
+      await ledgerTenant('B 新宿店'),
+      await ledgerTenant('C 渋谷店'),
+    ]
+    const received = await Promise.all(
+      tenants.map((tenant) => walkinAs(tenant.token, { storeId: tenant.storeId })),
+    )
+    expect(received.map((one) => one.status)).toEqual([200, 200, 200])
+    expect(received.map((one) => one.body.ticketNo)).toEqual([1, 1, 1])
+
+    // 2 人目もそれぞれの店舗で 2 番になる（他社の行を数えていない証拠）。
+    for (const tenant of tenants) {
+      const second = await walkinAs(tenant.token, { storeId: tenant.storeId, time: '11:34' })
+      expect(second.body.ticketNo).toBe(2)
+    }
+  })
+
+  it('他テナントのウォークイン id を PATCH しても 404 で、存在の有無も返らない', async () => {
+    const [mine, theirs] = [await ledgerTenant(), await ledgerTenant('B 店')]
+    const received = await walkinAs(theirs.token, { storeId: theirs.storeId })
+    expect(received.status).toBe(200)
+
+    const intruded = await callAs(mine.token)('PATCH', `/api/staff/walkins/${received.body.id}`, {
+      version: received.body.version,
+      status: 'left',
+    })
+    expect(intruded.status).toBe(404)
+    // 相手の行は 1 つも動いていない（版も状態もそのまま）。
+    const row = await env.DB.prepare(
+      'SELECT status, version FROM walk_ins WHERE organization_id = ? AND id = ?',
+    )
+      .bind(theirs.org, received.body.id)
+      .first<{ status: string; version: number }>()
+    expect(row).toMatchObject({ status: 'waiting', version: received.body.version })
+  })
+
+  it('body に他テナントの organizationId を混ぜても自分のテナントの行にしか書かれない', async () => {
+    const [mine, theirs] = [await ledgerTenant(), await ledgerTenant('B 店')]
+    const res = await SELF.fetch(`${BASE}/api/staff/walkins`, {
+      method: 'POST',
+      headers: authed(mine.token),
+      body: JSON.stringify({
+        organizationId: theirs.org,
+        storeId: mine.storeId,
+        purposeNote: 'フレームの相談',
+        arrivedAt: jstAt(LEDGER_DATE, '11:02'),
+        durationMinutes: 20,
+        staffId: null,
+      }),
+    })
+    // 知らないキーは契約が落とす（`z.strictObject`）。通る場合も JWT の org に書く。
+    expect([200, 400]).toContain(res.status)
+    expect(await countOf('walk_ins', theirs.org)).toBe(0)
+  })
+
+  it('他テナントの subjectId で工程を進めようとしても 404', async () => {
+    const [mine, theirs] = [await ledgerTenant(), await ledgerTenant('B 店')]
+    const received = await walkinAs(theirs.token, { storeId: theirs.storeId })
+
+    const intruded = await callAs(mine.token)('POST', '/api/staff/visits', {
+      storeId: mine.storeId,
+      subjectType: 'walkin',
+      subjectId: received.body.id,
+      stage: 'consulting',
+      occurredAt: jstAt(LEDGER_DATE, '11:05'),
+    })
+    expect(intruded.status).toBe(404)
+    expect(await countOf('visit_events', mine.org)).toBe(0)
+    expect(await countOf('visit_events', theirs.org)).toBe(0)
+  })
+
+  it('他テナントの担当を工程の記録に混ぜても 404 で、1 行も残らない', async () => {
+    const [mine, theirs] = [await ledgerTenant(), await ledgerTenant('B 店')]
+    const received = await walkinAs(mine.token, { storeId: mine.storeId })
+
+    const intruded = await callAs(mine.token)('POST', '/api/staff/visits', {
+      storeId: mine.storeId,
+      subjectType: 'walkin',
+      subjectId: received.body.id,
+      stage: 'consulting',
+      staffId: theirs.staffId,
+      occurredAt: jstAt(LEDGER_DATE, '11:05'),
+    })
+    expect(intruded.status).toBe(404)
+    expect(await countOf('visit_events', mine.org)).toBe(0)
+  })
+
+  it('他テナントのご予約へ付け替える PATCH は 404 で、ウォークインの版も動かない', async () => {
+    const [mine, theirs] = [await ledgerTenant(), await ledgerTenant('B 店')]
+    const ours = await walkinAs(mine.token, { storeId: mine.storeId })
+    const theirWalkin = await walkinAs(theirs.token, { storeId: theirs.storeId })
+
+    const intruded = await callAs(mine.token)('PATCH', `/api/staff/walkins/${ours.body.id}`, {
+      version: ours.body.version,
+      reservationId: theirWalkin.body.reservationId,
+    })
+    expect(intruded.status).toBe(404)
+    const row = await env.DB.prepare(
+      'SELECT reservation_id AS reservationId, version FROM walk_ins WHERE organization_id = ? AND id = ?',
+    )
+      .bind(mine.org, ours.body.id)
+      .first<{ reservationId: string; version: number }>()
+    expect(row).toMatchObject({
+      reservationId: ours.body.reservationId,
+      version: ours.body.version,
+    })
+  })
+
+  it('他テナントの受付履歴は期間を広げても 1 件も出ない', async () => {
+    const [mine, theirs] = [await ledgerTenant(), await ledgerTenant('B 店')]
+    const received = await walkinAs(theirs.token, { storeId: theirs.storeId })
+
+    const history = await callAs(mine.token)(
+      'GET',
+      `/api/staff/reception-sessions?from=2026-08-01&to=${LEDGER_DATE}`,
+    )
+    expect(history.status).toBe(200)
+    const body = history.body as unknown as {
+      items: { entryId: string }[]
+      total: number
+    }
+    expect(body.items.map((entry) => entry.entryId)).not.toContain(received.body.reservationId)
+    expect(body.total).toBe(0)
+  })
+
+  it('来店受付ボードは他テナントの storeId を渡しても空を返す', async () => {
+    const [mine, theirs] = [await ledgerTenant(), await ledgerTenant('B 店')]
+    await walkinAs(theirs.token, { storeId: theirs.storeId })
+
+    const board = await callAs(mine.token)(
+      'GET',
+      `/api/staff/visits/board?storeId=${theirs.storeId}&date=${LEDGER_DATE}`,
+    )
+    expect(board.status).toBe(200)
+    const body = board.body as unknown as { rows: unknown[]; activeCount: number }
+    expect(body.rows).toEqual([])
+    expect(body.activeCount).toBe(0)
+  })
+
+  it('他テナントのご予約を「ご来店がなかった」として残そうとしても 404 で、状態は動かない', async () => {
+    const [mine, theirs] = [await ledgerTenant(), await ledgerTenant('B 店')]
+    const reservationId = await insertReservation(theirs.org, {
+      storeId: theirs.storeId,
+      startsAt: jstAt(LEDGER_DATE, '11:00'),
+      durationMinutes: 30,
+      staffId: null,
+    })
+
+    const denied = await callAs(mine.token)(
+      'POST',
+      `/api/staff/reservations/${reservationId}/cancel`,
+      { version: 1, reason: 'no_show' },
+    )
+    // 403 にしない（存在の有無を漏らさない）。
+    expect(denied.status).toBe(404)
+
+    const row = await env.DB.prepare(
+      'SELECT status, version FROM reservations WHERE organization_id = ? AND id = ?',
+    )
+      .bind(theirs.org, reservationId)
+      .first<{ status: string; version: number }>()
+    expect(row).toMatchObject({ status: 'confirmed', version: 1 })
+  })
+
+  it('未同期は 503、無効化は 403（受付の 7 ルートでも取り違えない）', async () => {
+    const tenant = await ledgerTenant()
+    const paths = [
+      `/api/staff/walkins?storeId=${tenant.storeId}&date=${LEDGER_DATE}`,
+      `/api/staff/visits/board?storeId=${tenant.storeId}&date=${LEDGER_DATE}`,
+      `/api/staff/reception-sessions?from=${LEDGER_DATE}&to=${LEDGER_DATE}`,
+    ]
+
+    await env.DB.prepare('DELETE FROM organizations WHERE id = ?').bind(tenant.org).run()
+    for (const path of paths) {
+      const missing = await callAs(tenant.token)('GET', path)
+      expect(missing.status).toBe(503)
+      expect(missing.body).toMatchObject({ error: 'not_synced' })
+    }
+
+    await syncOrganization({ id: tenant.org, isDisabled: true, revision: 1 })
+    for (const path of paths) {
+      const disabled = await callAs(tenant.token)('GET', path)
+      expect(disabled.status).toBe(403)
+      expect(disabled.body).toMatchObject({ error: 'org_disabled' })
+    }
+  })
+})

@@ -70,6 +70,14 @@ const fixture = {
   noteId: '',
   mergePrimaryId: '',
   mergeSecondaryId: '',
+  // P5 の 7 ルートが 200 で返る足場。受付は店舗を書き込むので、同時受付の上限に
+  // 余裕のある専用の店舗を持つ（表は主体 5 種ぶん叩くので、上限 3 の店舗だと
+  // 主体の並び順で 409 に化ける）。
+  walkinStoreId: '',
+  walkinId: '',
+  visitReservationId: '',
+  // 取消は 1 件につき 1 度しか通らないので、表の主体ぶん（5 種）を分けて持つ。
+  cancellableReservationIds: [] as string[],
 }
 
 /** dev グラントが載せる `sub`。membership の `userId` はこれに合わせる。 */
@@ -280,7 +288,59 @@ beforeAll(async () => {
   )
     .bind(fixture.noteId, ORG, fixture.customerId, fixture.storeId, '覚えておくこと', NOW, NOW)
     .run()
+
+  // P5 の足場。ウォークインは 1 行を PATCH で使い回し（版は送る直前に読み直す）、
+  // 工程は追記だけなので同じご予約へ何度でも積める。
+  fixture.walkinStoreId = await insertStore(ORG, 'EYEX 受付確認店')
+  await insertBusinessHours(ORG, fixture.walkinStoreId)
+  await insertSlotRules(ORG, fixture.walkinStoreId, { maxParallel: 8 })
+  const walkinStaffId = await insertStaff(ORG, fixture.walkinStoreId, { displayName: '伊藤 健' })
+  await insertShift(ORG, fixture.walkinStoreId, walkinStaffId)
+  fixture.visitReservationId = await insertReservation(ORG, {
+    storeId: fixture.walkinStoreId,
+    startsAt: jstAt(LEDGER_DATE, '14:00'),
+    durationMinutes: 30,
+    staffId: null,
+  })
+  const seededWalkinReservation = await insertReservation(ORG, {
+    storeId: fixture.walkinStoreId,
+    startsAt: jstAt(LEDGER_DATE, '15:00'),
+    durationMinutes: 20,
+    source: 'walkin',
+    staffId: null,
+  })
+  for (const _ of [0, 1, 2, 3, 4]) {
+    fixture.cancellableReservationIds.push(
+      await insertReservation(ORG, {
+        storeId: fixture.walkinStoreId,
+        startsAt: jstAt(LEDGER_DATE, '17:00'),
+        durationMinutes: 20,
+        staffId: null,
+      }),
+    )
+  }
+  fixture.walkinId = crypto.randomUUID()
+  await env.DB.prepare(
+    "INSERT INTO walk_ins (id, organization_id, store_id, visit_date, ticket_no, arrived_at, purpose_id, purpose_note, customer_id, reservation_id, status, left_at, version, created_at) VALUES (?,?,?,?,?,?,NULL,?,NULL,?,'waiting',NULL,1,?)",
+  )
+    .bind(
+      fixture.walkinId,
+      ORG,
+      fixture.walkinStoreId,
+      LEDGER_DATE,
+      900,
+      jstAt(LEDGER_DATE, '15:02'),
+      'フレームの相談',
+      seededWalkinReservation,
+      jstAt(LEDGER_DATE, '15:02'),
+    )
+    .run()
 })
+
+/** 取消の表が 1 行ずつ食べるご予約。使い切ったら「無いご予約」を指す。 */
+function nextCancellableReservation(): string {
+  return fixture.cancellableReservationIds.shift() ?? crypto.randomUUID()
+}
 
 /** やめるの表が 1 行ずつ食べる受付。使い切ったら「無い受付」を指す（401 の主体も 1 つ食べる）。 */
 function nextClosableSession(): string {
@@ -314,6 +374,14 @@ async function currentPurposeVersion(): Promise<number> {
 async function currentCustomerVersion(): Promise<number> {
   const row = await env.DB.prepare('SELECT version FROM customers WHERE id = ?')
     .bind(fixture.customerId)
+    .first<{ version: number }>()
+  return row?.version ?? 1
+}
+
+/** ウォークインの版。表の主体が順に PATCH するので、送る直前に読み直す。 */
+async function currentWalkinVersion(): Promise<number> {
+  const row = await env.DB.prepare('SELECT version FROM walk_ins WHERE id = ?')
+    .bind(fixture.walkinId)
     .first<{ version: number }>()
   return row?.version ?? 1
 }
@@ -866,6 +934,72 @@ const TABLE: Row[] = [
     }),
     expected: MERGE,
   },
+  /* --- 来店受付とウォークイン（P5。受付は手の空いた人がやるので店長限定にしない） --- */
+  {
+    name: '店頭のお客様の受付は店舗の誰でもできる',
+    method: 'POST',
+    path: () => '/api/staff/walkins',
+    body: () => ({
+      storeId: fixture.walkinStoreId,
+      purposeNote: 'フレームの相談',
+      arrivedAt: jstAt(LEDGER_DATE, '11:02'),
+      startsAt: jstAt(LEDGER_DATE, '11:00'),
+      durationMinutes: 20,
+      staffId: null,
+    }),
+    expected: BOOKING,
+  },
+  {
+    name: 'お待ちの一覧は店舗の誰でも読める',
+    method: 'GET',
+    path: () => `/api/staff/walkins?storeId=${fixture.walkinStoreId}&date=${LEDGER_DATE}`,
+    expected: BOOKING,
+  },
+  {
+    name: 'ウォークインの更新は店舗の誰でもできる',
+    method: 'PATCH',
+    path: () => `/api/staff/walkins/${fixture.walkinId}`,
+    body: async () => ({ version: await currentWalkinVersion(), status: 'waiting' }),
+    expected: BOOKING,
+  },
+  {
+    name: '工程を進めるのは店舗の誰でもできる（担当以外も進める）',
+    method: 'POST',
+    path: () => '/api/staff/visits',
+    body: () => ({
+      storeId: fixture.walkinStoreId,
+      subjectType: 'reservation',
+      subjectId: fixture.visitReservationId,
+      stage: 'consulting',
+      occurredAt: jstAt(LEDGER_DATE, '14:05'),
+    }),
+    expected: BOOKING,
+  },
+  {
+    name: '来店受付ボードは店舗の誰でも読める',
+    method: 'GET',
+    path: () => `/api/staff/visits/board?storeId=${fixture.walkinStoreId}&date=${LEDGER_DATE}`,
+    expected: BOOKING,
+  },
+  {
+    name: '受付履歴の一覧は店舗の誰でも読める',
+    method: 'GET',
+    path: () => `/api/staff/reception-sessions?from=${LEDGER_DATE}&to=${LEDGER_DATE}`,
+    expected: BOOKING,
+  },
+  {
+    name: '受付履歴の 1 件は店舗の誰でも読める',
+    method: 'GET',
+    path: () => `/api/staff/reception-sessions/${fixture.visitReservationId}`,
+    expected: BOOKING,
+  },
+  {
+    name: 'ご来店がなかったとして残すのは店舗の誰でもできる',
+    method: 'POST',
+    path: () => `/api/staff/reservations/${nextCancellableReservation()}/cancel`,
+    body: () => ({ version: 1, reason: 'no_show' }),
+    expected: BOOKING,
+  },
   {
     name: '未知の顧客パスも既定の拒否に落ちる',
     method: 'GET',
@@ -896,6 +1030,30 @@ describe('権限マトリクス', () => {
       })
     }
   }
+})
+
+describe('受付履歴は店長に絞らない', () => {
+  it('受付履歴はスタッフも読める（店長に絞らない）', async () => {
+    // `settings.read` しか持たない人でも読める。閉じるのではなく、閲覧そのものを
+    // 監査に残す（`design/09-open-questions.md` Q-03 のいまの前提）。
+    const res = await SELF.fetch(
+      `${BASE}/api/staff/reception-sessions?from=${LEDGER_DATE}&to=${LEDGER_DATE}`,
+      { headers: headersFor('clerk') },
+    )
+    expect(res.status).toBe(200)
+  })
+
+  it('未知パス /api/staff/not-a-reception-route は 404 のまま', async () => {
+    const anonymous = await SELF.fetch(`${BASE}/api/staff/not-a-reception-route`, {
+      headers: headersFor('none'),
+    })
+    expect(anonymous.status).toBe(401)
+
+    const authenticated = await SELF.fetch(`${BASE}/api/staff/not-a-reception-route`, {
+      headers: headersFor('staff'),
+    })
+    expect(authenticated.status).toBe(404)
+  })
 })
 
 describe('設定の書き込みは membership だけで決まる', () => {

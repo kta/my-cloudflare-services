@@ -52,7 +52,8 @@ infrastructure-only の文書には UC/AC がないため、分母には入ら�
 P1（`004-store-settings`）はこの表の 36 行が、P2（`005-availability-and-ledger`）は
 続く 33 行（UC-LEDGER-01..11 / AC-LEDGER-01..22）が、P3（`006-booking-flow`）はさらに続く
 37 行（UC-BOOK-01..15 / AC-BOOK-01..22）が、P4（`007-customer-records`）はさらに続く
-40 行（UC-CUST-01..14 / AC-CUST-01..26）がそろった時点で Approved にした。
+40 行（UC-CUST-01..14 / AC-CUST-01..26）が、P5（`008-reception-and-walkin`）はさらに続く
+45 行（UC-RECEP-01..16 / AC-RECEP-01..29）がそろった時点で Approved にした。
 
 `007-customer-records` の 26 本のうち、新しいお客様の登録・おまとめ・手書き・候補の吹き出しに
 属するものは**画面ではなく HTTP のふるまいで固定してある**。部品（`src/web/customers/`）は
@@ -60,6 +61,11 @@ P1（`004-store-settings`）はこの表の 36 行が、P2（`005-availability-a
 差し込んでおらず、ブラウザから開けないためである。どの面が足りないかは
 `services/glasses_management/e2e/customers.spec.ts` の先頭と各 test のコメントに書いてある。
 面が器に載ったら、同じ ID の test を操作へ書き換える（行は増えない）。
+
+`008-reception-and-walkin` の 45 本も同じ扱いである。来店受付ボードからお客様を結びつける口・
+予約を「ご来店がなかった」として残す口・台帳リストの行の「ご来店」の行き先は**まだ器に
+載っていない**ので、その AC は HTTP のふるまいで固定してある。どの入口が足りないかは
+`services/glasses_management/e2e/reception.spec.ts` の先頭と各 test のコメントに書いてある。
 
 | Spec ID | Playwright scenario |
 |---|---|
@@ -221,6 +227,51 @@ P1（`004-store-settings`）はこの表の 36 行が、P2（`005-availability-a
 | AC-CUST-25 | `services/glasses_management/e2e/customers.spec.ts` — 帯を押して開く詳細の見出しと注意ごとがその方のものになる |
 | UC-CUST-14 | `services/glasses_management/e2e/customers.spec.ts` — 顧客台帳からそのままご予約を取り始められる |
 | AC-CUST-26 | `services/glasses_management/e2e/customers.spec.ts` — 顧客台帳からそのままご予約を取り始められる |
+| AC-RECEP-01 | `services/glasses_management/e2e/reception.spec.ts` — 来店受付の画面は「11:00 のご予約　5分早くお着きです」と、お名前ひとまとめのカードを出す |
+| UC-RECEP-01 | `services/glasses_management/e2e/reception.spec.ts` — 来店受付の画面は「11:00 のご予約　5分早くお着きです」と、お名前ひとまとめのカードを出す |
+| AC-RECEP-02 | `services/glasses_management/e2e/reception.spec.ts` — 「ご来店を受け付ける」を押すと盤面へ戻り、その行の「受付」が済みましたになる |
+| AC-RECEP-03 | `services/glasses_management/e2e/reception.spec.ts` — 注意ごとの行だけが「要確認」の札を持ち、確かめ済みと未確認が札で見分けられる |
+| UC-RECEP-02 | `services/glasses_management/e2e/reception.spec.ts` — 注意ごとの行だけが「要確認」の札を持ち、確かめ済みと未確認が札で見分けられる |
+| AC-RECEP-04 | `services/glasses_management/e2e/reception.spec.ts` — 「お待ちいただく」を押すと盤面に行が残り、受け付けがまだ済んでいないことが分かる |
+| UC-RECEP-03 | `services/glasses_management/e2e/reception.spec.ts` — 「お待ちいただく」を押すと盤面に行が残り、受け付けがまだ済んでいないことが分かる |
+| AC-RECEP-05 | `services/glasses_management/e2e/reception.spec.ts` — お客様を「あとで登録する」のまま受け付けて、そのままご相談を始められる |
+| UC-RECEP-06 | `services/glasses_management/e2e/reception.spec.ts` — お客様を「あとで登録する」のまま受け付けて、そのままご相談を始められる |
+| AC-RECEP-06 | `services/glasses_management/e2e/reception.spec.ts` — 受付パネルは「いまお待ち N名」と次の整理番号を出し、その番号で受付履歴に載る |
+| UC-RECEP-07 | `services/glasses_management/e2e/reception.spec.ts` — 受付パネルは「いまお待ち N名」と次の整理番号を出し、その番号で受付履歴に載る |
+| AC-RECEP-07 | `services/glasses_management/e2e/reception.spec.ts` — 台帳の最下段に「ご来店お待ち」の帯が出て、お待ちの人数とご用件が読める |
+| AC-RECEP-08 | `services/glasses_management/e2e/reception.spec.ts` — 受け付けたあとのウォークインを今までのお客様へ結びつけると、表示がお名前に変わる |
+| UC-RECEP-08 | `services/glasses_management/e2e/reception.spec.ts` — 受け付けたあとのウォークインを今までのお客様へ結びつけると、表示がお名前に変わる |
+| AC-RECEP-09 | `services/glasses_management/e2e/reception.spec.ts` — 新しく登録したお客様へ結びつけると、その来店がそのお客様の初めてのご来店になる |
+| UC-RECEP-09 | `services/glasses_management/e2e/reception.spec.ts` — 新しく登録したお客様へ結びつけると、その来店がそのお客様の初めてのご来店になる |
+| AC-RECEP-10 | `services/glasses_management/e2e/reception.spec.ts` — 前日に受け付けて退店したウォークインを、期間を広げて受付履歴から見つけられる |
+| UC-RECEP-10 | `services/glasses_management/e2e/reception.spec.ts` — 前日に受け付けて退店したウォークインを、期間を広げて受付履歴から見つけられる |
+| AC-RECEP-11 | `services/glasses_management/e2e/reception.spec.ts` — 来店受付ボードは 7 列をこの順で並べ、右上にその日とご来店中の人数を出す |
+| UC-RECEP-04 | `services/glasses_management/e2e/reception.spec.ts` — 来店受付ボードは 7 列をこの順で並べ、右上にその日とご来店中の人数を出す |
+| AC-RECEP-12 | `services/glasses_management/e2e/reception.spec.ts` — 「次にやること　視力測定機 A」を押すと対応中になり、前の工程が済みましたに変わる |
+| UC-RECEP-05 | `services/glasses_management/e2e/reception.spec.ts` — 「次にやること　視力測定機 A」を押すと対応中になり、前の工程が済みましたに変わる |
+| AC-RECEP-13 | `services/glasses_management/e2e/reception.spec.ts` — お待たせしている行は赤地と「お待たせ中　18分」の両方で分かる |
+| AC-RECEP-14 | `services/glasses_management/e2e/reception.spec.ts` — 「次にやること」の担当が勤務に入っていない欄は、文字でも担当を決め直すよう促す |
+| AC-RECEP-15 | `services/glasses_management/e2e/reception.spec.ts` — 「次にやること」の設備が点検で止まっている欄は、設備名を差し込んだ文で分かる |
+| AC-RECEP-16 | `services/glasses_management/e2e/reception.spec.ts` — 受付履歴の「結果」は 成立・取消・ご来店なし の 3 語を選び分けられる |
+| UC-RECEP-11 | `services/glasses_management/e2e/reception.spec.ts` — 受付履歴の「結果」は 成立・取消・ご来店なし の 3 語を選び分けられる |
+| AC-RECEP-17 | `services/glasses_management/e2e/reception.spec.ts` — 1 件を選ぶと、受け付けた時刻と手段と、そのあとの変更が古い順に読める |
+| UC-RECEP-12 | `services/glasses_management/e2e/reception.spec.ts` — 1 件を選ぶと、受け付けた時刻と手段と、そのあとの変更が古い順に読める |
+| AC-RECEP-18 | `services/glasses_management/e2e/reception.spec.ts` — 絞りすぎて 0 件になると、条件を 1 つ緩めた候補が件数つきで並び、押すと開き直せる |
+| UC-RECEP-13 | `services/glasses_management/e2e/reception.spec.ts` — 絞りすぎて 0 件になると、条件を 1 つ緩めた候補が件数つきで並び、押すと開き直せる |
+| AC-RECEP-19 | `services/glasses_management/e2e/reception.spec.ts` — 来店受付ボードは表として読まれ、どの欄もお客様の名前と工程の名前と一緒に読まれる |
+| AC-RECEP-20 | `services/glasses_management/e2e/reception.spec.ts` — 盤面はキーボードだけでたどれて、Tab で通り抜けるのに何十回も押さずに済む |
+| AC-RECEP-21 | `services/glasses_management/e2e/reception.spec.ts` — 0 件になったことは割り込まない知らせとして読み上げられ、候補の名前に件数が入る |
+| AC-RECEP-22 | `services/glasses_management/e2e/reception.spec.ts` — 台帳リストの行にも「ご来店」の入口があり、来店受付の画面は 1 つである |
+| AC-RECEP-23 | `services/glasses_management/e2e/reception.spec.ts` — 退店を記録するとご来店中から外れ、人数が 1 減り、来店回数に 1 件数えられる |
+| UC-RECEP-14 | `services/glasses_management/e2e/reception.spec.ts` — 退店を記録するとご来店中から外れ、人数が 1 減り、来店回数に 1 件数えられる |
+| AC-RECEP-24 | `services/glasses_management/e2e/reception.spec.ts` — お待ちのまま帰られた来店は待ちの帯から外れ、受付履歴には残る |
+| UC-RECEP-15 | `services/glasses_management/e2e/reception.spec.ts` — お待ちのまま帰られた来店は待ちの帯から外れ、受付履歴には残る |
+| AC-RECEP-25 | `services/glasses_management/e2e/reception.spec.ts` — 「お客様名で探す」は期間・結果の絞り込みを保ったまま効く |
+| AC-RECEP-26 | `services/glasses_management/e2e/reception.spec.ts` — 選んだ 1 件から「予約を開く」でご予約へ移り、戻ると同じ絞り込みの受付履歴に戻る |
+| UC-RECEP-16 | `services/glasses_management/e2e/reception.spec.ts` — 選んだ 1 件から「予約を開く」でご予約へ移り、戻ると同じ絞り込みの受付履歴に戻る |
+| AC-RECEP-27 | `services/glasses_management/e2e/reception.spec.ts` — ご来店中が 0 名のときは、見出し 1 行と理由 1 行と次の一手だけが残る |
+| AC-RECEP-28 | `services/glasses_management/e2e/reception.spec.ts` — 受付履歴は新しい順に 20 件まで出て、残りは 1 行にまとまり、押すと読み足される |
+| AC-RECEP-29 | `services/glasses_management/e2e/reception.spec.ts` — 担当を決めずに受け付ける 2 人目も同じ枠に載り、上限の 3 件目までは受け付けられる |
 
 validator 自体は `scripts/check-e2e-traceability.test.mjs` で unit test する。通常の実行は次の
 とおり。

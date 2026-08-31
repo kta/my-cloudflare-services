@@ -170,6 +170,30 @@ async function openLedger(page: Page): Promise<void> {
   await expect(page.getByRole('grid', { name: '予約台帳' })).toBeVisible()
 }
 
+/** 来店受付ボードを 2026年8月27日（木）11:08 の姿で開く。 */
+async function openReception(page: Page): Promise<void> {
+  await pinTo1108(page)
+  await startWork(page)
+  await page
+    .getByRole('navigation', { name: '画面の切り替え' })
+    .getByRole('button', { name: '来店受付', exact: true })
+    .click()
+}
+
+/**
+ * 受付履歴を開く。端末の時計を 8月27日 に据えてあるので、既定の期間は
+ * モックと同じ 8月21日 〜 8月27日 になる（絞り込みに触らずに撮れる）。
+ */
+async function openHistory(page: Page): Promise<void> {
+  await pinTo1108(page)
+  await startWork(page)
+  await page
+    .getByRole('navigation', { name: '画面の切り替え' })
+    .getByRole('button', { name: '受付履歴', exact: true })
+    .click()
+  await expect(page.getByRole('main', { name: '受付履歴' })).toBeVisible()
+}
+
 /** 設定の 1 面を開く。中身が届くまで待ってから撮る（読み込み中の姿を基準と比べない）。 */
 async function openSection(page: Page, section: string): Promise<void> {
   await startWork(page)
@@ -182,6 +206,98 @@ async function openSection(page: Page, section: string): Promise<void> {
     .getByRole('button', { name: section, exact: true })
     .click()
   await expect(page.getByRole('heading', { name: section, exact: true })).toBeVisible()
+}
+
+/* --- 来店受付ボードだけの下ごしらえ --------------------------------------- */
+
+type BoardCell = {
+  stage: string
+  state: 'done' | 'doing' | 'next' | 'waiting' | 'empty'
+  at: string | null
+  label: string
+  note: string | null
+  needsAttention: boolean
+}
+
+/** 盤面の 6 列。並びは `worker/domain/visit-board.ts` の `BOARD_STAGES` と同じ。 */
+const BOARD_STAGES = ['received', 'consulting', 'fitting', 'measuring', 'checkout', 'handover']
+
+/** 埋めた欄だけを渡し、残りは空の欄にする（モックの「空の欄は空のまま」に合わせる）。 */
+function boardCells(filled: Record<string, Omit<BoardCell, 'stage'>>): BoardCell[] {
+  return BOARD_STAGES.map((stage) => ({
+    stage,
+    ...(filled[stage] ?? {
+      state: 'empty',
+      at: null,
+      label: '',
+      note: null,
+      needsAttention: false,
+    }),
+  }))
+}
+
+function jstInstant(clock: string): string {
+  return new Date(`2026-08-27T${clock}:00+09:00`).toISOString()
+}
+
+/**
+ * 来店受付ボードの応答を、**モックが描いている盤面そのもの**に差し替える。
+ *
+ * seed のままの D1 では、この面は必ず空である —— 盤面に載る条件は「その subject に工程の
+ * 記録が 1 行でもあること」で、`seed.mjs` は `visit_events` を 1 行も入れない。
+ * かといって工程を実際に記録してもこの姿は作れない: 欄の状態（済みました／対応中／
+ * お待たせ中 18分）は**サーバの `new Date()`** から出るのに、モックが描いているのは
+ * 2026年8月27日 11:08 で、サーバの時計はいつも実時刻だからである（`page.clock` は
+ * 端末の時計しか据えられない）。
+ *
+ * そこでこの 1 面に限り、応答そのものをモックの 4 行にする。**盤面の中身の正しさ**
+ * （列の並び・状態の決まり方・注意の文・人数の数え方）は `test/visit-board.test.ts` と
+ * `e2e/reception.spec.ts` が実データで見ている。ここが見るのは**その盤面の描き方**だけである。
+ * 同じ手はすでに `reception.spec.ts` の `stubBoard` が AC-RECEP-14 / 15 で使っている。
+ */
+async function stubBoard(
+  page: Page,
+  rows: Record<string, unknown>[],
+  options: { activeCount?: number; serverNow?: string } = {},
+): Promise<void> {
+  await page.route(
+    (url) => url.pathname === '/api/staff/visits/board',
+    async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          date: '2026-08-27',
+          activeCount: options.activeCount ?? rows.length,
+          serverNow: options.serverNow ?? SERVER_NOW,
+          rows,
+        }),
+      })
+    },
+  )
+}
+
+/** 業務トークン 1 本。seed の実データを id で引くために使う。 */
+async function bearer(request: APIRequestContext): Promise<string> {
+  const res = await request.post('/api/auth/token', {
+    data: { organizationId: ORG, role: 'staff' },
+  })
+  const { token } = (await res.json()) as { token: string }
+  return token
+}
+
+/** seed の 8月27日 11:00 のご予約（田中 花子 様）。受け付ける面はこの 1 件を開く。 */
+async function elevenOClockReservation(request: APIRequestContext): Promise<string> {
+  const res = await request.get(
+    `/api/staff/ledger?storeId=${GINZA}&date=2026-08-27&axis=staff&view=timetable`,
+    { headers: { authorization: `Bearer ${await bearer(request)}` } },
+  )
+  const body = (await res.json()) as LedgerBody
+  const found = body.lanes
+    .flatMap((lane) => lane.entries)
+    .find((entry) => entry.startsAt === '2026-08-27T02:00:00.000Z')
+  expect(found, '8月27日 11:00 のご予約が seed に無い').toBeDefined()
+  return (found as { reservationId: string }).reservationId
 }
 
 test.describe('承認済みモックとの突き合わせ', () => {
@@ -1160,6 +1276,302 @@ test.describe('承認済みモックとの突き合わせ', () => {
     await expect(page).toHaveScreenshot('CUSTOMER-HANDWRITE.png', {
       scale: 'device',
       maxDiffPixelRatio: 0.0734,
+    })
+  })
+  /* --- 来店受付とウォークイン（008-reception-and-walkin） ------------------ */
+
+  test('RECEPTION-JOURNEY — 来店受付ボード', async ({ page }) => {
+    // モックが描いている 4 人（田中 花子 様・ウォークイン 003・山口 真央 様・伊藤 健 様）。
+    await stubBoard(page, [
+      {
+        subjectType: 'reservation',
+        subjectId: '00000000-0000-4000-8000-00000000ce01',
+        displayName: '田中 花子 様',
+        visitCount: 4,
+        purposeLabel: 'メガネを新しく作る',
+        isWaitingTooLong: false,
+        cells: boardCells({
+          received: {
+            state: 'done',
+            at: jstInstant('10:55'),
+            label: '',
+            note: null,
+            needsAttention: false,
+          },
+          consulting: {
+            state: 'done',
+            at: jstInstant('11:02'),
+            label: '',
+            note: null,
+            needsAttention: false,
+          },
+          fitting: {
+            state: 'doing',
+            at: jstInstant('11:02'),
+            label: '',
+            note: null,
+            needsAttention: false,
+          },
+          measuring: {
+            state: 'next',
+            at: null,
+            label: '視力測定機 A',
+            note: null,
+            needsAttention: false,
+          },
+        }),
+      },
+      {
+        subjectType: 'walkin',
+        subjectId: '00000000-0000-4000-8000-00000000ce02',
+        displayName: 'ウォークイン 003',
+        visitCount: null,
+        purposeLabel: 'フレームのご相談',
+        isWaitingTooLong: true,
+        cells: boardCells({
+          received: {
+            state: 'done',
+            at: jstInstant('10:50'),
+            label: '',
+            note: null,
+            needsAttention: false,
+          },
+          consulting: {
+            state: 'waiting',
+            at: null,
+            label: '18分',
+            note: null,
+            needsAttention: false,
+          },
+        }),
+      },
+      {
+        subjectType: 'reservation',
+        subjectId: '00000000-0000-4000-8000-00000000ce03',
+        displayName: '山口 真央 様',
+        visitCount: 0,
+        purposeLabel: '視力測定だけ',
+        isWaitingTooLong: false,
+        cells: boardCells({
+          received: {
+            state: 'done',
+            at: jstInstant('10:58'),
+            label: '',
+            note: null,
+            needsAttention: false,
+          },
+          consulting: {
+            state: 'doing',
+            at: jstInstant('11:02'),
+            label: '',
+            note: null,
+            needsAttention: false,
+          },
+          measuring: {
+            state: 'next',
+            at: null,
+            label: '視力測定機 B',
+            note: null,
+            needsAttention: false,
+          },
+        }),
+      },
+      {
+        subjectType: 'reservation',
+        subjectId: '00000000-0000-4000-8000-00000000ce04',
+        displayName: '伊藤 健 様',
+        visitCount: 2,
+        purposeLabel: '今のメガネを調整',
+        isWaitingTooLong: false,
+        cells: boardCells({
+          received: {
+            state: 'done',
+            at: jstInstant('10:42'),
+            label: '',
+            note: null,
+            needsAttention: false,
+          },
+          consulting: {
+            state: 'done',
+            at: jstInstant('10:52'),
+            label: '',
+            note: null,
+            needsAttention: false,
+          },
+          checkout: {
+            state: 'done',
+            at: jstInstant('11:01'),
+            label: '',
+            note: null,
+            needsAttention: false,
+          },
+          handover: {
+            state: 'doing',
+            at: jstInstant('11:04'),
+            label: '',
+            note: null,
+            needsAttention: false,
+          },
+        }),
+      },
+    ])
+    await openReception(page)
+    await expect(page.getByRole('grid', { name: '来店受付ボード　お客様ごとの工程' })).toBeVisible()
+    /*
+     * いま残っている差（実測 76,271 / 3,868,560 ＝ 1.9716%。1 巡目の 116,698 から下がった）:
+     *   - サイドバーの行き先が 1 つ多い（P0 が「トップ」を柱の中に置いた。モックは上のバーの
+     *     ⌂ だけで足りるとしている）。柱のアイコンが 1 段ずつ下へずれる。
+     *   - 上のバー右が「業務を終える」（モックは「お知らせ 3」… P10）。
+     *   - 「＋ ご来店を受け付ける」の左端が 10px ほど右（セグメントの幅が数 px 広い）。
+     *     ボタンそのものはモックにもあり、**多い/少ないの差ではない**。
+     *   - 盤面の 4 行は上の `stubBoard` が返している（理由はその関数の頭に書いた）。
+     * **この値は下げるだけ。上げてはいけない。**
+     */
+    await expect(page).toHaveScreenshot('RECEPTION-JOURNEY.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.0198,
+    })
+  })
+
+  test('RECEPTION-CHECKIN — ご来店の受け付け', async ({ page, request }) => {
+    /*
+     * 受け付ける面は seed の実データ（8月27日 11:00 のご予約・田中 花子 様と、その
+     * お客様の度数・注意ごと）をそのまま出す。**盤面だけ**、そのご予約が「お待ちいただく」
+     * で載っている姿に据える —— 工程の記録が 1 行も無いご予約は盤面に出ないので、
+     * 実データのままではこの面への入口（行を選んで「ご来店を受け付ける」）に辿り着けない。
+     * 予定時刻との差「5分早くお着きです」の出どころは応答の `serverNow` で、10:55 に据える。
+     */
+    const reservationId = await elevenOClockReservation(request)
+    await stubBoard(
+      page,
+      [
+        {
+          subjectType: 'reservation',
+          subjectId: reservationId,
+          displayName: '田中 花子 様',
+          visitCount: 4,
+          purposeLabel: 'メガネを新しく作る',
+          isWaitingTooLong: false,
+          cells: boardCells({}),
+        },
+      ],
+      { serverNow: '2026-08-27T01:55:00.000Z' },
+    )
+    await openReception(page)
+    await page
+      .getByRole('grid', { name: '来店受付ボード　お客様ごとの工程' })
+      .getByRole('rowheader', { name: /^田中 花子 様/ })
+      .click()
+    await page.getByRole('button', { name: 'ご来店を受け付ける', exact: true }).click()
+    await expect(page.getByRole('heading', { name: 'ご来店を受け付けます' })).toBeVisible()
+    /*
+     * いま残っている差（実測 258,738 / 3,868,560 ＝ 6.6883%）:
+     *   - **サイドバーがたたんだ柱 76px（モックはひらいた 216px）。** 本文がまるごと 140px
+     *     右へずれるので、この面の差の大半はこれ 1 つである。面が差し替わった瞬間に骨格が
+     *     広がり、戻ると縮む「跳ねるサイドバー」を作らないために直していない
+     *     （モック側も LEDGER-STAFF は柱・LEDGER-WALKIN はひらくで食い違っている）。
+     *   - 右下の録音の帯（`.rec-float`）を出さない… P7（`010-recording`）。
+     *   - 右の「前回のご来店」の日付・度数の綴り・ご希望メモが seed の値で、モックの文言と違う
+     *     （度数はモックが「−2.25 ／ −2.00」、実装は顧客台帳と同じ「R −2.25 ／ L −2.00」）。
+     *   - 「確かめること」の 3 行目が seed の注意ごと（「金属アレルギーのお申し出があります。」）。
+     *     モックは 1 行目と 3 行目を消し込み済みの姿で描いている。
+     *   - 「‹ 来店受付ボードへ戻る」がモックの 40px でなく 44pt（**触れるものは 44pt 以上**が
+     *     モックの寸法より上に来る）。
+     *   - 上のバー右が「業務を終える」（モックは「お知らせ 3」… P10）。
+     * **この値は下げるだけ。上げてはいけない。**
+     */
+    await expect(page).toHaveScreenshot('RECEPTION-CHECKIN.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.0669,
+    })
+  })
+
+  test('LEDGER-WALKIN — 台帳に重なる受付パネル', async ({ page }) => {
+    // 受付パネルの入口は来店受付ボードの「＋ ご来店を受け付ける」の 1 つだけである
+    // （台帳のツールバーにボタンを足すと、承認済みの LEDGER-STAFF の姿が変わる）。
+    await openReception(page)
+    await page.getByRole('button', { name: '＋ ご来店を受け付ける' }).click()
+    await expect(page.getByRole('heading', { name: '店頭のお客様を受け付けます' })).toBeVisible()
+    // モックはご用件を 1 つ伺い終えた瞬間を描いている（1 枚目が選択中・主操作が押せる）。
+    await page.getByRole('button', { name: /^メガネを新しく作る/ }).click()
+    /*
+     * いま残っている差（実測 247,766 / 3,868,560 ＝ 6.4047%。1 巡目の 321,804 から下がった ——
+     * ご用件を 1 つ選んだ姿にしたので、選択中の枠と主操作の緑がモックと揃った）。
+     * 台帳そのものの差（LEDGER-STAFF の 3.18%）を土台に持つ:
+     *   - 待ち状況の帯が「いまお待ち 0名」「ウォークイン 001」（モックは 2名 と 005）。
+     *     `walk_ins` は seed に 1 行も無く、突き合わせは盤面に手を触れずに撮る決めである。
+     *   - 「目安 15分」を出さない。空き枠エンジンがご用件の決まる前に出せない数字だからで、
+     *     出せないときは数字を置かない（`008` の決めごと）。
+     *   - ご用件の 4 択の文言が seed の `visit_purposes`（「今のメガネを調整したい」
+     *     「修理・部品交換」）で、モックの「メガネを調整したい」「視力測定だけ」と違う。
+     *     長い 2 件は 400px のパネルの中で 2 行に折り返す。
+     *   - 「4 択にないご用件」の 1 行がモックに無い（自由記述は AC が要る。4 択を 5 つに
+     *     増やさないためにこの形にしてある）。そのぶん「お客様」以下が 1 行ぶん下へずれる。
+     *   - サイドバーがたたんだ柱 76px（モックはひらいた 216px）。モック側も LEDGER-STAFF は
+     *     柱で描いており、面が変わっていないのに骨格が広がる姿は作らない。
+     *   - 台帳側の点線の枠「ここに入ります 11:30–12:30」と最下段の帯の中身は
+     *     `005-availability-and-ledger` が描く場所で、いまは人数だけを出している。
+     *   - 上のバー右が「業務を終える」（モックは「お知らせ 3」… P10）。
+     * **この値は下げるだけ。上げてはいけない。**
+     */
+    await expect(page).toHaveScreenshot('LEDGER-WALKIN.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.0641,
+    })
+  })
+
+  test('HISTORY-LIST — 受付履歴の一覧と右の中身', async ({ page }) => {
+    await openHistory(page)
+    await page.getByRole('group', { name: '受付の一覧' }).getByRole('button').first().click()
+    await expect(page.getByRole('region', { name: '選んだ受付の中身' })).toContainText('受け付け')
+    /*
+     * いま残っている差（実測 235,015 / 3,868,560 ＝ 6.0750%。1 巡目の 235,158 から下がった）:
+     *   - 「受付のときの録音」の欄を出さない… P7（`010-recording`）。
+     *   - 一覧が 12 行（モックは 46件 のうち 8 行＋まとめ）。seed の 8月27日 のご予約が
+     *     12 件だからで、「ほか N件」の 1 行はそのぶん出ない。
+     *   - お客様のお名前は 田中 花子 様 の 1 行だけで、ほかは「お客様」。
+     *     `reservations.customer_id` を書くのが seed と `PATCH /api/staff/walkins` だけ
+     *     だからである。
+     *   - 受け付けた人が空なので「Web から受け付け」と読む（モックは「中村 彩 が … 電話で」）。
+     *     `reception_sessions` は seed に 1 行も無い。
+     *   - 「そのあとの変更」が 1 行も無く、代わりに「まだ何もありません。」の 1 行が出る。
+     *     `changes` は `audit_events` から組み立てるが、seed は予約を直に入れていて
+     *     監査の行を持たない。**見出しだけを残さない**ためにこの 1 行を置いている（2 巡目）。
+     *   - サイドバーの行き先が 1 つ多い（P0 が「トップ」を柱の中に置いた）。
+     *   - 上のバー右が「業務を終える」（モックは「お知らせ 3」… P10）。
+     * **この値は下げるだけ。上げてはいけない。**
+     */
+    await expect(page).toHaveScreenshot('HISTORY-LIST.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.0608,
+    })
+  })
+
+  test('HISTORY-EMPTY — 条件に合う受付履歴が無い', async ({ page }) => {
+    await openHistory(page)
+    await page
+      .getByRole('group', { name: '受付履歴の絞り込み' })
+      .getByRole('button', { name: /^結果/ })
+      .click()
+    await page.getByRole('button', { name: '取消', exact: true }).click()
+    await expect(page.getByText('条件に合う受付履歴はありませんでした')).toBeVisible()
+    /*
+     * いま残っている差（実測 307,682 / 3,868,560 ＝ 7.9534%。1 巡目の 308,194 から下がった。
+     * **計画の初期値 4% を上回っている** —— 中央 640px の中身（候補の行数と件数）が seed の
+     * 12 件で決まり、モックが描く 46件 の面とは行の数から違うためである）:
+     *   - 絞った条件の言い直しが「8月21日 〜 8月27日／結果 取消」（モックは担当も絞った文）。
+     *     0 件にするのに要る絞り込みが seed の盤面では 2 つで足りる。
+     *   - 緩和候補が 1 件（モックは 2 件）で、件数も seed の 12 件・14 件で数えた値。
+     *     行が 1 本少ないぶん、中央の塊がモックより下に来る。
+     *   - 「お客様名で探す」がモックのこの面には無い。**0 件でも絞り込みの値を消さない**
+     *     決めなので出したままにしてある（AC-RECEP-22）。
+     *   - サイドバーの行き先が 1 つ多い（P0 が「トップ」を柱の中に置いた）。
+     *   - 上のバー右が「業務を終える」（モックは「お知らせ 3」… P10）。
+     * **この値は下げるだけ。上げてはいけない。**
+     */
+    await expect(page).toHaveScreenshot('HISTORY-EMPTY.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.0796,
     })
   })
 })

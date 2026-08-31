@@ -160,6 +160,14 @@ const Uuid = z.string().uuid()
 /** ご用件の所要時間。5 分の格子に載らない値を作らせない。 */
 const DurationMinutes = z.number().int().min(5).max(480).multipleOf(5)
 
+/**
+ * 店頭の整理番号（「ウォークイン 005」）。**店舗 × 来店日（JST）で 1 から採り直す**。
+ * 上限を 999 にしてあるのは表示が 3 桁ゼロ埋めだからで、1000 番目を採ると
+ * 台帳の札が桁あふれする。台帳（`LedgerView.nextTicketNo`）と受付
+ * （`Walkin.ticketNo`）が同じ境界を見るよう、値そのものをここに 1 つ置く。
+ */
+const TicketNo = z.number().int().min(1).max(999)
+
 /** 半開区間 `[startsAt, endsAt)` の左右が逆でないこと。 */
 const startsBeforeEnds = (value: { startsAt: string; endsAt: string }): boolean =>
   value.startsAt < value.endsAt
@@ -1056,6 +1064,21 @@ export const LedgerView = z.strictObject({
     upcoming: z.number().int().nonnegative(),
     pendingReview: z.number().int().nonnegative(),
   }),
+  /*
+   * LEDGER-WALKIN の受付パネルが props で受ける 3 欄（`008-reception-and-walkin` T-002）。
+   * **画面がこのために API を 1 本増やさない**ので台帳の応答に載せる。
+   * `walkinWaitingCount` は当日（JST）の `walk_ins.status='waiting'` の件数、
+   * `nextTicketNo` は「ウォークイン 005」の 005 で、どちらも欠けると受付パネルが
+   * 開いた瞬間に何も言えない（人数も番号も端末側では出せない）。
+   */
+  walkinWaitingCount: z.number().int().nonnegative(),
+  /*
+   * 「目安 15分」。**空き枠エンジンが返す「次に空く時刻 − 現在時刻」だけ**から出し、
+   * 出せないときは null にする（待ち人数の掛け算で作らない）。お客様に口で伝える
+   * 約束になる数字なので、担当の空きを見ていない値を載せる欄をここに作らない。
+   */
+  estimatedWaitMinutes: z.number().int().nonnegative().nullable().default(null),
+  nextTicketNo: TicketNo,
   serverNow: IsoDateTime,
 })
 export type LedgerView = z.infer<typeof LedgerView>
@@ -1757,3 +1780,433 @@ export const CustomerMergeResult = z.strictObject({
   movedNotes: CountInteger,
 })
 export type CustomerMergeResult = z.infer<typeof CustomerMergeResult>
+
+/* ------------------------------------------------------------------------- *
+ * P5 来店受付とウォークイン（`specs/glasses_management/features/008-reception-and-walkin`）
+ *
+ * お客様が店に着いてから帰るまで。**顧客未特定のまま受付と接客を始められる**ことが
+ * この一式の芯で、`customerId` は最後まで `null` を許す（あとから紐づける）。
+ *
+ * 記録は 2 系統ある。`walk_ins` は「予約なしのご来店 1 件」の**いまの姿**（列を書き換える。
+ * だから `version` を持つ）、`visit_events` は「工程が動いた事実」の**追記だけの並び**
+ * （行を書き換えないので版を持たない）である。盤面（`VisitBoard`）は後者から毎回組み立てる。
+ *
+ * 待ち時間・お待たせの判定は列に持たない。`serverNow − arrivedAt` を応答の側で出す
+ * （端末の時計を読ませない。`Walkin.waitedMinutes` / `VisitBoard.serverNow`）。
+ * ------------------------------------------------------------------------- */
+
+/* --- クエリの原始型 ------------------------------------------------------- */
+
+/**
+ * カンマ区切りの語の列（`?status=waiting,serving`）。`QueryIdList` と同じ理由で
+ * 分解を Worker の手書きに残さない（知らない語がそこで黙って落ち、絞り込みが
+ * 効いていないのに 200 が返る）。配列そのものも受ける。
+ */
+const QueryWordList = <S extends z.ZodType<string, string>>(word: S, max: number) =>
+  z
+    .union([
+      z.array(word),
+      z.string().transform((value) =>
+        value
+          .split(',')
+          .map((part) => part.trim())
+          .filter((part) => part !== ''),
+      ),
+    ])
+    .pipe(z.array(word).max(max))
+    .default([])
+
+/* --- ウォークイン --------------------------------------------------------- */
+
+/**
+ * 予約なしのご来店の状態（`03-data-model.md` §7.4）。**4 語**で、`visit_events.stage` の
+ * 写しではない（「先の日時のご予約に振り替えたか」は工程が持たない軸である）。
+ *
+ * `waiting` から直接 `left` になった行が「待ちきれずお帰りになった」件数で、
+ * これを `left` の 1 語に潰すと ANALYTICS-WAIT の母数から落ち、待ち時間が実態より
+ * 必ず良い側に出る。
+ */
+const WalkinStatus = z.enum(['waiting', 'serving', 'booked', 'left'])
+
+/**
+ * 4 択に無いご用件の自由記述（LEDGER-STAFF の「フレームの相談」）。
+ * 上限は **80 文字**で、`walk_ins.purpose_note` の列がこれを収める。
+ */
+const PurposeNote = z.string().trim().min(1).max(80)
+
+/**
+ * ご用件は**ちょうど一方**だけを受ける。4 択から選んだなら `purposeId`、
+ * 4 択に無いご用件なら `purposeNote` である。両方を許すと台帳の帯に出す語が
+ * 2 つになり、どちらを出すかが画面ごとに割れる。どちらも無いと、受け付けたあとに
+ * 「何のご用件で来られたか」を誰も答えられない受付が残る。
+ */
+const exactlyOnePurpose = (
+  value: { purposeId?: string; purposeNote?: string },
+  ctx: z.RefinementCtx,
+): void => {
+  const chosen = value.purposeId !== undefined
+  const written = value.purposeNote !== undefined
+  if (chosen === written) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'ご用件は 4 択から選ぶか、自由記述で書くかのどちらか一方にする',
+      path: ['purposeId'],
+    })
+  }
+}
+
+/**
+ * 店頭の受け付け（`POST /api/staff/walkins`。LEDGER-WALKIN「受付して台帳に載せる」）。
+ *
+ * **整理番号を受け取らない。**同時に 2 台の iPad から受け付けると、クライアントが
+ * 採った番号はそのまま重複する。採番は店舗 × 来店日でサーバが行う。
+ *
+ * `staffId` は `null`（「担当を決めずに受け付ける」）と欄が無い（まだ伺っていない）を
+ * 分ける（`StaffReservationCreate` と同じ扱い）。`startsAt` / `durationMinutes` は
+ * LEDGER-WALKIN が台帳に点線で描く「ここに入ります 11:30–12:30」で、省略時は
+ * `arrivedAt` とご用件の所要から決める。`arrivedAt` の省略はサーバ時刻で埋める。
+ */
+export const WalkinCreate = z
+  .strictObject({
+    storeId: Uuid,
+    purposeId: Uuid.optional(),
+    purposeNote: PurposeNote.optional(),
+    customerId: Uuid.optional(),
+    staffId: Uuid.nullable().optional(),
+    startsAt: IsoDateTime.optional(),
+    durationMinutes: DurationMinutes.optional(),
+    arrivedAt: IsoDateTime.optional(),
+  })
+  .superRefine(exactlyOnePurpose)
+export type WalkinCreate = z.infer<typeof WalkinCreate>
+
+/**
+ * 予約なしのご来店 1 件。
+ *
+ * `reservationId` が**必ず**入るのは、受付と同時に `source='walkin'` の予約を 1 件
+ * 起こすからである（`03-data-model.md` §7.4）。起こさないと LEDGER-WALKIN が
+ * 「ここに入ります」と描いた枠が空き枠エンジンから見て空いたままになり、同じ瞬間に
+ * お電話のご予約が同じ担当を取れてしまう。
+ *
+ * `waitedMinutes` は列ではなく `serverNow − arrivedAt` を分へ切り捨てた値である。
+ * **読む側でご用件の排他を強いない** — 1 列が食い違っただけで待ちの帯がまるごと
+ * 500 になり、目の前のお客様が画面から消える（書く側の不変条件として守る）。
+ */
+export const Walkin = z.strictObject({
+  id: Uuid,
+  ticketNo: TicketNo,
+  arrivedAt: IsoDateTime,
+  purposeId: Uuid.nullable().default(null),
+  purposeNote: z.string().trim().max(80).nullable().default(null),
+  customerId: Uuid.nullable().default(null),
+  reservationId: Uuid,
+  status: WalkinStatus,
+  waitedMinutes: z.number().int().nonnegative(),
+  leftAt: IsoDateTime.nullable().default(null),
+  version: Version,
+})
+export type Walkin = z.infer<typeof Walkin>
+
+/**
+ * 受け付けたあとの更新（`PATCH /api/staff/walkins/:walkinId`）。
+ * 顧客の紐づけと担当決めを 2 台の iPad が同時に触るので `version` を必須にする。
+ * 整理番号・受付時刻・ご用件はここから動かせない（受け付けた事実を書き換えない）。
+ */
+export const WalkinPatch = z.strictObject({
+  version: Version,
+  customerId: Uuid.optional(),
+  // 「あとで決める」へ戻せるので null も受ける。
+  staffId: Uuid.nullable().optional(),
+  status: WalkinStatus.optional(),
+  reservationId: Uuid.optional(),
+})
+export type WalkinPatch = z.infer<typeof WalkinPatch>
+
+/**
+ * 待ちの一覧（`GET /api/staff/walkins`）。**`date` は必須**である。
+ * 日付の条件を落とすと、昨日帰られたお客様が今朝の待ち行列に残り、
+ * 「いまお待ち N名」も `LedgerView.estimatedWaitMinutes` も一緒に狂う。
+ */
+export const WalkinListQuery = z.strictObject({
+  storeId: Uuid,
+  date: LocalDate,
+  status: QueryWordList(WalkinStatus, 4),
+})
+export type WalkinListQuery = z.infer<typeof WalkinListQuery>
+
+/** 台帳の最下段の帯 1 本（LEDGER-STAFF「ウォークイン 004　受付 11:02　お待ち 6分」）。 */
+export const WalkinSummary = z.strictObject({
+  id: Uuid,
+  ticketNo: TicketNo,
+  arrivedAt: IsoDateTime,
+  waitedMinutes: z.number().int().nonnegative(),
+  purposeNote: z.string().trim().max(80).nullable().default(null),
+  status: WalkinStatus,
+})
+export type WalkinSummary = z.infer<typeof WalkinSummary>
+
+/* --- 来店受付ボード ------------------------------------------------------- */
+
+/**
+ * 店内の工程（`03-data-model.md` §7.5）。**8 語**で、`left` は退店、`waiting` は
+ * 工程と工程の間のお待たせを指し、この 2 つは盤面の列を持たない。
+ *
+ * **この宣言順は画面の並びではない。**RECEPTION-JOURNEY の 6 列は
+ * 受付 → ご相談 → フレーム選び → 視力測定 → レンズ・お会計 → お渡し の順で、
+ * 列は UI 側の定数（`BOARD_STAGES`）から作る。宣言順から作ると列が入れ替わる。
+ */
+export const VisitStage = z.enum([
+  'received',
+  'waiting',
+  'measuring',
+  'consulting',
+  'fitting',
+  'checkout',
+  'handover',
+  'left',
+])
+export type VisitStage = z.infer<typeof VisitStage>
+
+/** 工程の対象。予約とウォークインの 2 系統だけで、お客様そのものは対象にしない。 */
+const VisitSubjectType = z.enum(['reservation', 'walkin'])
+
+/**
+ * 工程を進める（`POST /api/staff/visits`）。**追記だけ**なので「1 件足す」形しか無い。
+ * 訂正は打ち消しの行を足す（前の行を書き換える経路を契約に作らない）。
+ * `occurredAt` の省略はサーバ時刻で埋める。`note` には RECEPTION-CHECKIN の
+ * 消し込みの結果（確かめた行と確かめなかった行）を残す。
+ */
+export const VisitEventInput = z.strictObject({
+  storeId: Uuid,
+  subjectType: VisitSubjectType,
+  subjectId: Uuid,
+  stage: VisitStage,
+  occurredAt: IsoDateTime.optional(),
+  staffId: Uuid.optional(),
+  note: z.string().trim().max(120).optional(),
+})
+export type VisitEventInput = z.infer<typeof VisitEventInput>
+
+/** 追記された工程 1 件。`occurredAt` は必ず入る（省略ぶんはサーバが埋めたあとである）。 */
+export const VisitEvent = z.strictObject({
+  id: Uuid,
+  subjectType: VisitSubjectType,
+  subjectId: Uuid,
+  stage: VisitStage,
+  occurredAt: IsoDateTime,
+  staffId: Uuid.nullable().default(null),
+  note: z.string().trim().max(120).nullable().default(null),
+})
+export type VisitEvent = z.infer<typeof VisitEvent>
+
+/** 盤面の取得（`GET /api/staff/visits/board`）。既定は「ご来店中」だけ。 */
+export const VisitBoardQuery = z.strictObject({
+  storeId: Uuid,
+  date: LocalDate,
+  scope: z.enum(['active', 'all']).default('active'),
+})
+export type VisitBoardQuery = z.infer<typeof VisitBoardQuery>
+
+/**
+ * 盤面の欄 1 つ。状態は **5 語**（済みました / 対応中 / 次にやること / お待たせ中 / 空）。
+ *
+ * `note` と `needsAttention` を `label` と**別に**持つのは、担当が勤務外・設備が点検中の
+ * ときに色だけで伝えないためである（AC-RECEP-14 / AC-RECEP-15）。設備名と注意を
+ * 1 つの文字列へ混ぜると、読み上げが「視力測定機 A」と言うべき場所で長い注意を読み、
+ * 30 文字の `label` にも収まらない。文と旗は必ず揃える（片方だけの応答を通さない）。
+ */
+export const VisitBoardCell = z
+  .strictObject({
+    stage: VisitStage,
+    state: z.enum(['done', 'doing', 'next', 'waiting', 'empty']),
+    at: IsoDateTime.nullable().default(null),
+    // 「視力測定機 A」「お待たせ中 18分」。
+    label: z.string().trim().max(30).default(''),
+    // 「本日はお休みです。担当を決め直してください。」「視力測定機 A は点検で止まっています。」
+    note: z.string().trim().max(40).nullable().default(null),
+    needsAttention: z.boolean().default(false),
+  })
+  .refine((cell) => cell.needsAttention === (cell.note !== null), {
+    message: '注意の文を持つ欄だけが needsAttention を立てる',
+    path: ['needsAttention'],
+  })
+  .refine(
+    (cell) =>
+      cell.state !== 'empty' || (cell.at === null && cell.label === '' && cell.note === null),
+    {
+      // 工程を飛ばした行は飛ばした列を空のまま置く。空いた欄を文字で埋めない。
+      message: '空の欄は時刻も label も注意も持たない',
+      path: ['state'],
+    },
+  )
+export type VisitBoardCell = z.infer<typeof VisitBoardCell>
+
+/**
+ * 盤面の 1 行（お客様 1 人）。`displayName` は「田中 花子 様」か「ウォークイン 003」で、
+ * `visitCount` はお客様が特定できていない来店では null になる（札を出さない）。
+ */
+export const VisitBoardRow = z.strictObject({
+  subjectType: VisitSubjectType,
+  subjectId: Uuid,
+  displayName: z.string().trim().min(1).max(40),
+  visitCount: z.number().int().nonnegative().nullable().default(null),
+  purposeLabel: z.string().trim().max(30).default(''),
+  cells: VisitBoardCell.array().default([]),
+  isWaitingTooLong: z.boolean().default(false),
+})
+export type VisitBoardRow = z.infer<typeof VisitBoardRow>
+
+/**
+ * 盤面（RECEPTION-JOURNEY）。`activeCount` は**最新の工程が `left` でない行の数**で、
+ * 「お渡し」に居る人も数える。`serverNow` は必ず載せる — お待たせ中の分数は
+ * この値と最後の記録の差で描くので、端末の時計を読ませると iPad ごとに違う分数が出る。
+ */
+export const VisitBoard = z.strictObject({
+  date: LocalDate,
+  activeCount: z.number().int().nonnegative(),
+  rows: VisitBoardRow.array().default([]),
+  serverNow: IsoDateTime,
+})
+export type VisitBoard = z.infer<typeof VisitBoard>
+
+/* --- 取消とご来店なし ------------------------------------------------------ */
+
+/**
+ * ご予約を取り消す／ご来店がなかったとして残す（`POST /api/staff/reservations/:reservationId/cancel`）。
+ *
+ * **`reason` が `no_show` のときだけ `status` が `no_show` になる**（それ以外は `cancelled`）。
+ * 受付履歴の「結果」の 3 語（成立／取消／ご来店なし）はこの 1 か所でしか分岐しないので、
+ * 画面が `status` を直に送る形にしない — 送れるようにすると、来ていないお客様の予約を
+ * 「成立」に書き換えられる。
+ *
+ * `version` を必須にするのは、当日の締めを 2 台の iPad が同時に流すからである。
+ * 取り消し済みの予約は版が進んでいるので、遅れて届いた 2 台目は 409 になる。
+ *
+ * このフェーズが要るのは `no_show` の枝（AC-RECEP-16）だけなので、欄は 2 つに絞ってある。
+ * 取消の理由の言い直しやお客様への連絡は `009-change-and-cancel` が足す。
+ */
+export const ReservationCancelInput = z.strictObject({
+  version: z.number().int().min(1),
+  reason: z.enum(['customer', 'store', 'duplicate', 'no_show']),
+})
+export type ReservationCancelInput = z.infer<typeof ReservationCancelInput>
+
+/* --- 受付履歴 ------------------------------------------------------------- */
+
+/**
+ * 条件を 1 つ緩めた候補（HISTORY-EMPTY「期間を「今月（8月1日 〜 8月27日）」まで広げる　12件」）。
+ *
+ * `count` が 1 以上なのは、押しても 0 件のままの候補を出さないためである
+ * （0 件の画面から 0 件の画面へ送るのは行き止まりを 1 つ増やすだけである）。
+ * `query` はそのまま再送できる形にする（画面が条件を組み立て直さない）。
+ */
+export const SearchRelaxation = z.strictObject({
+  label: z.string().trim().min(1).max(60),
+  count: z.number().int().min(1),
+  query: z.record(z.string(), z.unknown()),
+})
+export type SearchRelaxation = z.infer<typeof SearchRelaxation>
+
+/**
+ * 受付履歴の絞り込み（`GET /api/staff/reception-sessions`。HISTORY-LIST）。
+ *
+ * 期間は**ご来店日**で絞る（受け付けた日ではない）。`staffId` は**接客する担当**
+ * （`reservation_assignments`）で、受け付けた人（`reception_sessions.actor_id`）ではない
+ * — 共有端末では NULL になり、その受付が絞り込みから丸ごと漏れる。
+ *
+ * 画面の「結果」3 語はここへ落とす。成立＝`confirmed,arrived,serving,done` /
+ * 取消＝`cancelled` / ご来店なし＝`no_show` である（契約に新しい語を足さない）。
+ * 読み足しは `cursor` で行い、`OFFSET` を使わない。
+ */
+export const ReceptionHistoryQuery = z
+  .strictObject({
+    storeId: Uuid.optional(),
+    from: LocalDate,
+    to: LocalDate,
+    staffId: Uuid.optional(),
+    // 「結果」の絞り込みは `status` の 1 本だけである。`outcome`（受付セッションの
+    // 成否）をここに置かない — ルートもドメインも見ないので、`?outcome=discarded` が
+    // 200 を返しながら 1 件も絞られていない、という黙って効かない絞り込みになる。
+    status: QueryWordList(ReservationStatus, 6),
+    name: z.string().trim().max(40).optional(),
+    limit: Limit,
+    cursor: Cursor.optional(),
+  })
+  .refine(spanWithinDays(92), { message: '一度に取れるのは 92 日まで', path: ['to'] })
+export type ReceptionHistoryQuery = z.infer<typeof ReceptionHistoryQuery>
+
+/**
+ * 受付履歴の 1 行。
+ *
+ * **`entryId` が行の識別子**で、`reception_sessions.id` ?? `reservations.id` ?? `walk_ins.id`
+ * である。`sessionId` を必須にできないのは、スタッフが受け付けない Web のご予約が
+ * 受付セッションを持たないからで、必須にするとその行が一覧から丸ごと落ちる
+ * （お客様からのお問い合わせに答えられない受付が出る）。
+ */
+export const ReceptionHistoryEntry = z.strictObject({
+  entryId: Uuid,
+  sessionId: Uuid.nullable().default(null),
+  startedAt: IsoDateTime,
+  displayName: z.string().trim().min(1).max(40),
+  visitCount: z.number().int().nonnegative().nullable().default(null),
+  outcome: ReceptionSessionOutcome.nullable().default(null),
+  reservationStatus: ReservationStatus.nullable().default(null),
+})
+export type ReceptionHistoryEntry = z.infer<typeof ReceptionHistoryEntry>
+
+/**
+ * 受付履歴の一覧（`04-api.md` §1.2 の `{ items, nextCursor, total }`）。
+ *
+ * `relaxations` は **0 件の応答に同梱する**（追加の往復を作ると 0 件の画面がその分だけ
+ * 遅れて出る）。1 件以上あるのに候補が付いた応答は落とす — 出せば「もっと広げますか」と
+ * 読める操作が結果の隣に並び、いま見えている一覧が信用できなくなる。
+ * 逆に 0 件でも候補が 0 件のことはある（緩められる条件が無い／全解除しても 0 件）。
+ */
+export const ReceptionHistoryList = z
+  .strictObject({
+    items: ReceptionHistoryEntry.array().default([]),
+    nextCursor: Cursor.nullable().default(null),
+    total: CountInteger,
+    relaxations: SearchRelaxation.array().max(3).default([]),
+  })
+  .superRefine((value, ctx) => {
+    if (value.total !== 0 && value.relaxations.length > 0) {
+      ctx.addIssue({
+        code: 'custom',
+        message: '条件を緩める候補は 0 件のときだけ添える',
+        path: ['relaxations'],
+      })
+    }
+  })
+export type ReceptionHistoryList = z.infer<typeof ReceptionHistoryList>
+
+/**
+ * 「そのあとの変更」の 1 行（HISTORY-LIST 右「8/20 14:32　新しく受け付けました　中村 彩」）。
+ * `audit_events` を `target_id` で引いて**古い順**に組み立てる。
+ */
+const ReservationChangeHistory = z.strictObject({
+  occurredAt: IsoDateTime,
+  what: z.string().trim().min(1).max(120),
+  actorName: z.string().trim().max(40).nullable().default(null),
+})
+
+/**
+ * 受付 1 件の詳細（`GET /api/staff/reception-sessions/:sessionId`。値は `entryId`）。
+ *
+ * `receivedBy` は null を許す — Web のご予約は**受け付けた人がいない**ので、
+ * 1..40 を強いると Web から入った 1 件を開いた瞬間に 500 になる（`sessionId` を
+ * null 可にしたのと同じ理由である）。
+ *
+ * `recording` は **P7（`010-recording`）が埋めるまで常に null** なので、いまは null しか
+ * 受けない形にしておく。器だけ先に広げると「まだ無い」と「空だった」が同じ形になる。
+ */
+export const ReceptionHistoryDetail = z.strictObject({
+  entryId: Uuid,
+  sessionId: Uuid.nullable().default(null),
+  reservation: ReservationDetail.nullable().default(null),
+  receivedBy: z.string().trim().min(1).max(40).nullable().default(null),
+  receivedAt: IsoDateTime,
+  changes: ReservationChangeHistory.array().default([]),
+  recording: z.null().default(null),
+})
+export type ReceptionHistoryDetail = z.infer<typeof ReceptionHistoryDetail>

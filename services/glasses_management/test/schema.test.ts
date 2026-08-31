@@ -32,7 +32,9 @@ import {
   storeSettingsRevision,
   storeSlotRules,
   stores,
+  visitEvents,
   visitPurposes,
+  walkIns,
 } from '../src/worker/db/schema'
 
 /** index の対象列を SQL 列名の配列で取り出す。 */
@@ -778,5 +780,117 @@ describe('顧客の 4 表', () => {
         table.name,
       ).toContain('organization_id')
     }
+  })
+})
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * P5 来店受付とウォークイン（0005_*.sql）
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+describe('walk_ins', () => {
+  const table = getTableConfig(walkIns)
+
+  it('整理番号を組織・店舗・来店日で一意にする', () => {
+    // 採番は MAX(ticket_no) + 1 を読んでから INSERT するので、同時受付で同じ番号を
+    // 読んだ 2 台をここで弾く。弾かれた側は +1 して採番し直す。
+    expect(columnsOf(table, 'walk_ins_org_store_date_ticket_idx')).toEqual([
+      'organization_id',
+      'store_id',
+      'visit_date',
+      'ticket_no',
+    ])
+    expect(isUnique(table, 'walk_ins_org_store_date_ticket_idx')).toBe(true)
+    // 店舗 × 日でリセットするので、来店日を含まない一意にはしない。
+    expect(columnsOf(table, 'walk_ins_org_store_date_ticket_idx')).toContain('visit_date')
+  })
+
+  it('台帳の最下段を受付時刻順に引く index を持つ', () => {
+    expect(columnsOf(table, 'walk_ins_org_store_arrived_idx')).toEqual([
+      'organization_id',
+      'store_id',
+      'arrived_at',
+    ])
+    expect(isUnique(table, 'walk_ins_org_store_arrived_idx')).toBe(false)
+  })
+
+  it('「いまお待ち N名」を来店日で絞って数える index を持つ', () => {
+    // 来店日を先に置かないと昨日の waiting まで数えてしまう。
+    expect(columnsOf(table, 'walk_ins_org_store_date_status_idx')).toEqual([
+      'organization_id',
+      'store_id',
+      'visit_date',
+      'status',
+    ])
+    expect(isUnique(table, 'walk_ins_org_store_date_status_idx')).toBe(false)
+  })
+
+  it('外部キーを持たず、version を整数で持つ', () => {
+    expect(table.name).toBe('walk_ins')
+    expect(table.foreignKeys).toHaveLength(0)
+    expect(table.columns.filter((c) => c.primary).map((c) => c.name)).toEqual(['id'])
+    // 顧客の紐づけと担当決めを 2 台の iPad が同時に触るので楽観ロックを持つ。
+    expect(table.columns.find((c) => c.name === 'version')?.columnType).toBe('SQLiteInteger')
+    expect(table.columns.find((c) => c.name === 'version')?.notNull).toBe(true)
+    expect(table.columns.find((c) => c.name === 'ticket_no')?.columnType).toBe('SQLiteInteger')
+    // 受付と同時に source='walkin' の予約を 1 件起こすので、予約 ID は必ず埋まる。
+    expect(table.columns.find((c) => c.name === 'reservation_id')?.notNull).toBe(true)
+    // お客様を特定しないまま受け付けられる。
+    expect(table.columns.find((c) => c.name === 'customer_id')?.notNull).toBe(false)
+    // ご用件は 4 択（purpose_id）か自由記述（purpose_note）のどちらか一方。
+    expect(table.columns.find((c) => c.name === 'purpose_id')?.notNull).toBe(false)
+    expect(table.columns.find((c) => c.name === 'purpose_note')?.notNull).toBe(false)
+    // status='left' のときだけ埋まる。
+    expect(table.columns.find((c) => c.name === 'left_at')?.notNull).toBe(false)
+  })
+
+  it('真偽値の列を持たない（状態は 4 語の text）', () => {
+    // waiting / serving / booked / left の 4 語を is_waiting のような真偽の組で
+    // 表すと、どれでもない行とどれでもある行が作れてしまう。
+    expect(table.columns.filter((c) => c.name.startsWith('is_'))).toHaveLength(0)
+    expect(table.columns.find((c) => c.name === 'status')?.columnType).toBe('SQLiteText')
+    expect(table.columns.find((c) => c.name === 'status')?.notNull).toBe(true)
+    // 来店日は JST の暦日（'YYYY-MM-DD'）。arrived_at から導いた写しを列に持つ。
+    expect(table.columns.find((c) => c.name === 'visit_date')?.columnType).toBe('SQLiteText')
+    expect(table.columns.find((c) => c.name === 'visit_date')?.notNull).toBe(true)
+  })
+})
+
+describe('visit_events', () => {
+  const table = getTableConfig(visitEvents)
+
+  it('そのお客様の工程を発生順に引く index を持つ', () => {
+    // ボードの 1 行はこの並びそのもの。現在地は occurred_at 最大の行。
+    expect(columnsOf(table, 'visit_events_org_subject_idx')).toEqual([
+      'organization_id',
+      'subject_type',
+      'subject_id',
+      'occurred_at',
+    ])
+    // 同じ工程を 2 回記録できる（打ち消しの行を足して訂正する）ので一意にしない。
+    expect(isUnique(table, 'visit_events_org_subject_idx')).toBe(false)
+  })
+
+  it('当日のボード全体を引く index を持つ', () => {
+    expect(columnsOf(table, 'visit_events_org_store_occurred_idx')).toEqual([
+      'organization_id',
+      'store_id',
+      'occurred_at',
+    ])
+    expect(isUnique(table, 'visit_events_org_store_occurred_idx')).toBe(false)
+  })
+
+  it('追記専用なので updated_at を持たない', () => {
+    expect(table.name).toBe('visit_events')
+    expect(table.foreignKeys).toHaveLength(0)
+    // 行を書き換えないので更新時刻の置き場所を作らない。訂正は打ち消しの行を足す。
+    expect(table.columns.map((c) => c.name)).not.toContain('updated_at')
+    // 対象は予約かウォークインのどちらか（reservation_id / walkin_id に割らない）。
+    expect(table.columns.map((c) => c.name)).toEqual(
+      expect.arrayContaining(['subject_type', 'subject_id', 'stage', 'occurred_at']),
+    )
+    expect(table.columns.map((c) => c.name)).not.toContain('reservation_id')
+    // 誰が進めたかは残すが、担当以外も進められるので NULL 可。
+    expect(table.columns.find((c) => c.name === 'staff_id')?.notNull).toBe(false)
+    expect(table.columns.find((c) => c.name === 'note')?.notNull).toBe(false)
   })
 })

@@ -49,6 +49,13 @@ export type ReservationListProps = {
   phase?: ReservationListPhase
   /** 通信断のとき。「受け付け」の列ごと落とし、書き込みの操作を出さない。 */
   isOffline?: boolean
+  /**
+   * 「ご来店」を押したとき。ご予約のお客様を受け付ける入口は**この 1 つ**である ——
+   * 来店受付ボードに載るのは「もうお着きの方」だけなので、まだお着きでないご予約は
+   * 盤面から探せない（`worker/domain/visit-board.ts` の `isPresent`）。
+   * 渡さなければ語だけの置き物になる（`005` が先に描いたときの姿）。
+   */
+  onCheckin?: (reservationId: string) => void
 }
 
 /** 行から始められる次の操作。行き先は 008 / 009 が作るので、ここでは語と形だけを決める。 */
@@ -57,6 +64,8 @@ type RowAction = {
   /** 押せない行（受け付けが済んだ行・ご来店の無かった行）は文字だけを置く。 */
   pressable: boolean
   tone: 'pine' | 'walkin' | 'web'
+  /** 行き先。`checkin` だけがこのフェーズ（008）の持ち場である。 */
+  kind: 'checkin' | 'guide' | 'review'
 }
 
 const TONE_CLASS: Record<RowAction['tone'], string> = {
@@ -69,11 +78,12 @@ function actionOf(row: LedgerListRow): RowAction | null {
   // 受け付けが済んだご予約に押し直す導線はモックに無い。押し間違いは取り消して受け直す。
   if (row.status === 'arrived' || row.status === 'serving' || row.status === 'done') return null
   if (row.status === 'no_show') return null
-  if (row.source === 'walkin') return { label: 'ご案内', pressable: true, tone: 'walkin' }
+  if (row.source === 'walkin')
+    return { label: 'ご案内', pressable: true, tone: 'walkin', kind: 'guide' }
   // Web から入って担当がまだ決まっていないご予約が「確認待ち」の中身になる。
   if (row.source === 'web' && row.isUnassigned)
-    return { label: '内容を確認', pressable: true, tone: 'web' }
-  return { label: 'ご来店', pressable: true, tone: 'pine' }
+    return { label: '内容を確認', pressable: true, tone: 'web', kind: 'review' }
+  return { label: 'ご来店', pressable: true, tone: 'pine', kind: 'checkin' }
 }
 
 /** 押せない行に置く事実の語。 */
@@ -141,6 +151,7 @@ export function ReservationList({
   onFilterChange,
   phase,
   isOffline = false,
+  onCheckin,
 }: ReservationListProps) {
   const state = phase ?? (view === null ? 'loading' : 'ready')
 
@@ -261,6 +272,9 @@ export function ReservationList({
                             {action !== null && (
                               <button
                                 type="button"
+                                {...(action.kind === 'checkin' && onCheckin !== undefined
+                                  ? { onClick: () => onCheckin(row.reservationId) }
+                                  : {})}
                                 className={`min-h-11.5 shrink-0 rounded-ctl border px-2 text-note font-semibold ${TONE_CLASS[action.tone]} ${focusRing}`}
                               >
                                 {action.label}

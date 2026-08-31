@@ -42,12 +42,17 @@ import {
   PurposeListQuery,
   PurposeOrderInput,
   PurposeRequirementsInput,
+  ReceptionHistoryDetail,
+  ReceptionHistoryList,
+  ReceptionHistoryQuery,
   ReceptionSession,
   ReceptionSessionClose,
   ReceptionSessionDraft,
   ReceptionSessionDraftPatch,
   ReceptionSessionStart,
+  ReservationCancelInput,
   ReservationDetail,
+  ReservationStatus,
   type SettingsImpactItem,
   SettingsImpactReport,
   SettingsImpactRequest,
@@ -68,9 +73,18 @@ import {
   StoreMembership,
   StorePatch,
   type StorePermission,
+  VisitBoard,
+  VisitBoardQuery,
+  VisitEvent,
+  VisitEventInput,
   VisitPurpose,
   VisitPurposeInput,
   VisitPurposePatch,
+  type VisitStage,
+  Walkin,
+  WalkinCreate,
+  WalkinListQuery,
+  WalkinPatch,
 } from '@app/contracts'
 import {
   type AuthVariables,
@@ -129,6 +143,7 @@ import {
   beginIdempotency,
   bookingStatements,
   constraintTable,
+  type ReservationCodeAttempt,
   readIdempotencyKey,
   releaseIdempotency,
   requestHash,
@@ -155,6 +170,7 @@ import {
 } from './domain/customers'
 import { deleteHold, HOLD_RENEW_MAX, listHoldOccupancies, putHold } from './domain/holds'
 import { buildLedgerView } from './domain/ledger'
+import { buildHistoryList, type ReceptionHistoryRow } from './domain/reception-history'
 import {
   type ImpactWebSlot,
   impactOfBusinessHours,
@@ -172,6 +188,8 @@ import {
   validateHoursInput,
   warnBusinessHours,
 } from './domain/store-settings'
+import { type BoardSubjectRow, buildBoard } from './domain/visit-board'
+import { jstVisitDate, nextTicketNo, waitedMinutes } from './domain/walkin'
 
 // 明示的に import している（ambient global を使わない）ので、export した AppType は
 // それ自体で完結し、web 側が Workers の型なしに読める。SPA も同じ Worker が静的資産
@@ -975,6 +993,20 @@ async function findCustomer(
     .first<CustomerRecord>()
 }
 
+/**
+ * 受付が結びつけてよいお客様か。**まとめられて消えた行（`merged_into_id` が非 NULL）は
+ * 「無い」として扱う。**残したまま結びつけられると、その来店は一覧にも検索にも出ない
+ * お客様の来店回数に数えられ、残す側は増えないまま食い違う（`008-reception-and-walkin`）。
+ */
+async function findLiveCustomer(
+  db: D1Database,
+  org: string,
+  customerId: string,
+): Promise<CustomerRecord | null> {
+  const found = await findCustomer(db, org, customerId)
+  return found === null || found.mergedIntoId !== null ? null : found
+}
+
 /** 打ち込まれた番号 → 保存する 3 列。3 つとも入るか 3 つとも NULL のどちらかにする。 */
 type PhoneColumns = { phone: string | null; normalized: string | null; last4: string | null }
 
@@ -1588,6 +1620,292 @@ function toReceptionSession(row: typeof receptionSessions.$inferSelect) {
     draft: row.draftJson === null ? null : ReceptionSessionDraft.parse(JSON.parse(row.draftJson)),
     createdAt: row.createdAt,
   }
+}
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * 来店受付とウォークイン（P5）が共有する道具
+ *
+ * 芯は **顧客未特定のまま受付と接客が始まる**ことである。`customer_id` は最後まで
+ * NULL を許し、あとから `PATCH /api/staff/walkins/:walkinId` で結び直す。
+ * 待ち時間は列に持たず、`serverNow − arrived_at` を応答の側で出す
+ * （端末の時計を読ませない。`domain/walkin.ts` の `waitedMinutes`）。
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * 枠が取れた予約にだけ後続の文を当てる条件。**`domain/booking.ts` の `LOCKED` と
+ * 一字一句同じ形**である（あちらはモジュール内の const なので、写しはこの 1 か所だけ）。
+ * 付け忘れると、枠が取れていないのに受付の行と整理番号だけが書かれる。
+ */
+const WALKIN_LOCKED =
+  'EXISTS (SELECT 1 FROM reservation_slot_locks WHERE organization_id = ? AND reservation_id = ?)'
+
+/** 整理番号の打ち直し。予約番号（`RESERVATION_CODE_ATTEMPTS`）と同じ 5 回。 */
+const WALKIN_TICKET_ATTEMPTS = 5
+
+/** ご用件を伺えていない受付の所要。4 択を選べば目的の所要が優先される。 */
+const WALKIN_DEFAULT_MINUTES = 30
+
+/**
+ * 「接客が始まった」工程。ここへ入った来店は待ちの帯から外れる（`walk_ins.status='serving'`）。
+ * `received` と `waiting` を入れない — 受け付けただけの人を接客中に数えると、
+ * 「お待たせ中」の分数が誰にも出なくなる。
+ */
+const SERVING_STAGES: ReadonlySet<string> = new Set([
+  'consulting',
+  'fitting',
+  'measuring',
+  'checkout',
+  'handover',
+])
+
+/** 一覧・詳細が同じ形で読む列。別名は契約の欄名に揃える。 */
+const WALKIN_COLUMNS =
+  'id, store_id AS storeId, visit_date AS visitDate, ticket_no AS ticketNo, ' +
+  'arrived_at AS arrivedAt, purpose_id AS purposeId, purpose_note AS purposeNote, ' +
+  'customer_id AS customerId, reservation_id AS reservationId, status, ' +
+  'left_at AS leftAt, version'
+
+type WalkinRecord = {
+  id: string
+  storeId: string
+  visitDate: string
+  ticketNo: number
+  arrivedAt: string
+  purposeId: string | null
+  purposeNote: string | null
+  customerId: string | null
+  reservationId: string
+  status: string
+  leftAt: string | null
+  version: number
+}
+
+/** 自分の組織のウォークインだけを引く。他テナントの id は「無い」として扱う（404）。 */
+async function findWalkin(
+  db: D1Database,
+  org: string,
+  walkinId: string,
+): Promise<WalkinRecord | null> {
+  return db
+    .prepare(`SELECT ${WALKIN_COLUMNS} FROM walk_ins WHERE organization_id = ? AND id = ?`)
+    .bind(org, walkinId)
+    .first<WalkinRecord>()
+}
+
+/** D1 の行 → 契約の `Walkin`。**待ち時間は列ではなく差から出す。** */
+function toWalkin(row: WalkinRecord, now: Date) {
+  return {
+    id: row.id,
+    ticketNo: row.ticketNo,
+    arrivedAt: row.arrivedAt,
+    purposeId: row.purposeId,
+    purposeNote: row.purposeNote,
+    customerId: row.customerId,
+    reservationId: row.reservationId,
+    status: row.status,
+    waitedMinutes: waitedMinutes(row.arrivedAt, now),
+    leftAt: row.leftAt,
+    version: row.version,
+  }
+}
+
+/**
+ * 「いまお待ち N名」と「次の整理番号」を **1 文で**数える。
+ *
+ * **日付の条件を落とさない** — 落とすと昨日帰られたお客様が今朝の待ち行列に残り、
+ * 待ち時間の目安まで狂う（`03-data-model.md` §7.4）。最大の整理番号が null なのは
+ * その日がまだ 0 件のときで、`nextTicketNo(null)` が 1 を返す（日が変われば 1 に戻る）。
+ */
+async function readWalkinCounters(
+  db: D1Database,
+  org: string,
+  storeId: string,
+  visitDate: string,
+): Promise<{ waiting: number; maxTicketNo: number | null }> {
+  const row = await db
+    .prepare(
+      "SELECT COUNT(CASE WHEN status = 'waiting' THEN 1 END) AS waiting, MAX(ticket_no) AS maxTicket " +
+        'FROM walk_ins WHERE organization_id = ? AND store_id = ? AND visit_date = ?',
+    )
+    .bind(org, storeId, visitDate)
+    .first<{ waiting: number; maxTicket: number | null }>()
+  return { waiting: row?.waiting ?? 0, maxTicketNo: row?.maxTicket ?? null }
+}
+
+/**
+ * 来店回数の書き戻し 1 文。**接客が終わった行（`status='done'`）だけを数える。**
+ *
+ * `db.batch()` は 1 トランザクションを順に流すので、この文より前に置いた
+ * 「ご予約を `done` にする」UPDATE の結果をそのまま読む。読み出してから足し算した値を
+ * 書くと、同じ瞬間の別の退店と足し合わさって二重に増える。
+ */
+function bumpVisitCounters(db: D1Database, org: string, customerId: string, now: Date): Statement {
+  const nowIso = now.toISOString()
+  return db
+    .prepare(
+      "UPDATE customers SET visit_count = (SELECT COUNT(*) FROM reservations WHERE organization_id = ? AND customer_id = ? AND status = 'done'), " +
+        `first_visit_at = (SELECT MIN(starts_at) FROM reservations WHERE organization_id = ? AND customer_id = ? AND status IN ${VISITED_STATUSES} AND starts_at <= ?), ` +
+        `last_visit_at = (SELECT MAX(starts_at) FROM reservations WHERE organization_id = ? AND customer_id = ? AND status IN ${VISITED_STATUSES} AND starts_at <= ?), ` +
+        'updated_at = ? WHERE organization_id = ? AND id = ?',
+    )
+    .bind(
+      org,
+      customerId,
+      org,
+      customerId,
+      nowIso,
+      org,
+      customerId,
+      nowIso,
+      nowIso,
+      org,
+      customerId,
+    )
+}
+
+/** 監査 1 行。受付の記録の端末欄は P10 まで NULL のまま置く（`013-terminals-and-audit`）。 */
+function auditRow(
+  db: D1Database,
+  input: {
+    organizationId: string
+    /** 組織そのものへの操作（受付履歴の閲覧）だけ null になる。 */
+    storeId: string | null
+    actorId: string | null
+    action: string
+    targetType: string
+    targetId: string
+    after: unknown
+    correlationId: string
+    occurredAt: string
+    /** 枠が取れた予約にだけ当てる条件（`reservationId` を渡したときだけ付く）。 */
+    lockedFor?: string
+  },
+): Statement {
+  const guard = input.lockedFor === undefined ? '' : ` WHERE ${WALKIN_LOCKED}`
+  const lock = input.lockedFor === undefined ? [] : [input.organizationId, input.lockedFor]
+  return db
+    .prepare(
+      'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
+        `SELECT ?, ?, ?, 'staff', ?, NULL, ?, ?, ?, NULL, ?, ?, ?${guard}`,
+    )
+    .bind(
+      crypto.randomUUID(),
+      input.organizationId,
+      input.storeId,
+      input.actorId,
+      input.action,
+      input.targetType,
+      input.targetId,
+      JSON.stringify(input.after),
+      input.correlationId,
+      input.occurredAt,
+      ...lock,
+    )
+}
+
+/* --- 受付履歴 ------------------------------------------------------------- */
+
+/** 一覧の 1 行を組み立てるために 4 表から読む列。 */
+type HistoryEntryRecord = {
+  reservationId: string
+  startsAt: string
+  reservationStatus: string
+  createdAt: string
+  walkinId: string | null
+  ticketNo: number | null
+  arrivedAt: string | null
+  customerName: string | null
+  customerKana: string | null
+  visitCount: number | null
+  sessionId: string | null
+  sessionStartedAt: string | null
+  actorId: string | null
+  outcome: string | null
+}
+
+/** 「そのあとの変更」1 行の材料（`audit_events` × `staff`）。 */
+type AuditChangeRecord = {
+  action: string
+  afterJson: string | null
+  occurredAt: string
+  actorName: string | null
+}
+
+/** 受付そのものの行。工程は `after_json` の `stage` で読み分ける。 */
+const RECEPTION_CHANGE_LABELS: Readonly<Record<string, string>> = {
+  'reservation.created': '新しく受け付けました',
+  'walkin.created': '店頭のお客様を受け付けました',
+}
+
+/** 工程 8 語の言い方。画面の列見出しと同じ言葉にする（覚え直しを作らない）。 */
+const STAGE_CHANGE_LABELS: Readonly<Record<string, string>> = {
+  received: 'ご来店を受け付けました',
+  waiting: 'お待ちいただいています',
+  consulting: 'ご相談を始めました',
+  fitting: 'フレーム選びを始めました',
+  measuring: '視力測定を始めました',
+  checkout: 'レンズ・お会計を始めました',
+  handover: 'お渡しを始めました',
+  left: 'ご退店になりました',
+}
+
+/**
+ * 監査 1 行 → 「そのあとの変更」の文。**知らない `action` は出さない**（null）。
+ * 出すと、まだ画面の無い操作の綴りがそのままお客様対応の場に出る。
+ */
+function changeLabel(action: string, afterJson: string | null): string | null {
+  if (action !== 'visit.stage.changed') return RECEPTION_CHANGE_LABELS[action] ?? null
+  const after = afterJson === null ? null : (JSON.parse(afterJson) as { stage?: string })
+  return after?.stage === undefined ? null : (STAGE_CHANGE_LABELS[after.stage] ?? null)
+}
+
+/**
+ * ご予約 1 件の詳細。台帳の帯と同じ 1 か所（`customerBands`）からお名前を引く。
+ * 受付履歴の右側（`ReceptionHistoryDetail.reservation`）も同じものを読む。
+ */
+async function reservationDetailOf(env: Bindings, org: string, reservationId: string) {
+  const db = drizzle(env.DB)
+  const found = await readReservationDetail(db, { organizationId: org, reservationId })
+  if (found === null) return null
+  const { reservation, purposes, assignments } = found
+  const band = (await customerBands(env.DB, org, [reservation.id])).get(reservation.id) ?? null
+  return ReservationDetail.parse({
+    id: reservation.id,
+    code: reservation.code,
+    storeId: reservation.storeId,
+    source: reservation.source,
+    status: reservation.status,
+    startsAt: reservation.startsAt,
+    endsAt: reservation.endsAt,
+    durationMinutes: reservation.durationMinutes,
+    customerId: reservation.customerId,
+    customerName: band?.customerName ?? null,
+    visitCount: band?.visitCount ?? null,
+    purposes: purposes.map((row) => ({
+      purposeId: row.purposeId,
+      nameInternal: row.nameInternal,
+      durationMinutes: row.durationMinutes,
+      sortOrder: row.sortOrder,
+    })),
+    assignments: assignments.map((row) => ({
+      kind: row.kind,
+      targetId: row.targetId,
+      startsAt: row.startsAt,
+      endsAt: row.endsAt,
+    })),
+    webBookingCode: webBookingCodeOf(reservation.source, reservation.code),
+    // 台帳の帯は短い名前、詳細と復唱は業務の名前（`03-data-model.md` §6.1）。
+    purposeLabel: purposes.map((row) => row.nameShort).join('・'),
+    purposeLabelInternal: purposes.map((row) => row.nameInternal).join('・'),
+    noteCustomer: reservation.noteCustomer ?? '',
+    noteInternal: reservation.noteInternal ?? '',
+    version: reservation.version,
+    createdAt: reservation.createdAt,
+    updatedAt: reservation.updatedAt,
+    createdBy: reservation.createdBy,
+    cancelledAt: reservation.cancelledAt,
+    cancelReason: reservation.cancelReason,
+  })
 }
 
 const routes = app
@@ -2923,8 +3241,24 @@ const routes = app
       isSuspended: store.isActive !== '1',
     })
 
+    // 受付パネル（LEDGER-WALKIN）が props で受ける 3 欄。**画面のために API を増やさない。**
+    // 人数と次の番号は同じ 1 文で数える（台帳 1 画面の D1 の文を 1 本しか増やさない）。
+    const walkins = await readWalkinCounters(c.env.DB, org, storeId, date)
     const board = buildLedgerView({
       date,
+      // 最下段の「ご来店お待ち」の行の副題（`${waitingCount}名`）と、受付パネルが props で
+      // 受ける件数は**同じ 1 つの数**である。片方だけ渡すと帯が 0名 のまま固まる。
+      waitingCount: walkins.waiting,
+      walkinWaitingCount: walkins.waiting,
+      /*
+       * 「目安 15分」は**空き枠エンジンが返す「選んだご用件を受けられる担当が次に
+       * 空く時刻 − 現在時刻」からしか出さない**。台帳を開いた時点ではご用件が
+       * 決まっていないので、ここでは出せない（null）。待ち人数の掛け算で作った数字は
+       * お客様に口で伝える約束になるので、担当の空きを見ない値をこの欄に載せない。
+       */
+      estimatedWaitMinutes: null,
+      // 999 番まで出し切った日は、予告だけ 999 に据え置く（受け付けは 409 で断る）。
+      nextTicketNo: nextTicketNo(walkins.maxTicketNo) ?? 999,
       axis,
       view,
       storeId,
@@ -2969,57 +3303,106 @@ const routes = app
    * 403 で存在を漏らさない。
    */
   .get('/api/staff/reservations/:reservationId', async (c) => {
-    const db = drizzle(c.env.DB)
     const org = c.get('auth').org
-    const found = await readReservationDetail(db, {
-      organizationId: org,
-      reservationId: c.req.param('reservationId'),
-    })
-    if (found === null) return c.json({ error: 'not_found' }, 404)
-    const { reservation, purposes, assignments } = found
-    // 見出しのお客様（AC-CUST-25）。帯と同じ 1 か所（`customerBands`）から引く。
-    const band = (await customerBands(c.env.DB, org, [reservation.id])).get(reservation.id) ?? null
-
-    return c.json(
-      ReservationDetail.parse({
-        id: reservation.id,
-        code: reservation.code,
-        storeId: reservation.storeId,
-        source: reservation.source,
-        status: reservation.status,
-        startsAt: reservation.startsAt,
-        endsAt: reservation.endsAt,
-        durationMinutes: reservation.durationMinutes,
-        customerId: reservation.customerId,
-        customerName: band?.customerName ?? null,
-        visitCount: band?.visitCount ?? null,
-        purposes: purposes.map((row) => ({
-          purposeId: row.purposeId,
-          nameInternal: row.nameInternal,
-          durationMinutes: row.durationMinutes,
-          sortOrder: row.sortOrder,
-        })),
-        assignments: assignments.map((row) => ({
-          kind: row.kind,
-          targetId: row.targetId,
-          startsAt: row.startsAt,
-          endsAt: row.endsAt,
-        })),
-        webBookingCode: webBookingCodeOf(reservation.source, reservation.code),
-        // 台帳の帯は短い名前、詳細と復唱は業務の名前（`03-data-model.md` §6.1）。
-        purposeLabel: purposes.map((row) => row.nameShort).join('・'),
-        purposeLabelInternal: purposes.map((row) => row.nameInternal).join('・'),
-        noteCustomer: reservation.noteCustomer ?? '',
-        noteInternal: reservation.noteInternal ?? '',
-        version: reservation.version,
-        createdAt: reservation.createdAt,
-        updatedAt: reservation.updatedAt,
-        createdBy: reservation.createdBy,
-        cancelledAt: reservation.cancelledAt,
-        cancelReason: reservation.cancelReason,
-      }),
-    )
+    const detail = await reservationDetailOf(c.env, org, c.req.param('reservationId'))
+    if (detail === null) return c.json({ error: 'not_found' }, 404)
+    return c.json(detail)
   })
+
+  /**
+   * ご予約を取り消す／ご来店がなかったとして残す（AC-RECEP-16）。
+   *
+   * **`reason='no_show'` だけが `status='no_show'` になる。**それ以外の理由は
+   * `cancelled` である。受付履歴の「結果」の 3 語（成立／取消／ご来店なし）が分かれるのは
+   * この 1 か所だけで、画面から `status` を直に受けない — 受けると、来ていないお客様の
+   * ご予約を「成立」に書き換えられる。
+   *
+   * 当日の締めは 2 台の iPad が同時に流すので版で守る。0 行なら 409 `version_conflict` で、
+   * 取り消し済みの予約を別の理由で上書きできない。
+   *
+   * 枠の占有はここで解く。**解かないと、お帰りになった方の 11:00 が翌朝まで埋まったまま**
+   * になり、同時受付の上限がその日ぶん狭くなる。ウォークインの受付は `left` にして
+   * 待ちの帯から外す（`walk_ins.status='waiting'` のまま残すと「いまお待ち N名」が
+   * 減らず、盤面にも出続ける）。取り消した来店であることは `reservations.status` に
+   * 残るので、受付履歴からは消えない。
+   *
+   * 取消の理由の言い直し・お客様への連絡・変更の記録は `009-change-and-cancel` が足す。
+   */
+  .post(
+    '/api/staff/reservations/:reservationId/cancel',
+    zValidator('json', ReservationCancelInput),
+    async (c) => {
+      const db = drizzle(c.env.DB)
+      const { org, sub } = c.get('auth')
+      const reservationId = c.req.param('reservationId')
+      const input = c.req.valid('json')
+      const found = await c.env.DB.prepare(
+        'SELECT store_id AS storeId, status FROM reservations WHERE organization_id = ? AND id = ?',
+      )
+        .bind(org, reservationId)
+        .first<{ storeId: string; status: string }>()
+      if (found === null) return c.json({ error: 'not_found' }, 404)
+
+      const now = new Date()
+      const nowIso = now.toISOString()
+      const status = input.reason === 'no_show' ? 'no_show' : 'cancelled'
+      const actorId = await actorStaffId(db, org, found.storeId, sub)
+      const walkin = await c.env.DB.prepare(
+        'SELECT id FROM walk_ins WHERE organization_id = ? AND reservation_id = ?',
+      )
+        .bind(org, reservationId)
+        .first<{ id: string }>()
+
+      /**
+       * 版の条件を 2 文目以降にも配る。**1 文目が 0 行でもバッチは止まらない**ので、
+       * 配らないと「409 を返しながら枠だけ解く」形になる。1 文目が版を +1 したあとなので、
+       * 条件は `version = <送られた版> + 1` である。
+       */
+      const applied =
+        'EXISTS (SELECT 1 FROM reservations WHERE organization_id = ? AND id = ? AND version = ?)'
+      const guard = [org, reservationId, input.version + 1]
+      const statements: [Statement, ...Statement[]] = [
+        c.env.DB.prepare(
+          'UPDATE reservations SET status = ?, cancel_reason = ?, cancelled_at = ?, updated_at = ?, version = version + 1 ' +
+            "WHERE organization_id = ? AND id = ? AND version = ? AND status IN ('confirmed','arrived','serving')",
+        ).bind(status, input.reason, nowIso, nowIso, org, reservationId, input.version),
+        c.env.DB.prepare(
+          `DELETE FROM reservation_slot_locks WHERE organization_id = ? AND reservation_id = ? AND ${applied}`,
+        ).bind(org, reservationId, ...guard),
+      ]
+      if (walkin !== null) {
+        statements.push(
+          c.env.DB.prepare(
+            `UPDATE walk_ins SET status = 'left', left_at = ?, version = version + 1 WHERE organization_id = ? AND id = ? AND ${applied}`,
+          ).bind(nowIso, org, walkin.id, ...guard),
+        )
+      }
+      // 監査にも版の条件を配る。配らないと、409 で断った取消が「取り消した」記録だけ残す。
+      statements.push(
+        c.env.DB.prepare(
+          'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
+            `SELECT ?, ?, ?, 'staff', ?, NULL, 'reservation.cancelled', 'reservations', ?, ?, ?, ?, ? WHERE ${applied}`,
+        ).bind(
+          crypto.randomUUID(),
+          org,
+          found.storeId,
+          actorId,
+          reservationId,
+          JSON.stringify({ status: found.status }),
+          JSON.stringify({ status, reason: input.reason }),
+          crypto.randomUUID(),
+          nowIso,
+          ...guard,
+        ),
+      )
+      const results = await c.env.DB.batch(statements)
+      if ((results[0]?.meta.changes ?? 0) === 0) return c.json({ error: 'version_conflict' }, 409)
+
+      const detail = await reservationDetailOf(c.env, org, reservationId)
+      if (detail === null) return c.json({ error: 'not_found' }, 404)
+      return c.json(detail)
+    },
+  )
 
   /* --- 電話・店頭からの予約受付（P3） ------------------------------------ */
 
@@ -3755,6 +4138,16 @@ const routes = app
           movesNotes ? 1 : 0,
           ...guard.params,
         ),
+        /*
+         * 店頭の受付の行も寄せる。寄せないと来店受付ボードと受付履歴が、まとめられて
+         * 消えたお客様の id を指したまま残り、そのウォークインの退店が残す側ではなく
+         * 消えた側の来店回数を数え直す（`008-reception-and-walkin` の AC-RECEP-23）。
+         * **応答の `movedReservations` / `movedNotes` は先頭 2 文から読むので、
+         * この文をその前に割り込ませない。**
+         */
+        c.env.DB.prepare(
+          `UPDATE walk_ins SET customer_id = ? WHERE organization_id = ? AND customer_id = ? AND ${guard.clause}`,
+        ).bind(input.primaryId, org, input.secondaryId, ...guard.params),
         // ③ 残す側の項目。**版は進めない** — 進めると下から先の文の条件が自分で崩れる。
         c.env.DB.prepare(
           'UPDATE customers SET name = ?, kana = ?, phone = ?, phone_normalized = ?, phone_last4 = ?, ' +
@@ -4127,6 +4520,890 @@ const routes = app
       return c.json(CustomerNote.parse((await oneNote(c.env, org, customerId, noteId)) ?? {}))
     },
   )
+
+  /* --- 来店受付とウォークイン（P5） -------------------------------------- */
+
+  /**
+   * 店頭のお客様を受け付ける（LEDGER-WALKIN「受付して台帳に載せる」）。
+   *
+   * **お名前も電話番号も伺わないうちから受け付けられる**（`customerId` は任意で、
+   * あとから `PATCH` で結び直す）。整理番号は**サーバが**店舗 × 来店日（JST）で採る
+   * — クライアントに採らせると、2 台の iPad が同じ番号を同時に配る。
+   *
+   * 受付は `source='walkin'` のご予約を 1 件起こす。起こさないと LEDGER-WALKIN が
+   * 台帳に点線で描いた枠が空き枠エンジンから見て空いたままになり、同じ瞬間の
+   * お電話のご予約が同じ担当を取れてしまう（`04-api.md` §3.7）。
+   *
+   * 枠は一意 index ではなく**上限つきの条件付き INSERT** で取る（`db/slot-locks.ts`）。
+   * 一意にすると「1 枠 1 件」しか表せず、**担当を決めずに受け付ける 2 人目が、店に
+   * 余裕があっても 409 で落ちる**（目の前のお客様を受け付けられない画面ができる）。
+   */
+  .post('/api/staff/walkins', zValidator('json', WalkinCreate), async (c) => {
+    const db = drizzle(c.env.DB)
+    const { org, sub } = c.get('auth')
+    const input = c.req.valid('json')
+    const store = await findStore(db, org, input.storeId)
+    if (!store) return c.json({ error: 'not_found' }, 404)
+
+    // 現在時刻はハンドラの入口で 1 回だけ作り、以降は引数で配る。
+    const now = new Date()
+    const nowIso = now.toISOString()
+    const arrivedAt = input.arrivedAt ?? nowIso
+    const visitDate = jstVisitDate(arrivedAt)
+
+    // 予約の間隔が決まっていない店舗には枠を置けない（暗黙の既定値を作らない）。
+    const rules = (
+      await db
+        .select()
+        .from(storeSlotRules)
+        .where(
+          and(eq(storeSlotRules.organizationId, org), eq(storeSlotRules.storeId, input.storeId)),
+        )
+    )[0]
+    if (rules === undefined) return c.json({ error: 'not_found' }, 404)
+
+    // ご用件は 4 択か自由記述の**ちょうど一方**（排他は契約が見ている）。
+    let purposeLine: BookingPurposeLine | null = null
+    if (input.purposeId !== undefined) {
+      const found = (
+        await db
+          .select({ id: visitPurposes.id, durationMinutes: visitPurposes.durationMinutes })
+          .from(visitPurposes)
+          .where(and(eq(visitPurposes.organizationId, org), eq(visitPurposes.id, input.purposeId)))
+      )[0]
+      if (found === undefined) return c.json({ error: 'not_found' }, 404)
+      purposeLine = { purposeId: found.id, durationMinutes: found.durationMinutes, sortOrder: 0 }
+    }
+
+    // 担当・お客様は自分の組織のものだけ。他テナントの id は「無い」として 404。
+    const staffMember =
+      input.staffId === undefined || input.staffId === null
+        ? null
+        : ((
+            await db
+              .select({
+                id: staff.id,
+                maxParallelReservations: staff.maxParallelReservations,
+              })
+              .from(staff)
+              .where(
+                and(
+                  eq(staff.organizationId, org),
+                  eq(staff.storeId, input.storeId),
+                  eq(staff.id, input.staffId),
+                ),
+              )
+          )[0] ?? null)
+    if (input.staffId !== undefined && input.staffId !== null && staffMember === null) {
+      return c.json({ error: 'not_found' }, 404)
+    }
+    const customerId = input.customerId ?? null
+    if (customerId !== null && (await findLiveCustomer(c.env.DB, org, customerId)) === null) {
+      return c.json({ error: 'not_found' }, 404)
+    }
+
+    const startsAt = input.startsAt ?? arrivedAt
+    const durationMinutes =
+      input.durationMinutes ?? purposeLine?.durationMinutes ?? WALKIN_DEFAULT_MINUTES
+    const endsAt = new Date(Date.parse(startsAt) + durationMinutes * MS_PER_MINUTE).toISOString()
+
+    // 冪等（`04-api.md` §6.2）。送らない端末は素通りする（送らない再送は 2 件になる）。
+    const header = readIdempotencyKey(c.req.header('Idempotency-Key'))
+    if (!header.ok) {
+      return c.json(
+        rejected([
+          'Idempotency-Key に使えない文字が入っているため受け付けられません。鍵を作り直して送り直してください。',
+        ]),
+        400,
+      )
+    }
+    let idempotencyKey: string | null = null
+    if (header.key !== null) {
+      const started = await beginIdempotency(c.env.DB, {
+        organizationId: org,
+        scope: 'walkin.create',
+        clientKey: header.key,
+        requestHash: await requestHash(input),
+        now,
+      })
+      // **再実行しない。**保存した応答（同じ整理番号の同じ 1 件）をそのまま返す。
+      if (started.state === 'replay') return c.json(Walkin.parse(started.response))
+      if (started.state === 'conflict') return c.json({ error: 'idempotency_conflict' }, 409)
+      idempotencyKey = started.key
+    }
+
+    const actorId = await actorStaffId(db, org, input.storeId, sub)
+    const correlationId = crypto.randomUUID()
+    /** 予期しない失敗のときだけ `in_progress` を消す（消すと同じ鍵で選び直せる）。 */
+    const release = async (): Promise<void> => {
+      if (idempotencyKey !== null) await releaseIdempotency(c.env.DB, idempotencyKey)
+    }
+
+    for (let attempt = 1; attempt <= WALKIN_TICKET_ATTEMPTS; attempt += 1) {
+      const counters = await readWalkinCounters(c.env.DB, org, input.storeId, visitDate)
+      const ticketNo = nextTicketNo(counters.maxTicketNo)
+      // その日の 999 番まで出し切った。500 にせず人を呼ぶ（`04-api.md` §5）。
+      if (ticketNo === null) {
+        await release()
+        return c.json({ error: 'code_exhausted' }, 409)
+      }
+      const walkinId = crypto.randomUUID()
+      const reservationId = crypto.randomUUID()
+      const walkin = Walkin.parse({
+        id: walkinId,
+        ticketNo,
+        arrivedAt,
+        purposeId: input.purposeId ?? null,
+        purposeNote: input.purposeNote ?? null,
+        customerId,
+        reservationId,
+        status: 'waiting',
+        waitedMinutes: waitedMinutes(arrivedAt, now),
+        leftAt: null,
+        version: FIRST_VERSION,
+      })
+
+      let attempted: ReservationCodeAttempt<boolean>
+      try {
+        // 予約番号の打ち直し（`reservations` の一意違反）は `withReservationCode` が吸収する。
+        attempted = await withReservationCode(c.env.DB, org, now, async (code) => {
+          const results = await c.env.DB.batch([
+            ...bookingStatements(c.env.DB, {
+              organizationId: org,
+              storeId: input.storeId,
+              reservationId,
+              code,
+              source: 'walkin',
+              startsAt,
+              endsAt,
+              durationMinutes,
+              purposes: purposeLine === null ? [] : [purposeLine],
+              staff: staffMember,
+              equipment: [],
+              slotRules: {
+                slotMinutes: rules.slotMinutes,
+                cleanupMinutes: rules.cleanupMinutes,
+                maxParallel: rules.maxParallel,
+              },
+              noteCustomer: '',
+              noteInternal: '',
+              actorId,
+              correlationId,
+              receptionSessionId: null,
+              idempotency:
+                idempotencyKey === null ? null : { key: idempotencyKey, response: walkin },
+              now,
+            }),
+            // 受付の 1 行。**枠が取れた予約にだけ当てる**（ガードを外すと、枠を取れて
+            // いない受付が整理番号だけ食べて台帳に載る）。
+            c.env.DB.prepare(
+              'INSERT INTO walk_ins (id, organization_id, store_id, visit_date, ticket_no, arrived_at, purpose_id, purpose_note, customer_id, reservation_id, status, left_at, version, created_at) ' +
+                `SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'waiting', NULL, ?, ? WHERE ${WALKIN_LOCKED}`,
+            ).bind(
+              walkinId,
+              org,
+              input.storeId,
+              visitDate,
+              ticketNo,
+              arrivedAt,
+              input.purposeId ?? null,
+              input.purposeNote ?? null,
+              customerId,
+              reservationId,
+              FIRST_VERSION,
+              nowIso,
+              org,
+              reservationId,
+            ),
+            auditRow(c.env.DB, {
+              organizationId: org,
+              storeId: input.storeId,
+              actorId,
+              action: 'walkin.created',
+              targetType: 'walk_ins',
+              targetId: walkinId,
+              after: { ticketNo, arrivedAt, reservationId, staffId: staffMember?.id ?? null },
+              correlationId,
+              occurredAt: nowIso,
+              lockedFor: reservationId,
+            }),
+          ])
+          // 1 本目は占有行の INSERT。0 行なら枠は取れていない（1 行も書かれていない）。
+          return (results[0]?.meta.changes ?? 0) === 0
+        })
+      } catch (err) {
+        // 整理番号がぶつかった。+1 して採番し直す。**`in_progress` はここで消さない**
+        // （消すと打ち直した実行が同じ鍵で `done` を書けなくなる。`04-api.md` §6.2 の④）。
+        if (constraintTable(err) === 'walk_ins') continue
+        await release()
+        throw err
+      }
+
+      if (!attempted.ok) {
+        await release()
+        return c.json({ error: 'code_exhausted' }, 409)
+      }
+      if (attempted.value) {
+        // 同時受付の上限に当たった。鍵を空けて、同じ鍵のまま入れ直せるようにする。
+        await release()
+        return c.json({ error: 'slot_taken' }, 409)
+      }
+      return c.json(walkin)
+    }
+
+    // 5 回打ち直しても採れなかった。ここだけが「再試行で解けない失敗」である。
+    await release()
+    return c.json({ error: 'code_exhausted' }, 409)
+  })
+
+  /**
+   * その日のウォークイン（LEDGER-STAFF「ご来店お待ち 2名」/ LEDGER-WALKIN「いまお待ち 2名」）。
+   * **`date` は必須**で、日付の条件を落とすと昨日帰られたお客様が今朝の行列に残る。
+   */
+  .get('/api/staff/walkins', zValidator('query', WalkinListQuery), async (c) => {
+    const org = c.get('auth').org
+    const { storeId, date, status } = c.req.valid('query')
+    const now = new Date()
+    const filter = status.length === 0 ? '' : ` AND status IN (${status.map(() => '?').join(',')})`
+    const found = await c.env.DB.prepare(
+      `SELECT ${WALKIN_COLUMNS} FROM walk_ins ` +
+        `WHERE organization_id = ? AND store_id = ? AND visit_date = ?${filter} ` +
+        'ORDER BY arrived_at, ticket_no',
+    )
+      .bind(org, storeId, date, ...status)
+      .all<WalkinRecord>()
+    return c.json(Walkin.array().parse(found.results.map((row) => toWalkin(row, now))))
+  })
+
+  /**
+   * 受け付けたあとの更新（お客様の紐づけ・担当決め・状態）。
+   *
+   * 顧客の紐づけと担当決めを 2 台の iPad が同時に触るので、版が合わなければ 409 にする。
+   * **お客様を書いたら予約側にも同じお客様を書く** — 書かないと、その来店が
+   * `customers.visit_count` の数え直し（`reservations.status='done'` の件数）から漏れ、
+   * 「紐づけたのに来店回数が増えない」になる。
+   */
+  .patch('/api/staff/walkins/:walkinId', zValidator('json', WalkinPatch), async (c) => {
+    const org = c.get('auth').org
+    const walkinId = c.req.param('walkinId')
+    const input = c.req.valid('json')
+    const current = await findWalkin(c.env.DB, org, walkinId)
+    if (current === null) return c.json({ error: 'not_found' }, 404)
+    if (
+      input.customerId !== undefined &&
+      (await findLiveCustomer(c.env.DB, org, input.customerId)) === null
+    ) {
+      return c.json({ error: 'not_found' }, 404)
+    }
+    // 付け替え先のご予約も自分の組織のものだけ。宛先の無い `reservation_id` を書けると、
+    // 受付履歴の詳細と盤面がその来店へ二度と辿り着けなくなる。
+    if (input.reservationId !== undefined) {
+      const found = await c.env.DB.prepare(
+        'SELECT id FROM reservations WHERE organization_id = ? AND id = ?',
+      )
+        .bind(org, input.reservationId)
+        .first<{ id: string }>()
+      if (found === null) return c.json({ error: 'not_found' }, 404)
+    }
+
+    const now = new Date()
+    const nowIso = now.toISOString()
+    const sets = ['version = version + 1']
+    const params: unknown[] = []
+    if (input.customerId !== undefined) {
+      sets.push('customer_id = ?')
+      params.push(input.customerId)
+    }
+    if (input.status !== undefined) {
+      sets.push('status = ?')
+      params.push(input.status)
+    }
+    if (input.reservationId !== undefined) {
+      sets.push('reservation_id = ?')
+      params.push(input.reservationId)
+    }
+
+    /**
+     * 版の条件を 2 文目以降にも配る。**1 文目が 0 行でもバッチは止まらない**ので、
+     * 配らないと「409 を返しながらお客様だけ書き換える」形になる。
+     * 1 文目が版を +1 したあとなので、条件は `version = <送られた版> + 1` である。
+     */
+    const applied = `EXISTS (SELECT 1 FROM walk_ins WHERE organization_id = ? AND id = ? AND version = ?)`
+    const guard = [org, walkinId, input.version + 1]
+    const statements: [Statement, ...Statement[]] = [
+      c.env.DB.prepare(
+        `UPDATE walk_ins SET ${sets.join(', ')} WHERE organization_id = ? AND id = ? AND version = ?`,
+      ).bind(...params, org, walkinId, input.version),
+    ]
+    if (input.staffId !== undefined) {
+      // 担当を決め直したら予約の割当も動かす（台帳と受付で担当が食い違わない）。
+      statements.push(
+        c.env.DB.prepare(
+          "UPDATE reservation_assignments SET target_id = ? WHERE organization_id = ? AND reservation_id = ? AND kind = 'staff' AND " +
+            applied,
+        ).bind(input.staffId, org, current.reservationId, ...guard),
+      )
+    }
+    if (input.customerId !== undefined) {
+      statements.push(
+        c.env.DB.prepare(
+          `UPDATE reservations SET customer_id = ?, updated_at = ? WHERE organization_id = ? AND id = ? AND ${applied}`,
+        ).bind(input.customerId, nowIso, org, current.reservationId, ...guard),
+      )
+      statements.push(bumpVisitCounters(c.env.DB, org, input.customerId, now))
+    }
+    const results = await c.env.DB.batch(statements)
+    if ((results[0]?.meta.changes ?? 0) === 0) return c.json({ error: 'version_conflict' }, 409)
+
+    const saved = await findWalkin(c.env.DB, org, walkinId)
+    if (saved === null) return c.json({ error: 'not_found' }, 404)
+    return c.json(Walkin.parse(toWalkin(saved, now)))
+  })
+
+  /**
+   * 工程を進める（RECEPTION-JOURNEY の欄の中の操作）。**追記だけ**で、
+   * UPDATE / DELETE を 1 文も発行しない。訂正は打ち消しの行を足す。
+   *
+   * 同じバッチで書くのは、記録の 1 行と、その記録で動く「いまの姿」
+   * （`reservations.status` / `walk_ins.status` / `customers.visit_count`）と監査である。
+   * 別の往復に割ると「盤面に載っているのに `confirmed` のまま」を作れてしまう。
+   */
+  .post('/api/staff/visits', zValidator('json', VisitEventInput), async (c) => {
+    const db = drizzle(c.env.DB)
+    const { org, sub } = c.get('auth')
+    const input = c.req.valid('json')
+    const store = await findStore(db, org, input.storeId)
+    if (!store) return c.json({ error: 'not_found' }, 404)
+
+    const now = new Date()
+    const occurredAt = input.occurredAt ?? now.toISOString()
+
+    /*
+     * 対象は自分の組織のものだけ。他テナントの id は「無い」として 404。
+     *
+     * **同じ組織の別の店舗も 404 にする。**`visit_events.store_id` には `input.storeId` が
+     * そのまま入り、盤面は `store_id` で絞って読む。対象の店舗と食い違ったまま書けると、
+     * 記録は残っているのにどの盤面にも出ない行ができる（お客様が画面から消える）。
+     */
+    const walkin =
+      input.subjectType === 'walkin' ? await findWalkin(c.env.DB, org, input.subjectId) : null
+    const subject =
+      input.subjectType === 'walkin'
+        ? walkin === null
+          ? null
+          : { reservationId: walkin.reservationId, storeId: walkin.storeId }
+        : await c.env.DB.prepare(
+            'SELECT id AS reservationId, store_id AS storeId FROM reservations WHERE organization_id = ? AND id = ?',
+          )
+            .bind(org, input.subjectId)
+            .first<{ reservationId: string; storeId: string }>()
+    if (subject === null || subject.storeId !== input.storeId) {
+      return c.json({ error: 'not_found' }, 404)
+    }
+    const reservationId = subject.reservationId
+
+    // 進めた人も自分の組織・自分の店舗の在籍者だけ（`POST /api/staff/walkins` と同じ検査）。
+    // 他テナントの id を通すと、監査の `after_json` と `visit_events.staff_id` に
+    // 誰にも辿れない id が残る。
+    if (input.staffId !== undefined) {
+      const found = await db
+        .select({ id: staff.id })
+        .from(staff)
+        .where(
+          and(
+            eq(staff.organizationId, org),
+            eq(staff.storeId, input.storeId),
+            eq(staff.id, input.staffId),
+          ),
+        )
+      if (found[0] === undefined) return c.json({ error: 'not_found' }, 404)
+    }
+
+    /**
+     * 受付は**点の記録**なので 2 行目を積まない。積むと「そのあとの変更」に
+     * 「ご来店を受け付けました」が 2 度並び、どちらが本当の受付時刻か読めなくなる。
+     */
+    if (input.stage === 'received') {
+      const already = await c.env.DB.prepare(
+        "SELECT id, subject_type AS subjectType, subject_id AS subjectId, stage, occurred_at AS occurredAt, staff_id AS staffId, note FROM visit_events WHERE organization_id = ? AND subject_type = ? AND subject_id = ? AND stage = 'received' ORDER BY occurred_at LIMIT 1",
+      )
+        .bind(org, input.subjectType, input.subjectId)
+        .first<{
+          id: string
+          subjectType: string
+          subjectId: string
+          stage: string
+          occurredAt: string
+          staffId: string | null
+          note: string | null
+        }>()
+      if (already !== null) return c.json(VisitEvent.parse(already))
+    }
+
+    /*
+     * 来店回数を数え直すお客様は**ご予約の側から読む**。おまとめ（P4）は
+     * `reservations.customer_id` を残す側へ寄せるので、ウォークインの側を先に読むと
+     * まとめられて消えた id を掴み、退店のときにその行の来店回数を 0 に書き戻して
+     * 残す側は 1 件も増えない（AC-RECEP-23 がおまとめのあとだけ崩れる）。
+     * `PATCH /api/staff/walkins` は両方へ同じお客様を書くので、ご予約の側が必ず新しい。
+     */
+    const customerId =
+      (
+        await c.env.DB.prepare(
+          'SELECT customer_id AS customerId FROM reservations WHERE organization_id = ? AND id = ?',
+        )
+          .bind(org, reservationId)
+          .first<{ customerId: string | null }>()
+      )?.customerId ??
+      walkin?.customerId ??
+      null
+
+    const eventId = crypto.randomUUID()
+    const correlationId = crypto.randomUUID()
+    const actorId = await actorStaffId(db, org, input.storeId, sub)
+    const statements: [Statement, ...Statement[]] = [
+      c.env.DB.prepare(
+        'INSERT INTO visit_events (id, organization_id, store_id, subject_type, subject_id, stage, occurred_at, staff_id, note, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
+      ).bind(
+        eventId,
+        org,
+        input.storeId,
+        input.subjectType,
+        input.subjectId,
+        input.stage,
+        occurredAt,
+        input.staffId ?? null,
+        input.note ?? null,
+        now.toISOString(),
+      ),
+    ]
+
+    // 受け付けた事実はご予約の側にも書く（盤面に載っているのに `confirmed` を作らない）。
+    if (input.stage === 'received') {
+      statements.push(
+        c.env.DB.prepare(
+          "UPDATE reservations SET status = 'arrived', updated_at = ? WHERE organization_id = ? AND id = ? AND status = 'confirmed'",
+        ).bind(occurredAt, org, reservationId),
+      )
+    }
+    if (SERVING_STAGES.has(input.stage)) {
+      statements.push(
+        c.env.DB.prepare(
+          "UPDATE reservations SET status = 'serving', updated_at = ? WHERE organization_id = ? AND id = ? AND status IN ('confirmed','arrived')",
+        ).bind(occurredAt, org, reservationId),
+      )
+      if (walkin !== null) {
+        statements.push(
+          c.env.DB.prepare(
+            "UPDATE walk_ins SET status = 'serving', version = version + 1 WHERE organization_id = ? AND id = ? AND status = 'waiting'",
+          ).bind(org, input.subjectId),
+        )
+      }
+    }
+    if (input.stage === 'left') {
+      /*
+       * 退店。**接客に入っていた来店だけを `done` にする** — お待ちのまま帰られた行を
+       * `done` に混ぜると来店回数が実態より増え、待ち時間の中央値は良い側へずれる。
+       * `walk_ins.status='left'` は待ちの帯から外すためで、受付履歴には残り続ける。
+       */
+      statements.push(
+        c.env.DB.prepare(
+          "UPDATE reservations SET status = 'done', updated_at = ? WHERE organization_id = ? AND id = ? AND status IN ('arrived','serving')",
+        ).bind(occurredAt, org, reservationId),
+      )
+      if (walkin !== null) {
+        statements.push(
+          c.env.DB.prepare(
+            "UPDATE walk_ins SET status = 'left', left_at = ?, version = version + 1 WHERE organization_id = ? AND id = ?",
+          ).bind(occurredAt, org, input.subjectId),
+        )
+      }
+      // 顧客が未特定の来店は数えない（結び直したときに数え直される）。
+      if (customerId !== null) {
+        statements.push(bumpVisitCounters(c.env.DB, org, customerId, now))
+      }
+    }
+    statements.push(
+      auditRow(c.env.DB, {
+        organizationId: org,
+        storeId: input.storeId,
+        actorId,
+        action: 'visit.stage.changed',
+        targetType: input.subjectType === 'walkin' ? 'walk_ins' : 'reservations',
+        targetId: input.subjectId,
+        after: { stage: input.stage, occurredAt, staffId: input.staffId ?? null },
+        correlationId,
+        occurredAt,
+      }),
+    )
+    await c.env.DB.batch(statements)
+
+    return c.json(
+      VisitEvent.parse({
+        id: eventId,
+        subjectType: input.subjectType,
+        subjectId: input.subjectId,
+        stage: input.stage,
+        occurredAt,
+        staffId: input.staffId ?? null,
+        note: input.note ?? null,
+      }),
+    )
+  })
+
+  /**
+   * 来店受付ボード（RECEPTION-JOURNEY「ご来店中 4名」）。
+   *
+   * 読むだけの面である。工程は `visit_events` の**追記だけ**の並びから毎回組み立てる
+   * （`domain/visit-board.ts` の `buildBoard`）ので、同じ日の同じ記録からは何度でも
+   * 同じ盤面が出る。**`serverNow` を必ず載せる** — 「お待たせ中 18分」を端末の時計で
+   * 描かせると、iPad ごとに違う分数が出る。
+   *
+   * `storeId` は**絞り込みにだけ**使い、認可の根拠にしない（店舗をまたぐ閲覧を作らない。
+   * `design/09-open-questions.md` Q-04 のいまの前提）。他テナントの店舗を指しても
+   * 403 でも 404 でもなく、単に 1 行も出ない。
+   */
+  .get('/api/staff/visits/board', zValidator('query', VisitBoardQuery), async (c) => {
+    const db = drizzle(c.env.DB)
+    const org = c.get('auth').org
+    const { storeId, date, scope } = c.req.valid('query')
+    const now = new Date()
+    const fromIso = toInstant(date, 0)
+    const toIso = toInstant(date, MINUTES_PER_DAY)
+
+    const [day, walkinRows, eventRows] = await Promise.all([
+      readLedgerDay(db, { organizationId: org, storeId, date }),
+      c.env.DB.prepare(
+        `SELECT ${WALKIN_COLUMNS} FROM walk_ins WHERE organization_id = ? AND store_id = ? AND visit_date = ? ORDER BY ticket_no`,
+      )
+        .bind(org, storeId, date)
+        .all<WalkinRecord>(),
+      c.env.DB.prepare(
+        'SELECT subject_type AS subjectType, subject_id AS subjectId, stage, occurred_at AS occurredAt ' +
+          'FROM visit_events WHERE organization_id = ? AND store_id = ? AND occurred_at >= ? AND occurred_at < ? ' +
+          'ORDER BY occurred_at',
+      )
+        .bind(org, storeId, fromIso, toIso)
+        .all<{ subjectType: string; subjectId: string; stage: VisitStage; occurredAt: string }>(),
+    ])
+
+    // 帯のお名前と来店回数は台帳と同じ 1 か所から引く（画面ごとに違う数字を出さない）。
+    const bands = await customerBands(
+      c.env.DB,
+      org,
+      day.reservations.map((row) => row.id),
+    )
+    const walkinOf = new Map(walkinRows.results.map((row) => [row.reservationId, row]))
+    const equipmentOf = new Map(day.equipment.map((unit) => [unit.id, unit]))
+    const labels = new Map<string, string[]>()
+    for (const purpose of [...day.purposes].sort((a, b) => a.sortOrder - b.sortOrder)) {
+      labels.set(purpose.reservationId, [
+        ...(labels.get(purpose.reservationId) ?? []),
+        purpose.nameShort,
+      ])
+    }
+
+    const rows: BoardSubjectRow[] = []
+    for (const reservation of day.reservations) {
+      // 取消・ご来店なしは盤面に出さない（お帰りになった行を待たせているように見せない）。
+      if (reservation.status === 'cancelled' || reservation.status === 'no_show') continue
+      const walkin = walkinOf.get(reservation.id) ?? null
+      const band = bands.get(reservation.id) ?? null
+      const assigned = day.assignments.filter((row) => row.reservationId === reservation.id)
+      const unit = assigned.find((row) => row.kind === 'equipment' && row.targetId !== null)
+      const attendant = assigned.find((row) => row.kind === 'staff')
+      rows.push({
+        subjectType: walkin === null ? 'reservation' : 'walkin',
+        subjectId: walkin?.id ?? reservation.id,
+        customerName: band?.customerName ?? null,
+        ticketNo: walkin?.ticketNo ?? null,
+        visitCount: band?.visitCount ?? null,
+        // 受け付けただけで工程の記録がまだ 1 行も無いウォークインは、この時刻が
+        // 受付の記録の代わりになる（`buildBoard` が補う）。
+        arrivedAt: walkin?.arrivedAt ?? null,
+        purposeLabel: labels.get(reservation.id)?.join('・') ?? walkin?.purposeNote ?? '',
+        /*
+         * 「次にやること」は押さえた設備から出す（AC-RECEP-12 の「視力測定機 A」）。
+         * 設備を押さえていないご予約には出さない — 出すと、担当も設備も決まっていない
+         * 欄に「次にやること」だけが並び、押しても何も始められない。
+         */
+        next:
+          unit === undefined || unit.targetId === null
+            ? null
+            : {
+                stage: 'measuring',
+                label: equipmentOf.get(unit.targetId)?.name ?? '',
+                staffId: attendant?.targetId ?? null,
+                equipmentId: unit.targetId,
+              },
+      })
+    }
+
+    return c.json(
+      VisitBoard.parse(
+        buildBoard(
+          rows,
+          eventRows.results.map((row) => ({
+            subjectType: row.subjectType === 'walkin' ? 'walkin' : 'reservation',
+            subjectId: row.subjectId,
+            stage: row.stage,
+            occurredAt: row.occurredAt,
+          })),
+          {
+            date,
+            now,
+            scope,
+            shifts: day.shifts.map((shift) => ({ ...shift, date })),
+            maintenances: day.maintenance.map((band) => ({
+              equipmentId: band.equipmentId,
+              startsAt: band.startsAt,
+              endsAt: band.endsAt,
+            })),
+          },
+        ),
+      ),
+    )
+  })
+
+  /**
+   * 受付履歴（HISTORY-LIST「46件」/ HISTORY-EMPTY）。
+   *
+   * 一覧の元は「その日にご来店予定のご予約 ＋ その日のウォークイン ＋ 破棄した受付」で、
+   * **`reception_sessions` だけを読まない** — スタッフが受け付けない Web のご予約は
+   * 受付セッションを持たないので、セッションだけを読むとその行が一覧から丸ごと落ちる
+   * （お客様からのお問い合わせに答えられない受付ができる）。
+   *
+   * 0 件のときは条件を 1 つ緩めた候補を**同じ応答に**同梱する。別の呼び出しで取りに行くと、
+   * 0 件の画面がその往復ぶんだけ遅れて出る。候補の件数は推定せず、同じ行の集合を
+   * 同じ `filterHistory` で数えた値である（押す前と押したあとで件数が食い違わない）。
+   *
+   * **閲覧そのものを監査に 1 行残す。**度数と録音へ届く経路なので、権限で閉じる代わりに
+   * 誰が読んだかを残す（`design/09-open-questions.md` Q-03 のいまの前提）。
+   */
+  .get('/api/staff/reception-sessions', async (c) => {
+    const db = drizzle(c.env.DB)
+    const { org, sub } = c.get('auth')
+    const query = validQuery(c, ReceptionHistoryQuery, c.req.query())
+    const now = new Date()
+
+    /*
+     * 読む窓は「絞り込みの期間」と「今月」の広いほう。緩和候補（`buildRelaxations`）が
+     * 今月まで広げた件数を**実際に数える**ので、そのぶんの行が手元に無いと
+     * 「12件」と書いた操作を押して 0 件の画面へ戻る。
+     */
+    const today = toJstDateString(now.toISOString())
+    const monthStart = `${today.slice(0, 7)}-01`
+    const from = query.from < monthStart ? query.from : monthStart
+    const to = query.to > today ? query.to : today
+    const fromIso = toInstant(from, 0)
+    const toIso = toInstant(to, MINUTES_PER_DAY)
+    const storeFilter = query.storeId === undefined ? '' : ' AND r.store_id = ?'
+    const storeParams = query.storeId === undefined ? [] : [query.storeId]
+
+    const [entries, attendants, discarded] = await Promise.all([
+      c.env.DB.prepare(
+        'SELECT r.id AS reservationId, r.starts_at AS startsAt, r.status AS reservationStatus, ' +
+          'r.created_at AS createdAt, w.id AS walkinId, w.ticket_no AS ticketNo, ' +
+          'w.arrived_at AS arrivedAt, c.name AS customerName, c.kana AS customerKana, ' +
+          'c.visit_count AS visitCount, s.id AS sessionId, s.started_at AS sessionStartedAt, ' +
+          's.actor_id AS actorId, s.outcome AS outcome ' +
+          'FROM reservations r ' +
+          'LEFT JOIN walk_ins w ON w.organization_id = r.organization_id AND w.reservation_id = r.id ' +
+          'LEFT JOIN customers c ON c.organization_id = r.organization_id AND c.id = r.customer_id ' +
+          'LEFT JOIN reception_sessions s ON s.organization_id = r.organization_id AND s.reservation_id = r.id ' +
+          `WHERE r.organization_id = ? AND r.starts_at >= ? AND r.starts_at < ?${storeFilter}`,
+      )
+        .bind(org, fromIso, toIso, ...storeParams)
+        .all<HistoryEntryRecord>(),
+      c.env.DB.prepare(
+        'SELECT a.reservation_id AS reservationId, a.target_id AS targetId ' +
+          'FROM reservation_assignments a ' +
+          'JOIN reservations r ON r.organization_id = a.organization_id AND r.id = a.reservation_id ' +
+          "WHERE a.organization_id = ? AND a.kind = 'staff' AND a.target_id IS NOT NULL " +
+          `AND r.starts_at >= ? AND r.starts_at < ?${storeFilter}`,
+      )
+        .bind(org, fromIso, toIso, ...storeParams)
+        .all<{ reservationId: string; targetId: string }>(),
+      c.env.DB.prepare(
+        'SELECT id AS sessionId, started_at AS startedAt, actor_id AS actorId, outcome ' +
+          'FROM reception_sessions ' +
+          "WHERE organization_id = ? AND reservation_id IS NULL AND outcome = 'discarded' " +
+          'AND started_at >= ? AND started_at < ?' +
+          (query.storeId === undefined ? '' : ' AND store_id = ?'),
+      )
+        .bind(org, fromIso, toIso, ...storeParams)
+        .all<{ sessionId: string; startedAt: string; actorId: string | null; outcome: string }>(),
+    ])
+
+    const staffIdsOf = new Map<string, string[]>()
+    for (const row of attendants.results) {
+      staffIdsOf.set(row.reservationId, [
+        ...(staffIdsOf.get(row.reservationId) ?? []),
+        row.targetId,
+      ])
+    }
+    const rows: ReceptionHistoryRow[] = entries.results.map((row) => ({
+      // 行の識別子は受付セッション → ご予約 → ウォークイン の順に決まる。
+      entryId: row.sessionId ?? row.reservationId,
+      sessionId: row.sessionId,
+      // 並びは「お着きになった順」。ウォークインは受付時刻、ご予約は予定時刻で並ぶ。
+      startedAt: row.arrivedAt ?? row.sessionStartedAt ?? row.startsAt,
+      // 「中村 彩 が 8月20日（木）14:32 に電話で受け付け」の時刻。**絞り込みには使わない。**
+      receivedAt: row.sessionStartedAt ?? row.arrivedAt ?? row.createdAt,
+      visitDate: jstVisitDate(row.startsAt),
+      customerName: row.customerName,
+      customerKana: row.customerKana,
+      ticketNo: row.ticketNo,
+      visitCount: row.visitCount,
+      staffIds: staffIdsOf.get(row.reservationId) ?? [],
+      receivedByStaffId: row.actorId,
+      outcome: row.outcome === 'booked' || row.outcome === 'discarded' ? row.outcome : null,
+      reservationStatus: ReservationStatus.parse(row.reservationStatus),
+    }))
+    // 破棄した受付は予約を持たないので、開始した日の暦日で一覧に混ざる。
+    for (const row of discarded.results) {
+      rows.push({
+        entryId: row.sessionId,
+        sessionId: row.sessionId,
+        startedAt: row.startedAt,
+        receivedAt: row.startedAt,
+        visitDate: jstVisitDate(row.startedAt),
+        customerName: null,
+        customerKana: null,
+        ticketNo: null,
+        visitCount: null,
+        staffIds: [],
+        receivedByStaffId: row.actorId,
+        outcome: 'discarded',
+        reservationStatus: null,
+      })
+    }
+
+    const view = buildHistoryList(
+      rows,
+      {
+        from: query.from,
+        to: query.to,
+        ...(query.staffId === undefined ? {} : { staffId: query.staffId }),
+        ...(query.status.length === 0 ? {} : { status: query.status }),
+        ...(query.name === undefined ? {} : { name: query.name }),
+        limit: query.limit,
+        ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+      },
+      now,
+    )
+
+    // 読んだ事実を 1 行残す。店舗が絞られていなければ組織そのものを対象に置く
+    // （`target_id` は NOT NULL なので、束ねる対象を必ず 1 つ書く）。
+    await auditRow(c.env.DB, {
+      organizationId: org,
+      storeId: query.storeId ?? null,
+      actorId: query.storeId === undefined ? null : await actorStaffId(db, org, query.storeId, sub),
+      action: 'reception.history.viewed',
+      targetType: 'reception_sessions',
+      targetId: query.storeId ?? org,
+      after: { from: query.from, to: query.to, total: view.total },
+      correlationId: crypto.randomUUID(),
+      occurredAt: now.toISOString(),
+    }).run()
+
+    return c.json(ReceptionHistoryList.parse(view))
+  })
+
+  /**
+   * 受付 1 件（HISTORY-LIST の右）。パスの値は **`entryId`** で、
+   * `reception_sessions` → `reservations` → `walk_ins` の順に引く。
+   *
+   * 「そのあとの変更」は `audit_events` を古い順に組み立てる。ウォークインは
+   * 受付の監査が `walk_ins` に、工程の監査が同じく `walk_ins` に付くので、
+   * **ご予約の id とウォークインの id の両方**で引く（片方だけだと受付の行が消える）。
+   * `recording` は P7（`010-recording`）が埋めるまで常に null である。
+   */
+  .get('/api/staff/reception-sessions/:sessionId', async (c) => {
+    const db = drizzle(c.env.DB)
+    const org = c.get('auth').org
+    const entryId = c.req.param('sessionId')
+
+    let session = await findReceptionSession(db, org, entryId)
+    let reservationId = session?.reservationId ?? null
+    if (session === null) {
+      const reservation = await c.env.DB.prepare(
+        'SELECT id FROM reservations WHERE organization_id = ? AND id = ?',
+      )
+        .bind(org, entryId)
+        .first<{ id: string }>()
+      reservationId =
+        reservation?.id ?? (await findWalkin(c.env.DB, org, entryId))?.reservationId ?? null
+      if (reservationId !== null) {
+        const rows = await db
+          .select()
+          .from(receptionSessions)
+          .where(
+            and(
+              eq(receptionSessions.organizationId, org),
+              eq(receptionSessions.reservationId, reservationId),
+            ),
+          )
+        session = rows[0] ?? null
+      }
+    }
+    if (session === null && reservationId === null) return c.json({ error: 'not_found' }, 404)
+
+    const walkin =
+      reservationId === null
+        ? null
+        : await c.env.DB.prepare(
+            `SELECT ${WALKIN_COLUMNS} FROM walk_ins WHERE organization_id = ? AND reservation_id = ?`,
+          )
+            .bind(org, reservationId)
+            .first<WalkinRecord>()
+    const reservation =
+      reservationId === null ? null : await reservationDetailOf(c.env, org, reservationId)
+    const receivedAt =
+      session?.startedAt ?? walkin?.arrivedAt ?? reservation?.createdAt ?? new Date().toISOString()
+
+    const targets = [reservationId, walkin?.id ?? null].filter((id): id is string => id !== null)
+    const changes =
+      targets.length === 0
+        ? { results: [] as AuditChangeRecord[] }
+        : await c.env.DB.prepare(
+            'SELECT a.action, a.after_json AS afterJson, a.occurred_at AS occurredAt, ' +
+              's.display_name AS actorName FROM audit_events a ' +
+              'LEFT JOIN staff s ON s.organization_id = a.organization_id AND s.id = a.actor_id ' +
+              `WHERE a.organization_id = ? AND a.target_id IN (${targets.map(() => '?').join(',')}) ` +
+              'ORDER BY a.occurred_at, a.id',
+          )
+            .bind(org, ...targets)
+            .all<AuditChangeRecord>()
+
+    const receivedBy =
+      session?.actorId === undefined || session?.actorId === null
+        ? null
+        : ((
+            await db
+              .select({ displayName: staff.displayName })
+              .from(staff)
+              .where(and(eq(staff.organizationId, org), eq(staff.id, session.actorId)))
+          )[0]?.displayName ?? null)
+
+    return c.json(
+      ReceptionHistoryDetail.parse({
+        entryId,
+        sessionId: session?.id ?? null,
+        reservation,
+        receivedBy,
+        receivedAt,
+        changes: changes.results
+          .map((row) => ({
+            occurredAt: row.occurredAt,
+            what: changeLabel(row.action, row.afterJson),
+            actorName: row.actorName,
+          }))
+          .filter((row) => row.what !== null),
+        recording: null,
+      }),
+    )
+  })
 
 // web 側はこの型だけを（type-only で）読み、`hc<AppType>` のクライアントを作る。
 export type AppType = typeof routes

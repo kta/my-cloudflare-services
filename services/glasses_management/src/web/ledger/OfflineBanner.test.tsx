@@ -76,6 +76,10 @@ const DAY: LedgerView = {
   slotMinutes: 30,
   lanes: LANES,
   counts: { all: 3, upcoming: 2, pendingReview: 0 },
+  // 受付パネルの 3 欄（P5）。この面は読まないので器だけ置く。
+  walkinWaitingCount: 0,
+  estimatedWaitMinutes: null,
+  nextTicketNo: 1,
   serverNow: jst('11:02'),
 }
 

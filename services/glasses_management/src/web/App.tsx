@@ -1,5 +1,5 @@
-import type { Store } from '@app/contracts'
-import { auth } from '@app/shared'
+import type { StaffMember, Store } from '@app/contracts'
+import { auth, toJstDateString } from '@app/shared'
 import { Button, Field, focusRing, focusRingOnPine, Notice, TextInput } from '@app/ui'
 import { type FormEvent, type ReactNode, useCallback, useEffect, useState } from 'react'
 import { BookingScreen } from './booking/BookingScreen'
@@ -7,6 +7,8 @@ import { client } from './client'
 import { CustomerScreen } from './customers/CustomerScreen'
 import { MyReservations } from './home/MyReservations'
 import { LedgerScreen } from './ledger/LedgerScreen'
+import { type HistoryFilters, ReceptionHistory } from './reception/ReceptionHistory'
+import { ReceptionScreen } from './reception/ReceptionScreen'
 import { SettingsScreen } from './settings/SettingsScreen'
 import { AppShell } from './shell/AppShell'
 import { DESTINATIONS, RAIL_BY_DEFAULT } from './shell/destinations'
@@ -99,6 +101,10 @@ function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
   } | null>(null)
   // 上のバーの中央。台帳が日付の帯を差し込む（モックの `.datepill` の置き場所）。
   const [barCenter, setBarCenter] = useState<ReactNode>(null)
+  // 来店受付ボードの「＋ ご来店を受け付ける」から台帳へ来たか（受付パネルを開いて出す）。
+  const [walkinPanel, setWalkinPanel] = useState(false)
+  // 受付履歴の絞り込み。「予約を開く」で台帳へ移っても、戻ったときに同じ条件へ戻す。
+  const [historyQuery, setHistoryQuery] = useState<HistoryFilters | undefined>(undefined)
 
   const load = useCallback(async () => {
     const res = await client.api.staff.stores.$get()
@@ -122,9 +128,10 @@ function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
     load().catch(() => setError('通信できませんでした。画面を開き直してください。'))
   }, [load])
 
-  function navigate(key: string, reservationId: string | null = null) {
+  function navigate(key: string, reservationId: string | null = null, walkin = false) {
     setCurrent(key)
     setOpenReservation(reservationId)
+    setWalkinPanel(walkin)
     setRail(RAIL_BY_DEFAULT.has(key))
   }
 
@@ -203,9 +210,41 @@ function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
             <LedgerScreen
               storeId={store.id}
               initialReservationId={openReservation ?? undefined}
+              initialWalkinOpen={walkinPanel}
               onBarCenter={setBarCenter}
               onOpenSettings={() => navigate('settings')}
+              onOpenCheckin={(reservationId) => navigate('reception', reservationId)}
               onSessionExpired={onSignOut}
+            />
+          ) : (
+            <p className="p-11 text-body text-ink-muted">読み込んでいます…</p>
+          )
+        ) : current === 'reception' ? (
+          /* 来店受付。盤面と受け付ける面の行き来はこの器の中で起き、URL を持たない。
+             「＋ ご来店を受け付ける」の行き先は台帳（店頭の受付パネルはそちらにある）。
+             ご予約のお客様を受け付ける入口も台帳の予約リストの「ご来店」で、そこから
+             来たときだけ `initialCheckinId` を持って開く（盤面に載るのはお着きの方だけ）。 */
+          store ? (
+            <ReceptionScreen
+              storeId={store.id}
+              onOpenLedger={() => navigate('ledger', null, true)}
+              {...(openReservation === null ? {} : { initialCheckinId: openReservation })}
+              onSessionExpired={onSignOut}
+            />
+          ) : (
+            <p className="p-11 text-body text-ink-muted">読み込んでいます…</p>
+          )
+        ) : current === 'history' ? (
+          /* 受付履歴（HISTORY-LIST / HISTORY-EMPTY）。絞り込みは面の中に持つ。
+             「予約を開く」は台帳のその帯の詳細へ渡し、戻ると同じ絞り込みへ戻る
+             （器が `historyQuery` に控えている）。 */
+          store ? (
+            <HistoryPane
+              storeId={store.id}
+              initialQuery={historyQuery}
+              onQueryChange={setHistoryQuery}
+              onOpenReservation={(id) => navigate('ledger', id)}
+              onStartBooking={() => startBooking()}
             />
           ) : (
             <p className="p-11 text-body text-ink-muted">読み込んでいます…</p>
@@ -330,5 +369,53 @@ function PrimaryAction({
         <span className="mt-1 block text-lead font-normal text-ink-muted">{note}</span>
       </span>
     </button>
+  )
+}
+
+/**
+ * 受付履歴の器。面が要る「本日（JST）」と担当の顔ぶれだけをここで揃える
+ * （`ReceptionHistory` は端末の時計を読まない決めなので、暦日は外から渡す）。
+ */
+function HistoryPane({
+  storeId,
+  initialQuery,
+  onQueryChange,
+  onOpenReservation,
+  onStartBooking,
+}: {
+  storeId: string
+  initialQuery?: HistoryFilters
+  onQueryChange: (filters: HistoryFilters) => void
+  onOpenReservation: (reservationId: string) => void
+  onStartBooking: () => void
+}) {
+  const [staff, setStaff] = useState<{ id: string; name: string }[]>([])
+  const [today] = useState(() => toJstDateString(new Date()))
+
+  useEffect(() => {
+    let live = true
+    client.api.staff.stores[':storeId'].staff
+      .$get({ param: { storeId } })
+      .then(async (res) => {
+        if (!live || !res.ok) return
+        const rows: StaffMember[] = await res.json()
+        if (live) setStaff(rows.map((row) => ({ id: row.id, name: row.displayName })))
+      })
+      .catch(() => undefined)
+    return () => {
+      live = false
+    }
+  }, [storeId])
+
+  return (
+    <ReceptionHistory
+      storeId={storeId}
+      today={today}
+      staff={staff}
+      {...(initialQuery === undefined ? {} : { initialQuery })}
+      onQueryChange={onQueryChange}
+      onOpenReservation={onOpenReservation}
+      onStartBooking={onStartBooking}
+    />
   )
 }

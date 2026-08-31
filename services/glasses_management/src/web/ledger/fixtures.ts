@@ -168,6 +168,12 @@ export function staffView(overrides: Partial<LedgerView> = {}): LedgerView {
     slotMinutes: 30,
     lanes: STAFF_LANES,
     counts: { all: 10, upcoming: 6, pendingReview: 1 },
+    // 受付パネル（LEDGER-WALKIN）が props で受ける 3 欄。モックの
+    // 「いまお待ち 2名」「ウォークイン 005」に合わせる。目安は空き枠エンジンの
+    // 結果からしか出さないので、台帳の応答では null のまま置く。
+    walkinWaitingCount: 2,
+    estimatedWaitMinutes: null,
+    nextTicketNo: 5,
     serverNow: SERVER_NOW,
     ...overrides,
   }

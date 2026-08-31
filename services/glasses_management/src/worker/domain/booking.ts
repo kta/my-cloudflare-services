@@ -129,18 +129,26 @@ export async function withReservationCode<T>(
  * ```
  * D1_ERROR: UNIQUE constraint failed: reservations.organization_id, reservations.code: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_UNIQUE)
  * D1_ERROR: UNIQUE constraint failed: idempotency_records.key: SQLITE_CONSTRAINT (extended: SQLITE_CONSTRAINT_PRIMARYKEY)
+ * D1_ERROR: UNIQUE constraint failed: walk_ins.organization_id, walk_ins.store_id, walk_ins.visit_date, walk_ins.ticket_no
  * ```
  *
  * 一意 index が複数列なら `<表>.<列>` が並ぶので、**先頭の 1 つ**から表名を採る。
- * 拡張コードが `SQLITE_CONSTRAINT_UNIQUE` / `_PRIMARYKEY` でないものは見ない
- * （`NOT NULL constraint failed: …` を一意違反と取り違えない）。
+ * 前後に別の文（`Error in batch statement 5:` など）が付いても、
+ * `UNIQUE constraint failed:` の 1 書式だけを見るので取り出せる。
+ *
+ * 拡張コードは**付いていて、それが一意違反でないときだけ**捨てる
+ * （`NOT NULL constraint failed: …` を一意違反と取り違えない）。付いていない形も通すのは、
+ * 整理番号（`walk_ins`）の衝突が拡張コード無しで届くことがあるためで、ここで落とすと
+ * 採番の打ち直しが 1 度も走らないまま 500 になる。
+ *
  * D1 の文言が変わるとこの関数が `null` を返し、409 が 500 に化ける。それを検知する
  * ために `test/booking.test.ts` の 2 本は**本物の D1 に違反を起こさせて**いる。
  */
 export function constraintTable(err: unknown): string | null {
   // Error でないものは推測しない（表名を作らずに null を返す）。
   if (!(err instanceof Error) || !err.message) return null
-  if (!/SQLITE_CONSTRAINT_(?:UNIQUE|PRIMARYKEY)\b/.test(err.message)) return null
+  const extended = /SQLITE_CONSTRAINT_([A-Z]+)\b/.exec(err.message)?.[1]
+  if (extended !== undefined && extended !== 'UNIQUE' && extended !== 'PRIMARYKEY') return null
   const matched = /\b(?:UNIQUE|PRIMARY KEY) constraint failed:\s*([A-Za-z_][A-Za-z0-9_]*)\./.exec(
     err.message,
   )

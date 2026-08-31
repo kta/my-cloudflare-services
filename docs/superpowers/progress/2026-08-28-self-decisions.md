@@ -1331,3 +1331,222 @@
   `MergeRejection` / `MergeRequest` を「使われていない export された型」として落とす。
   担当ファイル外なので直していない（**T-022 の前に 2 行消すか import 元を作る必要がある**）
 
+
+## J. P5（来店受付とウォークイン）の実装で決めたこと
+
+**全 181 件**。
+
+### J-backend-review（6 件）
+
+- `POST /api/staff/visits` で対象（予約・ウォークイン）が `storeId` と同じ店舗にあることを確かめ、違えば 404 にした — 理由: 同じ組織の別店舗の id を渡すと `visit_events.store_id` が対象と食い違い、盤面（`store_id` で絞る）から記録が黙って消える — 影響: `src/worker/index.ts` の `POST /api/staff/visits`
+- `POST /api/staff/visits` の `staffId` を自組織・自店舗の `staff` に限った — 理由: 隣のルート（`POST /api/staff/walkins`）は同じ検査をしており、他テナントの id が `visit_events.staff_id` と監査の `after_json` に黙って残る — 影響: 同上
+- `PATCH /api/staff/walkins/:walkinId` の `reservationId` を自組織の予約に限った — 理由: すぐ上の `customerId` と同じ検査が抜けており、宛先の無い `reservation_id` を書けた — 影響: `src/worker/index.ts` の `PATCH /api/staff/walkins/:walkinId`
+- `received` の二重防止の問い合わせに `subject_type` を足した — 理由: 予約とウォークインで同じ `subject_id` を引く余地を残さない — 影響: 同ファイル
+- `ReceptionHistoryQuery` から `outcome` を外した — 理由: 契約は受けるのにルートもドメインも一切見ておらず、`?outcome=discarded` が黙って効かない絞り込みになっていた。P5 の決めごとは「結果は `status` に落とす」 — 影響: `packages/contracts/src/glasses_management.ts`
+- AC-RECEP-16（ご来店なし）と AC-RECEP-06 の「目安 15分」は直さず残した — 理由: 前者は `POST /api/staff/reservations/:id/cancel` が P6 の担当でこのリポジトリにまだ 1 本も無く、後者は計画が「空き枠エンジン以外から出さない／出せないときは null」と決めている — 影響: なし（報告のみ）
+
+### J-backend-round2（12 件）
+
+- `POST /api/staff/reservations/:reservationId/cancel` を新設した — 理由: 計画 T-013 は「既存ルートに枝を足す」と書くが、そのルートは P0〜P4 のどこにも存在せず、AC-RECEP-16 の「ご来店がなかったとして残す」経路がアプリに 1 本も無かった — 影響: `src/worker/index.ts` / `packages/contracts/src/glasses_management.ts`（`ReservationCancelInput`）/ permissions・tenant-isolation・reception.integration のテスト
+- 取消の入力は `{ reason, version }` の最小形にした — 理由: 契約の注記が「取消の入力そのものは 009-change-and-cancel が足す」と書いているので、P6 が広げやすい最小の形だけを置く — 影響: `ReservationCancelInput`
+- 取消・ご来店なしのとき、その予約のウォークインも `left` にして枠を解放する — 理由: しないと `walk_ins.status='waiting'` が残り、お帰りになったお客様が「いまお待ち N名」と台帳の帯に永遠に残る — 影響: cancel ルート / `readWalkinCounters` の読み手すべて
+- 盤面の行に `arrivedAt` を持たせ、`received` の記録が無いウォークインには受付時刻からの `received` を補う — 理由: `POST /api/staff/walkins` は `visit_events` を 1 行も書かないので、受付パネルから受け付けたお客様は盤面で永久に「お待たせ中」にならず、受付の欄も空のままだった（AC-RECEP-13 / AC-RECEP-02 が単体テストと e2e の手入れでしか成立していなかった） — 影響: `domain/visit-board.ts` / `GET /api/staff/visits/board`
+- 工程の記録が 1 行も無い行を盤面に出さず、`activeCount` にも数えない — 理由: まだお着きでない当日のご予約が「ご来店中 N名」に混ざり、AC-RECEP-11 の人数と AC-RECEP-27 の 0 件が両方とも成立しなかった — 影響: `domain/visit-board.ts`
+- `POST /api/staff/visits` の顧客は**予約側を先に**読む — 理由: おまとめ（P4）は `reservations.customer_id` を寄せるが `walk_ins.customer_id` を寄せないので、ウォークイン側を先に読むと退店のとき「まとめられて消えた側」の来店回数を 0 に書き戻し、残す側は増えなかった — 影響: `POST /api/staff/visits` の `stage='left'`
+- おまとめの `db.batch()` に `walk_ins.customer_id` の付け替えを足した — 理由: 同上。寄せないと来店受付ボードと受付履歴が消えた顧客 id を指し続ける — 影響: `POST /api/staff/customers/merge`
+- `waitedMinutes` の HTTP 側の確認は「現在時刻 − 6分5秒」を `arrivedAt` に入れて行う — 理由: ルートの `new Date()` は差し替えられないので、e2e と同じく相対時刻で仕込む（ドメイン関数は引数のまま） — 影響: `test/reception.integration.test.ts`
+- まとめられて消えたお客様（`merged_into_id` が非 NULL）への紐づけを 404 で断る（`findLiveCustomer`） — 理由: 一覧にも検索にも出ない行に来店回数が積まれ、残す側と食い違う — 影響: `POST /api/staff/walkins` / `PATCH /api/staff/walkins/:walkinId`
+- 取消の監査 1 行にも版の条件を配る — 理由: 配らないと 409 で断った取消が「取り消した」記録だけ残す — 影響: cancel ルート
+- `action='reservation.cancelled'` に「そのあとの変更」の文言を与えない — 理由: `changeLabel` は知らない action を出さない設計で、取消の言い直しは `009-change-and-cancel` の仕事（AC-RECEP-17 が求めるのは 2 種だけ） — 影響: `GET /api/staff/reception-sessions/:sessionId`
+- `ReservationDetail` の customerId / customerName / visitCount を `.default(null)` に変える案は**採らなかった** — 理由: web の型エラーは直るが、別の web テストの土台（`src/web/ledger/ReservationDetail.test.tsx`）が 3 欄必須になって落ち、`src/web/**` は触れない — 影響: なし（`.optional()` のまま）
+
+### J-contracts（21 件）
+
+- テスト名を英語で書いた — 理由: `packages/contracts` の実物は P3/P4 が英語（P1/P2 だけ日本語）で、新しいぶんは新しい側に揃える — 影響: `packages/contracts/test/glasses_management.contract.test.ts` の追加 42 本
+- `TicketNo`（1..999）を共通の原始型として `DurationMinutes` の隣に置いた — 理由: `LedgerView.nextTicketNo`（P2 セクション）と `Walkin.ticketNo`（P5 セクション）が同じ境界を見る必要があり、P5 側に置くと `const` の TDZ で `LedgerView` の評価が落ちる — 影響: `packages/contracts/src/glasses_management.ts`
+- `LedgerView.walkinWaitingCount` / `nextTicketNo` を既定値なしの必須にした — 理由: TODO の「必ず持ち」をそのまま取る（欠けたら受付パネルが人数も番号も出せない） — 影響: 既存の `ledgerView` fixture に 3 欄を足した。`GET /api/staff/ledger` は T-012 が載せるまで赤い
+- `LedgerView.estimatedWaitMinutes` は `.nullable().default(null)` にした — 理由: 出せないときは数字を出さないという決め。既定 null ならサーバが黙って 0 を書けない — 影響: 同上
+- `LedgerView` に `04-api.md` §4 の `walkins: WalkinSummary[]` を足さなかった — 理由: TODO が足すと書いたのは 3 欄だけ — 影響: `WalkinSummary` は `GET /api/staff/walkins` 側の器として残る
+- `Walkin`（読む側）でご用件の排他（`purposeId` / `purposeNote` のちょうど一方）を強いない — 理由: 書く側の不変条件であり、1 列の食い違いで待ちの帯がまるごと 500 になると目の前のお客様が画面から消える（`ReservationDetail.purposes` の 0 件と同じ扱い） — 影響: 排他は `WalkinCreate.superRefine` だけが持つ
+- `Walkin.version` は既存の `Version`（0 以上）を使った — 理由: 設定 6 面・顧客と同じ版の器に揃える。1 以上は列の側で守る — 影響: `Walkin` / `WalkinPatch`
+- `Walkin` に `storeId` / `visitDate` を載せなかった — 理由: `04-api.md` §4 の `Walkin` の欄どおりにする（応答は必ず店舗を選んだ文脈で返る） — 影響: `Walkin`
+- `WalkinCreate.purposeNote` は trim 後 1 文字以上にした — 理由: 空白だけの自由記述を「ご用件を伺った」として通すと、4 択も自由記述も無い受付が残る — 影響: `WalkinCreate`（`Walkin` / `WalkinSummary` の読む側は 0..80 で緩い）
+- `WalkinPatch.staffId` は null も受ける — 理由: 「あとで決める」へ戻せる必要がある（担当決めは 2 台の iPad が同時に触る） — 影響: `WalkinPatch`
+- `WalkinListQuery.status` はカンマ区切りの文字列も受け、既定は空配列にした（`QueryWordList`） — 理由: `?status=waiting,serving` はクエリ文字列で届く。分解を Worker の手書きに残すと知らない語がそこで黙って落ちる（`QueryIdList` と同じ考え方） — 影響: `WalkinListQuery` / `ReceptionHistoryQuery`
+- `VisitBoardCell` の `needsAttention` は `note !== null` との**双条件**にした — 理由: 片方だけの応答を通すと、色だけで伝える欄（旗だけ）と読み上げに出ない注意（文だけ）が作れる — 影響: `VisitBoardCell`
+- `VisitBoardCell` の空欄は `at` / `label` / `note` をすべて空に強制した — 理由: 「何も起きていない欄は空のまま」（AC-RECEP-11）を型で守る — 影響: `VisitBoardCell`
+- `VisitEvent` の検証を `VisitEventInput > occurredAt を省略できる` の 1 本に相乗りさせた — 理由: TODO の 25 本に `VisitEvent` 単独のテストが無く、テストが 1 度も触らない export は knip が落とす。省略した `occurredAt` が埋まったあとの姿を同じ 1 本で見るのが素直 — 影響: テスト本数は 25 のまま
+- `ReceptionHistoryList` の強制は「`total !== 0` なら `relaxations` は 0 件」だけにした（`total === 0` でも 0 件を許す） — 理由: T-007 の「緩められる条件が 1 つも無いときは候補を返さない」「全解除しても 0 件のときは候補を返さない」と両立させる。上限 3 件は `.max(3)` が持つ — 影響: `ReceptionHistoryList`
+- `ReceptionHistoryDetail` にも `entryId` を足し `sessionId` を null 可にした — 理由: 詳細は `entryId` で引く（決着表）。Web のご予約は受付セッションを持たないので、詳細だけ必須にすると開いた瞬間に落ちる — 影響: `ReceptionHistoryDetail`
+- `ReceptionHistoryDetail.receivedBy` を null 可にした（`04-api.md` §4 の `1..40` から緩めた） — 理由: Web のご予約には受け付けた人がいない。`sessionId` を null 可にしたのと同じ理由 — 影響: `ReceptionHistoryDetail`
+- `ReceptionHistoryDetail.recording` を `z.null().default(null)` にした — 理由: T-014 が「常に null を返す」と決めており、P7 の `RecordingSummary` をここで先取りして作らない — 影響: P7 が器を広げる
+- 「そのあとの変更」の 1 行（`ReservationChangeHistory`）を module-local の const にした — 理由: いま外から使うのは `ReceptionHistoryDetail` だけで、export すると knip の未使用 export になる（P6 が必要になったときに export する） — 影響: `packages/contracts/src/glasses_management.ts`
+- `SearchRelaxation.query` を `z.record(z.string(), z.unknown())` にした — 理由: `04-api.md` は `z.unknown()` だが、それだと欄そのものを省ける。「そのまま再送できるクエリ」は必ずオブジェクトである — 影響: `SearchRelaxation`
+- `purposeNote`(80) / `note`(120) / `label`(30) / 注意(40) の上限は `.max()`（UTF-16 の長さ）で見た — 理由: TODO が「80 文字ちょうどまで通り、81 文字で落ちる」と書式まで指定しており、`codePointsAtMost` は画面が文字数を数えて出す長文（500 / 2000 文字）のための道具である — 影響: `WalkinCreate` / `VisitEventInput` / `VisitBoardCell`
+
+### J-domain（25 件）
+
+- `constraintTable` の 3 本を `test/booking.test.ts` ではなく `test/walkin.time.test.ts` の `整理番号の衝突` に置いた — 理由: 計画が名指しした `test/constraint.test.ts` / `src/worker/db/constraint.ts` は実在せず、実物は `booking.ts` / `booking.test.ts` で、後者は担当ファイル外のため — 影響: `test/walkin.time.test.ts`（16 本 + 3 本 = 19 本）
+- `constraintTable` の拡張コード判定を「付いていて一意違反でないときだけ捨てる」に緩めた — 理由: `D1_ERROR: UNIQUE constraint failed: walk_ins.ticket_no` だけの形（拡張コード無し）から表名を採れるようにするため。既存 4 本（NOT NULL・no such table・network error）は今も null を返す — 影響: `src/worker/domain/booking.ts` の `constraintTable`
+- `nextTicketNo(999)` は `null` を返す（throw しない） — 理由: 採番の打ち止めは 500 ではなく人を呼ぶ事象で、`withReservationCode` の `code_exhausted` と同じく戻り値で表す — 影響: `walkin.ts` / 受付ルート（T-012）
+- 表示名（`田中 花子 様` / `ウォークイン 003`）を `walkin.ts` の `subjectDisplayName` 1 か所に置いた — 理由: 盤面と受付履歴が同じ規則を 2 度書かないため — 影響: `walkin.ts` `visit-board.ts` `reception-history.ts`
+- 盤面の `done` の `at` は「その工程の終了時刻」ではなく**その工程が始まった時刻**にした — 理由: 承認済みモック RECEPTION-JOURNEY の 伊藤 健 様（受付 10:42 / ご相談 10:52 / レンズ・お会計 11:01 / お渡し 対応中 11:04〜）は終了時刻では 1 つも再現できず、開始時刻でちょうど一致する — 影響: `visit-board.ts` の `done` セル
+- `received` は「対応中」にしない（点の記録として必ず `done`） — 理由: モックの ウォークイン 003 は最後の記録が受付 10:50 でありながら受付欄が「済みました 10:50」、ご相談欄が「お待たせ中 18分」である — 影響: `visit-board.ts`
+- 盤面の位置は**画面の並び（`BOARD_STAGES`）の添字**で決め、いまの工程より右の工程は記録があっても `empty` に戻す — 理由: 「打ち消しの行を足すと状態が戻る」を `visit_events` に列を足さずに（追記だけで）表せる唯一の形 — 影響: `visit-board.ts`
+- `お待たせ中` は「対応中の工程が無いとき」だけ立て、`next` の欄（無ければいまの工程の右隣で最初の未着手）に出す — 理由: 接客中の 40 分をお待たせと呼ばないため。モックの ウォークイン 003 と一致する — 影響: `visit-board.ts`
+- セルの `label` は「値の行」1 本に揃えた（`next`＝設備名 / `waiting`＝`18分`） — 理由: モックの欄が「状態 13px ＋ 値 15px/600」の 2 行で、状態は `state` から出るため `label` に状態語を混ぜない — 影響: `visit-board.ts` / 契約 `VisitBoardCell`
+- 注意は「次にやること」の欄にだけ出し、担当不在と設備停止が同時なら**担当不在を優先**する — 理由: 欄が持てる注意は 1 つで、担当を決め直さないと設備の手当ても決まらない — 影響: `visit-board.ts`
+- `buildBoard` の options に `date` を足した（計画は `{ now, scope }`） — 理由: `VisitBoard.date` が必須で、`now` から導くと前日の盤面を開けない — 影響: `visit-board.ts`
+- 勤務中かの判定を `availability.ts` の `isOnShift` から呼ばず、`visit-board.ts` に「ある一点の時刻」用の小さい判定を置いた — 理由: 前者は非公開で区間（from〜to）を見る形であり、盤面が要るのは `now` の 1 点だけ。型（`StaffShiftBand` / `MaintenanceBand`）は `availability.ts` のものを再利用する — 影響: `visit-board.ts`
+- 盤面の行の `visitCount` は、お客様が特定できていない行では入力に値があっても `null` に落とす — 理由: 整理番号で並ぶ行に来店回数の札を出さない（AC-RECEP-11 の検証点） — 影響: `visit-board.ts`
+- 受付履歴の並びは `(startedAt, entryId)` の降順、カーソルは base64url の複合 1 本 — 理由: `customers.ts` の `encodeCursor` と同じ形に揃え、同時刻の行を二重にも欠けにもしない — 影響: `reception-history.ts`
+- お客様名の部分一致は「姓名（空白あり）」「姓名（空白除去）」「ふりがな」の 3 通りで見る — 理由: 「田中花子」と打った操作を 0 件にしないため — 影響: `reception-history.ts`
+- 緩和候補の並びは 期間 → 担当 → 結果 → お客様名 → 全解除 で、3 件を越えるときは**先頭 2 件 ＋ 全解除**を残す — 理由: 全解除（AC-RECEP-18 の「絞り込みをすべて外す（46件）」）は必ず出す必要があるため、単純な先頭 3 件では落ちる — 影響: `reception-history.ts`
+- 全解除の query は「期間を今月（JST の月初〜本日）に戻し、担当・結果・お客様名を外したもの」 — 理由: 契約が `from` / `to` を必須にしており、期間だけ無限に広げる形を作れない。AC の 46 件も既定の期間の総数である — 影響: `reception-history.ts`
+- 緩められる条件が 1 つも無いとき（期間が既に今月以上で、担当・結果・名前が空）は全解除も出さない — 理由: 押しても同じ画面へ戻る候補を並べない — 影響: `reception-history.ts`
+- 全解除の query が先に並べた候補と同じになるときは全解除を出さない — 理由: 同じ件数・同じ条件の行を 2 つ並べない — 影響: `reception-history.ts`
+- 緩和候補のラベルに担当者名を差し込まず「担当の絞り込みを外す」にした — 理由: 純関数に氏名を持ち込むと staff の表を引く責務がドメインへ漏れる。件数は名前の付いた操作として読み上げられる（AC-RECEP-21）ので要件は満たす — 影響: `reception-history.ts`
+- T-005 のテスト名「済んだ工程は done と終了時刻を持つ」を「〜その工程が始まった時刻を持つ」に改めた — 理由: 上の判断（モックが開始時刻で一致する）に名前を合わせないと、名前と検証内容が食い違うテストが残る — 影響: `test/visit-board.test.ts`
+- `buildBoard` の options に `shifts` / `maintenances` を任意で受ける形にした（既定は空） — 理由: 勤務表も点検予定も無い店舗・日で盤面が描けなくなるのを避ける — 影響: `visit-board.ts`
+- `BoardStage` / `BoardNextStep` を export しない — 理由: 外から使わない型を export すると knip の未使用 export で CI が落ちる。ルートは `BoardSubjectRow['next']` で読む — 影響: `visit-board.ts`
+- 盤面の行は読み出した順のまま返す（並べ替えない） — 理由: 承認済みモックの並び（田中 10:55 / ウォークイン 10:50 / 山口 10:58 / 伊藤 10:42）は時刻順ではなく、ドメインで並べ替えると再現できない — 影響: `visit-board.ts`
+- `filterHistory` は読み出した順のまま返し、並べ替えは `buildHistoryList` だけが行う — 理由: 緩和候補の件数を数えるのに並べ替えは要らず、数える関数と並べる関数を分けると意図が読める — 影響: `reception-history.ts`
+
+### J-e2e（16 件）
+
+- `src/web/App.tsx` に `current === 'history'` の枝と `HistoryPane` を足した — 理由: `ReceptionHistory.tsx` は出来ているのに器に載っておらず、受付履歴の 7 本の AC と HISTORY-LIST / HISTORY-EMPTY の突き合わせがブラウザから 1 つも撮れない — 影響: `src/web/App.tsx`（左サイドバーの「受付履歴」が実際に開く）
+- `src/web/ledger/LedgerScreen.tsx` に `initialWalkinOpen` と `WalkinPanel` を足した — 理由: `WalkinPanel.tsx` は出来ているが台帳が開く口を持たず、AC-RECEP-05 / 06 と LEDGER-WALKIN の突き合わせが撮れない — 影響: `src/web/ledger/LedgerScreen.tsx` / `App.tsx`
+- 受付パネルの入口を**台帳のツールバーではなく来店受付ボードの「＋ ご来店を受け付ける」**にした — 理由: ツールバーにボタンを足した最初の版で、承認済みの LEDGER-STAFF / LEDGER-RESOURCE / LEDGER-LIST / LEDGER-DETAIL / EX-OFFLINE の 5 面が一斉に閾値超過した。`maxDiffPixelRatio` は下げるだけの決めなので、既存の面を動かさない入口に変えた — 影響: `LedgerScreen.tsx`（台帳の姿は 1 画素も変わらない）
+- `src/worker/index.ts` の台帳ルートに `waitingCount: walkins.waiting` を足した — 理由: `buildLedgerView` が最下段「ご来店お待ち」の副題に読むのは `waitingCount` で、ルートは `walkinWaitingCount` しか渡していなかったため、帯が常に「0名」だった（AC-RECEP-07 / 24 がこの 1 語で落ちる）— 影響: 台帳の最下段の帯
+- 盤面の e2e は**当日（実時刻の JST 暦日）**で組み立てる — 理由: `GET /api/staff/visits/board` は `new Date()` を読み、`visit_events` を盤面の日付の窓で引くので、過去日に固定するとその場で書いた工程が 1 行も見えない — 影響: `e2e/reception.spec.ts` 全体。火曜（定休）に走らせるとご予約を作れないため、ファイル冒頭に走らせる条件を書いた
+- お名前を見る 2 本（AC-RECEP-01 / 03）だけ seed の 2026-08-27 を開く — 理由: `POST /api/staff/reservations` は `customerId` を受けながら `reservations.customer_id` に NULL しか書かない（`domain/booking.ts` の `bookingStatements`）ので、当日作ったご予約の行は盤面で「お客様」のままになる。お客様の付いたご予約は seed のこの日にしかない — 影響: AC-RECEP-01 / 03
+- お客様の紐づけは `PATCH /api/staff/walkins/:walkinId` で行う — 理由: 受け付けと同時に `customerId` を渡しても `walk_ins.customer_id` にしか入らず、盤面と受付履歴が読む `reservations.customer_id` を埋めるのは PATCH だけである — 影響: AC-RECEP-08 / 23 / 25 / 26
+- ウォークインの枠は 30 分刻みで 1 つずつ配り、**断られたら次の枠へ送る** — 理由: `startsAt` を省くと受付時刻そのものが枠になり、続けて受け付けると担当未定の上限 3 で 4 人目から 409 になる。Playwright は test が落ちるとワーカを作り直すので、手元の数え上げは当てにできない — 影響: `createWalkin`
+- 件数を数える test は先に盤面を空にする（`clearBoard`）— 理由: D1 は 1 本きりで、前の test が残した行がそのまま「ご来店中 N名」に混ざる — 影響: AC-RECEP-11 / 23 / 27
+- AC-RECEP-14 / 15（担当不在・設備点検の注意）は盤面の応答を差し替えて画面だけを確かめる — 理由: 勤務外の担当を指したご予約は `POST /api/staff/reservations` が `staff_off` で断るので実データで作れない。注意の文そのものは `test/visit-board.test.ts`（T-006）が押さえている — 影響: この 2 本だけ `page.route` を使う
+- AC-RECEP-16（ご来店なし）は「結果」の 3 語を選び分けられることまでにした — 理由: `POST /api/staff/reservations/:id/cancel` が未実装で、`no_show` を作る経路がアプリにもう 1 本も無い（`009-change-and-cancel` の仕事）— 影響: この 1 本のコメント
+- AC-RECEP-05（受け付けてそのままご相談）の工程開始は `POST /api/staff/visits` で行う — 理由: 盤面から進められるのは「次にやること」の欄だけで、その欄が立つのは設備を押さえたご予約だけである。ウォークインは設備を押さえないので押せる欄が立たない — 影響: この 1 本のコメント
+- AC-RECEP-22（台帳リストの「ご来店」）は入口があることまでにした — 理由: `ReservationList` のボタンは `onClick` を持たない置き物で、行き先が繋がっていない — 影響: この 1 本のコメント
+- AC-RECEP-29 は当日 +9 日の 21:00（閉店後）に置いた — 理由: 営業時間の中だと `booking.spec.ts` が同じ枠を先に取っていることがある — 影響: この 1 本
+- `maxDiffPixelRatio` は計画の初期値ではなく**実測値**を書く — 理由: 実測が初期値を超える面が 2 つあり（LEDGER-WALKIN 8.32% / HISTORY-EMPTY 7.97%）、初期値のままでは落ちる。下げるだけの決めは実測を起点に守る — 影響: 5 面すべてのコメントに実測値と超過の理由を書いた
+- 突き合わせは seed のままの盤面で撮る（walk_ins を 1 行も作らない）— 理由: mock project は業務の e2e より先に走る決めで、盤面に手を触れると比べる意味が無くなる — 影響: LEDGER-WALKIN は「いまお待ち 0名 / ウォークイン 001」の姿で撮る
+
+### J-frontend-review（11 件）
+
+- `grid-cols-[1.15fr_1.15fr_0.7fr]` を `style={{ gridTemplateColumns: DETAIL_COLUMNS }}` に置き換えた — 理由: Tailwind 任意値は非交渉の禁止事項で、`booking/SlotBoard.tsx` が同じ逃げ方をしている — 影響: src/web/reception/ReceptionHistory.tsx（見た目は同じ、`minmax(0, …)` を足して桁あふれも塞いだ）
+- 来店回数の印を `ledger/Timetable.tsx` の `VisitBadge` に一本化し、そこに `export` を付けた — 理由: 同じ印を 3 か所で綴り直し、しかも 3 つとも色がモック（4回目＝薄い緑／初めて＝薄い橙）と違っていた。Timetable のコメントが「印の綴りはこの 1 か所しか無い」と宣言している — 影響: VisitBoard.tsx / CheckinPanel.tsx / ReceptionHistory.tsx / Timetable.tsx（export 1 語のみ）
+- `VisitBoard` の注意の色は `--color-amber` のままにした — 理由: theme.css の定義が「失敗ではない注意」で、T-016 が walkin を指すのは CHECKIN の「要確認」の札だけ — 影響: 変更なし（記録のみ）
+- `WalkinPanel` と新しい `LinkCustomerPanel` に Esc を足した — 理由: 非交渉のアクセシビリティ観点に Esc があり、`ledger/ReservationDetail.tsx` が同じ鍵を document で購読している。台帳を隠しきらない非モーダルなので `<dialog>` にはしない — 影響: 台帳の受付パネルと結びつけのパネル
+- 受付履歴の絞り込みの献立に Esc（＋押した札へフォーカスを返す）を足した — 理由: 開いた献立から出る道が「もう一度札を押す」しか無かった — 影響: ReceptionHistory.tsx の `FilterButton`
+- 受け付ける面から盤面へ戻ったとき、その行のお客様欄へフォーカスを返すようにした（`focusSubjectId`） — 理由: 計画 T-016 の「閉じたら開いた要素へ戻す」が効いていなかった（開いた要素ごと消えるため `activeElement` の控えでは戻せない） — 影響: VisitBoard.tsx / ReceptionScreen.tsx
+- 工程の記録が 4xx で断られたときに 1 文で言うようにした（`notice`） — 理由: 押しても盤面が変わらないだけで、押せていないのか済んでいるのか手元から見分けられなかった — 影響: ReceptionScreen.tsx / VisitBoard.tsx のツールバー
+- 来店受付の面の「‹ 来店受付ボードへ戻る」を 40px → 44pt に上げた — 理由: モックは 40px だが「触れるものは 44pt 以上」が非交渉。受付履歴の絞り込みも同じ理由で先に上げてある — 影響: CheckinPanel.tsx
+- 顧客を後から結びつける口（`LinkCustomerPanel`）を新設し、盤面のその行から開くようにした — 理由: AC-RECEP-08 / 09 は画面の操作を書いているのに口が無く、e2e が「盤面にこの口はまだ実装されていない」と断って HTTP で代替していた。フェーズの非交渉（後から関連付けられる）に直に触れる — 影響: 新 src/web/reception/LinkCustomerPanel.tsx ＋ test / VisitBoard.tsx の行の操作 / ReceptionScreen.tsx / e2e/reception.spec.ts の 2 本
+- 結びつけの `version` は開いたときに `GET /api/staff/walkins` で読み直す — 理由: 盤面の行は版を持たず、控えた版で上書きすると 2 台目の iPad の更新を黙って踏む — 影響: LinkCustomerPanel.tsx
+- 結びつけのパネルの姿は `WalkinPanel` に揃えた（右 400px・見出し帯・足元の主操作） — 理由: 承認済みモックにこの面の絵が無く、覚え直しを作らないため — 影響: LinkCustomerPanel.tsx
+
+### J-frontend-round2（18 件）
+
+- RECEPTION-CHECKIN と LEDGER-WALKIN の「サイドバーがモックではひらいた 216px、実装はたたんだ 76px」を**直さない** — 理由: 面を開いた瞬間にサイドバーが勝手に広がると、戻ったときにまた縮む「跳ねる骨格」になり、覚え直しを作る（モック側が LEDGER-STAFF=柱／LEDGER-WALKIN=ひらくで食い違っている） — 影響: `shell/destinations.ts` の `RAIL_BY_DEFAULT` を触らない。RECEPTION-CHECKIN の 6.6% の大半・LEDGER-WALKIN の 6.4% の一部がこの差
+- 1 巡目のコメント「RECEPTION-JOURNEY は右上に『＋ ご来店を受け付ける』が 1 つ多い（モックはセグメントと日付だけ）」を**事実誤認として書き直す** — 理由: モック RECEPTION-JOURNEY.png はセグメントの右にその緑のボタンを描いている — 影響: `e2e/mock-compare.spec.ts` の RECEPTION-JOURNEY のコメント
+- 1 巡目のコメント「RECEPTION-CHECKIN はサイドバーがひらいた 216px（モックと同じ）」を**事実誤認として書き直す** — 理由: 実測すると実装は柱 76px、モックは 216px（reference/ の画素で確認） — 影響: 同ファイルの RECEPTION-CHECKIN のコメント
+- LEDGER-WALKIN の突き合わせで、撮る前に「メガネを新しく作る」を選ぶ — 理由: モックはご用件を伺い終えた瞬間（1 枚目が選択中・主操作が押せる）を描いており、未選択の姿と比べても意味が無い — 影響: 321,804 → 247,766 画素（8.32% → 6.40%）
+- HISTORY-LIST で「モックが開いている 田中 花子 様」を選ぶ案は**採らない** — 理由: 実測すると 235,158 → 239,919 と増える（選択中の帯が 1 行目から 10 行目へ動く損が、右の見出しが合う得より大きい） — 影響: 一覧の先頭を選ぶ 1 巡目のままにした
+- 受付履歴の詳細で `お客様 様` と重ねていたのを `お客様` に直す — 理由: お名前が分からない受付に敬称を重ねると読み上げが耳障りで、名前が分からない事実も伝わらない — 影響: `ReceptionHistory.tsx` の `customerLabel`
+- 受付履歴の詳細の見出しに来店回数の札を出す — 理由: モック HISTORY-LIST.png が「田中 花子 様（4回目）」と描いており、台帳・盤面と同じ `VisitBadge` の綴りを使える — 影響: `ReceptionHistory.tsx`
+- 「そのあとの変更」が 0 行のときは 1 文を出す（見出しだけを残さない） — 理由: 空の並びだけだと「読み込めていない」のか「まだ何も起きていない」のかが手元から見分けられない — 影響: `ReceptionHistory.tsx`。HISTORY-LIST の実測画素が約 2,400 増える
+- 「お客様名で探す」の幅を w-56（224px）から w-40（160px）へ — 理由: モックの同じ位置の操作が 160px で、広げておく理由が無い（お名前は短い） — 影響: HISTORY-LIST・HISTORY-EMPTY の実測画素が計 1,166 減る
+- 来店受付ボードにも通信断の帯（台帳と同じ `OfflineBanner`）を出す — 理由: 60 秒ごとの取り直しが落ちても盤面が黙って古い「お待たせ中 18分」を出し続ける経路があった（品質フロアの「通信断」） — 影響: `ReceptionScreen.tsx`
+- 来店受付の面を Esc でも閉じられるようにする — 理由: 受付パネル・結びつけのパネルは Esc を持つのにこの面だけ持たず、逃げ道の鍵がばらついていた — 影響: `CheckinPanel.tsx`
+- 「そのあとの変更」が 0 行のときの 1 文を `text-body` から `text-grid`（muted）に落とし、文言を「まだ何もありません。」に縮めた — 理由: 中身ではなく「無い」ことの注記なので見出しと張り合わせない。あわせて HISTORY-LIST の実測が 1 巡目の 235,158 を下回り、閾値を上げずに済んだ — 影響: `ReceptionHistory.tsx` / 実測 235,015
+- RECEPTION-JOURNEY と RECEPTION-CHECKIN の突き合わせで、盤面の応答だけを `page.route` で差し替える — 理由: 盤面に載る条件が「工程の記録が 1 行でもあること」に直った（worker 2 巡目）ので seed のままでは必ず空になる。実際に工程を記録してもこの姿は作れない（欄の状態はサーバの `new Date()` から出るのに、モックが描くのは 2026年8月27日 11:08 で、`page.clock` は端末の時計しか据えられない）。同じ手はすでに `reception.spec.ts` の `stubBoard` が使っている — 影響: RECEPTION-JOURNEY 116,698 → 76,271（3.02% → 1.97%）
+- **seed.mjs に工程の記録（`visit_events`）とウォークインを入れるのが本筋の直し方だが、担当ファイル外なので手を付けない** — 理由: 入れれば LEDGER-WALKIN の最下段の帯（「ウォークイン 004　受付 11:02　お待ち 6分」）も一緒に埋まる — 影響: 引き継ぎとして報告する
+- 台帳の予約リストの「ご来店」を来店受付の画面へ繋いだ — 理由: 盤面が「もうお着きの方」だけになった結果、ご予約のお客様を受け付ける経路が UI から消えていた（AC-RECEP-01〜04 が到達不能）。ボタン自体は P2 が語だけ置いており、押しても何も起きない置き物だった — 影響: `ReservationList.tsx` / `LedgerScreen.tsx` / `App.tsx` / `ReceptionScreen.tsx`（`initialCheckinId`）／`e2e/reception.spec.ts` の 6 本
+- 受け付ける面は盤面の応答が届いてから開く — 理由: 予定時刻との差の 1 行は `serverNow` だけから出す決めなのに、届く前は端末の時計へ落ちて一瞬だけ違う分数を出していた — 影響: `ReceptionScreen.tsx`
+- 受付パネルを閉じたときの戻り先を台帳そのものにした — 理由: パネルは来店受付ボードから開くのでこの面に「開いた要素」が無く、閉じると焦点が body へ落ちていた — 影響: `LedgerScreen.tsx`（`stageRef` に `tabIndex={-1}`）
+- 台帳リストの「ご案内」「内容を確認」は置き物のまま残す — 理由: 前者はウォークイン（すでに盤面に居る）、後者は `009-change-and-cancel` の持ち場で、行き先を勝手に作らない — 影響: 報告に残す
+
+### J-reception-screens（20 件）
+
+- 器の名前を `ReceptionScreen.tsx` / 部品を `VisitBoard.tsx` / `CheckinPanel.tsx` にした — 理由: 指示のファイル一覧がこの 3 つを名指ししており、TODO の `ReceptionBoard.tsx` / `ReceptionCheckin.tsx` / `stages.ts` は担当外 — 影響: src/web/reception/ の 3 ファイル
+- 列の並びは `worker/domain/visit-board.ts` の `BOARD_STAGES` を import して作った（web 側に `stages.ts` を作らない） — 理由: 正本が 1 つでよく、`ledger/metrics.ts` が `worker/domain/ledger.ts` を import している前例と同じ — 影響: VisitBoard.tsx の列の並び
+- 列の日本語名（受付／ご相談／フレーム選び／視力測定／レンズ・お会計／お渡し）は VisitBoard.tsx に置いた — 理由: この 6 語を出すのはこの画面だけ — 影響: VisitBoard.tsx
+- URL で面を切り替えない（`?view=board` を持ち込まず、器の `pane` state で切り替える） — 理由: この製品に router が無く、`CustomerScreen.tsx` が同じ決めを明文化している — 影響: ReceptionScreen.tsx / App.tsx
+- 来店受付の画面への入口は「盤面の行（お客様欄）を押す」にした — 理由: 台帳（AC-RECEP-22 の入口）は担当外のファイルで、押して開く形は `Timetable` の帯 → 詳細と同じ型 — 影響: VisitBoard.tsx の rowheader / ReceptionScreen.tsx の pane
+- 工程を進める操作は「次にやること」の欄そのものを Enter / Space / クリックで発火させ、欄の中に `<button>` を入れ子にしなかった — 理由: 台帳の `Timetable` の `Cell` と同じ型に揃える（覚え直しを作らない）・Tab を 1 回に保つ — 影響: VisitBoard.tsx
+- 退店 / ご来店がなかった は、行を選んだときだけ出るツールバー下の帯（`role="group"`）に置いた — 理由: モックの盤面に行ごとの操作が無く、常設すると空いた場所を埋めることになる — 影響: VisitBoard.tsx
+- 「ご来店がなかった」は `onMarkNoShow` を渡された器でだけ出す。P5 に予約の取消ルートが無いので `ReceptionScreen` は渡さない — 理由: 押して何も起きないボタンを置かない（`Timetable` の `onOpenSettings` と同じ扱い）。取消ルートは 009-change-and-cancel が付ける — 影響: VisitBoard.tsx / ReceptionScreen.tsx
+- 「＋ ご来店を受け付ける」は台帳（受付パネルのある面）へ渡す `onOpenLedger` にした — 理由: 店頭の受付パネルは T-017 が台帳に置く。盤面から新しい受付の面を作らない — 影響: ReceptionScreen.tsx / App.tsx
+- 空の欄には見た目の文字を足さないが `aria-label`（お客様名＋工程名）は付けた — 理由: AC-RECEP-11 の「空のまま」と AC-RECEP-19 の「両方と一緒に読まれる」を同時に満たす形はこれだけ — 影響: VisitBoard.tsx
+- モックの 15px / 18px / 26px は theme.css の段（`text-body` 16px / `text-bar` 19px / `text-hero` 28px）へ寄せた — 理由: 任意値を書かない・段に無い大きさは足さないという theme.css の決め — 影響: VisitBoard.tsx / CheckinPanel.tsx
+- 確かめることの消し込み結果は「確かめた: … ／ 確かめていない: …」の 1 文にして `VisitEventInput.note`（120 文字）へ入れ、溢れたら切る — 理由: 契約に新しい欄を足さずに「確かめずに受けた」を残す — 影響: CheckinPanel.tsx
+- 前回のご来店の度数・PD の綴りは `customers/CustomerList.tsx` の `currentPowerLabel` / `pdLabel` を、お電話番号は `booking/CustomerStep.tsx` の `formatPhoneDigits` を呼んだ — 理由: 同じものを二度作らない — 影響: ReceptionScreen.tsx
+- 盤面は 60 秒ごとに取り直す — 理由: 「お待たせ中 18分」は応答の `serverNow` からしか出さないので、取り直さないと朝の分数で止まる（`LedgerScreen` と同じ 60 秒） — 影響: ReceptionScreen.tsx
+- 行を押すと「その行にできること」の帯が出る形にし、来店受付の面へはそこの「ご来店を受け付ける」から入る — 理由: 1 回の押下に 2 つの意味を持たせない・受付済みの行では入口ごと消える — 影響: VisitBoard.tsx（RowActions）
+- 担当不在・設備停止の注意は琥珀（`--color-amber` / `--color-amber-soft`）にした — 理由: パス 1 の計画で赤は「お待たせ中」だけ・緑は「対応中」と「次にやること」だけに取ってあり、theme.css が琥珀を「失敗ではない注意」と定めている — 影響: VisitBoard.tsx の next セル
+- 「その行にできること」は `<fieldset aria-label>`、お客様カードは `<section aria-label>` にした — 理由: biome の `a11y/useSemanticElements` が `role="group"` を弾く。前者は `LedgerScreen` の Segmented と同じ形、後者はフォームでないので region が正しい — 影響: VisitBoard.tsx / CheckinPanel.tsx
+- 確かめることの行は本物の `<input type="checkbox">`（`sr-only` ＋ 見た目の箱）にした — 理由: 30×30 の箱を自前で描きつつ、押せる範囲は行ぜんぶ（52px）で 44pt を満たす — 影響: CheckinPanel.tsx
+- 済みの行に「確かめました」の語を添えた — 理由: AC-RECEP-03 の「札と枠で見分けられる」を色だけに頼らせない — 影響: CheckinPanel.tsx
+- テストの全角空白は `asWritten`（`normalizer: (t) => t.trim()`）で探す — 理由: 既定の normalizer が U+3000 を半角へ畳む。`customers/CustomerHandwrite.test.tsx` に同じ名前の前例がある — 影響: 3 つの test ファイル
+
+### J-routes（23 件）
+
+- テストの下ごしらえは `helpers.ts` に足さず `reception.integration.test.ts` の中に閉じた — 理由: 担当ファイル外の同時編集で他タスクの作業を潰さないため — 影響: test/reception.integration.test.ts
+- 「ご来店がなかった」は D1 に `status='no_show'` を直に置いて受付履歴の結果を確かめる — 理由: `POST /api/staff/reservations/:reservationId/cancel` は出荷済みコードに無く、P6（009-change-and-cancel）が作るルートで、このタスクの 7 本に含まれない — 影響: test/reception.integration.test.ts の「ご来店がなかった」
+- 未知の店舗・担当・ご用件・お客様の id は 404 not_found（他テナントぶんも同じ） — 理由: 403 で存在の有無を漏らさない既存の作法に揃える — 影響: POST /api/staff/walkins・PATCH /api/staff/walkins/:id・POST /api/staff/visits
+- 受付の 1 バッチは `bookingStatements` を再利用し、`walk_ins` の 1 行と `walkin.created` の監査だけを足した — 理由: 枠の上限つき条件付き INSERT・予約番号の打ち直し・冪等の done 化を二度作らない — 影響: src/worker/index.ts
+- 枠のガード（`WHERE EXISTS ... reservation_slot_locks`）は index.ts に 1 か所だけ書き写した（`domain/booking.ts` の LOCKED は module 内 const で export されていない） — 理由: 担当ファイル外を書き換えない — 影響: src/worker/index.ts の WALKIN_LOCKED
+- 整理番号の打ち直しは外側 5 回・予約番号は `withReservationCode` の内側 5 回の二重ループ — 理由: `constraintTable(err)` が返す表名で打ち直す対象が違うため — 影響: POST /api/staff/walkins
+- `startsAt` 省略時は `arrivedAt`、`durationMinutes` 省略時はご用件の所要（自由記述は 30 分） — 理由: 台帳に点線で描く枠を必ず 1 つ決める（枠を持たない受付を作らない） — 影響: POST /api/staff/walkins
+- `stage` が consulting/fitting/measuring/checkout/handover のとき `walk_ins.status='serving'` と `reservations.status='serving'` を書く — 理由: 「お待ち」と「接客中」を分けないと待ちの帯と待ち時間の母数が狂う — 影響: POST /api/staff/visits
+- `stage='left'` は `reservations.status='done'` を **arrived / serving からだけ**書く — 理由: お待ちのまま帰られた来店を来店回数に数えない（受付履歴には残す） — 影響: POST /api/staff/visits・customers.visit_count
+- 来店回数の書き戻しは `countVisitsOf` を呼ばず、同じ `db.batch()` の中の 1 文（副問い合わせ）で行う — 理由: 直前の `status='done'` の UPDATE を同じトランザクションで読むため（読んでから足すと二重に増える） — 影響: bumpVisitCounters
+- `PATCH /api/staff/walkins/:id` に `customerId` を入れたら `reservations.customer_id` も書く — 理由: 来店回数は予約の `status='done'` を数えるので、書かないと紐づけても数に入らない — 影響: AC-RECEP-08
+- `stage='received'` は 2 行目を積まず、既にある 1 行をそのまま返す — 理由: 受付は点の記録で、2 行あると受付時刻がどちらか読めない — 影響: POST /api/staff/visits
+- `GET /api/staff/visits/board` は他テナントの storeId でも 404 にせず空を返す — 理由: Q-04 のいまの前提（storeId は絞り込みで、認可の根拠にしない） — 影響: tenant-isolation.test.ts
+- 盤面の「次にやること」は押さえた設備からだけ出す（`stage='measuring'` / label は設備名） — 理由: 担当も設備も決まっていない欄に押しても始まらない操作を並べない — 影響: GET /api/staff/visits/board
+- 受付履歴が読む窓は「絞り込みの期間」と「今月」の広いほう — 理由: 緩和候補が今月まで広げた件数を実際に数えるため（推定しない） — 影響: GET /api/staff/reception-sessions
+- 破棄した受付は `outcome='discarded'` かつ `reservation_id IS NULL` の行だけ混ぜる — 理由: 進行中の受付は履歴ではない — 影響: GET /api/staff/reception-sessions
+- 一覧の並びの時刻（startedAt）は ウォークインの受付時刻 → 受付セッションの開始 → 予約の開始 の順で決める — 理由: AC-RECEP-10 の「受付時刻が読める」を満たす — 影響: ReceptionHistoryEntry.startedAt
+- 監査 `walkin.created` は `walk_ins` を対象に置き、詳細は予約 id とウォークイン id の両方で引く — 理由: `reservation.created` と二重に「新しく受け付けました」を並べない — 影響: GET /api/staff/reception-sessions/:sessionId
+- 閲覧の監査は `target_id` に storeId（無ければ組織 id）を置く — 理由: `audit_events.target_id` が NOT NULL で、一覧の閲覧には単一の対象が無い — 影響: GET /api/staff/reception-sessions
+- `LedgerView` の 3 欄は `buildLedgerView` の**任意の入力**にして既定（0 / null / 1）を持たせた — 理由: P2 の `ledger.test.ts` と web の fixtures を壊さずに契約を満たすため — 影響: domain/ledger.ts・index.ts の台帳ルート
+- 「いまお待ち」と「次の整理番号」は 1 文で数える（`readWalkinCounters`） — 理由: 台帳 1 画面の D1 の文を 1 本しか増やさない（NFR 16 本以内。14 → 15） — 影響: ledger.integration.test.ts の本数
+- `estimatedWaitMinutes` は台帳では常に null — 理由: 目安は「選んだご用件を受けられる担当が次に空く時刻」からしか出さない決めで、台帳の時点ではご用件が決まっていない — 影響: LedgerView.estimatedWaitMinutes
+- 担当外の 5 ファイルに最小の追随を入れた（`src/worker/domain/ledger.ts` の 3 欄・`test/ledger.integration.test.ts` の文の本数・web の fixtures 3 本） — 理由: T-002 で `LedgerView` に 3 欄が必須で入り、載せないと台帳ルートと web の型が壊れたまま（T-012 の「台帳の応答にこの 3 欄を載せる」の付随） — 影響: typecheck と P2 の既存テスト
+
+### J-t003-schema（7 件）
+
+- `purpose_note` は列に長さ制約を書かず、コメントを「0〜80文字」にした — 理由: SQLite に長さ制約は無く、DDL の DEFAULT / CHECK に意味を持たせない決めがあるため長さは契約（`WalkinCreate`）だけで守る — 影響: `src/worker/db/schema.ts` の `walkIns.purposeNote`（03-data-model.md §7.4 の 0〜60 ではなく P5 の決着表の 80 を採った）
+- `ticket_no` に 1〜999 の DB 制約を置かず integer NOT NULL だけにした — 理由: 同上（範囲は `Walkin` 契約と採番の再試行で守る） — 影響: `walkIns.ticketNo`
+- 列の並びを 03-data-model.md §7.4 / §7.5 の表の順そのままにした — 理由: 設計文書と生成 SQL を目で突き合わせられる状態を保つため — 影響: `migrations/0005_thin_ego.sql` の列順
+- `walk_ins_org_store_date_status_idx` は `visit_date` を `status` より前に置いた — 理由: 「いまお待ち N名」を当日で絞るクエリの形（前置き一致）に合わせるため。逆順だと昨日の waiting まで走査する — 影響: 同 index
+- 8 本のテスト名は TODO のまま据え置き、1 本の中で NULL 可否・列の型まで確かめる形にした — 理由: TODO が「8 本」と件数を決めているので本数を増やさず、`reservation_id` NOT NULL・`customer_id` NULL 可のような P5 の非交渉をテストの中身に入れた — 影響: `test/schema.test.ts`
+- 「真偽値の列を持たない」は `is_` 前置の列が 0 本であることで確かめた — 理由: 4 語の状態を真偽値の組で表すと「どれでもない行」が作れることを固定したいが、無い列を名指しで列挙できないため前置で見る — 影響: 同テスト
+- schema.ts 冒頭の表数コメントを 27 → 29 に直した — 理由: フェーズごとに増える表数を書く既存の書き方に揃えるため — 影響: `src/worker/db/schema.ts` の先頭コメント
+
+### J-t017-t019（22 件）
+
+- 3 ファイルではなく 2 ファイルに収める（`reception/WalkinPanel.tsx` と `reception/ReceptionHistory.tsx`） — 理由: 担当指示が触ってよいファイルをこの 2 本に定めているため（TODO の `ledger/WalkinPanel.tsx` `history/HistoryList.tsx` `history/HistoryDetail.tsx` `history/HistoryEmpty.tsx` の分割ではない） — 影響: 一覧・詳細・0 件は `ReceptionHistory.tsx` の中で部品に分ける
+- ご用件の 4 択・待ち状況の 3 欄は props で受け取り、パネル自身は照会しない — 理由: TODO の「このパネルから API を足さない」に従い、台帳の応答（`LedgerView`）をそのまま流す — 影響: `WalkinPanel.tsx` の props（`purposes` / `walkinWaitingCount` / `estimatedWaitMinutes` / `nextTicketNo`）
+- 「4 択にないご用件」は 4 択の下の押しボタン → 押すと自由記述の欄が開く形にした — 理由: モックに欄が無く、2×2 の格子を 5 枚に増やすと 3 タップで済む受付が読む作業になる。契約は `purposeId` と `purposeNote` のちょうど一方を要求するので入口自体は要る — 影響: `WalkinPanel.tsx`。片方を選ぶともう片方を必ず空にする
+- 電話番号の読み分けは `worker/domain/customers` の `searchMode` / `normalizePhone` をそのまま呼ぶ — 理由: ちょうど 4 桁だけを下 4 桁として扱う規則を画面で二度書かない — 影響: `lookupParam`（4 桁 → `phoneLast4`、10〜11 桁 → `phone`、それ以外は照会しない）
+- `Idempotency-Key` は開いたときに 1 度作り、**断られたときだけ作り直す** — 理由: 枠が取れなかったときサーバは `in_progress` を空けるので、同じ鍵のまま内容を直して送ると 409 `idempotency_conflict` になる（`booking/BookingScreen.tsx` と同じ扱い） — 影響: 409 / 通信断のあと入力を残したまま送り直せる
+- 二度押しは `phase`（idle / sending / done）で止め、成功後は主操作を二度と有効にしない — 理由: 目の前のお客様を 2 件作らない — 影響: `WalkinPanel.tsx`
+- 「あとで登録する」は開いた時点で押された状態（`aria-pressed="true"`）にした — 理由: 顧客未特定のまま受け付けられることがこの面の芯で、既定を「後回し」に置く — 影響: 候補を選ぶとだけ外れる
+- 選択中のご用件は枠 1px → 3px の差も併せて示す — 理由: 状態を色だけで伝えない — 影響: `border-3 border-pine bg-pine-soft`
+- モックの 18px / 15px は `--text-bar`(19) / `--text-body`(16) に寄せた — 理由: トークンに無い段を任意値で足さない — 影響: 見出しと帯の文字
+- 一覧・詳細・0 件を 1 ファイル（`ReceptionHistory.tsx`）の 3 部品にした — 理由: 担当指示の触ってよいファイルがこの 1 本 — 影響: `ReceptionHistory` / `HistoryDetail` / `EmptyHistory`
+- 一覧はご来店日で束ね、**いちばん新しい日の見出しにだけ絞り込みの総件数**を付ける（「2026年8月27日（木）　46件」） — 理由: モックが 4 行しか出ていないのに 46件 と書いており、`buildHistoryList` の注記も「見出しがこの数を読む」と言っている。2 つ目以降の日は日付だけ — 影響: 一覧の見出し
+- 「結果」3 語は画面の語彙（`settled` / `cancelled` / `no_show`）として持ち、送るときだけ `status` の並びへ落とす — 理由: 契約に新しい語を足さない — 影響: `RESULT_STATUSES`
+- 「お客様名で探す」はボタンではなく `type="search"` の欄にした（role は `searchbox`） — 理由: モックはボタンだが、押した先の欄がモックに無く、打ってすぐ絞れる方が入力の手が止まらない — 影響: ツールバー右
+- 期間・担当・結果は札を押すと開く小さな面（期間は日付の欄 2 つ、担当と結果は選択肢）にした — 理由: モックは値つきの札しか描いていないが、絞り込みを変える道が無いと 0 件から戻れない — 影響: `FilterButton` / `MenuOption`。触れるものは 44pt へ上げた（モックの 40px から）
+- 緩和候補は行まるごとを 1 つのボタンにし、`aria-label` に「文　N件　この条件で見る」を入れた — 理由: 押せる操作の名前に件数を含める（AC-RECEP-21）。文と件数と小さなボタンを分けると、読み上げで件数が名前から落ちる — 影響: `EmptyHistory`
+- 「絞り込みをすべて外す」は緩和候補の並びから抜いて主操作に置く — 理由: モックの並び（候補 2 行＋下の緑ボタン）に合わせる。サーバはこれも `relaxations` の 1 件として返す — 影響: ラベル一致（`絞り込みをすべて外す`）で判別
+- 候補が 1 件も無いときは「＋ 予約を取る」を出す — 理由: 緩められる条件が無い＝この店舗にまだ受付が無いので、行き止まりにしない — 影響: `EmptyHistory`
+- 受け付けた手段の語は `worker/domain/ledger` の `SOURCE_LABELS` をそのまま使う（「お電話で受け付け」） — 理由: モックの「電話で受け付け」に対して語を 2 つ持たない。「お電話で受け付け」は「電話で受け付け」を含むので読みは変わらない — 影響: 詳細の副文。テストは部分一致で見る
+- 絞り込みは `initialQuery` で受けて `onQueryChange` で返す — 理由: URL のクエリを持つのは器（`App.tsx`）の仕事で、そこは担当外 — 影響: 「予約を開く」から戻ると同じ条件に戻せる
+- 担当のお名前は `staff` prop で引き当てる — 理由: `ReservationDetail.assignments` は `targetId` しか持たない（`ledger/ReservationDetail.tsx` が `staffName` を props で受けるのと同じ） — 影響: 詳細の「担当」欄と絞り込みの顔ぶれ
+- `role="group"` の div は `<fieldset aria-label>` にした — 理由: biome の `a11y/useSemanticElements` が落ちる（既存の `CustomerList.tsx` と同じ書き方） — 影響: 待ち状況の帯・ご用件・候補・絞り込み・受付の一覧
+- `getByText` の期待値では全角空白を半角に畳んで書く — 理由: dom-testing-library は DOM 側だけを正規化し、期待文字列は素通しで比べる（`getByRole` の name は素通しなので全角空白のまま書ける） — 影響: 0 件の言い直しの 1 本
+
