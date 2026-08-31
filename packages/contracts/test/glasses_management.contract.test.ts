@@ -4,6 +4,12 @@ import {
   AlertCode,
   AlertList,
   AlertListQuery,
+  AnalyticsMetric,
+  AnalyticsPoint,
+  AnalyticsQuery,
+  AnalyticsReport,
+  AnalyticsSeries,
+  AnalyticsTargets,
   AvailabilityLane,
   AvailabilityQuery,
   AvailabilityReason,
@@ -3834,5 +3840,209 @@ describe('WebBookingReviewInput', () => {
       WebBookingReviewInput.parse({ decision: 'reject', reason: 'あ'.repeat(121) }),
     ).toThrow()
     expect(() => WebBookingReviewInput.parse({ decision: 'cancel' })).toThrow()
+  })
+})
+
+/* ------------------------------------------------------------------------- *
+ * P9 分析（`specs/glasses_management/features/012-analytics`）
+ * ------------------------------------------------------------------------- */
+
+const analyticsStoreId = '3f2d8c1e-9a4b-4c7d-8e1f-2b3c4d5e6f70'
+
+const analyticsQueryInput = {
+  storeId: analyticsStoreId,
+  metric: 'reservation_count',
+  from: '2026-08-01',
+  to: '2026-08-31',
+} as const
+
+const analyticsPointInput = {
+  key: '2026-08-01',
+  label: '1日',
+  value: 12,
+  isClosed: false,
+  isOverTarget: false,
+} as const
+
+const analyticsReportInput = {
+  metric: 'reservation_count',
+  from: '2026-08-01',
+  to: '2026-08-31',
+  granularity: 'day',
+  countBy: 'visit_date',
+  series: [{ name: 'ご予約', pattern: 'solid', points: [analyticsPointInput] }],
+  summary: [{ label: '合計', value: '320', unit: '件', isOverTarget: false }],
+  target: null,
+  suppressed: false,
+  businessDays: 27,
+  pendingDays: 0,
+} as const
+
+describe('AnalyticsMetric', () => {
+  it('is an allow-list of eight metrics and fails closed on anything else', () => {
+    expect(AnalyticsMetric.options).toEqual([
+      'overview',
+      'reservation_count',
+      'reservation_source',
+      'cancellation',
+      'visit_frequency',
+      'staff',
+      'purpose',
+      'wait_time',
+    ])
+    expect(() => AnalyticsMetric.parse('guests')).toThrow()
+    expect(() => AnalyticsMetric.parse('')).toThrow()
+  })
+
+  it('keeps overview separate from reservation_count — the top tab is its own request', () => {
+    expect(AnalyticsMetric.parse('overview')).toBe('overview')
+    expect(AnalyticsMetric.parse('reservation_count')).toBe('reservation_count')
+  })
+})
+
+describe('AnalyticsQuery', () => {
+  it('defaults granularity to day and countBy to visit_date', () => {
+    const parsed = AnalyticsQuery.parse(analyticsQueryInput)
+    expect(parsed.granularity).toBe('day')
+    expect(parsed.countBy).toBe('visit_date')
+  })
+
+  it('accepts a range of exactly 400 days (2026-01-01 to 2027-02-04)', () => {
+    expect(
+      AnalyticsQuery.parse({ ...analyticsQueryInput, from: '2026-01-01', to: '2027-02-04' }).to,
+    ).toBe('2027-02-04')
+  })
+
+  it('rejects a range of 401 days (2026-01-01 to 2027-02-05)', () => {
+    expect(() =>
+      AnalyticsQuery.parse({ ...analyticsQueryInput, from: '2026-01-01', to: '2027-02-05' }),
+    ).toThrow()
+  })
+
+  it('rejects a to earlier than from', () => {
+    expect(() =>
+      AnalyticsQuery.parse({ ...analyticsQueryInput, from: '2026-08-31', to: '2026-08-01' }),
+    ).toThrow()
+  })
+
+  it('accepts from equal to to — a single day is a valid range', () => {
+    expect(
+      AnalyticsQuery.parse({ ...analyticsQueryInput, from: '2026-08-07', to: '2026-08-07' }).from,
+    ).toBe('2026-08-07')
+  })
+
+  it('requires a UUID storeId so a store slug cannot be smuggled in', () => {
+    expect(() => AnalyticsQuery.parse({ ...analyticsQueryInput, storeId: 'ginza' })).toThrow()
+  })
+
+  it('rejects an unknown key so a stale client field never lands silently', () => {
+    expect(() =>
+      AnalyticsQuery.parse({ ...analyticsQueryInput, staffId: analyticsStoreId }),
+    ).toThrow()
+    expect(() => AnalyticsQuery.parse({ ...analyticsQueryInput, granularity: 'week' })).toThrow()
+  })
+})
+
+describe('AnalyticsPoint', () => {
+  it('defaults secondaryValue to null so a suppressed rate is not zero', () => {
+    expect(AnalyticsPoint.parse(analyticsPointInput).secondaryValue).toBeNull()
+  })
+
+  it('bounds a rate secondaryValue to 0..1', () => {
+    expect(AnalyticsPoint.parse({ ...analyticsPointInput, secondaryValue: 0 }).secondaryValue).toBe(
+      0,
+    )
+    expect(AnalyticsPoint.parse({ ...analyticsPointInput, secondaryValue: 1 }).secondaryValue).toBe(
+      1,
+    )
+    expect(() => AnalyticsPoint.parse({ ...analyticsPointInput, secondaryValue: 1.01 })).toThrow()
+    expect(() => AnalyticsPoint.parse({ ...analyticsPointInput, secondaryValue: -0.01 })).toThrow()
+    expect(() => AnalyticsPoint.parse({ ...analyticsPointInput, value: -1 })).toThrow()
+  })
+
+  it('carries isClosed and isOverTarget as booleans, never as a colour', () => {
+    const parsed = AnalyticsPoint.parse({
+      ...analyticsPointInput,
+      isClosed: true,
+      isOverTarget: true,
+    })
+    expect(parsed.isClosed).toBe(true)
+    expect(parsed.isOverTarget).toBe(true)
+    expect(() =>
+      AnalyticsPoint.parse({ ...analyticsPointInput, isClosed: 'var(--color-danger)' }),
+    ).toThrow()
+    expect(() => AnalyticsPoint.parse({ ...analyticsPointInput, colour: '#c0392b' })).toThrow()
+  })
+})
+
+describe('AnalyticsSeries', () => {
+  it('requires a pattern of solid, hatch or dot', () => {
+    expect(AnalyticsSeries.parse({ name: 'ご予約', pattern: 'hatch', points: [] }).pattern).toBe(
+      'hatch',
+    )
+    expect(AnalyticsSeries.parse({ name: 'ご予約', pattern: 'dot', points: [] }).pattern).toBe(
+      'dot',
+    )
+    expect(() => AnalyticsSeries.parse({ name: 'ご予約', pattern: 'red', points: [] })).toThrow()
+  })
+
+  it('bounds name to 1..30 characters', () => {
+    expect(() => AnalyticsSeries.parse({ name: '', pattern: 'solid', points: [] })).toThrow()
+    expect(() =>
+      AnalyticsSeries.parse({ name: 'あ'.repeat(31), pattern: 'solid', points: [] }),
+    ).toThrow()
+    expect(
+      AnalyticsSeries.parse({ name: 'あ'.repeat(30), pattern: 'solid', points: [] }).name.length,
+    ).toBe(30)
+  })
+})
+
+describe('AnalyticsReport', () => {
+  it("has no guests field — the mock's 名 is out until Q-11 is answered", () => {
+    const parsed = AnalyticsReport.parse(analyticsReportInput)
+    expect(Object.keys(parsed)).not.toContain('guests')
+    expect(() => AnalyticsReport.parse({ ...analyticsReportInput, guests: 414 })).toThrow()
+    expect(JSON.stringify(parsed)).not.toContain('名')
+  })
+
+  it('keeps target nullable because most tabs have no 目安', () => {
+    expect(AnalyticsReport.parse(analyticsReportInput).target).toBeNull()
+    expect(AnalyticsReport.parse({ ...analyticsReportInput, target: 8 }).target).toBe(8)
+  })
+
+  it('requires businessDays and pendingDays to be non-negative integers', () => {
+    expect(AnalyticsReport.parse({ ...analyticsReportInput, pendingDays: 3 }).pendingDays).toBe(3)
+    expect(() => AnalyticsReport.parse({ ...analyticsReportInput, businessDays: -1 })).toThrow()
+    expect(() => AnalyticsReport.parse({ ...analyticsReportInput, businessDays: 26.5 })).toThrow()
+    expect(() => AnalyticsReport.parse({ ...analyticsReportInput, pendingDays: -1 })).toThrow()
+    expect(() =>
+      AnalyticsReport.parse({
+        ...analyticsReportInput,
+        summary: [
+          { label: 'a', value: '1', unit: '件', isOverTarget: false },
+          { label: 'b', value: '2', unit: '件', isOverTarget: false },
+          { label: 'c', value: '3', unit: '件', isOverTarget: false },
+          { label: 'd', value: '4', unit: '件', isOverTarget: false },
+        ],
+      }),
+    ).toThrow()
+  })
+})
+
+describe('AnalyticsTargets', () => {
+  it('is the fixed all-store triple 8 / 10 / 90', () => {
+    const parsed = AnalyticsTargets.parse({
+      waitMinutes: 8,
+      cancellationRatePercent: 10,
+      revisitWindowDays: 90,
+    })
+    expect(parsed).toEqual({ waitMinutes: 8, cancellationRatePercent: 10, revisitWindowDays: 90 })
+    expect(() =>
+      AnalyticsTargets.parse({
+        waitMinutes: 9,
+        cancellationRatePercent: 10,
+        revisitWindowDays: 90,
+      }),
+    ).toThrow()
   })
 })

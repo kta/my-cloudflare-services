@@ -183,9 +183,11 @@ beforeAll(async () => {
       NOW,
     )
     .run()
+  // 店長は分析も開ける（`analytics.read`）。持たないスタッフは 403 になる。
   await syncMembership(ORG, fixture.storeId, subOf(ORG, ':manager'), [
     'settings.read',
     'settings.manage',
+    'analytics.read',
   ])
   await syncMembership(ORG, fixture.storeId, subOf(ORG, ':clerk'), ['settings.read'])
   await syncMembership(ORG, fixture.storeId, subOf(ORG, ':reader'), ['recording.read'])
@@ -768,6 +770,22 @@ const PUBLIC_MISSING = {
   clerk: 404,
   expired: 404,
   'wrong-secret': 404,
+} as const
+
+/**
+ * 分析は `analytics.read` を持つ人だけ。持たない人は 403（401 にしない）。
+ * 別 org のトークンも 403 で、**その店舗が在ることを 404 で漏らさない**。
+ */
+const ANALYTICS = {
+  none: 401,
+  staff: 403,
+  admin: 403,
+  manager: 200,
+  clerk: 403,
+  reader: 403,
+  keeper: 403,
+  expired: 401,
+  'wrong-secret': 401,
 } as const
 
 /** きょうから N 日先の JST 暦日。Web 予約の受付の窓は実時刻を見る。 */
@@ -1507,6 +1525,32 @@ const TABLE: Row[] = [
     },
   },
   {
+    name: '分析は analytics.read を持つ人だけが開ける',
+    method: 'GET',
+    path: () =>
+      `/api/staff/analytics?storeId=${fixture.storeId}&metric=overview&from=2026-08-01&to=2026-08-31`,
+    expected: ANALYTICS,
+  },
+  {
+    name: '分析の目安も analytics.read を持つ人だけが読める',
+    method: 'GET',
+    path: () => `/api/staff/analytics/targets?storeId=${fixture.storeId}`,
+    expected: ANALYTICS,
+  },
+  {
+    name: '分析の未知パスも default-deny で塞がる',
+    method: 'GET',
+    path: () => '/api/staff/analytics/not-a-route',
+    expected: {
+      none: 401,
+      staff: 404,
+      manager: 404,
+      clerk: 404,
+      expired: 401,
+      'wrong-secret': 401,
+    },
+  },
+  {
     name: '未知の顧客パスも既定の拒否に落ちる',
     method: 'GET',
     path: () => '/api/staff/customers/not-a-route',
@@ -1739,5 +1783,41 @@ describe('録音の権限は 401 と 403 を取り違えない', () => {
       headers: headersFor('reader'),
     })
     expect(authenticated.status).toBe(404)
+  })
+})
+
+describe('分析は 401 と 403 と 400 を取り違えない', () => {
+  it('storeId を書かない要求は、認可の前に入力検証で 400 になる', async () => {
+    const res = await SELF.fetch(`${BASE}/api/staff/analytics?metric=overview`, {
+      headers: headersFor('clerk'),
+    })
+    // 403 を返すと「権限が足りない」と読めてしまう。落ちているのは入力である。
+    expect(res.status).toBe(400)
+  })
+
+  it('期限切れトークンは 403 ではなく 401 を返す（固定の過去時刻で作る）', async () => {
+    const res = await SELF.fetch(`${BASE}/api/staff/analytics/targets?storeId=${fixture.storeId}`, {
+      headers: headersFor('expired'),
+    })
+    expect(res.status).toBe(401)
+  })
+
+  it('別 org のトークンは 403 で、その店舗が在ることを 404 で漏らさない', async () => {
+    const other = orgId()
+    const token = await tokenFor(other)
+    const res = await SELF.fetch(`${BASE}/api/staff/analytics/targets?storeId=${fixture.storeId}`, {
+      headers: { ...JSON_HEADERS, authorization: `Bearer ${token}` },
+    })
+    expect(res.status).toBe(403)
+    expect(await res.json()).toMatchObject({ error: 'forbidden' })
+  })
+
+  it('日次集計の保守はテナントのトークンでは越えられない', async () => {
+    const res = await SELF.fetch(`${BASE}/api/internal/maintenance/analytics/rollup`, {
+      method: 'POST',
+      headers: headersFor('manager'),
+      body: JSON.stringify({}),
+    })
+    expect(res.status).toBe(401)
   })
 })

@@ -481,3 +481,81 @@ export async function insertSlotLock(
     )
     .run()
 }
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * P9 分析
+ * 画面は `analytics_daily` しか読まないので、読み出しの試験はこの表へ直に置く。
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+/** `analytics_daily` の 1 行ぶんの材料。`dimension` を省くと `total`（鍵は空文字）。 */
+export type DailySeed = {
+  date: string
+  metric: string
+  dimension?: string
+  dimensionKey?: string
+  value: number
+}
+
+/** 日次集計の行を D1 へ直に置く。同じ 6 列の行は上書きする（本番の upsert と同じ）。 */
+export async function insertAnalyticsDaily(
+  org: string,
+  storeId: string,
+  seeds: readonly DailySeed[],
+): Promise<void> {
+  for (const seed of seeds) {
+    await env.DB.prepare(
+      'INSERT INTO analytics_daily (id, organization_id, store_id, date, metric, dimension, dimension_key, value, created_at, updated_at) ' +
+        'VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT (organization_id, store_id, date, metric, dimension, dimension_key) ' +
+        'DO UPDATE SET value = excluded.value',
+    )
+      .bind(
+        crypto.randomUUID(),
+        org,
+        storeId,
+        seed.date,
+        seed.metric,
+        seed.dimension ?? 'total',
+        seed.dimensionKey ?? '',
+        seed.value,
+        FIXED_NOW,
+        FIXED_NOW,
+      )
+      .run()
+  }
+}
+
+/** 「その日を集計した」印（`closed`）を期間ぶん置く。`closedDates` の日だけ定休にする。 */
+export async function markAnalyticsDays(
+  org: string,
+  storeId: string,
+  dates: readonly string[],
+  closedDates: readonly string[] = [],
+): Promise<void> {
+  const closed = new Set(closedDates)
+  await insertAnalyticsDaily(
+    org,
+    storeId,
+    dates.map((date) => ({ date, metric: 'closed', value: closed.has(date) ? 1 : 0 })),
+  )
+}
+
+/** 店舗の権限を配る（admin からの membership 同期を模す）。 */
+export async function grantStorePermissions(
+  org: string,
+  storeId: string,
+  userId: string,
+  permissions: readonly string[],
+): Promise<void> {
+  await SELF.fetch(`${BASE}/api/internal/store-memberships/sync`, {
+    method: 'POST',
+    headers: INTERNAL_HEADERS,
+    body: JSON.stringify({
+      id: crypto.randomUUID(),
+      organizationId: org,
+      storeId,
+      userId,
+      permissions: [...permissions],
+      createdAt: FIXED_NOW,
+    }),
+  })
+}

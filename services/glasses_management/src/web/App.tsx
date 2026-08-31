@@ -2,6 +2,7 @@ import type { StaffMember, Store } from '@app/contracts'
 import { auth, toJstDateString } from '@app/shared'
 import { Button, Field, focusRing, focusRingOnPine, Notice, TextInput } from '@app/ui'
 import { type FormEvent, type ReactNode, useCallback, useEffect, useState } from 'react'
+import { AnalyticsScreen } from './analytics/AnalyticsScreen'
 import { BookingScreen } from './booking/BookingScreen'
 import { ChangeScreen } from './change/ChangeScreen'
 import { client } from './client'
@@ -291,6 +292,19 @@ function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
               stores={stores}
               initialQuery={customerQuery}
               onStartBooking={(customer) => startBooking(customer)}
+              onSessionExpired={onSignOut}
+            />
+          ) : (
+            <p className="p-11 text-body text-ink-muted">読み込んでいます…</p>
+          )
+        ) : current === 'analytics' ? (
+          /* 分析（ANALYTICS-TOP ほか 8 タブ）。期間と店舗はこの面の中で選び、
+             「適用」を押したときだけ集計する。店舗は器が引いた一覧をそのまま渡す。 */
+          store ? (
+            <AnalyticsScreen
+              storeId={store.id}
+              stores={stores ?? []}
+              onBack={() => navigate('home')}
               onSessionExpired={onSignOut}
             />
           ) : (

@@ -85,6 +85,19 @@ const dayLabel = (date: string) => `${Number(date.slice(5, 7))}月${Number(date.
 /** 実時刻の JST 暦日。盤面はこの日の上で組み立てる。 */
 const TODAY = jstDate(Date.now())
 
+/** 当日（JST）の 00:00 の瞬間。 */
+const DAY_START = Date.parse(`${TODAY}T00:00:00.000+09:00`)
+
+/**
+ * いまから n 分前の瞬間（当日の 00:00 より前にはしない。前後の順は n の大小で保たれる）。
+ *
+ * **お着きになった時刻を当日の壁時計で決め打ちしない。**11:02 と書くと、その時刻より前に
+ * この面を走らせたときに「未来にお着きになった」行ができ、サーバ時刻で書く退店の記録が
+ * 先に並んで、その行がご来店中のまま残る（盤面は `occurred_at` の並びの最後で決める）。
+ */
+const minutesAgo = (n: number) =>
+  new Date(Math.max(Date.now() - n * MS_PER_MINUTE, DAY_START + (60 - n) * 1_000)).toISOString()
+
 /**
  * seed が 12 件のご予約を置いている日（モックが描いている 2026年8月27日（木））。
  *
@@ -140,9 +153,24 @@ function freeSlot(date: string): string {
 /** 1 日ぶんの枠の本数（30 分刻み）。これを配り切ったら諦める。 */
 const SLOTS_PER_DAY = 48
 
+/**
+ * **いまより前**の枠を 1 分ずつずらして配る。
+ *
+ * 来店回数と初回来店日は `starts_at <= いま` のご予約だけを数える（`bumpVisitCounters`）。
+ * 日の頭から配る `freeSlot` の枠は、この面を朝早くに走らせると未来になり、退店を記録しても
+ * 初回来店日が入らない。初回来店日を見る test だけはここから枠を取る。
+ */
+let pastSlotIndex = 0
+function pastSlot(): string {
+  pastSlotIndex += 1
+  const at = Date.now() - pastSlotIndex * 30 * MS_PER_MINUTE
+  return new Date(Math.max(at, DAY_START)).toISOString()
+}
+
 async function createWalkin(
   request: APIRequestContext,
   body: Record<string, unknown>,
+  nextSlot?: () => string,
 ): Promise<Walkin> {
   const { headers } = await authed(request)
   const arrivedAt = typeof body.arrivedAt === 'string' ? body.arrivedAt : new Date().toISOString()
@@ -154,7 +182,8 @@ async function createWalkin(
    * 断られた事実を見て次を探すのが、走らせ方に依らない唯一の形である。
    */
   for (let attempt = 0; attempt < SLOTS_PER_DAY; attempt += 1) {
-    const startsAt = typeof body.startsAt === 'string' ? body.startsAt : freeSlot(date)
+    const startsAt =
+      typeof body.startsAt === 'string' ? body.startsAt : (nextSlot?.() ?? freeSlot(date))
     const res = await request.post('/api/staff/walkins', {
       headers: { ...headers, 'Idempotency-Key': crypto.randomUUID() },
       data: {
@@ -193,7 +222,13 @@ async function createReservation(
   return (await res.json()) as { id: string }
 }
 
-type BoardRow = { subjectType: string; subjectId: string; displayName: string }
+type BoardRow = {
+  subjectType: string
+  subjectId: string
+  displayName: string
+  /** 工程 6 欄。`at` はその工程を記録した瞬間（まだなら null）。 */
+  cells: { at: string | null }[]
+}
 type Board = { date: string; activeCount: number; rows: BoardRow[]; serverNow: string }
 
 async function readBoard(
@@ -247,14 +282,25 @@ async function linkCustomer(
 /**
  * その日の盤面を空にする。**件数を数える test の前に必ず呼ぶ** —— D1 は 1 本しか無く、
  * 前の test が残した行がそのまま「ご来店中 N名」に混ざるからである。
+ *
+ * **退店は行の最後の記録より必ずあとの時刻で書く。**盤面は `occurred_at` の並びの
+ * 最後の工程でご来店中かどうかを決めるので、退店をサーバ時刻（＝いま）に任せると、
+ * 当日の壁時計で先に仕込んだ記録（11:02 のご来店など）より前に入ってしまい、
+ * その行がご来店中のまま残る。この e2e を午前の早い時刻に走らせたときだけ起きる。
  */
 async function clearBoard(request: APIRequestContext, date = TODAY): Promise<void> {
   const board = await readBoard(request, date)
+  const serverNow = Date.parse(board.serverNow)
   for (const row of board.rows) {
+    const lastAt = Math.max(
+      serverNow,
+      ...row.cells.map((cell) => (cell.at === null ? 0 : Date.parse(cell.at))),
+    )
     await addVisit(request, {
       subjectType: row.subjectType,
       subjectId: row.subjectId,
       stage: 'left',
+      occurredAt: new Date(lastAt + 1_000).toISOString(),
     })
   }
   expect((await readBoard(request, date)).activeCount).toBe(0)
@@ -655,8 +701,8 @@ test('台帳の最下段に「ご来店お待ち」の帯が出て、お待ち�
   request,
 }) => {
   await clearBoard(request)
-  await createWalkin(request, { purposeNote: 'フレームの相談', arrivedAt: atJst(TODAY, '11:02') })
-  await createWalkin(request, { purposeNote: 'フレームの相談', arrivedAt: atJst(TODAY, '11:05') })
+  await createWalkin(request, { purposeNote: 'フレームの相談', arrivedAt: minutesAgo(8) })
+  await createWalkin(request, { purposeNote: 'フレームの相談', arrivedAt: minutesAgo(5) })
 
   await openLedger(page)
   const grid = page.getByRole('grid', { name: '予約台帳' })
@@ -715,7 +761,8 @@ test('新しく登録したお客様へ結びつけると、その来店がそ�
   request,
 }) => {
   await clearBoard(request)
-  const walkin = await createWalkin(request, { purposeId: ADJUST })
+  // 初回来店日は `starts_at <= いま` のご予約からしか入らないので、枠を過去に取る。
+  const walkin = await createWalkin(request, { purposeId: ADJUST }, pastSlot)
   await openBoard(page)
 
   // 盤面のその行から、お名前とふりがなを入れて新しいお客様を作り、そのまま結びつける。
@@ -980,8 +1027,14 @@ test('絞りすぎて 0 件になると、条件を 1 つ緩めた候補が件�
   await createWalkin(request, { purposeId: ADJUST })
 
   await openHistory(page)
-  await pickSpan(page, TODAY, TODAY)
-  // 取り消したご予約は当日に 1 件も無いので、この 2 つで 0 件になる。
+  /*
+   * **期間は前日に絞る。**「絞り込みをすべて外す」は今月ぜんぶへ戻す候補なので、
+   * 当日だけに絞ると月初（1日）にはその 2 つが同じ問い合わせになり、重ねて出さない。
+   * 前日に絞れば「期間を今月まで広げる」と「すべて外す」がどの日でも別の候補になる。
+   */
+  const yesterday = shiftDate(TODAY, -1)
+  await pickSpan(page, yesterday, yesterday)
+  // 取り消したご予約は 1 件も無いので、この 2 つで 0 件になる。
   await pickResult(page, '取消')
 
   await expect(page.getByText('条件に合う受付履歴はありませんでした')).toBeVisible()
@@ -1152,11 +1205,11 @@ test('お待ちのまま帰られた来店は待ちの帯から外れ、受付�
   await clearBoard(request)
   const stayed = await createWalkin(request, {
     purposeNote: 'フレームの相談',
-    arrivedAt: atJst(TODAY, '11:02'),
+    arrivedAt: minutesAgo(8),
   })
   const left = await createWalkin(request, {
     purposeNote: 'フレームの相談',
-    arrivedAt: atJst(TODAY, '11:05'),
+    arrivedAt: minutesAgo(5),
   })
 
   await openLedger(page)

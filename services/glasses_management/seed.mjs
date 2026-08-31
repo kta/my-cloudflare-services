@@ -266,9 +266,30 @@ const jstDays = (from, days) => {
 }
 const weekdayOf = (date) => new Date(`${date}T00:00:00.000Z`).getUTCDay()
 
-const shiftRows = jstDays(SHIFT_FROM, SHIFT_DAYS).flatMap((date, dayIndex) =>
+/* --- 実時刻の「今日」が定休に当たる日の臨時営業 --------------------------- *
+ * 来店受付ボード（GET /api/staff/visits/board）は時刻を渡す口が無く `new Date()` を使う。
+ * よって reception の e2e は実時刻の JST 暦日で組み立てるしかないが、銀座店の定休は火曜
+ * なので、火曜に走らせると当日のご予約が `store_closed` で 1 件も作れず面ごと落ちる。
+ * 世界観（定休は火曜）は変えず、その日だけ `kind='special'` の臨時営業を 1 行足し、
+ * 同じ日の勤務も置く（勤務が無いと今度は `staff_off` で枠が全滅するため）。
+ * 営業日に走らせるときは SPECIAL_OPEN が null になり、seed の中身は 1 行も変わらない。 */
+const TODAY_JST = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10)
+const SPECIAL_OPEN =
+  businessHours[weekdayOf(TODAY_JST)].opens === null
+    ? { date: TODAY_JST, opens: '10:00', closes: '19:00' }
+    : null
+
+const shiftDates = jstDays(SHIFT_FROM, SHIFT_DAYS)
+if (SPECIAL_OPEN !== null && !shiftDates.includes(SPECIAL_OPEN.date))
+  shiftDates.push(SPECIAL_OPEN.date)
+
+const shiftRows = shiftDates.flatMap((date, dayIndex) =>
   staffMembers.flatMap((m, i) => {
-    const band = m.week[weekdayOf(date)]
+    // 臨時営業の日は全員が店の営業時間どおりに出る（定休の曜日には勤務の型が無い）。
+    const band =
+      date === SPECIAL_OPEN?.date
+        ? `${SPECIAL_OPEN.opens}-${SPECIAL_OPEN.closes}`
+        : m.week[weekdayOf(date)]
     if (band === null) return []
     const [startsAt, endsAt] = band.split('-')
     const rows = [{ n: i * 100 + dayIndex, staffIndex: i, date, startsAt, endsAt, kind: 'work' }]
@@ -814,6 +835,336 @@ const memberships = [
   },
 ]
 
+/* --- 分析の日次集計（P9） -------------------------------------------------- *
+ * 画面が読むのは `analytics_daily` だけなので、E2E の盤面はここに直接置く
+ * （Cron を待たない）。基準日は 2026年8月27日（木）で、火曜が定休。
+ *
+ * 数え方の約束をそのまま実データにしてある:
+ *   - 2026年8月は暦 31 日 − 火曜 4 日 ＝ **営業日 27 日**。合計 320 件なので
+ *     「1日あたり」は 320 ÷ 27 ＝ 11.9 件になる（暦日 31 で割ると 10.3 にしかならない）。
+ *   - 今週（8/24 月〜8/30 日）は 72 件。
+ *   - 7月30日・31日は**行を置かない** —— 定休日の 0 件（`closed=1` の行がある）と
+ *     まだ集計できていない日（行が無い）を分けて描けるようにするため。
+ *   - 「名」は 1 行も書かない（`metric='guests'` を作らない）。
+ */
+
+/** 別の組織（テナント分離の見本）。EYEX の数字が 1 件も混ざらないことを見る。 */
+const RIVAL_ORG = 'org-rival-seed'
+const RIVAL_STORE = '77777777-7777-4777-8777-777777777777'
+const RIVAL_STAFF = uid('c0060000', 0)
+
+/** 丸の内店の担当 2 名（銀座店の 6 名とは 1 人も重ならない）。 */
+const marunouchiStaff = [
+  { id: uid('c0050000', 0), name: '井上 彩香', kana: 'いのうえ あやか' },
+  { id: uid('c0050000', 1), name: '大西 亮', kana: 'おおにし りょう' },
+]
+
+const ANALYTICS_MONTHS = [
+  '2026-02',
+  '2026-03',
+  '2026-04',
+  '2026-05',
+  '2026-06',
+  '2026-07',
+  '2026-08',
+]
+/*
+ * まだ集計できていない 2 日。行を 1 つも置かない —— 定休日の 0 件（`closed=1` の行がある）と
+ * 見分けがつくことの実データである。取り消しタブが既定で見る 3〜8 月から外して 2 月へ置く
+ * （どのタブでも「〜日ぶんはまだ集計中です」が出る盤面にすると、6 面が常に 1 行ぶん下がる）。
+ */
+const PENDING_DATES = new Set(['2026-02-27', '2026-02-28'])
+
+const monthDates = (month) => {
+  const [y, m] = month.split('-').map(Number)
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate()
+  return Array.from({ length: last }, (_, i) => `${month}-${String(i + 1).padStart(2, '0')}`)
+}
+const isClosedDay = (date) => weekdayOf(date) === 2
+const analyticsDates = ANALYTICS_MONTHS.flatMap(monthDates).filter((d) => !PENDING_DATES.has(d))
+const businessDatesOf = (month) =>
+  monthDates(month).filter((d) => !PENDING_DATES.has(d) && !isClosedDay(d))
+
+/** 合計を日数へ割り振る（余りは前から 1 ずつ）。**合計は必ず一致する。** */
+const spread = (total, count) => {
+  const base = Math.floor(total / count)
+  const rest = total - base * count
+  return Array.from({ length: count }, (_, i) => base + (i < rest ? 1 : 0))
+}
+
+const analyticsRows = []
+const daily = (org, store, date, metric, dimension, dimensionKey, value) => {
+  if (value === 0 && metric !== 'closed') return
+  analyticsRows.push({ org, store, date, metric, dimension, dimensionKey, value })
+}
+/** 合計を日付の並びへ割り振って 1 行ずつ置く。 */
+const dailySpread = (org, store, dates, metric, dimension, dimensionKey, total) => {
+  const values = spread(total, dates.length)
+  dates.forEach((date, i) => {
+    daily(org, store, date, metric, dimension, dimensionKey, values[i])
+  })
+}
+
+/** 2026年8月のご予約（ご来店日でかぞえる）。火曜は 0、8/27 だけが 14 件で最も多い。 */
+const AUGUST_RESERVATIONS = {
+  1: 13,
+  2: 11,
+  3: 13,
+  4: 0,
+  5: 11,
+  6: 12,
+  7: 13,
+  8: 10,
+  9: 12,
+  10: 11,
+  11: 0,
+  12: 13,
+  13: 12,
+  14: 10,
+  15: 13,
+  16: 11,
+  17: 12,
+  18: 0,
+  19: 13,
+  20: 10,
+  21: 12,
+  22: 11,
+  23: 13,
+  24: 11,
+  25: 0,
+  26: 13,
+  27: 14,
+  28: 12,
+  29: 12,
+  30: 10,
+  31: 12,
+}
+/** 3〜7月の月合計（取消率の分母になる「来店予定だった総数」の内訳の片側）。 */
+const MONTH_RESERVATIONS = {
+  '2026-02': 236,
+  '2026-03': 268,
+  '2026-04': 281,
+  '2026-05': 292,
+  '2026-06': 276,
+  '2026-07': 274,
+}
+/** 月ごとの取り消し 5 分類。文字は CHANGE-CANCEL の 4 択と 1 字も違えない。 */
+const MONTH_CANCELLATIONS = {
+  '2026-03': { customer: 12, store: 3, duplicate: 2, no_show: 4, web: 3 },
+  '2026-04': { customer: 15, store: 4, duplicate: 2, no_show: 5, web: 3 },
+  '2026-05': { customer: 16, store: 4, duplicate: 3, no_show: 5, web: 3 },
+  '2026-06': { customer: 14, store: 5, duplicate: 3, no_show: 6, web: 3 },
+  '2026-07': { customer: 20, store: 6, duplicate: 4, no_show: 5, web: 2 },
+  '2026-08': { customer: 13, store: 4, duplicate: 3, no_show: 4, web: 3 },
+}
+/** 月ごとの受付件数（ウォークインを含む。ご予約の件数とは別の母数）。 */
+const MONTH_RECEPTIONS = {
+  '2026-02': 240,
+  '2026-03': 268,
+  '2026-04': 281,
+  '2026-05': 296,
+  '2026-06': 288,
+  '2026-07': 305,
+  '2026-08': 328,
+}
+/** 月ごとのお待ち時間の中央値（秒）。6月は 8分ちょうど、5月は 8分1秒。 */
+const MONTH_WAIT_SECONDS = {
+  '2026-02': 510,
+  '2026-03': 500,
+  '2026-04': 460,
+  '2026-05': 481,
+  '2026-06': 480,
+  '2026-07': 440,
+  '2026-08': 520,
+}
+
+// 集計した日の印。定休日は value=1 で、行が無い日（7/30・7/31）が「まだ集計中」になる。
+for (const date of analyticsDates) {
+  daily(ORG, GINZA, date, 'closed', 'total', '', isClosedDay(date) ? 1 : 0)
+}
+for (const date of monthDates('2026-08')) {
+  daily(ORG, MARUNOUCHI, date, 'closed', 'total', '', isClosedDay(date) ? 1 : 0)
+  daily(RIVAL_ORG, RIVAL_STORE, date, 'closed', 'total', '', isClosedDay(date) ? 1 : 0)
+}
+
+// ご予約の件数（ご来店日）。8月は日ごとに、3〜7月は月合計を営業日へ割り振る。
+for (const [day, value] of Object.entries(AUGUST_RESERVATIONS)) {
+  const date = `2026-08-${String(day).padStart(2, '0')}`
+  daily(ORG, GINZA, date, 'reservations', 'total', '', value)
+}
+for (const [month, total] of Object.entries(MONTH_RESERVATIONS)) {
+  dailySpread(ORG, GINZA, businessDatesOf(month), 'reservations', 'total', '', total)
+}
+
+/*
+ * 受付日でかぞえた 8月のご予約。**同じ予約が別の日に落ちる**ので合計が変わる
+ * （320 → 331）。「かぞえる日」を切り替えると数字が動くことの実データである。
+ */
+const augustBusiness = businessDatesOf('2026-08')
+augustBusiness.forEach((date, i) => {
+  const day = Number(date.slice(8))
+  const extra = i < 11 ? 1 : 0
+  daily(ORG, GINZA, date, 'reservations_received', 'total', '', AUGUST_RESERVATIONS[day] + extra)
+})
+
+/** 8月の切り口を置く 5 日（月合計をこの 5 日へ割り振る）。 */
+const AUGUST_SAMPLES = ['2026-08-03', '2026-08-10', '2026-08-17', '2026-08-24', '2026-08-27']
+
+// 時間帯別（10・11・14・15・17時台）。5 日で 320 件になる。
+const AUGUST_HOURS = ['10', '11', '14', '15', '17']
+for (const date of AUGUST_SAMPLES) {
+  const perHour = spread(64, AUGUST_HOURS.length)
+  AUGUST_HOURS.forEach((hour, i) => {
+    daily(ORG, GINZA, date, 'reservations', 'hour', hour, perHour[i])
+  })
+}
+
+// 予約の入口 4 つ（お電話・店頭・Web予約・ウォークイン）。
+for (const [source, total] of Object.entries({ phone: 128, counter: 96, web: 64, walkin: 32 })) {
+  dailySpread(ORG, GINZA, AUGUST_SAMPLES, 'reservations', 'source', source, total)
+}
+
+// ご来店の目的。4 つ目は**すでに消したご用件**（名前が引けないので「（削除されたご用件）」）。
+const DELETED_PURPOSE = 'e0010000-0000-4000-8000-000000000099'
+for (const [purposeId, total] of Object.entries({
+  [uid('e0010000', 0)]: 120,
+  [uid('e0010000', 1)]: 90,
+  [uid('e0010000', 2)]: 70,
+  [DELETED_PURPOSE]: 40,
+})) {
+  dailySpread(ORG, GINZA, AUGUST_SAMPLES, 'reservations', 'purpose', purposeId, total)
+}
+
+// 来店回数の 4 階級。合計は受付の 328 件と揃える。
+for (const [klass, total] of Object.entries({
+  first: 118,
+  second: 76,
+  third_to_fifth: 84,
+  sixth_plus: 50,
+})) {
+  dailySpread(ORG, GINZA, AUGUST_SAMPLES, 'receptions', 'visit_frequency', klass, total)
+}
+
+/*
+ * 担当者ごとの受付と 90 日以内の再来。合計 328 件（担当未定 36 件を含む）。
+ * 渡辺 由紀は 19 件で**小標本の閾値 20 に 1 件足りない**ので率を伏せる。
+ * 山田 大輔は 0 件（行を置かない）。それでも名簿から行として出る。
+ */
+const STAFF_RECEPTIONS = [
+  { staff: uid('c0010000', 0), receptions: 84, revisits: 55 },
+  { staff: uid('c0010000', 1), receptions: 71, revisits: 44 },
+  { staff: uid('c0010000', 2), receptions: 66, revisits: 40 },
+  { staff: uid('c0010000', 3), receptions: 52, revisits: 29 },
+  { staff: uid('c0010000', 4), receptions: 19, revisits: 12 },
+  { staff: 'unassigned', receptions: 36, revisits: 0 },
+]
+for (const row of STAFF_RECEPTIONS) {
+  dailySpread(ORG, GINZA, AUGUST_SAMPLES, 'receptions', 'staff', row.staff, row.receptions)
+  if (row.revisits > 0) {
+    dailySpread(ORG, GINZA, AUGUST_SAMPLES, 'revisits_90d', 'staff', row.staff, row.revisits)
+  }
+}
+
+// 受付の総数とお待ち時間の中央値。中央値は日ごとに同じ値なので月の中央値もその値になる。
+for (const month of ANALYTICS_MONTHS) {
+  const dates = businessDatesOf(month)
+  dailySpread(ORG, GINZA, dates, 'receptions', 'total', '', MONTH_RECEPTIONS[month])
+  for (const date of dates) {
+    daily(ORG, GINZA, date, 'wait_seconds_median', 'total', '', MONTH_WAIT_SECONDS[month])
+  }
+}
+
+// 時間帯ごとのお待ち時間（10〜18時台）。13・14・17時台だけが目安 8 分を超える。
+const WAIT_BY_HOUR = {
+  10: 300,
+  11: 420,
+  12: 480,
+  13: 540,
+  14: 600,
+  15: 460,
+  16: 380,
+  17: 520,
+  18: 300,
+}
+for (const date of [...AUGUST_SAMPLES, '2026-05-15', '2026-06-15']) {
+  for (const [hour, seconds] of Object.entries(WAIT_BY_HOUR)) {
+    daily(ORG, GINZA, date, 'wait_seconds_median', 'hour', hour, seconds)
+    daily(ORG, GINZA, date, 'receptions', 'hour', hour, 4)
+  }
+}
+
+// 取り消しの 5 分類。月ごとに 15 日へ置く（月別の積み上げなので日は問わない）。
+for (const [month, layers] of Object.entries(MONTH_CANCELLATIONS)) {
+  for (const [reason, value] of Object.entries(layers)) {
+    daily(ORG, GINZA, `${month}-15`, 'cancellations', 'cancel_reason', reason, value)
+  }
+}
+
+/*
+ * 丸の内店（8月）。銀座店とは合計も担当も重ならない —— 店舗を選び替えて「適用」を
+ * 押すと、見出しの合計件数と行がまるごと入れ替わることの実データである。
+ */
+const MARUNOUCHI_STAFF_RECEPTIONS = [
+  { staff: marunouchiStaff[0].id, receptions: 78, revisits: 44 },
+  { staff: marunouchiStaff[1].id, receptions: 51, revisits: 25 },
+  { staff: 'unassigned', receptions: 13, revisits: 0 },
+]
+for (const row of MARUNOUCHI_STAFF_RECEPTIONS) {
+  dailySpread(ORG, MARUNOUCHI, AUGUST_SAMPLES, 'receptions', 'staff', row.staff, row.receptions)
+  if (row.revisits > 0) {
+    dailySpread(ORG, MARUNOUCHI, AUGUST_SAMPLES, 'revisits_90d', 'staff', row.staff, row.revisits)
+  }
+}
+dailySpread(ORG, MARUNOUCHI, augustBusiness, 'reservations', 'total', '', 149)
+dailySpread(ORG, MARUNOUCHI, augustBusiness, 'receptions', 'total', '', 142)
+
+// 別の組織（8月）。合計 9 件で、EYEX の数字とは 1 件も重ならない。
+dailySpread(RIVAL_ORG, RIVAL_STORE, AUGUST_SAMPLES, 'receptions', 'staff', RIVAL_STAFF, 9)
+dailySpread(RIVAL_ORG, RIVAL_STORE, augustBusiness, 'reservations', 'total', '', 9)
+
+/*
+ * 9月の頭（9/1〜9/6）。トップは**本日を中心に前後 7 日**（8/20〜9/3）を見るので、
+ * 月をまたいだ先の予定が無いと未来側の棒が欠け、「来週」も月末までしか数えられない。
+ * 9/1 は火曜なので定休（closed=1・0 件の棒）である。
+ */
+const SEPTEMBER_RESERVATIONS = { 1: 0, 2: 9, 3: 8, 4: 10, 5: 11, 6: 7 }
+for (const [day, value] of Object.entries(SEPTEMBER_RESERVATIONS)) {
+  const date = `2026-09-0${day}`
+  daily(ORG, GINZA, date, 'closed', 'total', '', isClosedDay(date) ? 1 : 0)
+  daily(ORG, GINZA, date, 'reservations', 'total', '', value)
+}
+
+/** 数え方の約束が崩れていたら seed の時点で止める（E2E で気づくのでは遅い）。 */
+const sumOfMetric = (org, store, metric, dimension) =>
+  analyticsRows
+    .filter(
+      (r) => r.org === org && r.store === store && r.metric === metric && r.dimension === dimension,
+    )
+    .reduce((total, r) => total + r.value, 0)
+const assertSeed = (label, actual, expected) => {
+  if (actual !== expected)
+    throw new Error(`分析の seed が合わない: ${label} は ${expected} のはずが ${actual}`)
+}
+assertSeed('2026年8月の営業日数', augustBusiness.length, 27)
+assertSeed(
+  '2026年8月のご予約',
+  Object.values(AUGUST_RESERVATIONS).reduce((a, b) => a + b, 0),
+  320,
+)
+assertSeed(
+  '今週（8/24〜8/30）のご予約',
+  [24, 25, 26, 27, 28, 29, 30].reduce((total, day) => total + AUGUST_RESERVATIONS[day], 0),
+  72,
+)
+assertSeed(
+  '来週（8/31〜9/6）のご予約',
+  AUGUST_RESERVATIONS[31] + Object.values(SEPTEMBER_RESERVATIONS).reduce((a, b) => a + b, 0),
+  57,
+)
+assertSeed('2026年8月の受付', sumOfMetric(ORG, GINZA, 'receptions', 'staff'), 328)
+assertSeed('丸の内店の受付', sumOfMetric(ORG, MARUNOUCHI, 'receptions', 'staff'), 142)
+assertSeed('別組織の受付', sumOfMetric(RIVAL_ORG, RIVAL_STORE, 'receptions', 'staff'), 9)
+
 /** まだ空の列だけを埋める（手で直した行は上書きしない）。数は引用符で包まない。 */
 const fillStore = (id, column, value) =>
   `UPDATE stores SET ${column} = ${typeof value === 'number' ? value : q(value)} WHERE id = ${q(id)} AND ${column} IS NULL;`
@@ -853,6 +1204,13 @@ const lines = [
 
   // 臨時のお休み 1 行。
   `INSERT OR IGNORE INTO store_calendar_exceptions (id, organization_id, store_id, date, kind, opens_at, closes_at, note, created_at, created_by) VALUES (${q(uid('b0040000', 0))}, ${q(ORG)}, ${q(GINZA)}, '2026-09-30', 'closed', NULL, NULL, '棚卸しのため', ${q(NOW)}, NULL);`,
+
+  // 定休に当たる日だけの臨時営業 1 行（営業日に走らせたときは 1 行も出ない）。
+  ...(SPECIAL_OPEN === null
+    ? []
+    : [
+        `INSERT OR IGNORE INTO store_calendar_exceptions (id, organization_id, store_id, date, kind, opens_at, closes_at, note, created_at, created_by) VALUES (${q(uid('b0040000', 1))}, ${q(ORG)}, ${q(GINZA)}, ${q(SPECIAL_OPEN.date)}, 'special', ${q(SPECIAL_OPEN.opens)}, ${q(SPECIAL_OPEN.closes)}, ${q('E2E とローカル開発のため当日を臨時営業として扱う')}, ${q(NOW)}, NULL);`,
+      ]),
 
   // スタッフ 6 名。
   ...staffMembers.map(
@@ -991,6 +1349,39 @@ const lines = [
       (lock, j) =>
         `INSERT OR IGNORE INTO reservation_slot_locks (id, organization_id, store_id, reservation_id, kind, target_key, slot_start, created_at) VALUES (${q(uid('a0040000', i * 100 + j))}, ${q(ORG)}, ${q(GINZA)}, ${q(r.id)}, ${q(lock.kind)}, ${q(lock.targetKey)}, ${q(lock.slotStart)}, ${q(NOW)});`,
     ),
+  ),
+  /* --- 分析（P9） --------------------------------------------------------- *
+   * 画面は `analytics_daily` しか読まないので、E2E の盤面はここに直接置く。
+   * 併せて、丸の内店の担当 2 名・別組織 1 つ・分析を読む担当店舗の行を足す。 */
+  ...marunouchiStaff.map(
+    (m, i) =>
+      `INSERT OR IGNORE INTO staff (id, organization_id, store_id, admin_user_id, display_name, kana, job_label, role, max_parallel_reservations, pin_hash, pin_updated_at, is_active, sort_order, created_at, updated_at) VALUES (${q(m.id)}, ${q(ORG)}, ${q(MARUNOUCHI)}, NULL, ${q(m.name)}, ${q(m.kana)}, NULL, 'staff', 1, NULL, NULL, '1', ${i}, ${q(NOW)}, ${q(NOW)});`,
+  ),
+
+  // 別の組織（テナント分離の見本）。店舗 1 つと担当 1 名だけを持つ。
+  `INSERT OR IGNORE INTO organizations (id, name, plan, is_disabled, created_at, revision) VALUES (${q(RIVAL_ORG)}, 'ミライ光学', 'contracted', '0', ${q(NOW)}, '1');`,
+  `INSERT OR IGNORE INTO stores (id, organization_id, name, slug, phone, address, access_note, is_active, created_at) VALUES (${q(RIVAL_STORE)}, ${q(RIVAL_ORG)}, 'ミライ光学 本店', 'mirai-honten', '03-9999-0000', '東京都台東区上野1-1-1', 'JR上野駅から徒歩2分', '1', ${q(NOW)});`,
+  `INSERT OR IGNORE INTO staff (id, organization_id, store_id, admin_user_id, display_name, kana, job_label, role, max_parallel_reservations, pin_hash, pin_updated_at, is_active, sort_order, created_at, updated_at) VALUES (${q(RIVAL_STAFF)}, ${q(RIVAL_ORG)}, ${q(RIVAL_STORE)}, NULL, '相馬 直樹', 'そうま なおき', NULL, 'staff', 1, NULL, NULL, '1', 0, ${q(NOW)}, ${q(NOW)});`,
+
+  /*
+   * 分析を読む担当店舗。`dev:<組織>` は開発グラントが載せる `sub` で、E2E の viewer が
+   * これになる。**analytics.read だけ**を配るので、設定を書き換える経路は開かない。
+   */
+  ...[
+    // 銀座店の行は **ほかの E2E と同じ id** を配る（`store-memberships/sync` は id で
+    // upsert するので、別の id で 2 行目を作ると (組織・利用者・店舗) の一意制約で落ちる）。
+    { id: '0f0f0f0f-0f0f-4f0f-8f0f-0f0f0f0f0f0f', org: ORG, store: GINZA },
+    { id: uid('f0020000', 1), org: ORG, store: MARUNOUCHI },
+    { id: uid('f0020000', 2), org: RIVAL_ORG, store: RIVAL_STORE },
+  ].map(
+    (m) =>
+      `INSERT OR IGNORE INTO store_memberships (id, organization_id, store_id, user_id, permissions, created_at) VALUES (${q(m.id)}, ${q(m.org)}, ${q(m.store)}, ${q(`dev:${m.org}`)}, 'store.read reservation.read customer.read settings.read analytics.read', ${q(NOW)});`,
+  ),
+
+  // 日次集計の行（3〜8月）。「名」の行（metric='guests'）は 1 つも書かない。
+  ...analyticsRows.map(
+    (r, i) =>
+      `INSERT OR IGNORE INTO analytics_daily (id, organization_id, store_id, date, metric, dimension, dimension_key, value, created_at, updated_at) VALUES (${q(uid('9a010000', i))}, ${q(r.org)}, ${q(r.store)}, ${q(r.date)}, ${q(r.metric)}, ${q(r.dimension)}, ${q(r.dimensionKey)}, ${r.value}, ${q(NOW)}, ${q(NOW)});`,
   ),
 ]
 

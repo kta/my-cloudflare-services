@@ -7,6 +7,7 @@ import { getTableConfig } from 'drizzle-orm/sqlite-core'
 import { describe, expect, it } from 'vitest'
 import {
   alerts,
+  analyticsDaily,
   auditEvents,
   customerGlasses,
   customerNotes,
@@ -1173,5 +1174,62 @@ describe('web_bookings', () => {
     expect(table.columns.find((c) => c.name === 'cancelled_at')?.notNull).toBe(false)
     expect(table.columns.find((c) => c.name === 'updated_at')?.notNull).toBe(true)
     expect(table.columns.filter((c) => c.hasDefault)).toHaveLength(0)
+  })
+})
+
+describe('analytics_daily', () => {
+  const table = getTableConfig(analyticsDaily)
+
+  it('日次 upsert の重複を組織・店舗・日・指標・切り口で止める', () => {
+    expect(isUnique(table, 'analytics_daily_org_store_date_metric_dim_idx')).toBe(true)
+    expect(columnsOf(table, 'analytics_daily_org_store_date_metric_dim_idx')).toEqual([
+      'organization_id',
+      'store_id',
+      'date',
+      'metric',
+      'dimension',
+      'dimension_key',
+    ])
+  })
+
+  it('期間指定の読み出しを組織・店舗・指標・日の順で引ける', () => {
+    expect(isUnique(table, 'analytics_daily_org_store_metric_date_idx')).toBe(false)
+    expect(columnsOf(table, 'analytics_daily_org_store_metric_date_idx')).toEqual([
+      'organization_id',
+      'store_id',
+      'metric',
+      'date',
+    ])
+    expect(table.indexes).toHaveLength(2)
+  })
+
+  it('外部キーを持たない', () => {
+    expect(table.name).toBe('analytics_daily')
+    expect(table.foreignKeys).toHaveLength(0)
+    expect(table.columns.filter((c) => c.primary).map((c) => c.name)).toEqual(['id'])
+    expect(table.columns.filter((c) => c.hasDefault)).toHaveLength(0)
+  })
+
+  it('値は real で持つ（件数も率も中央値も 1 列に入る）', () => {
+    expect(table.columns.find((c) => c.name === 'value')?.getSQLType()).toBe('real')
+    expect(table.columns.find((c) => c.name === 'value')?.notNull).toBe(true)
+  })
+
+  it('dimension_key は NOT NULL で、total のときは空文字を入れる', () => {
+    expect(table.columns.map((c) => c.name)).toEqual([
+      'id',
+      'organization_id',
+      'store_id',
+      'date',
+      'metric',
+      'dimension',
+      'dimension_key',
+      'value',
+      'created_at',
+      'updated_at',
+    ])
+    for (const column of table.columns) {
+      expect(column.notNull).toBe(true)
+    }
   })
 })

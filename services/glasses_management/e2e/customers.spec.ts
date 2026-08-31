@@ -65,6 +65,8 @@ const MANAGER_PERMISSIONS = [
   'customer.read',
   'customer.write',
   'settings.read',
+  // 分析は seed の盤面をそのまま読むので、配り直しでも `analytics.read` を落とさない。
+  'analytics.read',
   'settings.manage',
 ]
 /** 店長ではないスタッフ。顧客は読み書きできるが `settings.manage` を持たない。 */
@@ -75,6 +77,8 @@ const STAFF_PERMISSIONS = [
   'customer.read',
   'customer.write',
   'settings.read',
+  // 分析は seed の盤面をそのまま読むので、配り直しでも `analytics.read` を落とさない。
+  'analytics.read',
 ]
 
 /** seed の id は `${区分}-0000-4000-8000-${連番}`（`seed.mjs` の `uid`）。 */
