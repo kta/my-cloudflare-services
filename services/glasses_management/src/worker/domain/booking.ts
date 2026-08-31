@@ -398,6 +398,8 @@ export type BookingInput = {
   storeId: string
   reservationId: string
   code: string
+  /** 既存顧客を選んだ受付。未特定なら null。 */
+  customerId?: string | null
   source: string
   startsAt: string
   /** 片付け時間は含めない。 */
@@ -459,19 +461,18 @@ export function bookingStatements(db: D1Database, input: BookingInput): D1Prepar
     }),
   })
 
-  // お客様の台帳（`customers`）は P4 が作るので `customer_id` は常に NULL。
-  // 伺ったお名前・お電話番号は `reception_sessions.draft_json` に置く。
   statements.push(
     db
       .prepare(
         'INSERT INTO reservations (id, organization_id, store_id, code, customer_id, source, status, starts_at, ends_at, duration_minutes, note_customer, note_internal, version, created_at, updated_at, created_by, cancelled_at, cancel_reason) ' +
-          `SELECT ?, ?, ?, ?, NULL, ?, 'confirmed', ?, ?, ?, ?, ?, 1, ?, ?, ?, NULL, NULL WHERE ${LOCKED}`,
+          `SELECT ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?, ?, ?, 1, ?, ?, ?, NULL, NULL WHERE ${LOCKED}`,
       )
       .bind(
         input.reservationId,
         input.organizationId,
         input.storeId,
         input.code,
+        input.customerId ?? null,
         input.source,
         input.startsAt,
         input.endsAt,

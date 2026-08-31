@@ -16,6 +16,7 @@
  *   台帳の灰帯は担当ひとりの休憩であって、店舗の停止帯ではない）
  */
 import type {
+  EquipmentKind,
   LedgerAxis,
   LedgerBlock,
   LedgerEntry,
@@ -27,6 +28,7 @@ import type {
   LocalTime,
   ReservationSource,
   ReservationStatus,
+  SkillCode,
 } from '@app/contracts'
 import { toJstDateString } from '@app/shared'
 
@@ -63,6 +65,8 @@ export type LedgerPurposeRow = {
   /** `visit_purposes.name_short`（1〜5 文字）。 */
   nameShort: string
   sortOrder: number
+  requiredSkills?: SkillCode[]
+  requiredEquipmentKinds?: EquipmentKind[]
 }
 
 /** 担当・設備の押さえ 1 行。`targetId` が null の行も枠を消費する（I-05）。 */
@@ -97,6 +101,7 @@ export type LedgerShiftRow = {
 export type LedgerEquipmentRow = {
   id: string
   name: string
+  kind?: EquipmentKind
   /** 行見出しの下に出る小さい文字（「測定」）。 */
   roleLabel: string | null
   sortOrder: number

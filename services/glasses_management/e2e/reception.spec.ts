@@ -481,7 +481,7 @@ test('「ご来店を受け付ける」を押すと盤面へ戻り、その行�
   })
 
   // まだお着きでないご予約は盤面に載らない。受け付ける入口は台帳の予約リストである。
-  await openCheckin(page, '14:30', 'upcoming')
+  await openCheckin(page, '14:30')
   await page.getByRole('button', { name: 'ご来店を受け付ける', exact: true }).click()
 
   await expect(board(page)).toBeVisible()
@@ -792,7 +792,7 @@ test('「次にやること　視力測定機 A」を押すと対応中になり
     /^お客様\s+フレーム選び\s+対応中/,
   )
   await expect(cell(page, 'お客様', '視力測定')).toHaveAccessibleName(
-    'お客様　視力測定　次にやること　視力測定機 A',
+    /^お客様\s+視力測定\s+次にやること\s+視力測定機 A/,
   )
 
   await cell(page, 'お客様', '視力測定').click()

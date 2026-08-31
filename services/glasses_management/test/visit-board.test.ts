@@ -22,6 +22,7 @@ import {
   type BoardVisitEvent,
   type BuildBoardOptions,
   buildBoard,
+  planBoardSteps,
 } from '../src/worker/domain/visit-board'
 import { FIXED_NOW, LEDGER_DATE } from './helpers'
 
@@ -112,6 +113,63 @@ const EVENTS: BoardVisitEvent[] = [
   event(SUBJECT.ken, 'checkout', '11:01'),
   event(SUBJECT.ken, 'handover', '11:04'),
 ]
+
+describe('目的の要件から次工程を組み立てる', () => {
+  it('要件が未設定の既存目的でも、割当済み設備を設備種別の工程へ残す', () => {
+    expect(
+      planBoardSteps({
+        requiredSkills: [],
+        requiredEquipmentKinds: [],
+        staffId: STAFF.sato,
+        equipment: [
+          { id: EQUIPMENT.measureA, name: '視力測定機 A', kind: 'measure', sortOrder: 0 },
+        ],
+      }),
+    ).toEqual([
+      {
+        stage: 'measuring',
+        label: '視力測定機 A',
+        staffId: STAFF.sato,
+        equipmentId: EQUIPMENT.measureA,
+      },
+    ])
+  })
+
+  it('同じ視力測定工程の技能と設備を1件へまとめ、設備名を表示する', () => {
+    expect(
+      planBoardSteps({
+        requiredSkills: ['measure'],
+        requiredEquipmentKinds: ['measure'],
+        staffId: STAFF.sato,
+        equipment: [
+          { id: EQUIPMENT.measureA, name: '視力測定機 A', kind: 'measure', sortOrder: 0 },
+        ],
+      }),
+    ).toEqual([
+      {
+        stage: 'measuring',
+        label: '視力測定機 A',
+        staffId: STAFF.sato,
+        equipmentId: EQUIPMENT.measureA,
+      },
+    ])
+  })
+
+  it('複数工程は盤面順に並べ、設備のない技能工程も残す', () => {
+    expect(
+      planBoardSteps({
+        requiredSkills: ['processing', 'fitting'],
+        requiredEquipmentKinds: ['counter'],
+        staffId: STAFF.sato,
+        equipment: [{ id: id(), name: '相談カウンター 2', kind: 'counter', sortOrder: 0 }],
+      }).map((step) => ({ stage: step.stage, label: step.label })),
+    ).toEqual([
+      { stage: 'consulting', label: '相談カウンター 2' },
+      { stage: 'fitting', label: '' },
+      { stage: 'checkout', label: '' },
+    ])
+  })
+})
 
 /** 銀座店 1 日分の盤面。`now` は必ず引数で渡す。 */
 function board(

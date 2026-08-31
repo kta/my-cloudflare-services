@@ -16,7 +16,9 @@
  */
 
 import type {
+  EquipmentKind,
   LocalDate,
+  SkillCode,
   VisitBoard,
   VisitBoardCell,
   VisitBoardRow,
@@ -59,6 +61,71 @@ type BoardNextStep = {
   equipmentId: string | null
 }
 
+const SKILL_STAGE: Readonly<Record<SkillCode, BoardStage>> = {
+  sales_reception: 'consulting',
+  contact_lens: 'consulting',
+  repair: 'consulting',
+  fitting: 'fitting',
+  measure: 'measuring',
+  processing: 'checkout',
+}
+
+const EQUIPMENT_STAGE: Readonly<Record<EquipmentKind, BoardStage>> = {
+  counter: 'consulting',
+  measure: 'measuring',
+  workbench: 'checkout',
+}
+
+/** 予約目的の要件を盤面の工程へ畳み、同じ工程の技能と設備を1件にまとめる。 */
+export function planBoardSteps(input: {
+  requiredSkills: readonly SkillCode[]
+  requiredEquipmentKinds: readonly EquipmentKind[]
+  staffId: string | null
+  equipment: readonly {
+    id: string
+    name: string
+    kind: EquipmentKind
+    sortOrder: number
+  }[]
+}): BoardNextStep[] {
+  const planned = new Map<BoardStage, BoardNextStep>()
+  const ensure = (stage: BoardStage): BoardNextStep => {
+    const existing = planned.get(stage)
+    if (existing !== undefined) return existing
+    const created = { stage, label: '', staffId: input.staffId, equipmentId: null }
+    planned.set(stage, created)
+    return created
+  }
+  for (const skill of input.requiredSkills) ensure(SKILL_STAGE[skill])
+  for (const kind of input.requiredEquipmentKinds) {
+    const step = ensure(EQUIPMENT_STAGE[kind])
+    const unit = [...input.equipment]
+      .sort((left, right) => left.sortOrder - right.sortOrder)
+      .find((candidate) => candidate.kind === kind)
+    if (unit !== undefined && step.equipmentId === null) {
+      step.label = unit.name
+      step.equipmentId = unit.id
+    }
+  }
+  // 要件行を持たない移行前の目的では、すでに割り当てられた設備を失わせない。
+  // 要件が1件でもある目的では、その要件だけを工程の正本として扱う。
+  if (input.requiredSkills.length === 0 && input.requiredEquipmentKinds.length === 0) {
+    for (const unit of [...input.equipment].sort(
+      (left, right) => left.sortOrder - right.sortOrder,
+    )) {
+      const step = ensure(EQUIPMENT_STAGE[unit.kind])
+      if (step.equipmentId === null) {
+        step.label = unit.name
+        step.equipmentId = unit.id
+      }
+    }
+  }
+  return BOARD_STAGES.flatMap((stage) => {
+    const step = planned.get(stage)
+    return step === undefined ? [] : [step]
+  })
+}
+
 /** 盤面の 1 行の材料（ご予約 1 件、またはウォークイン 1 件）。 */
 export type BoardSubjectRow = {
   subjectType: 'reservation' | 'walkin'
@@ -68,7 +135,7 @@ export type BoardSubjectRow = {
   ticketNo: number | null
   visitCount: number | null
   purposeLabel: string
-  next: BoardNextStep | null
+  next: BoardNextStep | readonly BoardNextStep[] | null
   /**
    * 店にお着きになった時刻（`walk_ins.arrived_at`）。まだお着きでないご予約は null。
    *
@@ -234,7 +301,8 @@ function buildCells(
       ? waitedMinutes(waitingFrom, options.now)
       : null
 
-  const planned = row.next !== null && stageIndex(row.next.stage) > currentIndex ? row.next : null
+  const candidates = row.next === null ? [] : Array.isArray(row.next) ? row.next : [row.next]
+  const planned = candidates.find((candidate) => stageIndex(candidate.stage) > currentIndex) ?? null
   const waitingStage =
     waitingMinutes === null
       ? null

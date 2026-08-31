@@ -132,6 +132,7 @@ import {
   stores,
   visitPurposes,
 } from './db/schema'
+import { slotLockStatements, UNASSIGNED_TARGET_KEY } from './db/slot-locks'
 import {
   type AvailabilityInput,
   computeAvailability,
@@ -188,7 +189,7 @@ import {
   validateHoursInput,
   warnBusinessHours,
 } from './domain/store-settings'
-import { type BoardSubjectRow, buildBoard } from './domain/visit-board'
+import { type BoardSubjectRow, buildBoard, planBoardSteps } from './domain/visit-board'
 import { jstVisitDate, nextTicketNo, waitedMinutes } from './domain/walkin'
 
 // 明示的に import している（ambient global を使わない）ので、export した AppType は
@@ -931,8 +932,8 @@ function toReport(input: {
 const handwritingKey = (org: string, customerId: string, noteId: string): string =>
   `notes/${org}/${customerId}/${noteId}.svg`
 
-/** 「足を運ばれた」3 語。`done` だけが接客の終わった回数（`visit_count`）に入る。 */
-const VISITED_STATUSES = "('arrived','serving','done')"
+/** 接客を終えた 1 語。来店3列はすべて `done` の予約だけから書き戻す。 */
+const VISITED_STATUSES = "('done')"
 
 /** 一覧・詳細・候補が同じ形で読む列。別名は契約の欄名に揃える。 */
 const CUSTOMER_COLUMNS =
@@ -1739,14 +1740,21 @@ async function readWalkinCounters(
  * 「ご予約を `done` にする」UPDATE の結果をそのまま読む。読み出してから足し算した値を
  * 書くと、同じ瞬間の別の退店と足し合わさって二重に増える。
  */
-function bumpVisitCounters(db: D1Database, org: string, customerId: string, now: Date): Statement {
+function bumpVisitCounters(
+  db: D1Database,
+  org: string,
+  customerId: string,
+  now: Date,
+  guard?: Guard,
+): Statement {
   const nowIso = now.toISOString()
+  const applied = guard === undefined ? '' : ` AND ${guard.condition}`
   return db
     .prepare(
       "UPDATE customers SET visit_count = (SELECT COUNT(*) FROM reservations WHERE organization_id = ? AND customer_id = ? AND status = 'done'), " +
         `first_visit_at = (SELECT MIN(starts_at) FROM reservations WHERE organization_id = ? AND customer_id = ? AND status IN ${VISITED_STATUSES} AND starts_at <= ?), ` +
         `last_visit_at = (SELECT MAX(starts_at) FROM reservations WHERE organization_id = ? AND customer_id = ? AND status IN ${VISITED_STATUSES} AND starts_at <= ?), ` +
-        'updated_at = ? WHERE organization_id = ? AND id = ?',
+        `updated_at = ? WHERE organization_id = ? AND id = ?${applied}`,
     )
     .bind(
       org,
@@ -1760,6 +1768,7 @@ function bumpVisitCounters(db: D1Database, org: string, customerId: string, now:
       nowIso,
       org,
       customerId,
+      ...(guard?.params ?? []),
     )
 }
 
@@ -1779,10 +1788,22 @@ function auditRow(
     occurredAt: string
     /** 枠が取れた予約にだけ当てる条件（`reservationId` を渡したときだけ付く）。 */
     lockedFor?: string
+    /** 工程イベントが成立した操作にだけ当てる条件。 */
+    appliedVisitEventId?: string
   },
 ): Statement {
-  const guard = input.lockedFor === undefined ? '' : ` WHERE ${WALKIN_LOCKED}`
-  const lock = input.lockedFor === undefined ? [] : [input.organizationId, input.lockedFor]
+  const guard =
+    input.lockedFor !== undefined
+      ? ` WHERE ${WALKIN_LOCKED}`
+      : input.appliedVisitEventId !== undefined
+        ? ' WHERE EXISTS (SELECT 1 FROM visit_events WHERE organization_id = ? AND id = ?)'
+        : ''
+  const guardParams =
+    input.lockedFor !== undefined
+      ? [input.organizationId, input.lockedFor]
+      : input.appliedVisitEventId !== undefined
+        ? [input.organizationId, input.appliedVisitEventId]
+        : []
   return db
     .prepare(
       'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
@@ -1799,7 +1820,7 @@ function auditRow(
       JSON.stringify(input.after),
       input.correlationId,
       input.occurredAt,
-      ...lock,
+      ...guardParams,
     )
 }
 
@@ -3608,6 +3629,15 @@ const routes = app
       idempotencyKey = started.key
     }
 
+    const customer =
+      input.customerId === undefined
+        ? null
+        : await findLiveCustomer(c.env.DB, org, input.customerId)
+    if (input.customerId !== undefined && customer === null) {
+      if (idempotencyKey !== null) await releaseIdempotency(c.env.DB, idempotencyKey)
+      return c.json({ error: 'not_found' }, 404)
+    }
+
     const reservationId = crypto.randomUUID()
     const correlationId = crypto.randomUUID()
     const actorId = await actorStaffId(db, org, input.storeId, sub)
@@ -3625,6 +3655,9 @@ const routes = app
         startsAt: input.startsAt,
         endsAt,
         durationMinutes,
+        customerId: customer?.id ?? null,
+        customerName: customer?.name ?? null,
+        visitCount: customer?.visitCount ?? null,
         purposes: lines.map((line, index) => ({
           purposeId: line.id,
           nameInternal: line.nameInternal,
@@ -3659,6 +3692,7 @@ const routes = app
           storeId: input.storeId,
           reservationId,
           code,
+          customerId: input.customerId ?? null,
           source: input.source,
           startsAt: input.startsAt,
           endsAt,
@@ -4542,14 +4576,46 @@ const routes = app
     const db = drizzle(c.env.DB)
     const { org, sub } = c.get('auth')
     const input = c.req.valid('json')
-    const store = await findStore(db, org, input.storeId)
-    if (!store) return c.json({ error: 'not_found' }, 404)
-
     // 現在時刻はハンドラの入口で 1 回だけ作り、以降は引数で配る。
     const now = new Date()
     const nowIso = now.toISOString()
     const arrivedAt = input.arrivedAt ?? nowIso
     const visitDate = jstVisitDate(arrivedAt)
+
+    // 冪等（`04-api.md` §6.2）。保存済みの成功は、受付後に店舗や目的の設定が変わっても
+    // 現在の入力検証を再実行せず、そのとき保存した応答をそのまま返す。
+    const header = readIdempotencyKey(c.req.header('Idempotency-Key'))
+    if (!header.ok) {
+      return c.json(
+        rejected([
+          'Idempotency-Key に使えない文字が入っているため受け付けられません。鍵を作り直して送り直してください。',
+        ]),
+        400,
+      )
+    }
+    let idempotencyKey: string | null = null
+    if (header.key !== null) {
+      const started = await beginIdempotency(c.env.DB, {
+        organizationId: org,
+        scope: 'walkin.create',
+        clientKey: header.key,
+        requestHash: await requestHash(input),
+        now,
+      })
+      if (started.state === 'replay') return c.json(Walkin.parse(started.response))
+      if (started.state === 'conflict') return c.json({ error: 'idempotency_conflict' }, 409)
+      idempotencyKey = started.key
+    }
+    /** 新規処理が成立しなかったときは、同じ鍵で入力を直して再試行できるようにする。 */
+    const release = async (): Promise<void> => {
+      if (idempotencyKey !== null) await releaseIdempotency(c.env.DB, idempotencyKey)
+    }
+
+    const store = await findStore(db, org, input.storeId)
+    if (!store) {
+      await release()
+      return c.json({ error: 'not_found' }, 404)
+    }
 
     // 予約の間隔が決まっていない店舗には枠を置けない（暗黙の既定値を作らない）。
     const rules = (
@@ -4560,7 +4626,10 @@ const routes = app
           and(eq(storeSlotRules.organizationId, org), eq(storeSlotRules.storeId, input.storeId)),
         )
     )[0]
-    if (rules === undefined) return c.json({ error: 'not_found' }, 404)
+    if (rules === undefined) {
+      await release()
+      return c.json({ error: 'not_found' }, 404)
+    }
 
     // ご用件は 4 択か自由記述の**ちょうど一方**（排他は契約が見ている）。
     let purposeLine: BookingPurposeLine | null = null
@@ -4571,7 +4640,10 @@ const routes = app
           .from(visitPurposes)
           .where(and(eq(visitPurposes.organizationId, org), eq(visitPurposes.id, input.purposeId)))
       )[0]
-      if (found === undefined) return c.json({ error: 'not_found' }, 404)
+      if (found === undefined) {
+        await release()
+        return c.json({ error: 'not_found' }, 404)
+      }
       purposeLine = { purposeId: found.id, durationMinutes: found.durationMinutes, sortOrder: 0 }
     }
 
@@ -4595,49 +4667,29 @@ const routes = app
               )
           )[0] ?? null)
     if (input.staffId !== undefined && input.staffId !== null && staffMember === null) {
+      await release()
       return c.json({ error: 'not_found' }, 404)
     }
     const customerId = input.customerId ?? null
     if (customerId !== null && (await findLiveCustomer(c.env.DB, org, customerId)) === null) {
+      await release()
       return c.json({ error: 'not_found' }, 404)
     }
 
     const startsAt = input.startsAt ?? arrivedAt
     const durationMinutes =
       input.durationMinutes ?? purposeLine?.durationMinutes ?? WALKIN_DEFAULT_MINUTES
-    const endsAt = new Date(Date.parse(startsAt) + durationMinutes * MS_PER_MINUTE).toISOString()
-
-    // 冪等（`04-api.md` §6.2）。送らない端末は素通りする（送らない再送は 2 件になる）。
-    const header = readIdempotencyKey(c.req.header('Idempotency-Key'))
-    if (!header.ok) {
+    if (purposeLine !== null && durationMinutes < purposeLine.durationMinutes) {
+      await release()
       return c.json(
-        rejected([
-          'Idempotency-Key に使えない文字が入っているため受け付けられません。鍵を作り直して送り直してください。',
-        ]),
-        400,
+        rejected(['お取りする時間は、ご来店の目的に必要な時間以上にしてください。']),
+        422,
       )
     }
-    let idempotencyKey: string | null = null
-    if (header.key !== null) {
-      const started = await beginIdempotency(c.env.DB, {
-        organizationId: org,
-        scope: 'walkin.create',
-        clientKey: header.key,
-        requestHash: await requestHash(input),
-        now,
-      })
-      // **再実行しない。**保存した応答（同じ整理番号の同じ 1 件）をそのまま返す。
-      if (started.state === 'replay') return c.json(Walkin.parse(started.response))
-      if (started.state === 'conflict') return c.json({ error: 'idempotency_conflict' }, 409)
-      idempotencyKey = started.key
-    }
+    const endsAt = new Date(Date.parse(startsAt) + durationMinutes * MS_PER_MINUTE).toISOString()
 
     const actorId = await actorStaffId(db, org, input.storeId, sub)
     const correlationId = crypto.randomUUID()
-    /** 予期しない失敗のときだけ `in_progress` を消す（消すと同じ鍵で選び直せる）。 */
-    const release = async (): Promise<void> => {
-      if (idempotencyKey !== null) await releaseIdempotency(c.env.DB, idempotencyKey)
-    }
 
     for (let attempt = 1; attempt <= WALKIN_TICKET_ATTEMPTS; attempt += 1) {
       const counters = await readWalkinCounters(c.env.DB, org, input.storeId, visitDate)
@@ -4673,6 +4725,7 @@ const routes = app
               storeId: input.storeId,
               reservationId,
               code,
+              customerId,
               source: 'walkin',
               startsAt,
               endsAt,
@@ -4789,25 +4842,135 @@ const routes = app
     const input = c.req.valid('json')
     const current = await findWalkin(c.env.DB, org, walkinId)
     if (current === null) return c.json({ error: 'not_found' }, 404)
+    if (current.version !== input.version) return c.json({ error: 'version_conflict' }, 409)
     if (
       input.customerId !== undefined &&
       (await findLiveCustomer(c.env.DB, org, input.customerId)) === null
     ) {
       return c.json({ error: 'not_found' }, 404)
     }
-    // 付け替え先のご予約も自分の組織のものだけ。宛先の無い `reservation_id` を書けると、
+    const selectedStaff =
+      input.staffId === undefined || input.staffId === null
+        ? null
+        : await c.env.DB.prepare(
+            "SELECT id, max_parallel_reservations AS maxParallelReservations FROM staff WHERE organization_id = ? AND store_id = ? AND id = ? AND is_active = '1'",
+          )
+            .bind(org, current.storeId, input.staffId)
+            .first<{ id: string; maxParallelReservations: number }>()
+    if (input.staffId !== undefined && input.staffId !== null && selectedStaff === null) {
+      return c.json({ error: 'not_found' }, 404)
+    }
+    if (selectedStaff !== null) {
+      const band = await c.env.DB.prepare(
+        "SELECT starts_at AS startsAt, ends_at AS endsAt FROM reservation_assignments WHERE organization_id = ? AND reservation_id = ? AND kind = 'staff'",
+      )
+        .bind(org, current.reservationId)
+        .first<{ startsAt: string; endsAt: string }>()
+      if (band === null) return c.json({ error: 'not_found' }, 404)
+      const jstParts = (iso: string): { date: string; clock: string } => {
+        const shifted = new Date(Date.parse(iso) + 9 * 60 * MS_PER_MINUTE)
+        return {
+          date: shifted.toISOString().slice(0, 10),
+          clock: shifted.toISOString().slice(11, 16),
+        }
+      }
+      const starts = jstParts(band.startsAt)
+      const ends = jstParts(band.endsAt)
+      if (starts.date !== ends.date) return c.json({ error: 'purpose_unavailable' }, 409)
+      const [shiftRows, requiredRows, skillRows] = await Promise.all([
+        c.env.DB.prepare(
+          'SELECT starts_at AS startsAt, ends_at AS endsAt, kind FROM staff_shifts WHERE organization_id = ? AND store_id = ? AND staff_id = ? AND date = ?',
+        )
+          .bind(org, current.storeId, selectedStaff.id, starts.date)
+          .all<{ startsAt: string; endsAt: string; kind: string }>(),
+        c.env.DB.prepare(
+          "SELECT DISTINCT pr.value FROM reservation_purposes rp JOIN purpose_requirements pr ON pr.organization_id = rp.organization_id AND pr.purpose_id = rp.purpose_id WHERE rp.organization_id = ? AND rp.reservation_id = ? AND pr.kind = 'skill'",
+        )
+          .bind(org, current.reservationId)
+          .all<{ value: string }>(),
+        c.env.DB.prepare(
+          'SELECT skill_code AS skillCode FROM staff_skills WHERE organization_id = ? AND staff_id = ?',
+        )
+          .bind(org, selectedStaff.id)
+          .all<{ skillCode: string }>(),
+      ])
+      const covers = shiftRows.results.some(
+        (row) => row.kind === 'work' && row.startsAt <= starts.clock && row.endsAt >= ends.clock,
+      )
+      const overlapsBreak = shiftRows.results.some(
+        (row) => row.kind === 'break' && row.startsAt < ends.clock && row.endsAt > starts.clock,
+      )
+      const heldSkills = new Set(skillRows.results.map((row) => row.skillCode))
+      const lacksSkill = requiredRows.results.some((row) => !heldSkills.has(row.value))
+      if (!covers || overlapsBreak || lacksSkill) {
+        return c.json({ error: 'purpose_unavailable' }, 409)
+      }
+    }
+    // 付け替え先のご予約も自分の組織・現在の店舗のものだけ。宛先の無い `reservation_id` を書けると、
     // 受付履歴の詳細と盤面がその来店へ二度と辿り着けなくなる。
     if (input.reservationId !== undefined) {
       const found = await c.env.DB.prepare(
-        'SELECT id FROM reservations WHERE organization_id = ? AND id = ?',
+        'SELECT id FROM reservations WHERE organization_id = ? AND store_id = ? AND id = ?',
       )
-        .bind(org, input.reservationId)
+        .bind(org, current.storeId, input.reservationId)
         .first<{ id: string }>()
       if (found === null) return c.json({ error: 'not_found' }, 404)
     }
 
     const now = new Date()
     const nowIso = now.toISOString()
+    let lockStatements: Statement[] = []
+    let lockGuard: Guard | null = null
+    let desiredStaffTarget: string | null = null
+    if (input.staffId !== undefined) {
+      desiredStaffTarget = selectedStaff?.id ?? UNASSIGNED_TARGET_KEY
+      const held = await c.env.DB.prepare(
+        "SELECT target_key AS targetKey, slot_start AS slotStart FROM reservation_slot_locks WHERE organization_id = ? AND reservation_id = ? AND kind = 'staff' ORDER BY slot_start",
+      )
+        .bind(org, current.reservationId)
+        .all<{ targetKey: string; slotStart: string }>()
+      const alreadyHeld =
+        held.results.length > 0 && held.results.every((row) => row.targetKey === desiredStaffTarget)
+      if (!alreadyHeld) {
+        const maxParallel =
+          selectedStaff?.maxParallelReservations ??
+          (
+            await c.env.DB.prepare(
+              'SELECT max_parallel AS maxParallel FROM store_slot_rules WHERE organization_id = ? AND store_id = ?',
+            )
+              .bind(org, current.storeId)
+              .first<{ maxParallel: number }>()
+          )?.maxParallel
+        if (maxParallel === undefined) return c.json({ error: 'not_found' }, 404)
+        const ids = held.results.map(() => crypto.randomUUID())
+        let idIndex = 0
+        lockStatements = slotLockStatements(c.env.DB, {
+          organizationId: org,
+          storeId: current.storeId,
+          reservationId: current.reservationId,
+          createdAt: nowIso,
+          requests: held.results.map((row) => ({
+            kind: 'staff' as const,
+            targetKey: desiredStaffTarget as string,
+            slotStart: row.slotStart,
+            cap: maxParallel,
+          })),
+          newId: () => ids[idIndex++] as string,
+          additionalGuard: {
+            condition:
+              'EXISTS (SELECT 1 FROM walk_ins WHERE organization_id = ? AND id = ? AND version = ?)',
+            params: [org, walkinId, input.version],
+          },
+        })
+        if (ids[0] !== undefined) {
+          lockGuard = {
+            condition:
+              'EXISTS (SELECT 1 FROM reservation_slot_locks WHERE organization_id = ? AND id = ?)',
+            params: [org, ids[0]],
+          }
+        }
+      }
+    }
     const sets = ['version = version + 1']
     const params: unknown[] = []
     if (input.customerId !== undefined) {
@@ -4823,37 +4986,55 @@ const routes = app
       params.push(input.reservationId)
     }
 
-    /**
-     * 版の条件を 2 文目以降にも配る。**1 文目が 0 行でもバッチは止まらない**ので、
-     * 配らないと「409 を返しながらお客様だけ書き換える」形になる。
-     * 1 文目が版を +1 したあとなので、条件は `version = <送られた版> + 1` である。
-     */
+    /** 副作用を walk_ins の更新前 version で守り、walk_ins 本体はバッチの最後に更新する。 */
     const applied = `EXISTS (SELECT 1 FROM walk_ins WHERE organization_id = ? AND id = ? AND version = ?)`
-    const guard = [org, walkinId, input.version + 1]
-    const statements: [Statement, ...Statement[]] = [
-      c.env.DB.prepare(
-        `UPDATE walk_ins SET ${sets.join(', ')} WHERE organization_id = ? AND id = ? AND version = ?`,
-      ).bind(...params, org, walkinId, input.version),
-    ]
+    const guard = [org, walkinId, input.version]
+    const lockApplied = lockGuard === null ? '' : ` AND ${lockGuard.condition}`
+    const sideEffectApplied = `${applied}${lockApplied}`
+    const sideEffectGuard = [...guard, ...(lockGuard?.params ?? [])]
+    const walkinUpdate = c.env.DB.prepare(
+      `UPDATE walk_ins SET ${sets.join(', ')} WHERE organization_id = ? AND id = ? AND version = ?${lockApplied}`,
+    ).bind(...params, org, walkinId, input.version, ...(lockGuard?.params ?? []))
+    const statements: Statement[] = [...lockStatements]
     if (input.staffId !== undefined) {
       // 担当を決め直したら予約の割当も動かす（台帳と受付で担当が食い違わない）。
       statements.push(
         c.env.DB.prepare(
           "UPDATE reservation_assignments SET target_id = ? WHERE organization_id = ? AND reservation_id = ? AND kind = 'staff' AND " +
-            applied,
-        ).bind(input.staffId, org, current.reservationId, ...guard),
+            sideEffectApplied,
+        ).bind(input.staffId, org, current.reservationId, ...sideEffectGuard),
       )
+      if (lockGuard !== null && desiredStaffTarget !== null) {
+        statements.push(
+          c.env.DB.prepare(
+            `DELETE FROM reservation_slot_locks WHERE organization_id = ? AND reservation_id = ? AND kind = 'staff' AND target_key <> ? AND ${sideEffectApplied}`,
+          ).bind(org, current.reservationId, desiredStaffTarget, ...sideEffectGuard),
+        )
+      }
     }
     if (input.customerId !== undefined) {
       statements.push(
         c.env.DB.prepare(
-          `UPDATE reservations SET customer_id = ?, updated_at = ? WHERE organization_id = ? AND id = ? AND ${applied}`,
-        ).bind(input.customerId, nowIso, org, current.reservationId, ...guard),
+          `UPDATE reservations SET customer_id = ?, updated_at = ? WHERE organization_id = ? AND id = ? AND ${sideEffectApplied}`,
+        ).bind(input.customerId, nowIso, org, current.reservationId, ...sideEffectGuard),
       )
-      statements.push(bumpVisitCounters(c.env.DB, org, input.customerId, now))
+      statements.push(
+        bumpVisitCounters(c.env.DB, org, input.customerId, now, {
+          condition: sideEffectApplied,
+          params: sideEffectGuard,
+        }),
+      )
     }
-    const results = await c.env.DB.batch(statements)
-    if ((results[0]?.meta.changes ?? 0) === 0) return c.json({ error: 'version_conflict' }, 409)
+    statements.push(walkinUpdate)
+    const walkinResultIndex = statements.length - 1
+    const results = await c.env.DB.batch(statements as [Statement, ...Statement[]])
+    if ((results[walkinResultIndex]?.meta.changes ?? 0) === 0) {
+      const latest = await findWalkin(c.env.DB, org, walkinId)
+      if (latest !== null && latest.version === input.version && lockStatements.length > 0) {
+        return c.json({ error: 'slot_taken' }, 409)
+      }
+      return c.json({ error: 'version_conflict' }, 409)
+    }
 
     const saved = await findWalkin(c.env.DB, org, walkinId)
     if (saved === null) return c.json({ error: 'not_found' }, 404)
@@ -4961,9 +5142,15 @@ const routes = app
     const eventId = crypto.randomUUID()
     const correlationId = crypto.randomUUID()
     const actorId = await actorStaffId(db, org, input.storeId, sub)
+    const eventApplied: Guard = {
+      condition: 'EXISTS (SELECT 1 FROM visit_events WHERE organization_id = ? AND id = ?)',
+      params: [org, eventId],
+    }
     const statements: [Statement, ...Statement[]] = [
       c.env.DB.prepare(
-        'INSERT INTO visit_events (id, organization_id, store_id, subject_type, subject_id, stage, occurred_at, staff_id, note, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
+        'INSERT INTO visit_events (id, organization_id, store_id, subject_type, subject_id, stage, occurred_at, staff_id, note, created_at) ' +
+          'SELECT ?,?,?,?,?,?,?,?,?,? WHERE NOT EXISTS (' +
+          'SELECT 1 FROM visit_events WHERE organization_id = ? AND subject_type = ? AND subject_id = ? AND occurred_at >= ?)',
       ).bind(
         eventId,
         org,
@@ -4975,6 +5162,10 @@ const routes = app
         input.staffId ?? null,
         input.note ?? null,
         now.toISOString(),
+        org,
+        input.subjectType,
+        input.subjectId,
+        occurredAt,
       ),
     ]
 
@@ -4982,21 +5173,21 @@ const routes = app
     if (input.stage === 'received') {
       statements.push(
         c.env.DB.prepare(
-          "UPDATE reservations SET status = 'arrived', updated_at = ? WHERE organization_id = ? AND id = ? AND status = 'confirmed'",
-        ).bind(occurredAt, org, reservationId),
+          `UPDATE reservations SET status = 'arrived', updated_at = ? WHERE organization_id = ? AND id = ? AND status = 'confirmed' AND ${eventApplied.condition}`,
+        ).bind(occurredAt, org, reservationId, ...eventApplied.params),
       )
     }
     if (SERVING_STAGES.has(input.stage)) {
       statements.push(
         c.env.DB.prepare(
-          "UPDATE reservations SET status = 'serving', updated_at = ? WHERE organization_id = ? AND id = ? AND status IN ('confirmed','arrived')",
-        ).bind(occurredAt, org, reservationId),
+          `UPDATE reservations SET status = 'serving', updated_at = ? WHERE organization_id = ? AND id = ? AND status IN ('confirmed','arrived') AND ${eventApplied.condition}`,
+        ).bind(occurredAt, org, reservationId, ...eventApplied.params),
       )
       if (walkin !== null) {
         statements.push(
           c.env.DB.prepare(
-            "UPDATE walk_ins SET status = 'serving', version = version + 1 WHERE organization_id = ? AND id = ? AND status = 'waiting'",
-          ).bind(org, input.subjectId),
+            `UPDATE walk_ins SET status = 'serving', version = version + 1 WHERE organization_id = ? AND id = ? AND status = 'waiting' AND ${eventApplied.condition}`,
+          ).bind(org, input.subjectId, ...eventApplied.params),
         )
       }
     }
@@ -5008,19 +5199,19 @@ const routes = app
        */
       statements.push(
         c.env.DB.prepare(
-          "UPDATE reservations SET status = 'done', updated_at = ? WHERE organization_id = ? AND id = ? AND status IN ('arrived','serving')",
-        ).bind(occurredAt, org, reservationId),
+          `UPDATE reservations SET status = 'done', updated_at = ? WHERE organization_id = ? AND id = ? AND status IN ('arrived','serving') AND ${eventApplied.condition}`,
+        ).bind(occurredAt, org, reservationId, ...eventApplied.params),
       )
       if (walkin !== null) {
         statements.push(
           c.env.DB.prepare(
-            "UPDATE walk_ins SET status = 'left', left_at = ?, version = version + 1 WHERE organization_id = ? AND id = ?",
-          ).bind(occurredAt, org, input.subjectId),
+            `UPDATE walk_ins SET status = 'left', left_at = ?, version = version + 1 WHERE organization_id = ? AND id = ? AND ${eventApplied.condition}`,
+          ).bind(occurredAt, org, input.subjectId, ...eventApplied.params),
         )
       }
       // 顧客が未特定の来店は数えない（結び直したときに数え直される）。
       if (customerId !== null) {
-        statements.push(bumpVisitCounters(c.env.DB, org, customerId, now))
+        statements.push(bumpVisitCounters(c.env.DB, org, customerId, now, eventApplied))
       }
     }
     statements.push(
@@ -5034,9 +5225,13 @@ const routes = app
         after: { stage: input.stage, occurredAt, staffId: input.staffId ?? null },
         correlationId,
         occurredAt,
+        appliedVisitEventId: eventId,
       }),
     )
-    await c.env.DB.batch(statements)
+    const results = await c.env.DB.batch(statements)
+    if ((results[0]?.meta.changes ?? 0) === 0) {
+      return c.json({ error: 'occurred_at_conflict' }, 409)
+    }
 
     return c.json(
       VisitEvent.parse({
@@ -5110,8 +5305,24 @@ const routes = app
       const walkin = walkinOf.get(reservation.id) ?? null
       const band = bands.get(reservation.id) ?? null
       const assigned = day.assignments.filter((row) => row.reservationId === reservation.id)
-      const unit = assigned.find((row) => row.kind === 'equipment' && row.targetId !== null)
       const attendant = assigned.find((row) => row.kind === 'staff')
+      const reservationPurposes = day.purposes.filter(
+        (purpose) => purpose.reservationId === reservation.id,
+      )
+      const assignedEquipment = assigned.flatMap((assignment) => {
+        if (assignment.kind !== 'equipment' || assignment.targetId === null) return []
+        const found = equipmentOf.get(assignment.targetId)
+        return found?.kind === undefined
+          ? []
+          : [
+              {
+                id: found.id,
+                name: found.name,
+                kind: found.kind,
+                sortOrder: found.sortOrder,
+              },
+            ]
+      })
       rows.push({
         subjectType: walkin === null ? 'reservation' : 'walkin',
         subjectId: walkin?.id ?? reservation.id,
@@ -5127,15 +5338,14 @@ const routes = app
          * 設備を押さえていないご予約には出さない — 出すと、担当も設備も決まっていない
          * 欄に「次にやること」だけが並び、押しても何も始められない。
          */
-        next:
-          unit === undefined || unit.targetId === null
-            ? null
-            : {
-                stage: 'measuring',
-                label: equipmentOf.get(unit.targetId)?.name ?? '',
-                staffId: attendant?.targetId ?? null,
-                equipmentId: unit.targetId,
-              },
+        next: planBoardSteps({
+          requiredSkills: reservationPurposes.flatMap((purpose) => purpose.requiredSkills ?? []),
+          requiredEquipmentKinds: reservationPurposes.flatMap(
+            (purpose) => purpose.requiredEquipmentKinds ?? [],
+          ),
+          staffId: attendant?.targetId ?? null,
+          equipment: assignedEquipment,
+        }),
       })
     }
 

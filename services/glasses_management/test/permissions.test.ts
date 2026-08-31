@@ -516,6 +516,8 @@ const weeklyShifts = () =>
  * 期待値は「その主体がそのパスを叩いたときの status」。
  * 200 系は経路が通ったこと、401 は未認証、403 は権限不足、404 は存在しないこと。
  */
+let permissionVisitMinute = 5
+
 const TABLE: Row[] = [
   {
     name: 'ヘルスチェックは誰でも通る',
@@ -971,7 +973,7 @@ const TABLE: Row[] = [
       subjectType: 'reservation',
       subjectId: fixture.visitReservationId,
       stage: 'consulting',
-      occurredAt: jstAt(LEDGER_DATE, '14:05'),
+      occurredAt: jstAt(LEDGER_DATE, `14:${String(permissionVisitMinute++).padStart(2, '0')}`),
     }),
     expected: BOOKING,
   },

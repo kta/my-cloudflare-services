@@ -70,6 +70,7 @@ type ConfirmBody = {
   holdId?: string
   receptionSessionId?: string
   noteCustomer?: string
+  customerId?: string
 }
 
 type ConfirmResponse = {
@@ -77,6 +78,32 @@ type ConfirmResponse = {
   code?: string
   error?: string
   alternatives?: { startsAt: string; endsAt: string }[]
+  customerId?: string | null
+  customerName?: string | null
+  visitCount?: number | null
+}
+
+async function seedBookingCustomer(org: string): Promise<string> {
+  const id = crypto.randomUUID()
+  const now = jstAt(LEDGER_DATE, '09:00')
+  await env.DB.prepare(
+    'INSERT INTO customers (id, organization_id, customer_number, name, kana, phone, phone_normalized, phone_last4, email, birth_date, address, memo, first_visit_at, last_visit_at, visit_count, merged_into_id, version, created_store_id, created_terminal_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,NULL,NULL,NULL,?,NULL,NULL,2,NULL,1,NULL,NULL,?,?)',
+  )
+    .bind(
+      id,
+      org,
+      `G-${crypto.randomUUID().slice(0, 8)}`,
+      '田中 花子',
+      'たなか はなこ',
+      '090-1234-5678',
+      '09012345678',
+      '5678',
+      '',
+      now,
+      now,
+    )
+    .run()
+  return id
 }
 
 async function confirm(token: string, key: string, body: ConfirmBody) {
@@ -155,6 +182,71 @@ async function countRows(org: string) {
 }
 
 describe('予約の確定', () => {
+  it('既存のお客様を予約と成功応答へ載せ、同じ鍵の再送でも同じ顧客情報を返す', async () => {
+    const t = await bookingTenant()
+    const customerId = await seedBookingCustomer(t.org)
+    const key = crypto.randomUUID()
+    const body: ConfirmBody = {
+      storeId: t.storeId,
+      startsAt: AT_11,
+      purposeIds: [t.purposeId],
+      source: 'phone',
+      customerId,
+    }
+
+    const first = await confirm(t.token, key, body)
+    const replay = await confirm(t.token, key, body)
+
+    expect(first.status).toBe(200)
+    expect(first.body).toMatchObject({ customerId, customerName: '田中 花子', visitCount: 2 })
+    expect(replay.body).toMatchObject({ customerId, customerName: '田中 花子', visitCount: 2 })
+    const saved = await env.DB.prepare(
+      'SELECT customer_id AS customerId FROM reservations WHERE organization_id = ? AND id = ?',
+    )
+      .bind(t.org, first.body.id)
+      .first<{ customerId: string | null }>()
+    expect(saved?.customerId).toBe(customerId)
+  })
+
+  it('初回成功後に顧客が統合されても同じ鍵は保存済み応答を replay する', async () => {
+    const t = await bookingTenant()
+    const customerId = await seedBookingCustomer(t.org)
+    const key = crypto.randomUUID()
+    const body: ConfirmBody = {
+      storeId: t.storeId,
+      startsAt: AT_11,
+      purposeIds: [t.purposeId],
+      source: 'phone',
+      customerId,
+    }
+    const first = await confirm(t.token, key, body)
+    expect(first.status).toBe(200)
+    await env.DB.prepare(
+      'UPDATE customers SET merged_into_id = ? WHERE organization_id = ? AND id = ?',
+    )
+      .bind(crypto.randomUUID(), t.org, customerId)
+      .run()
+
+    const replay = await confirm(t.token, key, body)
+
+    expect(replay).toEqual(first)
+    expect((await countRows(t.org)).reservations).toBe(1)
+  })
+
+  it('存在しない customerId では予約も冪等キーも作らない', async () => {
+    const t = await bookingTenant()
+    const res = await confirm(t.token, crypto.randomUUID(), {
+      storeId: t.storeId,
+      startsAt: AT_11,
+      purposeIds: [t.purposeId],
+      source: 'phone',
+      customerId: crypto.randomUUID(),
+    })
+    expect(res.status).toBe(404)
+    expect(await countRows(t.org)).toMatchObject({ reservations: 0 })
+    expect(await countIdempotency(t.org)).toBe(0)
+  })
+
   it('1 予約で reservations / reservation_purposes / reservation_assignments / audit_events が揃う', async () => {
     const t = await bookingTenant()
     const res = await confirm(t.token, crypto.randomUUID(), {
