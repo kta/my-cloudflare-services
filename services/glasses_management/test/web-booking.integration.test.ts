@@ -26,6 +26,7 @@ import {
   insertBusinessHours,
   insertEquipment,
   insertShift,
+  insertSlotLock,
   insertSlotRules,
   insertStaff,
   JSON_HEADERS,
@@ -909,6 +910,65 @@ describe('予約の作成', () => {
     expect(after?.status).toBe('confirmed')
   })
 
+  it('却下の候補取得後に別の承認が先に成立したら、予約本体と枠を取り消さない', async () => {
+    const t = await webTenant()
+    await book(t)
+    const web = await env.DB.prepare(
+      'SELECT id, reservation_id AS reservationId FROM web_bookings WHERE organization_id = ?',
+    )
+      .bind(t.org)
+      .first<{ id: string; reservationId: string }>()
+    if (web === null) throw new Error('Web予約のseedに失敗した')
+    const locksBefore = await countRows(
+      'SELECT COUNT(*) AS n FROM reservation_slot_locks WHERE organization_id = ? AND reservation_id = ?',
+      t.org,
+      web.reservationId,
+    )
+
+    const trigger = `test_approve_before_reject_${web.id.replaceAll('-', '_')}`
+    await env.DB.prepare(
+      `CREATE TRIGGER ${trigger} BEFORE UPDATE OF status ON web_bookings
+       WHEN OLD.id = '${web.id}' AND OLD.status = 'pending' AND NEW.status = 'cancelled'
+       BEGIN
+         UPDATE web_bookings
+            SET status = 'confirmed', confirmed_at = NEW.updated_at, updated_at = NEW.updated_at
+          WHERE id = OLD.id AND status = 'pending';
+         SELECT RAISE(IGNORE);
+       END`,
+    ).run()
+
+    try {
+      const review = await call(`/api/staff/web-bookings/${web.id}/review`, {
+        method: 'POST',
+        headers: authed(t.manager),
+        body: { decision: 'reject', reason: '時間が埋まったため' },
+      })
+      expect([200, 409]).toContain(review.status)
+
+      const afterWeb = await env.DB.prepare(
+        'SELECT status FROM web_bookings WHERE organization_id = ? AND id = ?',
+      )
+        .bind(t.org, web.id)
+        .first<{ status: string }>()
+      const reservation = await env.DB.prepare(
+        'SELECT status, version FROM reservations WHERE organization_id = ? AND id = ?',
+      )
+        .bind(t.org, web.reservationId)
+        .first<{ status: string; version: number }>()
+      expect(afterWeb?.status).toBe('confirmed')
+      expect(reservation).toEqual({ status: 'confirmed', version: 1 })
+      expect(
+        await countRows(
+          'SELECT COUNT(*) AS n FROM reservation_slot_locks WHERE organization_id = ? AND reservation_id = ?',
+          t.org,
+          web.reservationId,
+        ),
+      ).toBe(locksBefore)
+    } finally {
+      await env.DB.prepare(`DROP TRIGGER IF EXISTS ${trigger}`).run()
+    }
+  })
+
   it('受け付ける時間の外の時刻を送ると 409 store_closed になる', async () => {
     const t = await webTenant()
     // 店舗は 19:00 まで開いているが、Web で受けるのは 18:00 まで。
@@ -1256,6 +1316,125 @@ describe('締切', () => {
       .bind(seeded.reservationId)
       .first<{ startsAt: string; status: string }>()
     expect(row).toEqual({ startsAt: at(TODAY, '17:00'), status: 'confirmed' })
+  })
+})
+
+describe('確認待ちの自動取消', () => {
+  it('同じ時刻で二重実行しても、取消・版・お知らせを1回だけ進める', async () => {
+    const t = await webTenant()
+    const seeded = await seedWebBooking(t, {
+      startsAt: at(VISIT, '11:00'),
+      status: 'pending',
+      createdAt: at(plusDays(TODAY, -1), '10:00'),
+    })
+    await insertSlotLock(t.org, {
+      storeId: t.storeId,
+      reservationId: seeded.reservationId,
+      kind: 'store',
+      targetKey: 'store',
+      slotStart: at(VISIT, '11:00'),
+    })
+    const request = {
+      method: 'POST',
+      headers: INTERNAL_HEADERS,
+      body: { now: at(TODAY, '00:00'), limit: 100 },
+    }
+
+    const first = await call('/api/internal/maintenance/web-publications/apply', request)
+    const second = await call('/api/internal/maintenance/web-publications/apply', request)
+    expect(first.body).toMatchObject({ autoCancelled: 1 })
+    expect(second.body).toMatchObject({ autoCancelled: 0 })
+
+    const reservation = await env.DB.prepare(
+      'SELECT status, version FROM reservations WHERE organization_id = ? AND id = ?',
+    )
+      .bind(t.org, seeded.reservationId)
+      .first<{ status: string; version: number }>()
+    expect(reservation).toEqual({ status: 'cancelled', version: 2 })
+    expect(
+      await countRows(
+        "SELECT COUNT(*) AS n FROM alerts WHERE organization_id = ? AND code = 'web_booking.auto_cancelled' AND target_id = ?",
+        t.org,
+        seeded.reservationId,
+      ),
+    ).toBe(1)
+    expect(
+      await countRows(
+        'SELECT COUNT(*) AS n FROM reservation_slot_locks WHERE organization_id = ? AND reservation_id = ?',
+        t.org,
+        seeded.reservationId,
+      ),
+    ).toBe(0)
+  })
+
+  it('候補取得後に店長の承認が先に成立したら、予約・枠・お知らせを変更しない', async () => {
+    const t = await webTenant()
+    const yesterday = plusDays(TODAY, -1)
+    const seeded = await seedWebBooking(t, {
+      startsAt: at(VISIT, '11:00'),
+      status: 'pending',
+      createdAt: at(yesterday, '10:00'),
+    })
+    await insertSlotLock(t.org, {
+      storeId: t.storeId,
+      reservationId: seeded.reservationId,
+      kind: 'store',
+      targetKey: 'store',
+      slotStart: at(VISIT, '11:00'),
+    })
+
+    // 自動取消が候補を SELECT した直後、条件付き UPDATE より先に店長の承認が
+    // 成立した競合を再現する。外側の cancelled UPDATE は RAISE(IGNORE) で 0 行にし、
+    // それでも後続の予約取消・枠削除・alert INSERT が走らないことを確かめる。
+    const trigger = `test_approve_before_auto_cancel_${seeded.webBookingId.replaceAll('-', '_')}`
+    await env.DB.prepare(
+      `CREATE TRIGGER ${trigger} BEFORE UPDATE OF status ON web_bookings
+       WHEN OLD.id = '${seeded.webBookingId}' AND OLD.status = 'pending' AND NEW.status = 'cancelled'
+       BEGIN
+         UPDATE web_bookings
+            SET status = 'confirmed', confirmed_at = NEW.updated_at, updated_at = NEW.updated_at
+          WHERE id = OLD.id AND status = 'pending';
+         SELECT RAISE(IGNORE);
+       END`,
+    ).run()
+
+    try {
+      const result = await call('/api/internal/maintenance/web-publications/apply', {
+        method: 'POST',
+        headers: INTERNAL_HEADERS,
+        body: { now: at(TODAY, '00:00'), limit: 100 },
+      })
+      expect(result.status).toBe(200)
+
+      const web = await env.DB.prepare(
+        'SELECT status FROM web_bookings WHERE organization_id = ? AND id = ?',
+      )
+        .bind(t.org, seeded.webBookingId)
+        .first<{ status: string }>()
+      const reservation = await env.DB.prepare(
+        'SELECT status, version FROM reservations WHERE organization_id = ? AND id = ?',
+      )
+        .bind(t.org, seeded.reservationId)
+        .first<{ status: string; version: number }>()
+      expect(web?.status).toBe('confirmed')
+      expect(reservation).toEqual({ status: 'confirmed', version: 1 })
+      expect(
+        await countRows(
+          'SELECT COUNT(*) AS n FROM reservation_slot_locks WHERE organization_id = ? AND reservation_id = ?',
+          t.org,
+          seeded.reservationId,
+        ),
+      ).toBe(1)
+      expect(
+        await countRows(
+          "SELECT COUNT(*) AS n FROM alerts WHERE organization_id = ? AND code = 'web_booking.auto_cancelled' AND target_id = ?",
+          t.org,
+          seeded.reservationId,
+        ),
+      ).toBe(0)
+    } finally {
+      await env.DB.prepare(`DROP TRIGGER IF EXISTS ${trigger}`).run()
+    }
   })
 })
 

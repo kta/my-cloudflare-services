@@ -4,6 +4,16 @@ import {
   AlertCode,
   AlertList,
   AlertListQuery,
+  AnalyticsDailyDimension,
+  AnalyticsDailyMetric,
+  AnalyticsDailyRow,
+  AnalyticsPoint,
+  AnalyticsQuery,
+  AnalyticsReport,
+  AnalyticsRollupRequest,
+  AnalyticsRollupResult,
+  AnalyticsSeries,
+  AnalyticsTargets,
   AvailabilityLane,
   AvailabilityQuery,
   AvailabilityReason,
@@ -3834,5 +3844,238 @@ describe('WebBookingReviewInput', () => {
       WebBookingReviewInput.parse({ decision: 'reject', reason: 'あ'.repeat(121) }),
     ).toThrow()
     expect(() => WebBookingReviewInput.parse({ decision: 'cancel' })).toThrow()
+  })
+})
+
+describe('Analytics contracts', () => {
+  const analyticsQuery = {
+    storeId: UUID,
+    metric: 'reservation_count',
+    from: '2026-01-01',
+    to: '2027-02-04', // 両端を含めて 400 日
+  }
+
+  it('allows exactly 400 inclusive days and supplies report defaults', () => {
+    const parsed = AnalyticsQuery.parse(analyticsQuery)
+    expect(parsed.granularity).toBe('day')
+    expect(parsed.countBy).toBe('visit_date')
+    expect(() => AnalyticsQuery.parse({ ...analyticsQuery, to: '2027-02-05' })).toThrow()
+    expect(() => AnalyticsQuery.parse({ ...analyticsQuery, metric: 'guests' })).toThrow()
+    expect(() => AnalyticsQuery.parse({ ...analyticsQuery, unexpected: true })).toThrow()
+  })
+
+  it('keeps the nine physical metrics and eight dimensions fail-closed', () => {
+    expect(AnalyticsDailyMetric.options).toEqual([
+      'closed',
+      'reservations',
+      'scheduled_reservations',
+      'reservations_received',
+      'receptions',
+      'cancellations',
+      'wait_seconds_histogram',
+      'revisit_eligible',
+      'revisit_returning_90d',
+    ])
+    expect(AnalyticsDailyDimension.options).toEqual([
+      'total',
+      'staff',
+      'purpose',
+      'hour',
+      'source',
+      'cancellation_category',
+      'wait_seconds',
+      'visit_frequency',
+    ])
+    expect(() => AnalyticsDailyDimension.parse('cancel_reason')).toThrow()
+  })
+
+  it('allows only the dimension key vocabulary for persisted daily rows', () => {
+    const base = {
+      id: UUID,
+      organizationId: ORG,
+      storeId: UUID2,
+      date: '2026-08-27',
+      metric: 'cancellations',
+      dimension: 'cancellation_category',
+      dimensionKey: 'web',
+      dimensionLabel: 'Webからの取消',
+      value: 2,
+      createdAt: NOW,
+      updatedAt: NOW,
+    }
+    expect(AnalyticsDailyRow.parse(base).dimensionKey).toBe('web')
+    expect(AnalyticsDailyRow.parse(base).dimensionLabel).toBe('Webからの取消')
+    expect(() => AnalyticsDailyRow.parse({ ...base, dimensionLabel: '' })).toThrow()
+    expect(() => AnalyticsDailyRow.parse({ ...base, dimensionKey: 'other' })).toThrow()
+    expect(() => AnalyticsDailyRow.parse({ ...base, value: 1.5 })).toThrow()
+    expect(() =>
+      AnalyticsDailyRow.parse({
+        ...base,
+        metric: 'receptions',
+        dimension: 'hour',
+        dimensionKey: '10',
+        dimensionLabel: '10時台',
+      }),
+    ).toThrow()
+    expect(() =>
+      AnalyticsDailyRow.parse({
+        ...base,
+        metric: 'revisit_eligible',
+        dimension: 'total',
+        dimensionKey: '',
+        dimensionLabel: '合計',
+      }),
+    ).toThrow()
+    expect(
+      AnalyticsDailyRow.parse({
+        ...base,
+        metric: 'wait_seconds_histogram',
+        dimension: 'wait_seconds',
+        dimensionKey: 'hour:23:481',
+      }).dimensionKey,
+    ).toBe('hour:23:481')
+    expect(() =>
+      AnalyticsDailyRow.parse({
+        ...base,
+        metric: 'wait_seconds_histogram',
+        dimension: 'wait_seconds',
+        dimensionKey: 'hour:24:481',
+      }),
+    ).toThrow()
+  })
+
+  it('bounds an internal rollup to 31 inclusive days and three stores', () => {
+    expect(
+      AnalyticsRollupRequest.parse({
+        from: '2026-08-01',
+        to: '2026-08-31',
+        limit: 3,
+        storeCursor: 'opaque-store-cursor',
+      }),
+    ).toMatchObject({ limit: 3, storeCursor: 'opaque-store-cursor' })
+    expect(() =>
+      AnalyticsRollupRequest.parse({ from: '2026-08-01', to: '2026-09-01', limit: 3 }),
+    ).toThrow()
+    expect(() =>
+      AnalyticsRollupRequest.parse({ from: '2026-08-01', to: '2026-08-31', limit: 4 }),
+    ).toThrow()
+  })
+
+  it('keeps zero rates distinct from suppressed rates and has no guests response field', () => {
+    expect(
+      AnalyticsPoint.parse({
+        key: '2026-08-27',
+        label: '8/27',
+        value: 0,
+        secondaryValue: 0,
+        isClosed: false,
+        isOverTarget: false,
+      }).secondaryValue,
+    ).toBe(0)
+    expect(
+      AnalyticsPoint.parse({
+        key: 'unassigned',
+        label: '担当未定',
+        value: 9,
+        secondaryValue: null,
+        isClosed: false,
+        isOverTarget: false,
+      }).secondaryValue,
+    ).toBeNull()
+    expect(() =>
+      AnalyticsPoint.parse({
+        key: 'x',
+        label: 'x',
+        value: 1,
+        secondaryValue: 1.1,
+        isClosed: false,
+        isOverTarget: false,
+      }),
+    ).toThrow()
+    expect(
+      AnalyticsTargets.parse({
+        waitMinutes: 8,
+        cancellationRatePercent: 10,
+        revisitWindowDays: 90,
+      }),
+    ).toEqual({ waitMinutes: 8, cancellationRatePercent: 10, revisitWindowDays: 90 })
+    expect(() =>
+      AnalyticsTargets.parse({
+        waitMinutes: 9,
+        cancellationRatePercent: 10,
+        revisitWindowDays: 90,
+      }),
+    ).toThrow()
+    expect(
+      AnalyticsRollupResult.parse({
+        processedStores: 1,
+        failedStores: [],
+        nextStoreCursor: null,
+        from: '2026-08-01',
+        to: '2026-08-01',
+        upserted: 9,
+        dropped: 0,
+      }).dropped,
+    ).toBe(0)
+  })
+
+  it('accepts 40文字の担当snapshotを分析pointとseriesで保持する', () => {
+    const displayName = 'あ'.repeat(40)
+    expect(
+      AnalyticsPoint.parse({
+        key: 'staff-1',
+        label: displayName,
+        value: 0,
+        secondaryValue: null,
+        isClosed: false,
+        isOverTarget: false,
+      }).label,
+    ).toBe(displayName)
+    expect(AnalyticsSeries.parse({ name: displayName, points: [], pattern: 'solid' }).name).toBe(
+      displayName,
+    )
+  })
+
+  it('keeps summaries to three display-ready values and defaults an omitted rate to null', () => {
+    expect(
+      AnalyticsPoint.parse({
+        key: '2026-08-27',
+        label: '8/27',
+        value: 12,
+        isClosed: false,
+        isOverTarget: false,
+      }).secondaryValue,
+    ).toBeNull()
+
+    const report = {
+      metric: 'wait_time',
+      from: '2026-08-01',
+      to: '2026-08-31',
+      granularity: 'hour',
+      countBy: 'visit_date',
+      series: [],
+      summary: [
+        { label: '中央値', value: '8分40秒', unit: '', isOverTarget: true },
+        { label: '前の月', value: '7分20秒', unit: '', isOverTarget: false },
+        { label: '受付', value: '328', unit: '件', isOverTarget: false },
+      ],
+      target: 480,
+      suppressed: false,
+      businessDays: 27,
+      pendingDays: 0,
+    }
+    expect(AnalyticsReport.parse(report).summary).toHaveLength(3)
+    expect(() =>
+      AnalyticsReport.parse({
+        ...report,
+        summary: [...report.summary, report.summary[0]],
+      }),
+    ).toThrow()
+    expect(() =>
+      AnalyticsReport.parse({
+        ...report,
+        summary: [{ label: '中央値', value: 520, unit: '秒', isOverTarget: true }],
+      }),
+    ).toThrow()
   })
 })

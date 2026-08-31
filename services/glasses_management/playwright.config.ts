@@ -1,5 +1,7 @@
 import { defineConfig, devices } from '@playwright/test'
 
+const E2E_TODAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tokyo' }).format(new Date())
+
 function withDisposableState(command: string): string {
   return `E2E_STATE_PATH="$(mktemp -d)" && export E2E_STATE_PATH && trap 'rm -rf "$E2E_STATE_PATH"' EXIT && ${command}`
 }
@@ -88,5 +90,6 @@ export default defineConfig({
     name: 'EYEX予約',
     reuseExistingServer: false,
     timeout: 180_000,
+    env: { E2E_TODAY },
   },
 })

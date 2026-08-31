@@ -158,6 +158,202 @@ async function startWork(page: Page): Promise<void> {
   await page.getByRole('navigation', { name: '画面の切り替え' }).waitFor()
 }
 
+/** 分析の表示データをブラウザ側で固定する。visual regression は集計SQLではなく描画を比べる。 */
+async function stubAnalytics(page: Page): Promise<void> {
+  await page.route(
+    (url) => url.pathname === '/api/staff/analytics/targets',
+    async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          waitMinutes: 8,
+          cancellationRatePercent: 10,
+          revisitWindowDays: 90,
+        }),
+      })
+    },
+  )
+  await page.route(
+    (url) => url.pathname === '/api/staff/analytics',
+    async (route) => {
+      const params = new URL(route.request().url()).searchParams
+      const metric = params.get('metric') ?? 'overview'
+      const point = (
+        key: string,
+        label: string,
+        value: number,
+        secondaryValue: number | null = null,
+        isClosed = false,
+      ) => ({ key, label, value, secondaryValue, isClosed, isOverTarget: false })
+      const common = {
+        metric,
+        from: params.get('from') ?? '2026-08-01',
+        to: params.get('to') ?? '2026-08-31',
+        granularity: params.get('granularity') ?? 'day',
+        countBy: params.get('countBy') ?? 'visit_date',
+        target: null,
+        suppressed: false,
+        businessDays: 27,
+        pendingDays: 0,
+      }
+      const response = (() => {
+        if (metric === 'overview') {
+          const values = [10, 10, 9, 9, 0, 0, 0, 72, 0, 0, 0, 42, 0]
+          return {
+            ...common,
+            from: '2026-08-20',
+            to: '2026-09-03',
+            pendingDays: 2,
+            series: [
+              {
+                name: '予約数',
+                pattern: 'solid',
+                points: values.map((value, index) => {
+                  const date = new Date(Date.UTC(2026, 7, 20 + index)).toISOString().slice(0, 10)
+                  return point(
+                    date,
+                    date,
+                    value,
+                    null,
+                    date === '2026-08-25' || date === '2026-09-01',
+                  )
+                }),
+              },
+            ],
+            summary: [
+              { label: '先週', value: '68', unit: '件', isOverTarget: false },
+              { label: '今週', value: '72', unit: '件', isOverTarget: false },
+              { label: '来週', value: '42', unit: '件', isOverTarget: false },
+            ],
+          }
+        }
+        if (metric === 'reservation_count') {
+          const values = [
+            12, 14, 11, 0, 13, 10, 9, 16, 14, 13, 0, 12, 15, 11, 18, 14, 12, 0, 15, 13, 10, 16, 12,
+            11, 0, 13, 17, 14, 12, 10, 7,
+          ]
+          return {
+            ...common,
+            series: [
+              {
+                name: '件数',
+                pattern: 'solid',
+                points: values.map((value, index) => {
+                  const date = `2026-08-${String(index + 1).padStart(2, '0')}`
+                  return point(date, date, value, null, [4, 11, 18, 25].includes(index + 1))
+                }),
+              },
+            ],
+            summary: [
+              { label: '合計', value: '320', unit: '件', isOverTarget: false },
+              { label: '1日あたり', value: '11.9', unit: '件', isOverTarget: false },
+              { label: '最大', value: '18', unit: '件', isOverTarget: false },
+            ],
+          }
+        }
+        if (metric === 'staff') {
+          const staff = [
+            ['佐藤 美咲', 78, 0.68],
+            ['高橋 健', 71, 0.61],
+            ['中村 彩', 64, 0.59],
+            ['小林 学', 52, 0.55],
+            ['渡辺 由紀', 43, 0.52],
+            ['担当が未定', 20, null],
+          ] as const
+          return {
+            ...common,
+            series: staff.map(([name, value, rate], index) => ({
+              name,
+              pattern: index === staff.length - 1 ? 'hatch' : 'solid',
+              points: [
+                point(
+                  index === staff.length - 1 ? 'unassigned' : `staff-${index}`,
+                  name,
+                  value,
+                  rate,
+                ),
+              ],
+            })),
+            summary: [{ label: '合計', value: '328', unit: '件', isOverTarget: false }],
+          }
+        }
+        if (metric === 'wait_time') {
+          const waits = [310, 460, 380, 530, 800, 570, 490, 410, 280]
+          return {
+            ...common,
+            granularity: 'hour',
+            countBy: 'received_date',
+            target: 480,
+            series: [
+              {
+                name: '中央値',
+                pattern: 'solid',
+                points: waits.map((value, index) => ({
+                  ...point(String(index + 10), `${index + 10}時台`, value),
+                  isOverTarget: value > 480,
+                })),
+              },
+            ],
+            summary: [
+              { label: '待ち時間中央値', value: '520', unit: '秒', isOverTarget: true },
+              { label: '前の月', value: '440', unit: '秒', isOverTarget: false },
+              { label: '受付', value: '328', unit: '件', isOverTarget: false },
+            ],
+          }
+        }
+        const categories = [
+          ['お客様のご都合', [12, 14, 13, 11, 12, 13]],
+          ['店舗の都合', [4, 5, 4, 4, 8, 5]],
+          ['予約の重複', [3, 4, 3, 3, 6, 4]],
+          ['ご来店がなかった', [3, 4, 3, 5, 5, 4]],
+          ['Webからの取消', [5, 5, 8, 5, 6, 5]],
+        ] as const
+        const rates = [0.089, 0.101, 0.091, 0.095, 0.119, 0.095]
+        return {
+          ...common,
+          from: '2026-03-01',
+          granularity: 'month',
+          target: 10,
+          series: categories.map(([name, values], categoryIndex) => ({
+            name,
+            pattern: categoryIndex === 0 ? 'solid' : categoryIndex % 2 ? 'hatch' : 'dot',
+            points: values.map((value, index) =>
+              point(
+                `2026-${String(index + 3).padStart(2, '0')}`,
+                `${index + 3}月`,
+                value,
+                rates[index] ?? null,
+              ),
+            ),
+          })),
+          summary: [
+            { label: '取消率', value: '9.8%', unit: '', isOverTarget: false },
+            { label: '最も高い月', value: '2026-07', unit: '', isOverTarget: true },
+            { label: '該当内訳', value: '186', unit: '件', isOverTarget: false },
+          ],
+        }
+      })()
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(response),
+      })
+    },
+  )
+}
+
+/** 分析の5枚はタブごとの固定レスポンスで開き、描画だけを reference と比べる。 */
+async function openAnalytics(page: Page): Promise<void> {
+  await stubAnalytics(page)
+  await pinTo1108(page)
+  await startWork(page)
+  await page
+    .getByRole('navigation', { name: '画面の切り替え' })
+    .getByRole('button', { name: '分析', exact: true })
+    .click()
+}
+
 /** 予約台帳を 2026年8月27日（木）11:08 の姿で開く。 */
 async function openLedger(page: Page): Promise<void> {
   await pinTo1108(page)
@@ -2105,6 +2301,87 @@ test.describe('承認済みモックとの突き合わせ', () => {
     await expect(page).toHaveScreenshot('EX-UPLOAD-FAILED.png', {
       scale: 'device',
       maxDiffPixelRatio: 0.0163,
+    })
+  })
+
+  test('ANALYTICS-TOP — 分析トップ', async ({ page }) => {
+    await openAnalytics(page)
+    await expect(page.getByRole('heading', { name: '予約の入り具合' })).toBeVisible()
+    await expect(page.getByRole('img', { name: /前後7日/ })).toBeVisible()
+    /*
+     * 実測 7.7152%（298,467 / 3,868,560 画素）。主な意図した差は、まだ集計中の2日を
+     * 0件の棒にせず通知へ分ける AC-ANA-15 と、週の「名」を出さない AC-ANA-02。
+     * 上バーの「お知らせ 3」は P10 の範囲で、この時点では「業務を終える」が残る。
+     * **この値は下げるだけ。上げてはいけない。**
+     */
+    await expect(page).toHaveScreenshot('ANALYTICS-TOP.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.0773,
+    })
+  })
+
+  test('ANALYTICS-COUNT — 予約数', async ({ page }) => {
+    await openAnalytics(page)
+    await page.getByRole('tab', { name: '予約数' }).click()
+    await expect(page.getByRole('heading', { name: '予約数', level: 2 })).toBeVisible()
+    await expect(page.getByRole('img')).toBeVisible()
+    /*
+     * 実測 8.4850%（328,246 / 3,868,560 画素）。モックの見た目を基礎にしつつ、選択肢は
+     * 押せる本物のradioへ置換した。値は誤記の12.3ではなく、320÷営業27日=11.9を正とする。
+     * グラフは31日まで描き、モックと同じ最大24件のY軸目盛を置く。上バー差はP10。
+     * **この値は下げるだけ。上げてはいけない。**
+     */
+    await expect(page).toHaveScreenshot('ANALYTICS-COUNT.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.0849,
+    })
+  })
+
+  test('ANALYTICS-STAFF — 担当者', async ({ page }) => {
+    await openAnalytics(page)
+    await page.getByRole('tab', { name: '担当者' }).click()
+    await expect(page.getByRole('heading', { name: '担当者', level: 2 })).toBeVisible()
+    await expect(page.getByRole('table', { name: '担当者の集計' })).toBeVisible()
+    /*
+     * 実測 7.3666%（284,981 / 3,868,560 画素）。行・棒・件数・再来率・未定末尾という
+     * モックの骨格は維持。ロールアップsnapshotに無い職種の補足は表示せず、上バー差はP10。
+     * **この値は下げるだけ。上げてはいけない。**
+     */
+    await expect(page).toHaveScreenshot('ANALYTICS-STAFF.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.0738,
+    })
+  })
+
+  test('ANALYTICS-WAIT — お待ち時間', async ({ page }) => {
+    await openAnalytics(page)
+    await page.getByRole('tab', { name: 'お待ち時間' }).click()
+    await expect(page.getByRole('heading', { name: 'お待ち時間', level: 2 })).toBeVisible()
+    await expect(page.getByRole('img')).toBeVisible()
+    /*
+     * 実測 8.8903%（343,926 / 3,868,560 画素）。中央値・前月・母数・8分目安と9本の棒は
+     * モック値へ固定。目安線は色だけに頼らず、地模様と文の凡例で同じ意味を伝える。
+     * 装飾Y軸と上バー通知（P10）が残る主差分。**この値は下げるだけ。上げてはいけない。**
+     */
+    await expect(page).toHaveScreenshot('ANALYTICS-WAIT.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.0891,
+    })
+  })
+
+  test('ANALYTICS-CANCEL — 取り消し', async ({ page }) => {
+    await openAnalytics(page)
+    await page.getByRole('tab', { name: '取り消し' }).click()
+    await expect(page.getByRole('heading', { name: '取り消し', level: 2 })).toBeVisible()
+    await expect(page.getByRole('img')).toBeVisible()
+    /*
+     * 実測 10.9739%（424,530 / 3,868,560 画素）。月別積層と3行まとめはモックを維持するが、
+     * 理由を誤集約しないよう承認仕様の正式5分類（モックは3分類）を色＋地模様で描く。
+     * 装飾Y軸と上バー通知（P10）が残る差分。**この値は下げるだけ。上げてはいけない。**
+     */
+    await expect(page).toHaveScreenshot('ANALYTICS-CANCEL.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.11,
     })
   })
 })

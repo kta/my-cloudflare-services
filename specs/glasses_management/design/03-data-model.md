@@ -1810,7 +1810,8 @@ Web 予約の公開設定。**1 店舗 1 行**。SETTINGS-WEB の保存先。
 
 ### 11.4 `analytics_daily`
 
-分析 5 画面の元になる日次集計。生の予約を毎回集計しない。
+分析 8 タブの元になる唯一の日次集計表。**表示 API は生表を読まず `analytics_daily` だけを読む**。ロールアップ用の
+別表（`analytics_rollup_work` を含む）は作らない。
 
 | 論理名 | SQL 列名 | TS 名 | 型 | NULL | 取りうる値 | 説明 |
 |---|---|---|---|---|---|---|
@@ -1819,31 +1820,51 @@ Web 予約の公開設定。**1 店舗 1 行**。SETTINGS-WEB の保存先。
 | 店舗ID | `store_id` | `storeId` | text | 不可 | | |
 | 集計日 | `date` | `date` | text | 不可 | `YYYY-MM-DD` | JST の暦日 |
 | 指標 | `metric` | `metric` | text | 不可 | 下表 | |
-| 切り口 | `dimension` | `dimension` | text | 不可 | `total` \| `staff` \| `purpose` \| `hour` \| `source` \| `cancel_reason` | 「曜日別」「月別」（ANALYTICS-COUNT の集計の種類）は次元を持たない。`date` から読み出し時にまとめる |
-| 切り口キー | `dimension_key` | `dimensionKey` | text | 不可 | `dimension='total'` なら空文字 | `staff` なら `staff.id`、ただし**担当未定は `unassigned`**（ANALYTICS-STAFF の「担当が未定　受付では未定　9件」）。`hour` なら `14`（2桁ゼロ埋めしない）、`source` なら `web` |
-| 値 | `value` | `value` | real | 不可 | 0 以上 | 件数は整数、率と中央値は小数 |
+| 切り口 | `dimension` | `dimension` | text | 不可 | `total` \| `staff` \| `purpose` \| `hour` \| `source` \| `cancellation_category` \| `visit_frequency` \| `wait_seconds` | 「曜日別」「月別」は `date` を表示時にまとめる。率・中央値を保存する次元は持たない |
+| 切り口キー | `dimension_key` | `dimensionKey` | text | 不可 | 下表 | `total` は空文字。`staff` は `staff.id`、担当未定は `unassigned`。`purpose` は `visit_purposes.id`、`hour` は `0..23`、`source` は `phone` / `counter` / `web` / `walkin` |
+| 切り口表示名 | `dimension_label` | `dimensionLabel` | text | 不可 | 1〜60文字 | 日次集計時点の名称スナップショット。`staff` / `purpose` の無効化・改名後も過去の表示名を残す。固定分類は正式な日本語表示名を持ち、`total` 等も「合計」などを必ず保存する。DDL DEFAULT で空文字を補わない |
+| 値 | `value` | `value` | integer | 不可 | 0 以上 | 保存値は件数（整数）。率・中央値は期間の行を読んで計算する |
 | 作成日時＋ | `created_at` | `createdAt` | text | 不可 | ISO8601 | |
 | 更新日時＋ | `updated_at` | `updatedAt` | text | 不可 | ISO8601 | |
 
-`metric` の語彙と対応する画面:
+`dimension` の固定キー:
+
+| `dimension` | `dimension_key` |
+|---|---|
+| `cancellation_category` | `customer` / `store` / `duplicate` / `no_show` / `web` |
+| `visit_frequency` | `first` / `second` / `third_to_fifth` / `sixth_or_more` |
+| `wait_seconds` | `hour:<0..23>:<seconds>`。同じ受付 JST 時間帯・待ち秒の件数を `value` に保存する |
+
+`metric` の物理語彙と対応する画面:
 
 | `metric` | 意味 | かぞえる日 | 画面 |
 |---|---|---|---|
-| `reservations` | 予約件数 | `date` ＝ `starts_at` の JST 暦日 | ANALYTICS-TOP / COUNT（「かぞえる日 → ご来店日」） |
-| `reservations_received` | 予約件数（受け付けた日でかぞえる） | `date` ＝ `created_at` の JST 暦日 | ANALYTICS-COUNT（「かぞえる日 → 受付日」） |
-| `guests` | 人数 | ご来店日 | ANALYTICS-TOP「68件・88名」/ COUNT「320 件・414 名」。**Q-11 が解けるまで書き込まない** |
-| `cancellations` | 取消件数（`status='cancelled'`） | ご来店日 | ANALYTICS-CANCEL |
-| `no_shows` | 無断キャンセル件数（`status='no_show'`） | ご来店日 | ANALYTICS-CANCEL の赤 |
-| `wait_seconds_median` | 受付からご相談開始までの中央値（秒） | 受付した日 | ANALYTICS-WAIT（`8分40秒` = 520） |
-| `revisit_rate_90d` | 来店から 90 日以内の再来率（0.00〜1.00） | ご来店日 | ANALYTICS-STAFF「90日以内の再来 68%」 |
+| `closed` | 営業状態 | `date` の JST 暦日 | `total`、営業日 0 / 定休日・臨時休業 1。未来日は**行を書かない** |
+| `reservations` | 有効な来店予定件数 | `starts_at` の JST 暦日。`cancelled` / `no_show` を除く | TOP / COUNT（ご来店日）、purpose / hour / source |
+| `scheduled_reservations` | 予定総数 | `starts_at` の JST 暦日。取消・no show を含む | 取消率の分母（`total`） |
+| `reservations_received` | 受け付けた有効予約件数 | `created_at` の JST 暦日。`cancelled` / `no_show` を除く | COUNT（受付日）、source / purpose / hour |
+| `receptions` | 完了来店件数 | `status='done'` の来店日の JST 暦日 | staff / source / visit_frequency / total |
+| `cancellations` | 取消・no show 件数 | `starts_at` の JST 暦日 | `cancellation_category` の 5 キーだけ |
+| `wait_seconds_histogram` | 受付から相談開始までの待ち秒の度数 | 受付日の JST 暦日 | `wait_seconds`。期間内の度数を合算して厳密中央値を出す |
+| `revisit_eligible` | 再来率の分母 | 完了来店日の JST 暦日 | `staff`。担当未定には書かない |
+| `revisit_returning_90d` | 再来率の分子 | 完了来店日の JST 暦日 | `staff`。対象来店の前 1〜90 日に同一顧客の完了来店がある件数 |
 
 `reservations` と `reservations_received` を **2 つの `metric` に分ける**のは、ANALYTICS-COUNT が
 「かぞえる日　ご来店日／受付日」の 2 択を持つためである。1 つの `metric` を読み替えでは作れない
 （同じ予約が別の日に落ちるので、`date` の意味が行ごとに変わってしまう）。
 
+`revisit_eligible` / `revisit_returning_90d` は**現在の完了来店を基準に後ろを待たない**。対象の `done` 来店について、
+同じ customer の `done` 来店が **過去 1〜90 日**に 1 件以上あれば分子、対象来店すべてを分母にする
+（backward-looking）。よって 90 日後を待たず、日次ロールアップで確定できる。
+顧客未特定でも担当が決まっている完了来店は担当者別の分母へ含め、分子は 0 とする。担当未定だけは
+担当者別率を出さないため分母・分子のどちらにも書かない。
+
+`wait_seconds_histogram` は中央値を保存しない。期間中の `hour:<hour>:<seconds>` の件数をすべて合算し、
+昇順の累積件数が `floor((n + 1) / 2)` と `ceil((n + 1) / 2)` を越える秒を選ぶ。偶数件では両者の平均を取り、
+月次・複数月でも**厳密な中央値**を返す。
+
 > [要確認: Q-11 — いまの前提で進める]（`design/09-open-questions.md`）。
-> いまの前提: `metric='guests'` の行を**書かない**（画面の「名」を出さず、件数だけを出す）。
-> `purpose_requirements` の必要数も固定のままにする。
+> `metric='guests'` は物理語彙に含めず、画面の「名」も出さない。
 
 **index**
 
@@ -1852,37 +1873,48 @@ Web 予約の公開設定。**1 店舗 1 行**。SETTINGS-WEB の保存先。
 | `analytics_daily_org_store_date_metric_dim_idx`（一意） | `(organization_id, store_id, date, metric, dimension, dimension_key)` | 日次 upsert の重複防止 |
 | `analytics_daily_org_store_metric_date_idx` | `(organization_id, store_id, metric, date)` | 期間指定の読み出し（単月・6か月レンジ） |
 
+ロールアップの入力走査には、既存の `reservations_org_store_start_idx`（来店日）と
+`reservations_org_customer_start_idx`（再来の過去 90 日）を使う。受付日と Cron の pending 掃除を範囲走査にするため、
+同じマイグレーションで**表を増やさず** `reservations_org_store_created_idx`
+`(organization_id, store_id, created_at)` と `web_bookings_status_created_idx` `(status, created_at)` を追加する。
+
 **不変条件**
-- 日次 Cron（UTC。JST の意図をコメントに残す）で当日分と前日分を再計算して upsert する。
-  サブリクエスト上限（Cloudflare サービス宛 1,000／呼び出し）と CPU 10ms のため、生データの走査を画面から行わない。
-- 定休日も `value=0` の行を作る。**「0 件」と「欠測」を区別する**（グラフの定休日を空白でなく 0 の棒として描くため）。
-- 小標本抑制は**読み出し側**で行う。**分母が 20 件未満の率**（`revisit_rate_90d`・取消率）は画面に出さず「—」にし、
-  件数だけを出す。行そのものは値を持ったまま残す。閾値を 20 にするのは、ANALYTICS-STAFF の担当者別で
+- 日次ロールアップは生表を **bulk read** し、`json_each(?)` を使う 1 回の JSON bulk upsert で書く。再来判定の入力は対象範囲の開始 90 日前まで広げる。定期実行はcursorの各ページで、店舗ごとに `analytics_daily` の `metric='closed'` のJST昨日以下の最終確定日の翌日から最大31日を再集計する。昨日まで未確定の日が残るページは同じcursorを持ち越し、追いついた店舗はJST昨日〜7日先の通常窓へ戻す。JST昨日までを確定済みとすることで、最大3店舗ずつの次ページでも72店舗超または31日超停止後のforecast行を実績へ上書きできる。
+  未来日は予約系だけを作り、`closed` は 0 / 1 を推測せず欠測（行なし）にする。再実行しても同じ一意キーを上書きするため冪等である。
+  分析レポート API はこの表だけを読み、生表は読まない。固定値だけを返す targets API の `analytics_daily` 読み取りは 0 件とし、これは D1 全体の read を 0 にする意味ではない（認可の membership 読み取りは別）。
+- 定休日も `metric='closed', value=1` の行を作る。読み出し側はこれを予約 0 件の棒に変換し、**「0 件」と「欠測（行なし）」を区別する**。
+- 担当者次元はロールアップ時点の店舗スタッフ全員を読み、受付 0 件の担当も `receptions/staff=0` の行と名称スナップショットを残す。
+- 小標本抑制は**読み出し側**で行う。**分母が 20 件未満の率**（再来率・取消率）は画面に出さず「—」にし、
+  件数だけを出す。再来率は `revisit_returning_90d / revisit_eligible`、取消率は `cancellations / scheduled_reservations` で計算する。閾値を 20 にするのは、ANALYTICS-STAFF の担当者別で
   1 人あたり月 20 件を下回ると率が跳ねるためである。
-  `dimension_key='unassigned'`（担当未定）は件数だけを出し、分母が 20 件以上でも `revisit_rate_90d` は常に「—」にする
+  `dimension_key='unassigned'`（担当未定）は件数だけを出し、分母が 20 件以上でも再来率は常に「—」にする
   （ANALYTICS-STAFF は 9 件で「—」を描いている）。
 - **件数 0 の担当の行は出す**（「その人が 0 件だった」ことが情報）。**受付 0 件の時間帯の棒は出さない**（軸は残す）。
+- 担当者系列の表示順は日次snapshotの `dimension_label` の文字列（Unicode）順とし、`unassigned`（担当が未定）だけを最後に置く。reader はstaffマスターを読まない。
 - **「1日あたり」の分母は営業日数**（定休日・臨時休業を除く）。暦日数ではない。
-  ANALYTICS-COUNT の「8月の合計 320件」「1日あたり 12.3件」は **320 ÷ 26 = 12.31 → 12.3** で、
-  同画面のグラフも 1〜30 日の枠から火曜（4・11・18・25）を抜いた 26 本を描いている。暦日 31 では 10.3 にしかならない。
-- ANALYTICS-CANCEL の積み上げは保存しない。読み出し時に `reservations` の列から組み立てる。
-  **`cancel_reason` を基準に 5 層へ割る。**積み上げ棒なので層は必ず**排他**にする。
+  ANALYTICS-COUNT の「8月の合計 320件」「1日あたり」は、2026年8月の営業日 27 日で **320 ÷ 27 = 11.851... → 11.9**。暦日 31 でも 26 日でもない。
+  月途中など `closed` が欠測の未来日は、月合計の予約には含めるが「1日あたり」の分子・分母には含めない。
+  したがって平均は営業状態行（`closed=0/1`）が確定している日の予約件数 ÷
+  `closed=0` の営業日数であり、営業状態未確定の未来予約は分子に含めず、集計済み日数で割って過大表示しない。
+- ANALYTICS-CANCEL の積み上げは `analytics_daily` に保存し、読み出し時に生の `reservations` から組み立てない。
+  `dimension='cancellation_category'` の層は必ず**排他**にする。
 
   | 積み上げの層（凡例） | 条件（この順に上から当てる） |
   |---|---|
-  | ご来店がなかった | `status='no_show'` |
-  | Webからの取消 | `status='cancelled' AND source='web'` |
-  | お客様のご都合 | `status='cancelled' AND cancel_reason='customer'` |
-  | 店舗の都合 | `status='cancelled' AND cancel_reason='store'` |
-  | 予約の重複 | `status='cancelled' AND cancel_reason='duplicate'` |
+  | ご来店がなかった (`no_show`) | `status='no_show'` |
+  | Webからの取消 (`web`) | `status='cancelled' AND source='web'` |
+  | お客様のご都合 (`customer`) | `status='cancelled' AND cancel_reason='customer'` |
+  | 店舗の都合 (`store`) | `status='cancelled' AND cancel_reason='store'` |
+  | 予約の重複 (`duplicate`) | `status='cancelled' AND cancel_reason='duplicate'` |
 
   **凡例の文字は CHANGE-CANCEL の 4 択と 1 字も違えない。**モックの「お客様都合」「無断キャンセル」の 3 層に丸めると、
   店舗の都合で店側が取り消した予約が店長の分析画面で「お客様都合」に化ける（`cancel_reason` を持っているのに使わないため）。
   モックの棒は 3 色だが積み上げは本数を増やせる。モック画像は直さない。
-- **取消率の分母は「その日にご来店予定だった予約の総数（取消・無断キャンセルを含む）」、分子は上の 5 層の合計。**
+- **取消率の分母は `scheduled_reservations`（その日にご来店予定だった予約の総数。取消・無断キャンセルを含む）、分子は上の 5 層の合計。**
   一方、`metric='reservations'`（予約数）には取消を含めない。率と件数で分母をそろえると
   「取り消しても予約数が減らない」ことになり、現場の感覚と合わない。
-- **`analytics_daily` は 25 か月保持**（24 か月＋当月）。ANALYTICS-WAIT が「前の月は 7分20秒」を出し、
+- **`analytics_daily` は 25 か月保持**（24 か月＋当月）。削除基準日は backfill の `to` ではなく、
+  実行時刻から求めた JST 当日に固定する。ANALYTICS-WAIT が「前の月は 7分20秒」を出し、
   前年同月比まで見るため。それより古い行は日次 Cron が消す。
 
 ---
@@ -2183,4 +2215,4 @@ D1 に置いたままだと 5 枚 × 5,000 顧客で約 300MB となり、500MB 
 | §7.5 `visit_events.stage` | RECEPTION-JOURNEY の 6 列に対して値が 1 つ足りない | **`handover`（お渡し）を足して 8 値**。`left` は退店 |
 | §9.1 `customers` | 電話番号の後方一致は index が効かない | **`phone_last4` を足し、前方一致（`phone_normalized`）と下 4 桁一致（`phone_last4`）の 2 本にする** |
 | §9.4 `customer_notes` | 手書き SVG を D1 に置くと 5,000 顧客で 300MB | **R2 に置き、`handwriting_key` だけを D1 に持つ。1 顧客 5 枚まで** |
-| §11.4 `analytics_daily` | ANALYTICS-CANCEL の 3 分類が「店舗の都合」「予約の重複」を「お客様都合」に混ぜる | **`cancel_reason` を基準に 5 層へ割る**。凡例は CHANGE-CANCEL の 4 択と同じ文字にする |
+| §11.4 `analytics_daily` | ANALYTICS-CANCEL の 3 分類が「店舗の都合」「予約の重複」を「お客様都合」に混ぜる | **`cancel_reason` と source から `cancellation_category` の 5 層へ日次保存する**。凡例は CHANGE-CANCEL の 4 択と同じ文字にする |

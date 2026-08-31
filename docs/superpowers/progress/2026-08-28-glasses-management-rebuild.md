@@ -12,8 +12,8 @@
 | P5 来店受付とウォークイン | `008-reception-and-walkin` | **完了（Approved）** | 下記 |
 | P6 変更と取消 | `009-change-and-cancel` | **完了（Approved）** | 下記 |
 | P7 受付の録音 | `010-recording` | **完了（Approved）** | 下記 |
-| P8 お客様向けWeb予約 | `011-web-booking` | 未着手 | — |
-| P9 分析 | `012-analytics` | 未着手 | — |
+| P8 お客様向けWeb予約 | `011-web-booking` | **完了（Approved）** | 下記 |
+| P9 分析 | `012-analytics` | **完了（Approved）** | 下記 |
 | P10 端末と監査 | `013-terminals-and-audit` | 未着手 | — |
 
 ## P0（2026-08-28）
@@ -366,3 +366,49 @@ pnpm --filter @app/glasses_management e2e → 274 passed
   既存の `StaffPanel` と同じ手（経路だけ型のついたクライアントに引かせ、query は `fetch` 側で足す）に揃えた
 - `publicClient` が外から使われていない export だった（knip）ので export を外した
 - 設定の第2サイドバーが 7 項目になったのに、既存テストが 6 項目のままだった
+
+## P9 分析 — 完了（2026-09-01）
+
+作ったもの:
+
+- `analytics_daily` 1 表と migration `0008_cool_whizzer.sql`。表示 API は生表を読まず、
+  日次スナップショットだけを読む
+- JST 日次 rollup、最大 31 日・1 回 3 店舗の内部再集計、24か月保持、店舗 cursor、冪等 upsert
+- `GET /api/staff/analytics` / `GET /api/staff/analytics/targets` と、組織・担当店舗の認可
+- 既存 Cron 1 本を JST 00:00 に揃え、Web 公開反映 → 分析集計 → 録音片づけを独立 `try/catch` で実行
+- トップ／予約数／担当者／お待ち時間／取り消しの既存5 mockを基準にした画面
+- mockの無かった3タブは案Bを正式採用。予約の入口・来店回数は縦棒、長い目的名だけ横棒にし、
+  3面とも「グラフ1つ＋定義1行＋まとめ3項目」で統一
+- 期間・店舗は「適用」を押すまで表示値を変えず、4×2の予約数、厳密中央値、20件未満の率抑制、
+  定休日0件と欠測、取消5分類、営業27日で 320 ÷ 27 = 11.9件を実装
+- Web公開反映の条件付き更新が競合したとき、予約取消・枠削除・alert作成へ進まないようTDDで修正
+- 受付履歴の既存integration testが実行月を読んでいたため、`FIXED_NOW` を注入して月替わりでも安定化
+- 使い捨てE2E D1にだけ注入JST日付から45日分の勤務を展開し、将来日でもWeb予約と受付を再現可能にした
+- 旧seedが残した実行日の特別営業IDをローカル再seedで掃除し、Nodeテス6件を通常の品質ゲートへ組み込んだ
+- 予約数・待ち時間・取消グラフのVoiceOver代替文を正本相当へ揃え、追加3タブの実値が正本目盛りを超える場合は縦軸だけを上方拡張
+
+確かめたこと:
+
+```text
+pnpm check
+  → 緑（lint / Knip / 全typecheck / 全unit・integration / coverage / traceability）
+  → seed互換 Node 6 passed、glasses Worker 1,668 passed、web 955 passed
+  → Worker coverage 92.95 / 83.81 / 97.08 / 95.69%
+  → web coverage 83.99 / 79.64 / 83.65 / 87.51%
+pnpm --filter @app/glasses_management exec playwright test e2e/analytics.spec.ts --project=ipad
+  → 21 passed
+pnpm --filter @app/glasses_management exec playwright test e2e/mock-compare.spec.ts --project=mock --grep 'ANALYTICS-'
+  → 5 passed
+pnpm test:traceability
+  → Approved の UC-ANA-01..10 / AC-ANA-01..21 がちょうど1本ずつ対応
+pnpm --filter @app/glasses_management e2e
+  → 300 passed / 0 failed（mock 51本、分析21本、既存機能回帰を含む）
+```
+
+既存5 mockとの差分率（承認画像は更新していない）:
+
+- TOP 7.7152%（閾値 7.73%）
+- COUNT 8.4850%（閾値 8.49%）
+- STAFF 7.3666%（閾値 7.38%）
+- WAIT 8.8903%（閾値 8.91%）
+- CANCEL 10.9739%（閾値 11.00%）

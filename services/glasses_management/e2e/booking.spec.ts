@@ -787,24 +787,42 @@ test('録音の置き場所は工程 1 から 4 まで動かず、工程 5 で�
   const badge = page.locator('[data-booking-recording="bar"]')
   await expect(stepBar(page).locator('[data-booking-recording="bar"]')).toBeVisible()
   const first = await badge.boundingBox()
+  expect(first).not.toBeNull()
+  // 録音状態の文言は「許可を確かめています」→「録音していません」と縮み得る。
+  // そのため幅・左端ではなく、帯の右端に留まることを工程ごとに測る。
+  const rightEdge = (box: { x: number; width: number } | null) => (box?.x ?? 0) + (box?.width ?? 0)
+  const firstRight = rightEdge(first)
 
   await pickDateTime(page, '11:00')
   await proceed(page)
   await pickPurpose(page, '今のメガネを調整したい')
-  expect(await badge.boundingBox()).toEqual(first)
+  expect(rightEdge(await badge.boundingBox())).toBe(firstRight)
 
   await proceed(page)
   await expect(page.getByRole('table', { name: 'ご予約を置く盤' })).toBeVisible()
-  expect(await badge.boundingBox()).toEqual(first)
+  expect(rightEdge(await badge.boundingBox())).toBe(firstRight)
 
   await clearClash(page)
   await proceed(page)
   await page.getByLabel('お名前').fill('田中 花子')
-  expect(await badge.boundingBox()).toEqual(first)
+  expect(rightEdge(await badge.boundingBox())).toBe(firstRight)
 
   await proceed(page)
   await expect(page.getByRole('heading', { name: 'この文をそのまま読み上げます' })).toBeVisible()
-  await expect(page.locator('[data-booking-recording="floating"]')).toBeVisible()
+  const floating = page.locator('[data-booking-recording="floating"]')
+  await expect(floating).toBeVisible()
+  const floatingBox = await floating.boundingBox()
+  const viewport = page.viewportSize()
+  expect(floatingBox).not.toBeNull()
+  expect(viewport).not.toBeNull()
+  expect((viewport?.width ?? 0) - ((floatingBox?.x ?? 0) + (floatingBox?.width ?? 0))).toBeCloseTo(
+    20,
+    0,
+  )
+  // 確認画面のフローティング表示は、画面下端ではなく固定工程帯の直上に置く。
+  const footer = await stepBar(page).boundingBox()
+  expect(footer).not.toBeNull()
+  expect((footer?.y ?? 0) - ((floatingBox?.y ?? 0) + (floatingBox?.height ?? 0))).toBeCloseTo(20, 0)
   await expect(badge).toHaveCount(0)
 })
 

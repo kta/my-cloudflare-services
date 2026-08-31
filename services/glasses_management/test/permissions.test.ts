@@ -39,6 +39,7 @@ type ActorName =
   | 'admin'
   | 'manager'
   | 'clerk'
+  | 'analyst'
   | 'reader'
   | 'keeper'
   | 'expired'
@@ -51,6 +52,7 @@ const tokens: Record<Exclude<ActorName, 'none'>, string> = {
   admin: '',
   manager: '',
   clerk: '',
+  analyst: '',
   reader: '',
   keeper: '',
   expired: '',
@@ -144,6 +146,10 @@ beforeAll(async () => {
     { sub: subOf(ORG, ':clerk'), org: ORG, email: 'clerk@example.test', role: 'staff' },
     JWT_SECRET,
   )
+  tokens.analyst = await signAccessToken(
+    { sub: subOf(ORG, ':analyst'), org: ORG, email: 'analyst@example.test', role: 'staff' },
+    JWT_SECRET,
+  )
   // 録音は閲覧（再生・一覧）と保全（保全・削除）で権限が分かれる（Q-03）。
   // 2 つを 1 人に持たせると「読めるが消せない」が表から消えるので、別々の人にする。
   tokens.reader = await signAccessToken(
@@ -188,6 +194,7 @@ beforeAll(async () => {
     'settings.manage',
   ])
   await syncMembership(ORG, fixture.storeId, subOf(ORG, ':clerk'), ['settings.read'])
+  await syncMembership(ORG, fixture.storeId, subOf(ORG, ':analyst'), ['analytics.read'])
   await syncMembership(ORG, fixture.storeId, subOf(ORG, ':reader'), ['recording.read'])
   await syncMembership(ORG, fixture.storeId, subOf(ORG, ':keeper'), ['recording.manage'])
 
@@ -1394,6 +1401,45 @@ const TABLE: Row[] = [
     method: 'GET',
     path: () => `/api/staff/alerts?storeId=${fixture.storeId}`,
     expected: ALERT_READ,
+  },
+
+  /* --- 分析（P9）--- */
+  {
+    name: '分析は analytics.read を持つ担当店舗の利用者だけが読める',
+    method: 'GET',
+    path: () =>
+      `/api/staff/analytics?storeId=${fixture.storeId}&metric=overview&from=2026-08-01&to=2026-08-31`,
+    expected: {
+      none: 401,
+      staff: 403,
+      analyst: 200,
+      expired: 401,
+      'wrong-secret': 401,
+    },
+  },
+  {
+    name: '分析の目安も analytics.read を持つ担当店舗の利用者だけが読める',
+    method: 'GET',
+    path: () => `/api/staff/analytics/targets?storeId=${fixture.storeId}`,
+    expected: {
+      none: 401,
+      staff: 403,
+      analyst: 200,
+      expired: 401,
+      'wrong-secret': 401,
+    },
+  },
+  {
+    name: 'analytics rollup は共有鍵だけが通る',
+    method: 'POST',
+    path: () => '/api/internal/maintenance/analytics/rollup',
+    body: () => ({ from: '2026-08-01', to: '2026-08-31', limit: 3 }),
+    expected: {
+      none: 401,
+      analyst: 401,
+      expired: 401,
+      'wrong-secret': 401,
+    },
   },
 
   /* --- お客様向け Web 予約（P8）--- */

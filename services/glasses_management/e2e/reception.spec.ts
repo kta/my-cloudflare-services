@@ -19,8 +19,8 @@ import { expect, test } from '@playwright/test'
  *     （ブラウザの時計を進めない）
  * という形にしてある。
  *
- * **走らせる条件**: 火曜は店舗の定休で、当日のご予約を 1 件も作れない（`POST
- * /api/staff/reservations` が `store_closed` を返す）。この面の e2e は営業日に走らせる。
+ * **火曜の扱い**: 定休のままでは当日予約を作れないため、suite開始時に限って
+ * 当日を特別営業にし、受付に必要な勤務を展開する。suite終了時に元の例外と勤務へ戻す。
  *
  * **D1 を書き換える**: この面は盤面へ行を足す唯一の e2e である。件数を数える test は
  * 先に `clearBoard` で当日の盤面を空にしてから始める（D1 は 1 本しか無く、前の test が
@@ -39,6 +39,12 @@ import { expect, test } from '@playwright/test'
 const ORG = 'eyex'
 /** seed.mjs が固定 id で入れる EYEX 銀座店。 */
 const GINZA = '11111111-1111-4111-8111-111111111111'
+const INTERNAL_KEY = 'dev-internal-key'
+/**
+ * dev grant の担当店舗は全 E2E で同じ行を配り直す。別 id を使うと
+ * `(organization_id, user_id, store_id)` の一意制約に衝突する。
+ */
+const RECEPTION_E2E_MEMBERSHIP = '0f0f0f0f-0f0f-4f0f-8f0f-0f0f0f0f0f0f'
 
 /** seed の id は `${区分}-0000-4000-8000-${連番}`（`seed.mjs` の `uid`）。 */
 const uid = (group: string, n: number) => `${group}-0000-4000-8000-${String(n).padStart(12, '0')}`
@@ -84,6 +90,13 @@ const dayLabel = (date: string) => `${Number(date.slice(5, 7))}月${Number(date.
 
 /** 実時刻の JST 暦日。盤面はこの日の上で組み立てる。 */
 const TODAY = jstDate(Date.now())
+const DAY_START = Date.parse(`${TODAY}T00:00:00.000+09:00`)
+
+/** 早朝でも未来の受付を作らず、当日の範囲に収める。 */
+const minutesAgo = (minutes: number) =>
+  new Date(
+    Math.max(Date.now() - minutes * MS_PER_MINUTE, DAY_START + (60 - minutes) * 1_000),
+  ).toISOString()
 
 /**
  * seed が 12 件のご予約を置いている日（モックが描いている 2026年8月27日（木））。
@@ -106,6 +119,181 @@ async function authed(request: APIRequestContext): Promise<{ headers: Record<str
   expect(res.status()).toBe(200)
   const { token } = (await res.json()) as { token: string }
   return { headers: { authorization: `Bearer ${token}` } }
+}
+
+type CalendarExceptionSnapshot = {
+  id: string
+  date: string
+  kind: 'closed' | 'special'
+  opensAt: string | null
+  closesAt: string | null
+  note: string | null
+}
+
+type WeeklyShiftSnapshot = {
+  weekday: number
+  isOff: boolean
+  startsAt: string | null
+  endsAt: string | null
+  breaks: { startsAt: string; endsAt: string }[]
+}
+
+type ReceptionFixture = {
+  calendarException: CalendarExceptionSnapshot | undefined
+  weekly: WeeklyShiftSnapshot[]
+  insertedExceptionId: string
+}
+
+async function grantReceptionPermission(request: APIRequestContext): Promise<void> {
+  const membership = await request.post('/api/internal/store-memberships/sync', {
+    headers: { 'x-internal-key': INTERNAL_KEY },
+    data: {
+      id: RECEPTION_E2E_MEMBERSHIP,
+      organizationId: ORG,
+      storeId: GINZA,
+      userId: `dev:${ORG}`,
+      permissions: ['settings.manage'],
+      createdAt: '2026-08-27T00:00:00.000Z',
+    },
+  })
+  expect(membership.status()).toBe(200)
+}
+
+/**
+ * seed を暦日へ依存させず、使い捨てE2E状態の火曜だけを特別営業へ上書きする。
+ * 当日例外と勤務の実効値を残すので、suite終了時に正確に戻せる。
+ */
+async function installReceptionFixture(
+  request: APIRequestContext,
+): Promise<ReceptionFixture | undefined> {
+  if (new Date(`${TODAY}T00:00:00.000Z`).getUTCDay() !== 2) return undefined
+  await grantReceptionPermission(request)
+  const headers = await authed(request)
+  const exceptions = await request.get(`/api/staff/stores/${GINZA}/calendar-exceptions`, {
+    ...headers,
+    params: { from: TODAY, to: TODAY },
+  })
+  expect(exceptions.status()).toBe(200)
+  const [calendarException] = (await exceptions.json()) as CalendarExceptionSnapshot[]
+  const shiftResponse = await request.get(`/api/staff/stores/${GINZA}/staff-shifts`, {
+    ...headers,
+    params: { from: TODAY, to: shiftDate(TODAY, 6), staffId: SATO },
+  })
+  expect(shiftResponse.status()).toBe(200)
+  const savedShifts = (await shiftResponse.json()) as {
+    date: string
+    startsAt: string
+    endsAt: string
+    kind: 'work' | 'break'
+  }[]
+  const weekly = Array.from({ length: 7 }, (_, index) => {
+    const date = shiftDate(TODAY, index)
+    const rows = savedShifts.filter((row) => row.date === date)
+    const work = rows.find((row) => row.kind === 'work')
+    const rest = rows.find((row) => row.kind === 'break')
+    return {
+      weekday: new Date(`${date}T00:00:00.000Z`).getUTCDay(),
+      isOff: work === undefined,
+      startsAt: work?.startsAt ?? null,
+      endsAt: work?.endsAt ?? null,
+      breaks: rest === undefined ? [] : [{ startsAt: rest.startsAt, endsAt: rest.endsAt }],
+    }
+  })
+  const response = await request.post(`/api/staff/stores/${GINZA}/calendar-exceptions`, {
+    ...headers,
+    data: {
+      date: TODAY,
+      kind: 'special',
+      opensAt: '10:00',
+      closesAt: '19:00',
+      note: '受付 E2E の当日特別営業',
+    },
+  })
+  expect(response.status(), await response.text()).toBe(200)
+  const insertedException = (await response.json()) as CalendarExceptionSnapshot
+
+  const hours = await request.get(`/api/staff/stores/${GINZA}/business-hours`, {
+    ...headers,
+  })
+  expect(hours.status()).toBe(200)
+  const { version } = (await hours.json()) as { version: number }
+  const shifts = await request.put(`/api/staff/stores/${GINZA}/staff-shifts`, {
+    ...headers,
+    data: {
+      staffId: SATO,
+      effectiveFrom: TODAY,
+      version,
+      weekly: [
+        { weekday: 0, isOff: false, startsAt: '12:00', endsAt: '19:00', breaks: [] },
+        { weekday: 1, isOff: false, startsAt: '10:00', endsAt: '19:00', breaks: [] },
+        { weekday: 2, isOff: false, startsAt: '10:00', endsAt: '19:00', breaks: [] },
+        { weekday: 3, isOff: false, startsAt: '10:00', endsAt: '19:00', breaks: [] },
+        { weekday: 4, isOff: false, startsAt: '10:00', endsAt: '19:00', breaks: [] },
+        { weekday: 5, isOff: true, startsAt: null, endsAt: null, breaks: [] },
+        { weekday: 6, isOff: false, startsAt: '10:00', endsAt: '19:00', breaks: [] },
+      ],
+    },
+  })
+  expect(shifts.status(), await shifts.text()).toBe(200)
+  await revokeReceptionPermission(request)
+  return { calendarException, weekly, insertedExceptionId: insertedException.id }
+}
+
+/** 受付用の settings.manage は fixture の設置／撤去以外へ持ち越さない。 */
+async function revokeReceptionPermission(request: APIRequestContext): Promise<void> {
+  if (new Date(`${TODAY}T00:00:00.000Z`).getUTCDay() !== 2) return
+  const membership = await request.post('/api/internal/store-memberships/sync', {
+    headers: { 'x-internal-key': INTERNAL_KEY },
+    data: {
+      id: RECEPTION_E2E_MEMBERSHIP,
+      organizationId: ORG,
+      storeId: GINZA,
+      userId: `dev:${ORG}`,
+      permissions: [],
+      createdAt: '2026-08-27T00:00:00.000Z',
+    },
+  })
+  expect(membership.status()).toBe(200)
+}
+
+async function removeReceptionFixture(
+  request: APIRequestContext,
+  fixture: ReceptionFixture | undefined,
+): Promise<void> {
+  if (fixture === undefined) return
+  await grantReceptionPermission(request)
+  const headers = await authed(request)
+  try {
+    const hours = await request.get(`/api/staff/stores/${GINZA}/business-hours`, { ...headers })
+    expect(hours.status()).toBe(200)
+    const { version } = (await hours.json()) as { version: number }
+    const shifts = await request.put(`/api/staff/stores/${GINZA}/staff-shifts`, {
+      ...headers,
+      data: { staffId: SATO, effectiveFrom: TODAY, version, weekly: fixture.weekly },
+    })
+    expect(shifts.status(), await shifts.text()).toBe(200)
+    if (fixture.calendarException === undefined) {
+      const removed = await request.delete(
+        `/api/staff/stores/${GINZA}/calendar-exceptions/${fixture.insertedExceptionId}`,
+        { ...headers },
+      )
+      expect(removed.status(), await removed.text()).toBe(200)
+    } else {
+      const restored = await request.post(`/api/staff/stores/${GINZA}/calendar-exceptions`, {
+        ...headers,
+        data: {
+          date: fixture.calendarException.date,
+          kind: fixture.calendarException.kind,
+          opensAt: fixture.calendarException.opensAt,
+          closesAt: fixture.calendarException.closesAt,
+          note: fixture.calendarException.note,
+        },
+      })
+      expect(restored.status(), await restored.text()).toBe(200)
+    }
+  } finally {
+    await revokeReceptionPermission(request)
+  }
 }
 
 type Walkin = {
@@ -140,9 +328,19 @@ function freeSlot(date: string): string {
 /** 1 日ぶんの枠の本数（30 分刻み）。これを配り切ったら諦める。 */
 const SLOTS_PER_DAY = 48
 
+/** 来店回数に数えられる、いま以前の枠を使う。 */
+let pastSlotIndex = 0
+function pastSlot(): string {
+  pastSlotIndex += 1
+  return new Date(
+    Math.max(Date.now() - pastSlotIndex * 30 * MS_PER_MINUTE, DAY_START),
+  ).toISOString()
+}
+
 async function createWalkin(
   request: APIRequestContext,
   body: Record<string, unknown>,
+  nextSlot?: () => string,
 ): Promise<Walkin> {
   const { headers } = await authed(request)
   const arrivedAt = typeof body.arrivedAt === 'string' ? body.arrivedAt : new Date().toISOString()
@@ -154,7 +352,8 @@ async function createWalkin(
    * 断られた事実を見て次を探すのが、走らせ方に依らない唯一の形である。
    */
   for (let attempt = 0; attempt < SLOTS_PER_DAY; attempt += 1) {
-    const startsAt = typeof body.startsAt === 'string' ? body.startsAt : freeSlot(date)
+    const startsAt =
+      typeof body.startsAt === 'string' ? body.startsAt : (nextSlot?.() ?? freeSlot(date))
     const res = await request.post('/api/staff/walkins', {
       headers: { ...headers, 'Idempotency-Key': crypto.randomUUID() },
       data: {
@@ -193,7 +392,12 @@ async function createReservation(
   return (await res.json()) as { id: string }
 }
 
-type BoardRow = { subjectType: string; subjectId: string; displayName: string }
+type BoardRow = {
+  subjectType: string
+  subjectId: string
+  displayName: string
+  cells: { at: string | null }[]
+}
 type Board = { date: string; activeCount: number; rows: BoardRow[]; serverNow: string }
 
 async function readBoard(
@@ -250,11 +454,17 @@ async function linkCustomer(
  */
 async function clearBoard(request: APIRequestContext, date = TODAY): Promise<void> {
   const board = await readBoard(request, date)
+  const serverNow = Date.parse(board.serverNow)
   for (const row of board.rows) {
+    const lastAt = Math.max(
+      serverNow,
+      ...row.cells.map((cell) => (cell.at === null ? 0 : Date.parse(cell.at))),
+    )
     await addVisit(request, {
       subjectType: row.subjectType,
       subjectId: row.subjectId,
       stage: 'left',
+      occurredAt: new Date(lastAt + 1_000).toISOString(),
     })
   }
   expect((await readBoard(request, date)).activeCount).toBe(0)
@@ -470,6 +680,16 @@ async function stubBoard(
 
 /* ========================================================================= */
 
+let receptionFixture: ReceptionFixture | undefined
+
+test.beforeAll(async ({ request }) => {
+  receptionFixture = await installReceptionFixture(request)
+})
+
+test.afterAll(async ({ request }) => {
+  await removeReceptionFixture(request, receptionFixture)
+})
+
 // @e2e-covers AC-RECEP-01 UC-RECEP-01
 test('来店受付の画面は「11:00 のご予約　5分早くお着きです」と、お名前ひとまとめのカードを出す', async ({
   page,
@@ -655,8 +875,8 @@ test('台帳の最下段に「ご来店お待ち」の帯が出て、お待ち�
   request,
 }) => {
   await clearBoard(request)
-  await createWalkin(request, { purposeNote: 'フレームの相談', arrivedAt: atJst(TODAY, '11:02') })
-  await createWalkin(request, { purposeNote: 'フレームの相談', arrivedAt: atJst(TODAY, '11:05') })
+  await createWalkin(request, { purposeNote: 'フレームの相談', arrivedAt: minutesAgo(8) })
+  await createWalkin(request, { purposeNote: 'フレームの相談', arrivedAt: minutesAgo(5) })
 
   await openLedger(page)
   const grid = page.getByRole('grid', { name: '予約台帳' })
@@ -682,7 +902,7 @@ test('受け付けたあとのウォークインを今までのお客様へ結�
   request,
 }) => {
   await clearBoard(request)
-  const walkin = await createWalkin(request, { purposeId: ADJUST })
+  const walkin = await createWalkin(request, { purposeId: ADJUST }, pastSlot)
   await openBoard(page)
   await expect(
     board(page).getByRole('rowheader', { name: new RegExp(`^${ticketName(walkin.ticketNo)}`) }),
@@ -980,8 +1200,9 @@ test('絞りすぎて 0 件になると、条件を 1 つ緩めた候補が件�
   await createWalkin(request, { purposeId: ADJUST })
 
   await openHistory(page)
-  await pickSpan(page, TODAY, TODAY)
-  // 取り消したご予約は当日に 1 件も無いので、この 2 つで 0 件になる。
+  const yesterday = shiftDate(TODAY, -1)
+  await pickSpan(page, yesterday, yesterday)
+  // 取り消したご予約は前日に 1 件も無いので、この 2 つで 0 件になる。
   await pickResult(page, '取消')
 
   await expect(page.getByText('条件に合う受付履歴はありませんでした')).toBeVisible()
@@ -1152,11 +1373,11 @@ test('お待ちのまま帰られた来店は待ちの帯から外れ、受付�
   await clearBoard(request)
   const stayed = await createWalkin(request, {
     purposeNote: 'フレームの相談',
-    arrivedAt: atJst(TODAY, '11:02'),
+    arrivedAt: minutesAgo(8),
   })
   const left = await createWalkin(request, {
     purposeNote: 'フレームの相談',
-    arrivedAt: atJst(TODAY, '11:05'),
+    arrivedAt: minutesAgo(5),
   })
 
   await openLedger(page)

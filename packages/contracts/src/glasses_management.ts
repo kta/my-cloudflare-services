@@ -185,6 +185,12 @@ const spanWithinDays =
     return days >= 0 && days <= maxDays
   }
 
+/** 両端を含む日数で範囲を制限する。400 日なら日差 399 までを許す。 */
+const spanWithinInclusiveDays =
+  (maxDays: number) =>
+  (value: { from: string; to: string }): boolean =>
+    spanWithinDays(maxDays - 1)(value)
+
 /** 同じ値を 2 回書かせない。 */
 const noDuplicates = (values: readonly string[]): boolean => new Set(values).size === values.length
 
@@ -2584,6 +2590,199 @@ export const AlertList = z.strictObject({
   total: CountInteger,
 })
 export type AlertList = z.infer<typeof AlertList>
+
+/* ------------------------------------------------------------------------- *
+ * P9 分析
+ * ------------------------------------------------------------------------- */
+
+export const AnalyticsMetric = z.enum([
+  'overview',
+  'reservation_count',
+  'reservation_source',
+  'cancellation',
+  'visit_frequency',
+  'staff',
+  'purpose',
+  'wait_time',
+])
+export type AnalyticsMetric = z.infer<typeof AnalyticsMetric>
+
+export const AnalyticsDailyMetric = z.enum([
+  'closed',
+  'reservations',
+  'scheduled_reservations',
+  'reservations_received',
+  'receptions',
+  'cancellations',
+  'wait_seconds_histogram',
+  'revisit_eligible',
+  'revisit_returning_90d',
+])
+export type AnalyticsDailyMetric = z.infer<typeof AnalyticsDailyMetric>
+
+export const AnalyticsDailyDimension = z.enum([
+  'total',
+  'staff',
+  'purpose',
+  'hour',
+  'source',
+  'cancellation_category',
+  'wait_seconds',
+  'visit_frequency',
+])
+export type AnalyticsDailyDimension = z.infer<typeof AnalyticsDailyDimension>
+
+const isAnalyticsDimensionKey = (dimension: AnalyticsDailyDimension, key: string): boolean => {
+  switch (dimension) {
+    case 'total':
+      return key === ''
+    case 'staff':
+      return key === 'unassigned' || Uuid.safeParse(key).success
+    case 'purpose':
+      return Uuid.safeParse(key).success
+    case 'hour':
+      return /^(?:[0-9]|1[0-9]|2[0-3])$/.test(key)
+    case 'source':
+      return ['phone', 'counter', 'web', 'walkin'].includes(key)
+    case 'cancellation_category':
+      return ['customer', 'store', 'duplicate', 'no_show', 'web'].includes(key)
+    case 'wait_seconds':
+      return /^hour:(?:[0-9]|1[0-9]|2[0-3]):\d+$/.test(key)
+    case 'visit_frequency':
+      return ['first', 'second', 'third_to_fifth', 'sixth_or_more'].includes(key)
+  }
+}
+
+const analyticsDimensionsByMetric: Record<
+  AnalyticsDailyMetric,
+  readonly AnalyticsDailyDimension[]
+> = {
+  closed: ['total'],
+  reservations: ['total', 'purpose', 'hour', 'source'],
+  scheduled_reservations: ['total'],
+  reservations_received: ['total', 'purpose', 'hour', 'source'],
+  receptions: ['total', 'staff', 'source', 'visit_frequency'],
+  cancellations: ['cancellation_category'],
+  wait_seconds_histogram: ['wait_seconds'],
+  revisit_eligible: ['staff'],
+  revisit_returning_90d: ['staff'],
+}
+
+/** analytics_daily の 1 行。次元と key の対応を入口で fail-close にする。 */
+export const AnalyticsDailyRow = z
+  .strictObject({
+    id: Uuid,
+    organizationId: z.string().trim().min(1).max(200),
+    storeId: Uuid,
+    date: LocalDate,
+    metric: AnalyticsDailyMetric,
+    dimension: AnalyticsDailyDimension,
+    dimensionKey: z.string().max(200),
+    /** ロールアップ時の名称snapshot。元マスタが無効化されても表示を保つ。 */
+    dimensionLabel: z.string().trim().min(1).max(60),
+    value: z.number().int().nonnegative(),
+    createdAt: IsoDateTime,
+    updatedAt: IsoDateTime,
+  })
+  .refine((row) => isAnalyticsDimensionKey(row.dimension, row.dimensionKey), {
+    message: '切り口キーが次元の語彙に含まれない',
+    path: ['dimensionKey'],
+  })
+  .refine((row) => analyticsDimensionsByMetric[row.metric].includes(row.dimension), {
+    message: '指標と切り口の組み合わせが許可されていない',
+    path: ['dimension'],
+  })
+export type AnalyticsDailyRow = z.infer<typeof AnalyticsDailyRow>
+
+export const AnalyticsQuery = z
+  .strictObject({
+    storeId: Uuid,
+    metric: AnalyticsMetric,
+    from: LocalDate,
+    to: LocalDate,
+    granularity: z.enum(['day', 'month', 'hour', 'weekday']).default('day'),
+    countBy: z.enum(['visit_date', 'received_date']).default('visit_date'),
+  })
+  .refine(spanWithinInclusiveDays(400), {
+    message: '期間は400日以内にする',
+    path: ['to'],
+  })
+export type AnalyticsQuery = z.infer<typeof AnalyticsQuery>
+
+export const StoreIdQuery = z.strictObject({ storeId: Uuid })
+export type StoreIdQuery = z.infer<typeof StoreIdQuery>
+
+export const AnalyticsPoint = z.strictObject({
+  key: z.string().min(1).max(200),
+  label: z.string().min(1).max(60),
+  value: z.number().nonnegative(),
+  secondaryValue: z.number().min(0).max(1).nullable().default(null),
+  isClosed: z.boolean(),
+  isOverTarget: z.boolean(),
+})
+export type AnalyticsPoint = z.infer<typeof AnalyticsPoint>
+
+export const AnalyticsSeries = z.strictObject({
+  name: z.string().min(1).max(60),
+  points: AnalyticsPoint.array().default([]),
+  pattern: z.enum(['solid', 'hatch', 'dot']),
+})
+export type AnalyticsSeries = z.infer<typeof AnalyticsSeries>
+
+export const AnalyticsReport = z.strictObject({
+  metric: AnalyticsMetric,
+  from: LocalDate,
+  to: LocalDate,
+  granularity: z.enum(['day', 'month', 'hour', 'weekday']),
+  countBy: z.enum(['visit_date', 'received_date']),
+  series: AnalyticsSeries.array().default([]),
+  summary: z
+    .strictObject({
+      label: z.string().min(1).max(30),
+      value: z.string().max(40),
+      unit: z.string().max(8),
+      isOverTarget: z.boolean(),
+    })
+    .array()
+    .max(3)
+    .default([]),
+  target: z.number().nonnegative().nullable(),
+  suppressed: z.boolean(),
+  businessDays: z.number().int().nonnegative(),
+  pendingDays: z.number().int().nonnegative(),
+})
+export type AnalyticsReport = z.infer<typeof AnalyticsReport>
+
+export const AnalyticsTargets = z.strictObject({
+  waitMinutes: z.literal(8),
+  cancellationRatePercent: z.literal(10),
+  revisitWindowDays: z.literal(90),
+})
+export type AnalyticsTargets = z.infer<typeof AnalyticsTargets>
+
+export const AnalyticsRollupRequest = z
+  .strictObject({
+    from: LocalDate,
+    to: LocalDate,
+    limit: QueryInteger.pipe(z.number().int().min(1).max(3)).default(3),
+    storeCursor: z.string().min(1).max(512).optional(),
+  })
+  .refine(spanWithinInclusiveDays(31), {
+    message: '期間は31日以内にする',
+    path: ['to'],
+  })
+export type AnalyticsRollupRequest = z.infer<typeof AnalyticsRollupRequest>
+
+export const AnalyticsRollupResult = z.strictObject({
+  processedStores: z.number().int().min(0).max(3),
+  failedStores: z.string().min(1).max(200).array().max(3),
+  nextStoreCursor: z.string().min(1).max(512).nullable(),
+  from: LocalDate,
+  to: LocalDate,
+  upserted: CountInteger,
+  dropped: CountInteger,
+})
+export type AnalyticsRollupResult = z.infer<typeof AnalyticsRollupResult>
 
 /* ------------------------------------------------------------------------- *
  * P8 お客様向け Web 予約（`specs/glasses_management/features/011-web-booking`）

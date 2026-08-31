@@ -15,7 +15,7 @@
  * 明示的に渡し、**実時刻を読まない**。
  */
 import { env, SELF } from 'cloudflare:test'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   authed,
   BASE,
@@ -1751,34 +1751,40 @@ describe('受付履歴の読み足しと 0 件', () => {
   })
 
   it('0 件のときは、実際に引ける件数の付いた緩和候補が同じ応答で返る', async () => {
-    const t = await receptionTenant()
-    // 今月の頭に近い日の受付。狭い期間で絞ると 0 件になり、今月まで広げると見つかる。
-    const early = '2026-08-03'
-    await createWalkin(t.token, {
-      storeId: t.storeId,
-      purposeNote: 'フレームの相談',
-      arrivedAt: jstAt(early, '11:02'),
-      startsAt: jstAt(early, '11:00'),
-      durationMinutes: 20,
-      staffId: null,
-    })
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(FIXED_NOW))
+    try {
+      const t = await receptionTenant()
+      // 今月の頭に近い日の受付。狭い期間で絞ると 0 件になり、今月まで広げると見つかる。
+      const early = '2026-08-03'
+      await createWalkin(t.token, {
+        storeId: t.storeId,
+        purposeNote: 'フレームの相談',
+        arrivedAt: jstAt(early, '11:02'),
+        startsAt: jstAt(early, '11:00'),
+        durationMinutes: 20,
+        staffId: null,
+      })
 
-    const empty = await readHistory(t.token, {
-      storeId: t.storeId,
-      from: LEDGER_DATE,
-      to: LEDGER_DATE,
-    })
-    expect(empty.total).toBe(0)
-    const widen = empty.relaxations.find((item) => item.label.startsWith('期間を'))
-    expect(widen?.count).toBeGreaterThanOrEqual(1)
+      const empty = await readHistory(t.token, {
+        storeId: t.storeId,
+        from: LEDGER_DATE,
+        to: LEDGER_DATE,
+      })
+      expect(empty.total).toBe(0)
+      const widen = empty.relaxations.find((item) => item.label.startsWith('期間を'))
+      expect(widen?.count).toBeGreaterThanOrEqual(1)
 
-    // 候補の query をそのまま送り直すと、同じ件数がそのまま出る（推定した数字ではない）。
-    const again = await readHistory(t.token, {
-      storeId: t.storeId,
-      from: String(widen?.query.from),
-      to: String(widen?.query.to),
-    })
-    expect(again.total).toBe(widen?.count)
+      // 候補の query をそのまま送り直すと、同じ件数がそのまま出る（推定した数字ではない）。
+      const again = await readHistory(t.token, {
+        storeId: t.storeId,
+        from: String(widen?.query.from),
+        to: String(widen?.query.to),
+      })
+      expect(again.total).toBe(widen?.count)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('92 日を越える期間は 400 で断る（読める窓を黙って広げない）', async () => {
