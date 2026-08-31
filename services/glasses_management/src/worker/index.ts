@@ -300,6 +300,8 @@ export type Bindings = {
   PUBLIC_WEB_ORIGIN?: string
   /** credential 無しの dev トークングラントを開ける。本番では設定しない。 */
   AUTH_DEV_GRANT?: string
+  /** integration test の基準時刻。本番では設定せず、実時刻を使う。 */
+  TEST_NOW?: string
 }
 
 type Env = { Bindings: Bindings; Variables: AuthVariables }
@@ -7009,7 +7011,8 @@ const routes = app
     const db = drizzle(c.env.DB)
     const { org, sub } = c.get('auth')
     const query = validQuery(c, ReceptionHistoryQuery, c.req.query())
-    const now = new Date()
+    // テストだけは固定された世界観の時刻を注入する。本番では未設定なので実時刻のまま。
+    const now = new Date(c.env.TEST_NOW ?? Date.now())
 
     /*
      * 読む窓は「絞り込みの期間」と「今月」の広いほう。緩和候補（`buildRelaxations`）が

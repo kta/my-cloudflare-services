@@ -17,6 +17,9 @@ export default defineConfig({
           INTERNAL_KEY: 'dev-internal-key',
           JWT_SECRET: 'dev-jwt-secret-change-me',
           AUTH_DEV_GRANT: 'true',
+          // 受付履歴の「今月まで広げる」候補を、CI の実行日ではなく世界観データの
+          // 基準時刻で検証する。
+          TEST_NOW: '2026-08-27T02:08:00.000Z',
         },
         // notifier への同期送信はスタブで受ける。呼び出しの有無と本文を
         // vi.spyOn(env.NOTIFIER, 'fetch') で検証する。
