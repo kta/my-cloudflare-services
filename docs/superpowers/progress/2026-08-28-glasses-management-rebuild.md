@@ -11,7 +11,7 @@
 | P4 顧客台帳 | `007-customer-records` | **完了（Approved）** | 下記 |
 | P5 来店受付とウォークイン | `008-reception-and-walkin` | **完了（Approved）** | 下記 |
 | P6 変更と取消 | `009-change-and-cancel` | **完了（Approved）** | 下記 |
-| P7 受付の録音 | `010-recording` | 未着手 | — |
+| P7 受付の録音 | `010-recording` | **完了（Approved）** | 下記 |
 | P8 お客様向けWeb予約 | `011-web-booking` | 未着手 | — |
 | P9 分析 | `012-analytics` | 未着手 | — |
 | P10 端末と監査 | `013-terminals-and-audit` | 未着手 | — |
@@ -288,3 +288,38 @@ pnpm --filter @app/glasses_management e2e → 206 passed
 ```
 
 モック突き合わせは **44 面**。
+
+
+## P7（2026-08-31）
+
+作ったもの:
+
+- `domain/retention.ts` — 保持期限。**成立予約は録音完了から 30 日、破棄受付は録音終了から 24 時間**。
+  境界を両側で縛った（ちょうど＝消せない／+1 秒＝消せる）。保全（legal hold）は期限より優先する
+- `domain/recording.ts` — 状態遷移（recording → uploading → stored / failed → deleted）と採番、
+  お知らせ本文
+- 録音のルート 5 本（開始・本体の受け取り・状態更新・再送・一覧）と、再生の 2 段（チケット → 本体）、
+  保全の指定と解除、削除。**最低保持期限より前の削除は拒否する**
+- **ダウンロード URL を一切出さない。** R2 は非公開のまま Worker が仲介する
+- 保守の Cron を 1 本（JST 23:55 = UTC 14:55）。期限の来た録音だけを消す
+- **再生・保全の指定と解除・削除を監査に残す**
+- 画面: 受付中の録音の帯（全工程）・確認画面の常駐表示・端末側の録音と待避と再送・
+  マイクが許可されていない面・保存に失敗した面・再生の導線 3 か所
+- **予約は成立しているのに録音だけ失敗した状態**を画面で区別して見せる
+
+レビュー: subagent で **2 巡**（Opus。① backend / frontend ② 受入基準 29 本の 1 本ずつの充足確認と
+敵対的な粗探し）。
+
+確かめたこと:
+
+```
+（.dev.vars を退避した CI 相当の状態で）
+bash scripts/check-agent-compat.sh   → ok
+pnpm exec biome check .              → 緑
+pnpm run deps:check                  → 緑
+pnpm -r --if-present typecheck       → 緑
+pnpm run test                        → 緑（2,912 テスト + traceability）
+pnpm --filter @app/glasses_management e2e → 230 passed
+```
+
+モック突き合わせは **46 面**。

@@ -6,6 +6,7 @@
 import { getTableConfig } from 'drizzle-orm/sqlite-core'
 import { describe, expect, it } from 'vitest'
 import {
+  alerts,
   auditEvents,
   customerGlasses,
   customerNotes,
@@ -17,6 +18,7 @@ import {
   organizations,
   purposeRequirements,
   receptionSessions,
+  recordings,
   reservationAssignments,
   reservationPurposes,
   reservationSlotLocks,
@@ -912,5 +914,125 @@ describe('visit_events', () => {
     // 誰が進めたかは残すが、担当以外も進められるので NULL 可。
     expect(table.columns.find((c) => c.name === 'staff_id')?.notNull).toBe(false)
     expect(table.columns.find((c) => c.name === 'note')?.notNull).toBe(false)
+  })
+})
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * P7 受付の録音（0006_*.sql）
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+describe('recordings', () => {
+  const table = getTableConfig(recordings)
+
+  it('録音番号は組織の中で一意（採番の衝突を DB が弾く）', () => {
+    // 採番は直前の番号を読んでから INSERT するので、同じ番号を読んだ 2 台目をここで
+    // 弾く。弾かれた側は採番し直す（walk_ins.ticket_no と同じ作法。最大 5 回）。
+    expect(columnsOf(table, 'recordings_org_code_idx')).toEqual(['organization_id', 'code'])
+    expect(isUnique(table, 'recordings_org_code_idx')).toBe(true)
+    // 店舗ではなく組織で通しの番号なので、店舗を混ぜない。
+    expect(columnsOf(table, 'recordings_org_code_idx')).not.toContain('store_id')
+  })
+
+  it('保持期限切れを掃除する index を持つ', () => {
+    // 掃除は state='stored' かつ retain_until < now の行だけを引く。
+    expect(columnsOf(table, 'recordings_org_state_retain_idx')).toEqual([
+      'organization_id',
+      'state',
+      'retain_until',
+    ])
+    expect(isUnique(table, 'recordings_org_state_retain_idx')).toBe(false)
+  })
+
+  it('受付セッションから 1 本を引ける', () => {
+    // HISTORY-LIST の「受付のときの録音」。1 受付 1 録音だが、一意にはしない
+    // （録り直しの行を残せなくなる。1 本しか立てない保証はルート側が持つ）。
+    expect(columnsOf(table, 'recordings_org_session_idx')).toEqual([
+      'organization_id',
+      'reception_session_id',
+    ])
+    expect(isUnique(table, 'recordings_org_session_idx')).toBe(false)
+  })
+
+  it('予約から「録音を聞く」を引ける', () => {
+    // LEDGER-DETAIL / CHANGE-SEARCH の「● 録音を聞く　03:12」。
+    expect(columnsOf(table, 'recordings_org_reservation_idx')).toEqual([
+      'organization_id',
+      'reservation_id',
+    ])
+    expect(isUnique(table, 'recordings_org_reservation_idx')).toBe(false)
+  })
+
+  it('外部キーを宣言しない', () => {
+    expect(table.name).toBe('recordings')
+    expect(table.foreignKeys).toHaveLength(0)
+    expect(table.columns.filter((c) => c.primary).map((c) => c.name)).toEqual(['id'])
+    const names = table.columns.map((c) => c.name)
+    expect(names).toEqual(
+      expect.arrayContaining([
+        'organization_id',
+        'store_id',
+        'code',
+        'reception_session_id',
+        'reservation_id',
+        'r2_key',
+        'content_type',
+        'duration_seconds',
+        'bytes',
+        'state',
+        'retain_until',
+        'legal_hold',
+        'upload_attempts',
+        'created_at',
+        'updated_at',
+        'deleted_at',
+      ]),
+    )
+    // 破棄受付の録音は予約を持たない（最低保持期限が 24 時間になる側）。
+    expect(table.columns.find((c) => c.name === 'reservation_id')?.notNull).toBe(false)
+    // 実体の在り処。**応答には載せない**（契約の Recording が持たない）。
+    expect(table.columns.find((c) => c.name === 'r2_key')?.notNull).toBe(true)
+    // state='stored' になるまで決まらない。
+    expect(table.columns.find((c) => c.name === 'retain_until')?.notNull).toBe(false)
+    expect(table.columns.find((c) => c.name === 'deleted_at')?.notNull).toBe(false)
+    // 長さとバイト数は完了まで NULL。真偽値は text の '0' | '1'。
+    expect(table.columns.find((c) => c.name === 'duration_seconds')?.columnType).toBe(
+      'SQLiteInteger',
+    )
+    expect(table.columns.find((c) => c.name === 'duration_seconds')?.notNull).toBe(false)
+    expect(table.columns.find((c) => c.name === 'bytes')?.notNull).toBe(false)
+    expect(table.columns.find((c) => c.name === 'upload_attempts')?.columnType).toBe(
+      'SQLiteInteger',
+    )
+    expect(table.columns.find((c) => c.name === 'upload_attempts')?.notNull).toBe(true)
+    expect(table.columns.find((c) => c.name === 'legal_hold')?.columnType).toBe('SQLiteText')
+    expect(table.columns.find((c) => c.name === 'legal_hold')?.notNull).toBe(true)
+  })
+})
+
+describe('alerts', () => {
+  const table = getTableConfig(alerts)
+
+  it('新しい順の一覧を引く index を持つ', () => {
+    expect(columnsOf(table, 'alerts_org_store_occurred_idx')).toEqual([
+      'organization_id',
+      'store_id',
+      'occurred_at',
+    ])
+    expect(isUnique(table, 'alerts_org_store_occurred_idx')).toBe(false)
+  })
+
+  it('未対応の件数を数える index を持つ', () => {
+    // サイドバーの「お知らせ 3」は resolved_at IS NULL を数える。
+    expect(columnsOf(table, 'alerts_org_store_resolved_idx')).toEqual([
+      'organization_id',
+      'store_id',
+      'resolved_at',
+    ])
+    expect(isUnique(table, 'alerts_org_store_resolved_idx')).toBe(false)
+    expect(table.name).toBe('alerts')
+    expect(table.foreignKeys).toHaveLength(0)
+    // 同じ code + target_id の未解決行があれば新しい行を作らない（連打しない）。
+    expect(table.columns.find((c) => c.name === 'target_id')?.notNull).toBe(false)
+    expect(table.columns.find((c) => c.name === 'resolved_at')?.notNull).toBe(false)
   })
 })

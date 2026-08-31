@@ -41,7 +41,7 @@ idempotency ID を検証するためだけに使う。production Worker にテ�
 
 ## 現在の基準線
 
-Approved かつ UC/AC を持つ spec は次の 8 本である。`admin` の service spec と
+Approved かつ UC/AC を持つ spec は次の 9 本である。`admin` の service spec と
 infrastructure-only の文書には UC/AC がないため、分母には入らない（機械的な免除ではなく、
 そもそも product behavior を定義していない）。新しい production behavior は Approved spec
 に UC/AC を付け、この表と E2E mapping を同じ変更で追加する。
@@ -54,7 +54,8 @@ P1（`004-store-settings`）はこの表の 36 行が、P2（`005-availability-a
 37 行（UC-BOOK-01..15 / AC-BOOK-01..22）が、P4（`007-customer-records`）はさらに続く
 40 行（UC-CUST-01..14 / AC-CUST-01..26）が、P5（`008-reception-and-walkin`）はさらに続く
 45 行（UC-RECEP-01..16 / AC-RECEP-01..29）が、P6（`009-change-and-cancel`）はさらに続く
-37 行（UC-CHANGE-01..10 / AC-CHANGE-01..27）がそろった時点で Approved にした。
+37 行（UC-CHANGE-01..10 / AC-CHANGE-01..27）が、P7（`010-recording`）はさらに続く
+29 行（UC-REC-01..09 / AC-REC-01..20）がそろった時点で Approved にした。
 
 `007-customer-records` の 26 本のうち、新しいお客様の登録・おまとめ・手書き・候補の吹き出しに
 属するものは**画面ではなく HTTP のふるまいで固定してある**。部品（`src/web/customers/`）は
@@ -78,6 +79,20 @@ P1（`004-store-settings`）はこの表の 36 行が、P2（`005-availability-a
 承認済みモックとの突き合わせも同じ理由で 5 面（CHANGE-SEARCH / EX-EMPTY-SEARCH /
 CHANGE-DATETIME / CHANGE-DIFF / EX-CONFLICT）だけを実測し、CHANGE-CANCEL と CHANGE-DONE の
 2 面は `test.skip` で置いてある（`e2e/mock-compare.spec.ts`）。
+
+`010-recording` の 29 本（UC-REC-01..09 / AC-REC-01..20）も同じ扱いである。マイクが使えない面
+（EX-MIC-DENIED）・録音だけが送れなかった面（EX-UPLOAD-FAILED）・3 か所の「録音を聞く」は、
+部品（`src/web/recording/MicDeniedPanel.tsx` / `UploadFailedPanel.tsx` / `RecordingPlayer.tsx`）が
+出荷済みでありながら器（`BookingScreen` / `ReservationDetail` / `ReceptionHistory` を呼ぶ側）が
+まだ差し込んでおらず、ブラウザから開けない。その AC はブラウザで通せる半分（マイクが断られても
+受付が最後まで続く・予約の成立が録音の失敗より先に読める・右下に「録音は端末に保管中」が残る・
+録音が無い予約詳細に「録音を聞く」が出ない）を操作で見て、残りを HTTP のふるまいで固定してある。
+最低保持期限（成立 30 日 / 破棄 24 時間）の境界は**ブラウザの時計を動かさず**、
+`POST /api/internal/maintenance/recordings/purge` の `now` に固定値を注入して確かめる。
+承認済みモックとの突き合わせは、上と同じ理由で EX-MIC-DENIED と EX-UPLOAD-FAILED の 2 面を
+`test.skip` で置いてある（撮る相手が画面に無いので `maxDiffPixelRatio` を測れない）。
+どの入口が足りないかは `services/glasses_management/e2e/recording.spec.ts` の先頭と
+各 test のコメントに書いてある。
 
 | Spec ID | Playwright scenario |
 |---|---|
@@ -321,6 +336,35 @@ CHANGE-DATETIME / CHANGE-DIFF / EX-CONFLICT）だけを実測し、CHANGE-CANCEL
 | AC-CHANGE-27 | `services/glasses_management/e2e/change.spec.ts` — 古い版のまま送ると 409 になり、日時も担当も枠も監査も 1 行も書き換わらない |
 | UC-CHANGE-10 | `services/glasses_management/e2e/change.spec.ts` — 変更と取消は、実行した日時と変更前後が 1 件ずつたどれる形で残る |
 | AC-CHANGE-18 | `services/glasses_management/e2e/change.spec.ts` — 変更したご予約の「そのあとの変更」に、変更前後が 1 行で並ぶ |
+| UC-REC-01 | `services/glasses_management/e2e/recording.spec.ts` — 受付を始めると、その押した操作のなかで許可を求める |
+| AC-REC-15 | `services/glasses_management/e2e/recording.spec.ts` — 受付を始めると、その押した操作のなかで許可を求める |
+| UC-REC-02 | `services/glasses_management/e2e/recording.spec.ts` — 復唱まで進めても経過時間は減らない |
+| AC-REC-01 | `services/glasses_management/e2e/recording.spec.ts` — 復唱まで進めても経過時間は減らない |
+| AC-REC-02 | `services/glasses_management/e2e/recording.spec.ts` — 工程を戻しても録音は 1 本のまま |
+| UC-REC-03 | `services/glasses_management/e2e/recording.spec.ts` — マイクが切られていると、直し方が 3 手順で出る |
+| AC-REC-03 | `services/glasses_management/e2e/recording.spec.ts` — マイクが切られていると、直し方が 3 手順で出る |
+| AC-REC-04 | `services/glasses_management/e2e/recording.spec.ts` — 録音せずに続けると、伺った内容が残ったまま戻る |
+| AC-REC-16 | `services/glasses_management/e2e/recording.spec.ts` — 直したので、もう一度確かめる |
+| AC-REC-05 | `services/glasses_management/e2e/recording.spec.ts` — 途中で止まると「録音していません」に変わる |
+| AC-REC-17 | `services/glasses_management/e2e/recording.spec.ts` — 止まったことが読み上げにも届く |
+| UC-REC-04 | `services/glasses_management/e2e/recording.spec.ts` — 終わった録音が保管庫へ入り、保持期限が決まる |
+| UC-REC-05 | `services/glasses_management/e2e/recording.spec.ts` — 保存に失敗しても、先に予約の成立を言う |
+| AC-REC-06 | `services/glasses_management/e2e/recording.spec.ts` — 保存に失敗しても、先に予約の成立を言う |
+| AC-REC-07 | `services/glasses_management/e2e/recording.spec.ts` — 失敗した予約も台帳に載り、「録音を聞く」は出ない |
+| UC-REC-06 | `services/glasses_management/e2e/recording.spec.ts` — もう一度送ると「録音を聞く」が出る |
+| AC-REC-08 | `services/glasses_management/e2e/recording.spec.ts` — もう一度送ると「録音を聞く」が出る |
+| AC-REC-18 | `services/glasses_management/e2e/recording.spec.ts` — このまま続けると右下に「録音は端末に保管中」が残る |
+| UC-REC-07 | `services/glasses_management/e2e/recording.spec.ts` — 台帳から「● 録音を聞く　03:12」で聞ける |
+| AC-REC-09 | `services/glasses_management/e2e/recording.spec.ts` — 台帳から「● 録音を聞く　03:12」で聞ける |
+| AC-REC-10 | `services/glasses_management/e2e/recording.spec.ts` — 受付履歴から「再生する」で位置のバーが進む |
+| AC-REC-11 | `services/glasses_management/e2e/recording.spec.ts` — 成立予約は 30 日ちょうどで消せず、+1 秒で消せる |
+| AC-REC-12 | `services/glasses_management/e2e/recording.spec.ts` — 破棄受付は 24 時間ちょうどで消せず、+1 秒で消せる |
+| UC-REC-08 | `services/glasses_management/e2e/recording.spec.ts` — 保全を立てた録音は片づけで消えない |
+| AC-REC-13 | `services/glasses_management/e2e/recording.spec.ts` — 保全を立てた録音は片づけで消えない |
+| AC-REC-14 | `services/glasses_management/e2e/recording.spec.ts` — 他組織の録音は再生も保全もできず、一覧にも出ない |
+| AC-REC-19 | `services/glasses_management/e2e/recording.spec.ts` — 3 回失敗するとお知らせに 1 件立つ |
+| AC-REC-20 | `services/glasses_management/e2e/recording.spec.ts` — 端末セッションが失効しても未送信の録音は残る |
+| UC-REC-09 | `services/glasses_management/e2e/recording.spec.ts` — 受付をやめても記録と録音が残る |
 
 validator 自体は `scripts/check-e2e-traceability.test.mjs` で unit test する。通常の実行は次の
 とおり。

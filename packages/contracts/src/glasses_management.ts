@@ -2337,3 +2337,250 @@ export const ReservationChangeInput = z
     path: ['equipmentIds'],
   })
 export type ReservationChangeInput = z.infer<typeof ReservationChangeInput>
+
+/* ------------------------------------------------------------------------- *
+ * P7 受付の録音（`specs/glasses_management/features/010-recording`）
+ *
+ * 録音の実体は非公開の R2（binding `RECORDINGS`）にあり、D1 が持つのは状態だけである。
+ * **この節のどのスキーマにも `r2Key` とダウンロード URL を置かない。** 応答は必ず
+ * ここのスキーマで `parse` してから返すので、行をそのまま渡すと `strictObject` が落ちる
+ * （落ちる形にしてあるのが目的で、黙って剥がすと剥がし忘れに気づけない）。
+ *
+ * お知らせ（`alerts`）をここで作るのは、録音の 3 回失敗を積む場所が P7 の時点で
+ * 要るからである（`03-data-model.md` §12）。P7 が足すのは `audience='store'` の
+ * 一覧に要る形だけで、4 分類の `kind` と `counts` は P10（`013-terminals-and-audit`）。
+ * ------------------------------------------------------------------------- */
+
+/* --- 原始型 --------------------------------------------------------------- */
+
+/**
+ * 録音番号（ALERTS の `EY-R-1482`）。**組織で通しの 4 桁ゼロ埋め**で、9999 を越えた
+ * 組織だけ 5 桁になる。`ReservationCode`（`EY-YYMM-NNNN`）とは別の採番系統なので、
+ * 取り違えを書式で弾く（お知らせの本文に載るのはこちらの番号である）。
+ */
+export const RecordingCode = z.string().regex(/^EY-R-\d{4,5}$/)
+export type RecordingCode = z.infer<typeof RecordingCode>
+
+/**
+ * 録音の状態。`recording`（録っている）→ `uploading`（送っている）→ `stored`（保管庫にある）
+ * の 3 段に、`failed`（端末に実体が残っている）と `deleted`（実体を消したあとの行）を足した 5 値。
+ * 知らない語を通すと、掃除の Cron が拾えない状態の行が黙って増える。
+ */
+export const RecordingState = z.enum(['recording', 'uploading', 'stored', 'failed', 'deleted'])
+export type RecordingState = z.infer<typeof RecordingState>
+
+/**
+ * 録音の形式。**既定は `audio/mp4`**（AAC 32kbps モノラル）で、iPadOS の Safari の
+ * MediaRecorder が確実に出せる形式である（60 分でも約 14MB）。`audio/webm` は取れない
+ * 端末があるので既定にしない。許可リストの外は 400 にして、再生側の分岐を増やさない。
+ */
+export const RecordingContentType = z.enum(['audio/mp4', 'audio/webm', 'audio/mpeg'])
+export type RecordingContentType = z.infer<typeof RecordingContentType>
+
+/** 録音の長さ。上限 21,600 秒 = 6 時間（1 受付の録音がここに届くことはない）。 */
+const DurationSeconds = z.number().int().min(0).max(21_600)
+
+/**
+ * 録音のバイト数。上限 104,857,600 = 100MB は R2 の 1 オブジェクトの上限ではなく
+ * **この API が受ける 1 録音の上限**である。1 録音 = 1 キーなので分割送信を作らない。
+ */
+const RecordingBytes = z.number().int().min(0).max(104_857_600)
+
+/* --- 録音 ----------------------------------------------------------------- */
+
+/**
+ * 録音の開始（`POST /api/staff/recordings`）。受付セッションを指して 1 本だけ立てる。
+ * `r2Key` は**サーバが `id` から決める**ので、端末から受けない（受けると 1 録音 1 キーの
+ * 前提が端末側の都合で崩れ、再送が R2 に二重に置かれる）。
+ */
+export const RecordingCreate = z.strictObject({
+  receptionSessionId: Uuid,
+  storeId: Uuid,
+  contentType: RecordingContentType.default('audio/mp4'),
+  startedAt: IsoDateTime,
+})
+export type RecordingCreate = z.infer<typeof RecordingCreate>
+
+/**
+ * 状態の更新（`PATCH /api/staff/recordings/:recordingId`）。許されない遷移は
+ * 409 `invalid_transition` で、契約では止めない（遷移の可否は `domain/recording.ts` が持つ）。
+ * `failureReason` は端末が読んだ失敗の理由で、お客様の情報を書かない。
+ */
+export const RecordingStatePatch = z.strictObject({
+  state: RecordingState,
+  durationSeconds: DurationSeconds.optional(),
+  bytes: RecordingBytes.optional(),
+  failureReason: z.string().trim().max(120).optional(),
+})
+export type RecordingStatePatch = z.infer<typeof RecordingStatePatch>
+
+/**
+ * 録音 1 件。**`r2Key` を持たない。** `strictObject` なので、D1 の行をそのまま渡すと
+ * ここで落ちる（剥がし忘れが 200 で外へ出るより、500 で落ちるほうがよい）。
+ *
+ * `reservationId` が null なのは破棄受付の録音で、最低保持期限が 24 時間になる側である
+ * （成立予約は 30 日）。`retainUntil` は `state='stored'` になるまで決まらないので null 可。
+ */
+export const Recording = z.strictObject({
+  id: Uuid,
+  code: RecordingCode,
+  receptionSessionId: Uuid,
+  reservationId: Uuid.nullable().default(null),
+  state: RecordingState,
+  contentType: RecordingContentType,
+  durationSeconds: DurationSeconds.nullable().default(null),
+  bytes: RecordingBytes.nullable().default(null),
+  retainUntil: IsoDateTime.nullable().default(null),
+  legalHold: z.boolean(),
+  uploadAttempts: z.number().int().min(0).max(99),
+  createdAt: IsoDateTime,
+})
+export type Recording = z.infer<typeof Recording>
+
+/**
+ * 予約詳細・受付履歴に埋め込む録音。「● 録音を聞く　03:12」を描くのに要るのは
+ * 長さだけなので、埋め込み側に R2 の手がかりを渡さない。
+ */
+export const RecordingSummary = z.strictObject({
+  id: Uuid,
+  state: RecordingState,
+  durationSeconds: DurationSeconds.nullable().default(null),
+})
+export type RecordingSummary = z.infer<typeof RecordingSummary>
+
+/** 録音の一覧（`GET /api/staff/recordings`）。`OFFSET` を使わず `cursor` で続きを取る。 */
+export const RecordingListQuery = z.strictObject({
+  storeId: Uuid.optional(),
+  state: QueryWordList(RecordingState, 5),
+  from: LocalDate.optional(),
+  to: LocalDate.optional(),
+  limit: Limit,
+  cursor: Cursor.optional(),
+})
+export type RecordingListQuery = z.infer<typeof RecordingListQuery>
+
+/** 一覧の応答（`04-api.md` §1.2 の `{ items, nextCursor, total }`）。 */
+export const RecordingList = z.strictObject({
+  items: Recording.array().default([]),
+  nextCursor: Cursor.nullable().default(null),
+  total: CountInteger,
+})
+export type RecordingList = z.infer<typeof RecordingList>
+
+/**
+ * 再生の 1 段目（`POST /api/staff/recordings/:recordingId/playback`）が返す短命チケット。
+ * **寿命は 900 秒**で、300 秒では最長の録音（HISTORY-LIST の `06:12` = 372 秒）を
+ * 1 回聞き通せない。`token` は Authorization ヘッダーの代わりではなく上乗せである。
+ */
+export const RecordingPlaybackTicket = z.strictObject({
+  token: z.string().min(32).max(256),
+  expiresAt: IsoDateTime,
+  durationSeconds: DurationSeconds.nullable().default(null),
+})
+export type RecordingPlaybackTicket = z.infer<typeof RecordingPlaybackTicket>
+
+/**
+ * 保全の指定と解除（`POST /api/staff/recordings/:recordingId/hold`）。
+ * **理由を必須にする** — 理由の無い保全は、外していいのかを後から誰も判断できない。
+ */
+export const RecordingHoldInput = z.strictObject({
+  legalHold: z.boolean(),
+  reason: z.string().trim().min(1).max(120),
+})
+export type RecordingHoldInput = z.infer<typeof RecordingHoldInput>
+
+/**
+ * 保持期限を過ぎた録音の掃除（`POST /api/internal/maintenance/recordings/purge`）。
+ * `now` はテストが境界を確かめるための注入口で、省くとサーバの時刻を使う。
+ */
+export const RecordingPurgeRequest = z.strictObject({
+  now: IsoDateTime.optional(),
+  limit: QueryInteger.pipe(z.number().int().min(1).max(500)).default(100),
+})
+export type RecordingPurgeRequest = z.infer<typeof RecordingPurgeRequest>
+
+/**
+ * 掃除の結果。**保全で残したもの（`skippedHeld`）と消せなかったもの（`failed`）を
+ * 1 つの数に混ぜない** — 前者は正常で、後者は次の実行で拾い直す対象である。
+ */
+export const RecordingPurgeResult = z.strictObject({
+  examined: CountInteger,
+  deleted: CountInteger,
+  skippedHeld: CountInteger,
+  failed: CountInteger,
+})
+export type RecordingPurgeResult = z.infer<typeof RecordingPurgeResult>
+
+/**
+ * 最低保持期限の内側で削除を求められたときの 409。「いつから消せるか」を返さないと、
+ * 画面が「もう一度あとで」としか言えない。保全で消せない場合は `legalHold` が真になる。
+ */
+export const RecordingRetainedError = z.strictObject({
+  error: z.literal('recording_retained'),
+  retainUntil: IsoDateTime,
+  legalHold: z.boolean(),
+})
+export type RecordingRetainedError = z.infer<typeof RecordingRetainedError>
+
+/* --- お知らせ ------------------------------------------------------------- */
+
+/**
+ * お知らせの種別（10 値）。**綴りは `store.no_shift`**（`staff.no_shift` にしない。
+ * `07-nfr.md` §11.3 / §11.4 と同じ）。下 3 値は `audience='ops'` で作り、ALERTS には
+ * 出さない（運用の失敗を業務の「お知らせ」に積むと「対応が必要」の意味が薄まる）。
+ */
+export const AlertCode = z.enum([
+  'recording.upload_failed',
+  'web_booking.pending',
+  'equipment.maintenance_scheduled',
+  'store.closed_with_reservations',
+  'reservation.unclosed',
+  'store.no_shift',
+  'web_booking.auto_cancelled',
+  'notifier.send_failed',
+  'org.not_synced',
+  'd1.capacity_warning',
+])
+export type AlertCode = z.infer<typeof AlertCode>
+
+/**
+ * お知らせ 1 件。`body` の上限は **120 文字**（`04-api.md` §4.9）。
+ * `03-data-model.md` §11.3 は 200 文字と書いているが、画面が読むのは 04-api の側なので
+ * 契約はこちらを正とし、D1 の列は `text` のまま制限しない。
+ */
+export const Alert = z.strictObject({
+  id: Uuid,
+  code: AlertCode,
+  severity: z.enum(['info', 'action']),
+  audience: z.enum(['store', 'ops']).default('store'),
+  title: z.string().trim().min(1).max(60),
+  body: z.string().max(120).nullable().default(null),
+  targetType: z.enum(['recording', 'reservation', 'equipment']).nullable().default(null),
+  targetId: z.string().min(1).max(200).nullable().default(null),
+  occurredAt: IsoDateTime,
+  readAt: IsoDateTime.nullable().default(null),
+  resolvedAt: IsoDateTime.nullable().default(null),
+  resolvedBy: Uuid.nullable().default(null),
+})
+export type Alert = z.infer<typeof Alert>
+
+/**
+ * お知らせの一覧（`GET /api/staff/alerts`）。P7 が持つのは 4 つだけで、
+ * ALERTS 左の 4 分類（`kind`）と `counts` は P10（`013-terminals-and-audit`）が足す。
+ * 既定を `store` にするのは、運用のアラートを業務のお知らせに混ぜないためである。
+ */
+export const AlertListQuery = z.strictObject({
+  storeId: Uuid.optional(),
+  audience: z.enum(['store', 'ops']).default('store'),
+  limit: Limit,
+  cursor: Cursor.optional(),
+})
+export type AlertListQuery = z.infer<typeof AlertListQuery>
+
+/** お知らせの応答（`04-api.md` §1.2 の `{ items, nextCursor, total }`）。 */
+export const AlertList = z.strictObject({
+  items: Alert.array().default([]),
+  nextCursor: Cursor.nullable().default(null),
+  total: CountInteger,
+})
+export type AlertList = z.infer<typeof AlertList>

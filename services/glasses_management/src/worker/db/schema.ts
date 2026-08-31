@@ -12,7 +12,7 @@ import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-or
  * テーブルはフェーズごとに増える（specs/glasses_management/design/03-data-model.md）。
  * P0（基盤）の 3 つに、P1（店舗の受付条件）の 16 と P2（枠の一次排他）の 1、
  * P3（電話・店頭からの予約受付）の 3 と P4（顧客台帳）の 4、
- * P5（来店受付とウォークイン）の 2 を足した 29 表がここにある。
+ * P5（来店受付とウォークイン）の 2 と P7（受付の録音）の 2 を足した 31 表がここにある。
  */
 
 /**
@@ -1012,5 +1012,105 @@ export const visitEvents = sqliteTable(
     ),
     // 当日のボード全体と、ANALYTICS-WAIT の日次集計。
     index('visit_events_org_store_occurred_idx').on(t.organizationId, t.storeId, t.occurredAt),
+  ],
+)
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * P7 受付の録音（0006_*.sql）
+ * 受付中の音を非公開の R2 に置き、状態だけを D1 に持つ 1 表と、放っておくと予約に
+ * 響くものを 1 行 1 件にする 1 表。受付そのもの（reception_sessions）と監査
+ * （audit_events）は P3 の表をそのまま使い、ここでは作り直さない。
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * 受付中の録音。**実体は R2（binding `RECORDINGS`、非公開）で、D1 は状態だけを持つ。**
+ * ダウンロード URL を返さず、再生は Worker が仲介する（短命チケット + ストリーム）。
+ *
+ * `r2_key` は `recordings/{organizationId}/{storeId}/{YYYY}/{MM}/{id}.{ext}`。
+ * 前置 `recordings/` で、同じバケットに入る手書きメモ（`notes/`。§9.4）と分ける。
+ * **`id` から決まるので、同じ録音の再送は必ず同じキーを上書きする**（第 2 の冪等キー）。
+ * 掃除はこの列が指すキーだけを消し、プレフィクスを走査しない（走査すると手書きを巻き込む）。
+ *
+ * `retain_until` は `state='stored'` になった時刻から決まる（成立予約 +30 日 /
+ * 破棄受付 +24 時間）ので、録り始めの行では NULL である。`legal_hold='1'` か
+ * `now <= retain_until` の間は削除を 409 `recording_retained` で拒む。
+ * 行は削除しない。R2 のオブジェクトだけ消して `state='deleted'` / `deleted_at` を書く。
+ */
+export const recordings = sqliteTable(
+  'recordings',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    storeId: text('store_id').notNull(),
+    // 'EY-R-NNNN'。組織で通しの 4 桁ゼロ埋め（9999 を越えたら 5 桁）。
+    // reservations.code（EY-YYMM-NNNN）とは別の採番系統。
+    code: text('code').notNull(),
+    receptionSessionId: text('reception_session_id').notNull(),
+    reservationId: text('reservation_id'), // NULL＝破棄受付の録音（保持は 24 時間）
+    r2Key: text('r2_key').notNull(), // API の応答に載せない
+    contentType: text('content_type').notNull(), // 'audio/mp4' | 'audio/webm' | 'audio/mpeg'
+    durationSeconds: integer('duration_seconds'), // 完了まで NULL。'03:12' は 192
+    bytes: integer('bytes'), // 完了まで NULL
+    // 'recording' | 'uploading' | 'stored' | 'failed' | 'deleted'
+    state: text('state').notNull(),
+    // ISO8601 (UTC)。state='stored' になるまで決まらないので NULL 可。
+    // ISO 文字列同士の比較は辞書順で時系列と一致するので、掃除の絞り込みは文字列比較でよい。
+    retainUntil: text('retain_until'),
+    legalHold: text('legal_hold').notNull(), // '0' | '1'。'1' の間は期限後も消さない
+    uploadAttempts: integer('upload_attempts').notNull(), // 3 に達したら alerts に 1 件
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+    deletedAt: text('deleted_at'), // state='deleted' のとき非 NULL
+  },
+  (t) => [
+    // 録音番号の採番衝突を DB 側で弾く（walk_ins.ticket_no と同じ作法。弾かれたら
+    // 採番し直して最大 5 回まで再試行する）。組織で通しなので store_id を含めない。
+    uniqueIndex('recordings_org_code_idx').on(t.organizationId, t.code),
+    // 保持期限切れを掃除する Cron。state='stored' かつ retain_until < now を引く。
+    index('recordings_org_state_retain_idx').on(t.organizationId, t.state, t.retainUntil),
+    // HISTORY-LIST の「受付のときの録音」。1 受付 1 録音だが**一意にしない**
+    // （録り直しの行を残せなくなる。1 本しか立てない保証はルート側が持つ）。
+    index('recordings_org_session_idx').on(t.organizationId, t.receptionSessionId),
+    // LEDGER-DETAIL / CHANGE-SEARCH の「● 録音を聞く　03:12」。
+    index('recordings_org_reservation_idx').on(t.organizationId, t.reservationId),
+  ],
+)
+
+/**
+ * 放っておくと予約に響くものを 1 行 1 件にする。ALERTS 画面（P10）の元データで、
+ * P7 が立てるのは録音の 3 回失敗（`code='recording.upload_failed'` /
+ * `severity='action'`）だけである。
+ *
+ * **同じ原因で連打しない。**同じ `code` + `target_id` の未解決行（`resolved_at IS NULL`）が
+ * あれば新しい行を作らない。再検知は既存行の `occurred_at` を更新せず、何もしない。
+ *
+ * `audience='ops'` の 3 値（notifier / 組織同期 / D1 容量）は記録としては残すが
+ * ALERTS には出さない（運用の失敗を業務のお知らせに積むと「対応が必要」が薄まる）。
+ * `body` の上限は契約側の 120 文字で見る（列は text のまま制限しない）。
+ */
+export const alerts = sqliteTable(
+  'alerts',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    storeId: text('store_id').notNull(),
+    code: text('code').notNull(), // AlertCode の 10 値
+    severity: text('severity').notNull(), // 'info' | 'action'
+    audience: text('audience').notNull(), // 'store' | 'ops'
+    title: text('title').notNull(), // 1〜60文字。'録音の保存に3回失敗しました'
+    body: text('body'), // 'EY-R-1482　田中 花子 様。ご予約は成立しています。'
+    targetType: text('target_type'), // 'recording' | 'reservation' | 'equipment'
+    targetId: text('target_id'), // 対象表の id。行動ボタンの遷移先
+    occurredAt: text('occurred_at').notNull(), // ISO8601 (UTC)
+    readAt: text('read_at'), // 「すべて既読にする」で埋める
+    resolvedAt: text('resolved_at'), // 非 NULL の件数が ALERTS の「対応済み」
+    resolvedBy: text('resolved_by'), // staff.id
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => [
+    // ALERTS の一覧（新しい順）。
+    index('alerts_org_store_occurred_idx').on(t.organizationId, t.storeId, t.occurredAt),
+    // サイドバーの未対応バッジ（resolved_at IS NULL を数える）。
+    index('alerts_org_store_resolved_idx').on(t.organizationId, t.storeId, t.resolvedAt),
   ],
 )

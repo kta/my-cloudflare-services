@@ -1,7 +1,7 @@
 # 010-recording: 受付の録音
 
 - サービス: `glasses_management`
-- ステータス: Draft
+- ステータス: Approved
 
 ## 1. WHAT / WHY
 

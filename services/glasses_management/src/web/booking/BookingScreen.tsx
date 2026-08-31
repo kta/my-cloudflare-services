@@ -14,6 +14,10 @@ import { cn, focusRing, focusRingOnPine } from '@app/ui'
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { client, subjectFromToken } from '../client'
 import { dateLabel, jstClock } from '../ledger/metrics'
+import { MicDeniedPanel } from '../recording/MicDeniedPanel'
+import { RecordingBadge } from '../recording/RecordingBadge'
+import { UploadFailedPanel } from '../recording/UploadFailedPanel'
+import { useRecorder } from '../recording/useRecorder'
 import { ConfirmAction, ConfirmStep } from './ConfirmStep'
 import { type ConflictChoice, ConflictNotice } from './ConflictNotice'
 import { type CustomerDraft, CustomerStep, customerStepReady } from './CustomerStep'
@@ -21,7 +25,6 @@ import { DateTimeStep } from './DateTimeStep'
 import { DoneStep } from './DoneStep'
 import type { HandwrittenNote } from './Handwriting'
 import { PurposeStep } from './PurposeStep'
-import { RecordingBadge } from './RecordingBadge'
 import type { SlotChoice } from './SlotStep'
 import { SlotStep } from './SlotStep'
 import { StepBar } from './StepBar'
@@ -187,6 +190,22 @@ export function BookingScreen({
   /** 担当・設備の名前。軸を切り替えるたびに増える（同じ id を二度引かない）。 */
   const laneNames = useRef(new Map<string, string>())
   const holdRef = useRef<Hold | null>(null)
+
+  /*
+   * 受付中の録音（`010-recording`）。工程 1〜4 は帯の中、工程 5 は右下の常駐へ移り、
+   * 経過時間は移った瞬間も減らない（同じ 1 本を数え続けているため）。
+   *
+   * **許可はこの面が立ち上がった時点で求める。**この面は「新しい予約を取る」を押した
+   * その処理から同期的に差し替わってくるので、Safari の操作の有効期間の中に収まる。
+   * 工程を移っただけ・描き直しただけでは `start()` が二度目を求めない（1 受付 1 本）。
+   */
+  const recorder = useRecorder({ storeId, receptionSessionId: sessionId })
+  /** 「直したので、もう一度確かめる」を押した。読み込み直すまでのあいだ二度押しをさせない。 */
+  const [micRechecking, setMicRechecking] = useState(false)
+  const startRecording = recorder.start
+  useEffect(() => {
+    startRecording()
+  }, [startRecording])
 
   useEffect(() => {
     let live = true
@@ -448,6 +467,8 @@ export function BookingScreen({
   async function discard() {
     setConfirming(false)
     releaseHold()
+    // やめても受付の記録と録音は残す（UC-REC-09）。録り終えてから送る。
+    recorder.stop()
     if (sessionId !== null) {
       await client.api.staff['reception-sessions'][':sessionId'].close
         .$post({ param: { sessionId }, json: { outcome: 'discarded' } })
@@ -460,6 +481,8 @@ export function BookingScreen({
   /** 「あとで続ける」。受付は進行中のまま残し、続きから戻れるようにする。 */
   async function pause() {
     releaseHold()
+    // 面を離れる。マイクを掴んだままにせず、ここまでの音を送る。
+    recorder.stop()
     const folded = foldDraft()
     setDraft(folded)
     await saveDraft(folded)
@@ -513,6 +536,8 @@ export function BookingScreen({
       if (res.ok) {
         setBooked(body as ReservationDetail)
         sessionStorage.removeItem(SESSION_KEY)
+        // 復唱が終わった。ここで録り終えて送る（送れなければ端末に控える）。
+        recorder.stop()
         // ご予約そのものが枠を持つので、押さえは返す（同じ枠を二重に数えさせない）。
         releaseHold()
         return
@@ -690,8 +715,25 @@ export function BookingScreen({
    * 録音の印は工程 1〜4 が帯の中、工程 5 だけが右下の常駐（`05-screen-flow.md` §2.6）。
    * BOOK-CONFLICT は工程 3 へ差し戻した面なので、承認済みモックのとおり帯の中に戻る。
    */
-  const recordingInBar = booked === null && (step !== 'confirm' || conflict !== null)
+  /*
+   * 例外の 2 面（承認済みモック EX-MIC-DENIED / EX-UPLOAD-FAILED）。どちらも
+   * **工程の面を全面差し替える**（上のバーだけが残る）。
+   *   マイクを断られた …… どの工程にいても同じ形。「録音せずに続ける」でその工程へ戻る。
+   *   録音だけ送れなかった …… 承ったあとの完了の面の代わりに出す。予約の成立が先に読める。
+   */
+  const micDenied = phase === 'ready' && booked === null && recorder.micDenied
+  const uploadFailed = phase === 'ready' && booked !== null && recorder.state === 'buffered'
+  const recordingInBar = booked === null && !micDenied && (step !== 'confirm' || conflict !== null)
   const barStep: BookingStepKey = conflict === null ? step : 'slot'
+
+  /** 右下に常駐する録音の印。**1 つの画面に 1 か所しか出さない**ので、器が 1 つだけ作る。 */
+  const floatingBadge = () => (
+    <RecordingBadge
+      state={recorder.state}
+      elapsedSeconds={recorder.elapsedSeconds}
+      placement="floating"
+    />
+  )
 
   return (
     <div
@@ -798,6 +840,48 @@ export function BookingScreen({
               もう一度始める
             </button>
           </div>
+        ) : micDenied ? (
+          /*
+           * できないのは録音だけ。**受付はこのまま最後まで続けられる**ことを先に言い切り、
+           * 直し方は右へ寄せる（AC-REC-03 / AC-REC-04 / AC-REC-16）。
+           */
+          <MicDeniedPanel
+            onContinueWithoutRecording={recorder.continueWithoutRecording}
+            /*
+             * 同じ読み込みのまま尋ね直しても、ブラウザはダイアログを出さずに即断る。
+             * 読み込み直して判定し直す —— 伺った内容は `reception_sessions` の下書きから
+             * 引き直すので、端末に残すのは受付セッション id だけでよい。
+             */
+            onRecheck={() => {
+              setMicRechecking(true)
+              window.location.reload()
+            }}
+            recheck={micRechecking ? 'checking' : 'idle'}
+            onAbandon={() => setConfirming(true)}
+            indicator={floatingBadge()}
+          />
+        ) : uploadFailed ? (
+          /*
+           * 承ったのに録音だけ送れなかった。**成立が上、失敗が下**（AC-REC-06 / AC-REC-18）。
+           * 完了の面（DoneStep）の代わりに出す —— 同じ面に 2 つの結末を並べない。
+           */
+          <UploadFailedPanel
+            reservation={{
+              code: booked?.code ?? '',
+              startsAt: booked?.startsAt ?? clock,
+              endsAt: booked?.endsAt ?? clock,
+              purposeLabel: booked?.purposeLabelInternal ?? purposeLabel,
+              customerName: draft.nameTyped === '' ? null : draft.nameTyped,
+              staffName,
+              equipmentNames,
+            }}
+            durationSeconds={recorder.elapsedSeconds}
+            nextAttemptAt={recorder.nextAttemptAt}
+            onContinue={onOpenLedger ?? onExit}
+            onRetry={recorder.retryNow}
+            retry={recorder.retrying}
+            indicator={floatingBadge()}
+          />
         ) : booked !== null ? (
           <DoneStep
             reservation={{
@@ -927,14 +1011,21 @@ export function BookingScreen({
             }}
           />
         )}
-        {/* 工程 5 だけ、録音の印が帯から右下の常駐表示へ移る（`design/05-screen-flow.md` §2.6）。 */}
-        {phase === 'ready' && !recordingInBar && booked === null && (
-          <RecordingBadge state="off" seconds={null} placement="floating" />
-        )}
+        {/*
+          工程 5 だけ、録音の印が帯から右下の常駐表示へ移る（`design/05-screen-flow.md` §2.6）。
+          例外の 2 面は自分の中へ同じ印を 1 つ置いているので、ここでは出さない
+          （**録音の印は 1 つの画面に 1 か所**）。
+        */}
+        {phase === 'ready' &&
+          !recordingInBar &&
+          !micDenied &&
+          !uploadFailed &&
+          booked === null &&
+          floatingBadge()}
       </div>
 
-      {/* 完了の面は工程の帯を持たない（承認済みモック BOOK-06-DONE）。 */}
-      {phase === 'ready' && booked === null && (
+      {/* 完了の面と例外の 2 面は工程の帯を持たない（承認済みモック BOOK-06-DONE / EX-MIC-DENIED）。 */}
+      {phase === 'ready' && booked === null && !micDenied && (
         <StepBar
           current={barStep}
           done={conflict === null ? undefined : CONFLICT_DONE_STEPS}
@@ -956,7 +1047,13 @@ export function BookingScreen({
             goTo(nextStep(step)).catch(() => undefined)
           }}
           recording={
-            recordingInBar ? <RecordingBadge state="off" seconds={null} placement="bar" /> : null
+            recordingInBar ? (
+              <RecordingBadge
+                state={recorder.state}
+                elapsedSeconds={recorder.elapsedSeconds}
+                placement="bar"
+              />
+            ) : null
           }
           action={
             step === 'confirm' && conflict === null ? (

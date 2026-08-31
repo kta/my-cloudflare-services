@@ -1720,3 +1720,184 @@
 - 緩和候補へ渡すのは再送できる欄だけにする（`crossStore` / `limit` / `cursor` を混ぜない） — 理由: 契約の `crossStore` は `z.literal(false)` なので、案の `query` に混ぜるとクエリ文字列の `"false"` で再検索が 400 になる — 影響: `relaxableQuery`
 - 変更の枠の当て直しは `evaluateSlot` で「動かない事実」だけを断り、埋まりの判定はバッチの 1 文目に任せた — 理由: 確定（P3）と同じ形にして、画面と確定で理由が食い違う道を作らない — 影響: `PATCH /api/staff/reservations/:reservationId`
 
+
+## L. P7（受付の録音）の実装で決めたこと
+
+**全 146 件**。
+
+### L-backend-review-1（9 件）
+
+- `PUT /content` の 413 で `stored` の録音を `failed` へ落とさない（`nextState()` を通し、遷移が許されないときは状態を据え置いて試行回数だけ増やす） — 理由: `failed` に落ちると掃除（`state='stored'` を引く）が二度と拾わず、実体が最低保持期限を過ぎても保管庫に残り続ける — 影響: services/glasses_management/src/worker/index.ts の `countFailure`、お知らせも `landed.ok` のときだけ立てる
+- `POST .../retry` を `failed` からだけ受ける（`recording → uploading` は 409 にする） — 理由: 「もう一度送る」は失敗の面にしか出ない操作で、録音中の行を `uploading` にするとサーバが送り終える前に送信中を名乗る。P7-recording.md T-010 の「failed からのみ」に合わせた — 影響: 同 index.ts の retry ルート
+- `PATCH .../:id` で `stored` に着いたときも `retain_until` と `reservation_id` を書く（既に決まっている期限は動かさない） — 理由: 本体を受けた経路だけで書いていると、端末が「送り終えた」とだけ知らせた行が期限なしで `stored` になり、掃除の `retain_until IS NOT NULL` から外れて永久に残る — 影響: 同 index.ts の PATCH ルート
+- 掃除の「24 時間動かない」候補から、既に `recording.upload_failed` のお知らせが立っている録音を外す — 理由: `failed` の行はこの物差しから二度と外れないため、打ち切り済みの古い行が毎晩 `limit` を食い尽くし、新しく動かなくなった録音に順番が回らない（お知らせも対応済みのそばから毎晩立ち直る） — 影響: 同 index.ts の `purgeRecordings` ③
+- 猶予 24 時間の境目を `staleUploadBefore(now)` として retention.ts から出し、SQL の絞り込みに使う — 理由: 秒数をクエリ側へ書き写すと、片方だけ直したときに「SQL は拾うのに関数は落とさない」行が増える — 影響: src/worker/domain/retention.ts（export 追加）／index.ts／test/recording.time.test.ts
+- `verifyTicket` の `JSON.parse` を try/catch で包む — 理由: 壊れた KV 値で 500（`app.onError` の面）になり、聞けない理由が受付に伝わらない。コメントは「無いものとして扱う」と書いてあったのに実装が投げていた — 影響: src/worker/domain/playback.ts
+- 掃除の ① のコメントから「`recordings_org_state_retain_idx` で引く」を落とす — 理由: 組織を指定しない 1 本なので先頭列 `organization_id` の index は効かない。効かない index を効くと書くと、遅くなったときに誰も疑わない — 影響: index.ts のコメントのみ
+- `ReceptionHistoryDetail.recording` / `ReservationDetail` に録音を載せる改修は**やらずに報告に回した** — 理由: P7-recording.md T-001 が挙げる契約の外で、`RecordingSummary` を `ReservationDetail`（1300 行手前）から参照するには P7 の原始型を前へ動かす必要があり（TDZ）、P2/P5 の契約を跨ぐ。「書いてある以上のことをしない」に寄せた — 影響: なし（AC-REC-09/10 が UI から通らない事実を最終報告に残す）
+- `src/web/**` の knip 未使用 export と biome info は直さず報告 — 理由: 担当外で、レビュー中も並行して書き換わっていた（`RecorderRetryState` が途中で増えた）。上書きすると相手の作業を落とす — 影響: なし
+
+### L-backend-round2（8 件）
+
+- `PATCH` / `PUT content` の失敗回数を 99 で頭打ちにする — 理由: 契約 `Recording.uploadAttempts` が 0..99 で、5 分ごとの自動再送は約 8.3 時間で 100 に届き `Recording.parse` が落ちる — 影響: `src/worker/index.ts`（PATCH と 413 の countFailure）。1 行の桁あふれで `GET /api/staff/recordings` が組織まるごと 500 になるのを防ぐ
+- `PUT .../content` は一度決まった `retain_until` を書き換えない — 理由: 送り直しのたびに期限を引き直すと期限が前へ逃げ続け、削除が永久に 409 `recording_retained` になる（`PATCH` 側は最初からこの決めを持っていた）— 影響: `src/worker/index.ts` の本体受け取り。`reservation_id` は従来どおり引き直す
+- `GET .../stream` の `Content-Range` を実体の大きさで頭打ちにする — 理由: `bytes=4-999` のような要求に `bytes 4-999/12` と答えると HTTP として不正で、`<audio>` の頭出しが壊れる — 影響: `src/worker/index.ts` の stream
+- 24 時間で打ち切る録音は、送りかけの R2 実体も消す — 理由: R2 へ書いたあとで D1 が落ちると `stored` にならない実体が残り、掃除（`state='stored'` を引く）が二度と拾わないので期限の無い声が居座る — 影響: `src/worker/index.ts` の `purgeRecordings` 第 3 段。保全が立っている行では消さない
+- `uploadFailedAlert` の本文を最後に 120 文字で切る — 理由: 端末名が伸びる P10 で固定部だけが 120 を越えると、`Alert.parse` が落ちて ALERTS の一覧が丸ごと 500 になる — 影響: `src/worker/domain/recording.ts`
+- 直さずに報告に回したもの: ①`recordings_org_session_idx` を一意にできない（migrations/ は担当外）②`RecordingCode` の `\d{4,5}` 上限 ③Cron の `limit: 100`（TODO T-012 に明記された値）
+- 「録音を聞く」を実データで描けない件は**直さず報告に回す** — 理由: 残りの配線が `src/web/App.tsx` と `e2e/**`（どちらも担当外）にあり、サーバ側だけ足すと誰も読まない欄が増える。`ReservationDetail` に必須の欄を足すと `src/web/**` の型が落ちるが、そこは直せない — 影響: AC-REC-08 / AC-REC-09 / AC-REC-10 / UC-REC-07 が API までの観測に留まる
+- 打ち切りの R2 削除は「まだお知らせが立っていない録音」にしか届かない — 理由: 掃除の第 3 段は `NOT EXISTS(alerts)` で候補を絞っており、そこは枠が回らなくなるのを避けるための既存の決めなので動かさない — 影響: 3 回失敗でお知らせが立ったあと放置された録音の書きかけ実体は残る（報告に回す）
+
+### L-badge-recorder（13 件）
+
+- `RecordingBadge` を `packages/ui` ではなく `services/glasses_management/src/web/recording/RecordingBadge.tsx` に置いた — 理由: 依頼の「触ってよいファイル」がこの場所を名指ししている（計画 T-014 の `packages/ui` より依頼を優先） — 影響: `src/web/recording/RecordingBadge.tsx` / `packages/ui` は無変更
+- 既存の `src/web/booking/RecordingBadge.tsx`（P3 が置いた 2 状態版）を削除し、4 状態版へ 1 本化した — 理由: 「同じものを二度作らない」 — 影響: `booking/BookingScreen.tsx` `booking/StepBar.test.tsx` の import と prop 名（`seconds` → `elapsedSeconds`）
+- `outbox`（IndexedDB）を独立ファイルにせず `useRecorder.ts` の中に置いた — 理由: 触ってよいファイルに `outbox.ts` が無い（他の担当と衝突させない） — 影響: `useRecorder.ts` が `indexedDbOutbox()` も持つ
+- マイクの許可は `BookingScreen` が立ち上がった時点で `start()` を呼んで求める — 理由: 「新しい予約を取る」の押下ハンドラ（`App.tsx`・担当外）から同期的にこの面へ差し替わるので Safari の操作の有効期間に収まる。`useRecorder` 自体は呼ばれただけでは何も求めない（AC-REC-15 の「画面が切り替わっただけでは求めない」はフックの側で固定した） — 影響: `booking/BookingScreen.tsx` の 1 つの useEffect / `recording/useRecorder.test.ts`
+- 経過時間は 30 秒ごとに数え直す — 理由: 計画 T-016 の明記（読むための数ではなく、見えていることが目的） — 影響: `useRecorder.ts` の `RECOMPUTE_MS`
+- 送信の結果は `stored` / `retry` / `abandoned` の 3 値にし、既定の実装は 404・409 を `abandoned` とする — 理由: `PUT .../content` は `deleted` 以外を受けるので、サーバの `failed` を応答だけでは見分けられない — 影響: `useRecorder.ts` の `defaultApi().send`
+- 控えは録り始めから 24 時間を過ぎたら送らずに捨てる — 理由: サーバの保守経路が同じ 24 時間で `failed` に落とす（AC-REC-20）。応答を待たずに端末側でも同じ線を引く — 影響: `useRecorder.ts` の `ABANDON_MS`
+- 録音の行（`recordings.id`）が作れないまま録り終えたときは端末に控えない — 理由: 送り先が無い控えは 24 時間居座るだけで、送り直しても宛先が無い — 影響: `useRecorder.ts` の `handleDone`
+- 音の大きさの棒は `state='recording'` のときだけ出し、`motion-safe:` を付ける — 理由: 灰色版のモック（EX-MIC-DENIED / EX-UPLOAD-FAILED）に棒が無い。飾りなので `prefers-reduced-motion` では動かさない — 影響: `RecordingBadge.tsx`
+- 帯は 点→文言→棒→時間、右下は 点→文言→時間→棒 の並びにした — 理由: 承認済みモック BOOK-01（`.rec`）と BOOK-05（`.rec-float`）で並びが実際に違う — 影響: `RecordingBadge.tsx`
+- 完了の面（BOOK-06-DONE）では `state='buffered'` のときだけ右下の印を `raised`（下端 84px）で出す — 理由: 「予約は成立しているのに録音だけ失敗した状態」を区別して見せる。送れていれば何も出さない — 影響: `booking/BookingScreen.tsx`
+- 受付の 3 つの出口（確定・やめる・あとで続ける）で `recorder.stop()` を呼ぶ — 理由: マイクを掴んだままにせず、UC-REC-09（やめても録音は残す）を満たす — 影響: `booking/BookingScreen.tsx` の `confirmBooking` / `discard` / `pause`
+- `useRecorder.ts` の既定の依存（`MediaRecorder`・IndexedDB・実 API）はテストしない — 理由: 計画 T-015 の「グローバルを直接 monkey patch しない」。jsdom で動かない道である — 影響: `useRecorder.ts` の関数カバレッジ 51.92%（web 全体は 82.37% で下限 60% を満たす）
+
+### L-contracts-schema（9 件）
+
+- `RecordingList`（`{ items, nextCursor, total }`）を契約に足した — 理由: T-010 の `GET /api/staff/recordings` に応答スキーマが要り、契約ファイルは自分の担当だけが触れるため — 影響: `packages/contracts/src/glasses_management.ts` / `index.ts` / 契約テスト 1 本追加
+- `recordings.retain_until` を NULL 可にした — 理由: `state='stored'` になるまで値が決まらず、契約の `Recording.retainUntil` も nullable（`03-data-model.md` §8.2 は「不可」だが録り始めの行を作れなくなる） — 影響: `schema.ts` / `0006_lean_catseye.sql` / T-010 の INSERT
+- `alerts.body` は D1 では長さを制限せず、上限 120 文字を契約側だけで見る — 理由: P7-recording.md の逸脱 2（04-api §4.9 を正とする） — 影響: `Alert.body`（`z.string().max(120)`）/ `alerts.body` は `text`
+- `Alert.body` / `targetType` / `targetId` / `readAt` / `resolvedAt` / `resolvedBy` を nullable + 既定 null にした — 理由: D1 の列が NULL 可で、行から作る応答が既定で通るようにするため — 影響: `packages/contracts/src/glasses_management.ts`
+- `Alert.targetType` を 3 値の enum（`recording` / `reservation` / `equipment`）にした — 理由: `03-data-model.md` §11.3 の取りうる値がその 3 つ — 影響: 同上
+- `RecordingRetainedError.error` を `z.literal('recording_retained')` にした（`ApiError` の共通スキーマは作らない） — 理由: 既存のエラー応答は `c.json({ error: '...' })` の手書きで、共通の `ApiError` は契約にまだ無い。ここで新設すると P7 の範囲を越える — 影響: `RecordingRetainedError`
+- `recordings_org_session_idx` を一意にしなかった — 理由: 1 受付 1 録音の保証はルート側（T-010）が持ち、DB で一意にすると録り直しの行を残せない — 影響: `schema.ts` / `schema.test.ts`
+- `RecordingListQuery.state` を `QueryWordList(RecordingState, 5)` にした — 理由: `04-api.md` §4.9 が `state?: RecordingState[]`。既存の `status` 絞り込みと同じ受け方に揃える — 影響: `RecordingListQuery`
+- `Recording` テスト「never carries the R2 key — parsing strips it」の中身は「`r2Key` を混ぜると落ちる」で書いた — 理由: 実装指示が `strictObject`（剥がすのではなく落とす）。剥がすと剥がし忘れに気づけない — 影響: 契約テスト 1 本
+
+### L-domain（14 件）
+
+- テストのファイル名は計画書（正本）の `recording.time.test.ts` / `recording.domain.test.ts` を使う — 理由: 親からの指示は `retention.time.test.ts` / `recording.test.ts` だが、P7-recording.md が「作業指示の正本」と明示され、完了条件も `vitest run recording.time` を名指ししているため — 影響: services/glasses_management/test/recording.time.test.ts・recording.domain.test.ts
+- 削除の境界は `now <= retainUntil` を不可とする — 理由: `03-data-model.md` §10 は `now < retain_until` と書くが、計画書 T-008 と AC-REC-11/12 が「ちょうどは消せない・+1 秒で消せる」を明文で求めるため — 影響: src/worker/domain/retention.ts `canDelete`
+- `canDelete` の `retainUntil` は `string | null` を受け、null（まだ `stored` でない）は消せない側に倒す — 理由: 期限が決まっていない録音を消せると最低保持期限を素通りできるため（fail close） — 影響: `canDelete` の入力と 409 の中身。ルート側は `retainUntil: null` を受け取りうる
+- `canDelete` は保全・期限・`deleted` のどの理由でも同じ形（`retainUntil` / `legalHold`）で返す — 理由: 呼び出し側が理由ごとに応答を組み立て分けずに済み、409 `recording_retained` が 1 本になるため — 影響: `CanDeleteResult`
+- `isStaleUpload` の対象は `recording` / `uploading` / `failed` の 3 状態だけ — 理由: `07-nfr.md` §11.2 の条件そのまま。`stored` と `deleted` を含めると消した行を掘り返してお知らせに上げ直す — 影響: `STALE_TARGET_STATES`
+- 24 時間の閾値（`STALE_UPLOAD_SECONDS`）を破棄受付の保持期限（86,400）と別定数にした — 理由: 同じ数だが別の物差しで、片方を変えたときにもう片方が黙って一緒に動くほうが危険 — 影響: src/worker/domain/retention.ts の定数 2 本
+- `nextState` は同じ状態への据え置き（例 `uploading`→`uploading`）も `invalid_transition` にする — 理由: 許す辺 5 本に自己ループが無く、据え置きを許すと再送の回数が数えられなくなる — 影響: `ALLOWED_TRANSITIONS`
+- `nextState` に `stored`→`deleted` を入れない — 理由: 削除は `canDelete()`（最低保持期限と保全）を必ず通る別経路で、遷移として許すと期限を素通りできる — 影響: `ALLOWED_TRANSITIONS`、削除ルート（T-011）は `canDelete` を通したうえで直接 `deleted` を書く
+- `nextRecordingCode` に書式の検査（NaN ガード）を置かない — 理由: `previous` は `recordings.code` そのもので、書式は契約 `RecordingCode` と一意 index が保証する。到達しない分岐を足すと未到達の branch が残る — 影響: src/worker/domain/recording.ts `nextRecordingCode`
+- `uploadFailedAlert` の `customerName` は `string | null` を受け、空なら「{お名前} 様。」の一句ごと落とす — 理由: 破棄受付やウォークインではお名前が無く、「　 様。」という壊れた本文を出さないため — 影響: 本文の組み立て。null のときは `EY-R-NNNN　受付の記録は残っています。`
+- 切り詰めは末尾の `…` 1 文字を含めて 120 文字ちょうどに収める — 理由: `Alert.body` の上限が 120 文字で、削るのはお名前だけという計画の決めを満たす最大長にするため — 影響: `clampName`
+- 端末名の一句は全角空白区切りで `　{terminalName} に残っています` — 理由: 計画 T-009 と `07-nfr.md` §11.2 の本文の形をそのまま採る — 影響: 本文の末尾
+- `retainUntil` / `createdAt` は ISO 文字列、`storedAt` / `now` は `Date` で受ける — 理由: 前者は D1 の列そのもの、後者は呼び出し側が作る現在時刻で、変換の場所を 1 か所に寄せるため — 影響: `retention.ts` の 3 関数の引数
+- ISO 文字列同士の辞書順比較が時系列と一致することをコメントに残し、掃除の D1 側は文字列比較のままにする — 理由: 計画 T-008 の指示 — 影響: retention.ts の冒頭コメント（T-012 のクエリが読む）
+
+### L-frontend-2（11 件）
+
+- 右下の灰色の印から影を外した — 理由: 承認済みモックの `.float`（EX-MIC-DENIED / EX-UPLOAD-FAILED）は影を持たず、影を持つのは録音中の `.rec-float` だけ — 影響: src/web/recording/RecordingBadge.tsx。2 面の下辺 12px 帯の差が消える
+- 右下の印の文言を `text-ink`、経過時間を `text-ink-muted` にした — 理由: モックの `.float b` は `--ink`（濃い）で時間だけが薄い。全体を薄くすると文言のコントラストが落ちる — 影響: RecordingBadge.tsx。帯（`.rec.off`）は従来どおり全体 `--ink-2`
+- 読み上げ用の `role="status"` を注記の**下**へ移し、空のときの高さ確保をやめた — 理由: 下に何も無ければ出た瞬間に跳ねる面が無くなり、確保をやめても揺れない。確保していたぶん注記がモックより 26px 下にあった — 影響: MicDeniedPanel.tsx / UploadFailedPanel.tsx
+- 「確定したご予約」の見出しと項目の間を 16px → 4px にした — 理由: モック `.side h3` は `margin: 0 0 4px`。16px だと右の 4 項目がまるごと 12px 下にずれて、同じ文字（ラベル・目的）まで二重に差が出る — 影響: UploadFailedPanel.tsx
+- 「受付をやめる」を最小高 44px → 48px・左右 16px → 18px にした — 理由: モックの `.btn` は 48px / 0 18px。触れるものの下限 44pt を上回りつつモックに寄る — 影響: MicDeniedPanel.tsx
+- 応答待ちのボタンを `disabled` から `aria-busy` + `aria-disabled` + 押下の握り潰しに変えた — 理由: `disabled` にするとその瞬間にフォーカスが body へ落ちる。この repo は既に ConfirmStep / CustomerMerge / ChangeDiff でこの作法に揃えてある — 影響: MicDeniedPanel.tsx / UploadFailedPanel.tsx / RecordingPlayer.tsx とその 3 本のテスト
+- 赤いカードの左 6px は `--color-danger` のまま（モックの実画素は `#d9a9a4`）— 理由: モック側は `.card.warn { border-color }` が `.lead { border-left }` より詳細度で勝った描画事故で、6px の帯が地に溶けている。P6 の ConflictPanel も濃い帯で出荷済み — 影響: 2 面に 6px×273px の差が残る（コメントに明記）
+- 受付・変更・顧客新規に常駐の録音の印を足さない — 理由: spec の UC/AC は予約フローしか求めておらず、最終巡で受付セッション id の配線を増やすと 832 本の web テストと 22 本の e2e を道連れにする — 影響: RECEPTION-CHECKIN / CHANGE-DATETIME / CHANGE-DIFF / CUSTOMER-NEW の差はそのまま。理由を各コメントへ書き直した
+- 突き合わせの古い注記（「… P7（010-recording）」「録音は P10」）を現在の理由へ書き換えた — 理由: P7 は今このフェーズで、その一句はもう嘘になっている — 影響: e2e/mock-compare.spec.ts の 9 か所
+- 受付の e2e 2 本の時計まかせを直した（`pinLedgerToBeforeOpening`）— 理由: `TODAY 15:30` / `17:00` のご予約を「これから」で探すので、実時刻が夕方に回った回だけ 0 件になって落ちる。P7 とは無関係の既存の不具合だが、緑にしないと merge できない — 影響: e2e/reception.spec.ts の 2 本。台帳の応答の `serverNow` を開店前へ据え、`counts.upcoming` も `counts.all` に揃える
+- BOOK-05-CONFIRM の閾値を 0.0345 → 0.0337 へ下げた — 理由: 右下の灰の印から影を外し文言の色を戻したぶん実測が 133,122 → 129,782 に下がった — 影響: e2e/mock-compare.spec.ts
+
+### L-frontend-review-1（17 件）
+
+- MicDeniedPanel / UploadFailedPanel を BookingScreen から描くようにした — 理由: 1 巡目は部品だけ作って器に載せておらず AC-REC-03/04/06/08/16/18 がアプリから通せなかった — 影響: src/web/booking/BookingScreen.tsx / src/web/recording/useRecorder.ts
+- `useRecorder` に `micDenied` を足し、マイクの口そのものが無い環境（jsdom・古いブラウザ）では立てない — 理由: 「設定でマイクをオンにする」3 手順は許可を断られたときにだけ効く助言で、口が無い端末に出しても直らない — 影響: useRecorder.ts / BookingScreen.test.tsx が壊れない
+- `useRecorder` に `retryNow()` と `retrying` を足した — 理由: EX-UPLOAD-FAILED の「もう一度送る」は 5 分の周期を待たずに送る操作で、1 巡目には押す先が無かった — 影響: useRecorder.ts / UploadFailedPanel の retry 状態
+- 24 時間を過ぎて控えを捨てたときに印を `off` へ落とすようにした — 理由: 1 巡目は控えを消しても `buffered` のままで「録音は端末に保管中」が残り続けた（AC-REC-20 の「failed に落ちた時点で端末からも消える」と食い違う） — 影響: useRecorder.ts の flush
+- **断られた（`NotAllowedError`）ときだけ EX-MIC-DENIED へ差し替える**ようにした（`NotFoundError` = マイクが刺さっていない・`NotReadableError`・API そのものが無い、は印を灰にするだけ） — 理由: 「設定 → EYEX予約 → マイクをオンにする」の 3 手順は断られたときにしか効かず、口が無い端末に出しても直らない。あわせて走らせる Chromium（マイク無し = `NotFoundError`）でも既存の e2e が全部この面に着かなくなる — 影響: useRecorder.ts / booking・mock-compare の e2e が無傷
+- playwright.config.ts にマイクの用意を置くのはやめた（`--use-fake-device-for-media-capture` + `permissions: ['microphone']` を試したが、この機械では `getUserMedia` が `NotFoundError` のままだった。実測して確かめた） — 理由: 効かない設定を残さない — 影響: playwright.config.ts はコメントだけ
+- recording.spec.ts / mock-compare.spec.ts の「許す・断る」を `navigator.permissions` ではなく差し込む `getUserMedia` そのもので決めるようにした — 理由: 走らせる機械にマイクが無い以上、許可の答えではなく口の中身を作るしかない — 影響: e2e/recording.spec.ts / e2e/mock-compare.spec.ts
+- mock-compare の EX-MIC-DENIED / EX-UPLOAD-FAILED を `test.skip` から実測へ戻した — 理由: 器に載った以上ブラウザから通せる。測っていない `maxDiffPixelRatio` を置かないという 1 巡目の判断はここで解ける — 影響: e2e/mock-compare.spec.ts
+- `MicDeniedPanel` / `UploadFailedPanel` の外枠を `min-h-dvh` から `min-h-0 w-full flex-1 overflow-y-auto` にした — 理由: 器の本文の枠（`flex-1` の中）に置くと `min-h-dvh` は上のバーのぶんはみ出して切れる — 影響: 2 面の外枠だけ
+- `useRecorder` の `RecorderStreamLike` / `RecorderSendResult` の export を外した — 理由: 1 巡目のまま `pnpm run deps:check`（knip）が赤かった — 影響: useRecorder.ts
+- UploadFailedPanel の `role="alert"` を成功と失敗の 2 枚をまとめた 1 つに移した — 理由: 失敗の本文だけを assertive にすると、読み上げでは失敗が先に読まれ「失われていないものを先に言う」が画面と逆になる — 影響: UploadFailedPanel.tsx / .test.tsx
+- RecordingPlayer を予約検索（ReservationSearch）にも足した — 理由: 入口は 3 か所と決まっているのに 2 か所しか無く、`placement='row'` が誰からも呼ばれない死んだ枝になっていた — 影響: src/web/change/ReservationSearch.tsx
+- `maxDiffPixelRatio` を実測で置いた（EX-MIC-DENIED 69,008/3,868,560 = 1.7838% → 0.0179 ／ EX-UPLOAD-FAILED 75,070/3,868,560 = 1.9405% → 0.0195） — 理由: 当て推量の値を置くと次の巡が下げるべき基準を見失う — 影響: e2e/mock-compare.spec.ts
+- 「もう一度確かめる」の途中経過（`recheck='checking'`）を器から渡すようにした — 理由: 1 巡目は `recheck` を誰も渡しておらず、読み上げ用の文が製品では一度も出なかった — 影響: BookingScreen.tsx
+- `RecordingBadge` の `raised`（下端 84px）にテストを足した — 理由: 1 巡目のまま誰も渡さず、誰も確かめない枝だった — 影響: RecordingBadge.test.tsx
+- AC-REC-08 の e2e を画面から押す形に足した（「もう一度送る」で右下の印が消え、控えが空になる） — 理由: 1 巡目は HTTP だけで、押す先が器に無かった — 影響: e2e/recording.spec.ts
+- 受付（P5）・変更（P6）・顧客の新規（CUSTOMER-NEW）への録音の印は**足さなかった** — 理由: それらの面は受付セッションを立てず録音を始めないので、印だけ置くと「録っていないのに録音の印がある」ことになる。P7 の spec の UC/AC はすべて予約フローを指している — 影響: なし（未着手として報告）
+
+### L-routes-playback（29 件）
+
+- `domain/playback.ts` を新設した（親の「触るのは index.ts だけ」より TODO T-011 の「触るファイル」を優先） — 理由: T-011 と spec §2 HOW が明示していて、チケットの発行と検証は index.ts の中で書くと再利用も単体テストもできない — 影響: `src/worker/domain/playback.ts`（新規）/ `index.ts` の import
+- 再生チケットは**使い切りにしない**（900 秒のあいだ何度でも通る） — 理由: `<audio>` が 1 回の再生で範囲要求を何度も投げるので、1 回で捨てると数秒で止まる — 影響: `domain/playback.ts` の `verifyTicket`
+- チケットの期限切れは KV の TTL だけで見て、`verifyTicket` で時刻を比べない — 理由: 「消し忘れた鍵を期限で通す道」と「期限切れの鍵を消す道」の 2 本を持たないため — 影響: 同上
+- チケットに `r2Key` を書かない（`recordingId` / `storeId` / `staffId` だけ） — 理由: 保管庫の鍵の写しを 2 か所に置く理由が無い — 影響: 同上
+- `PUT .../content` は `deleted` 以外のどの状態からでも受ける（`nextState` を通さない） — 理由: 送り直しは同じキーを上書きするだけで冪等であり、`failed→stored` を遷移表に足すより素直。`stored` への再送を 409 にすると、端末が「送れたのか」を確かめる手段が消える — 影響: `index.ts` の PUT / 統合テスト「再送が成功すると stored になり、同じ R2 キーを上書きする」
+- 録音の長さは `PUT .../content?durationSeconds=` のクエリで受ける — 理由: 生 body のルートなので JSON に混ぜられない。ヘッダーより URL のほうがテストで見える — 影響: `index.ts` の PUT / `putContent` ヘルパー
+- その `durationSeconds` を 0〜21,600 の整数として受け直し、外れたら 400 — 理由: 検めずに書くと応答の `Recording.parse` が落ち、**音声は保管庫に入っているのに 500 に見える** — 影響: 同上
+- 100MB 超は `Content-Length` の宣言で先に断り、宣言が無い / 食い違うときに実バイト数で断る — 理由: 100MB を実際に流すテストは端末ごと詰まる。宣言だけに頼ると嘘の宣言で抜けられる — 影響: `index.ts` の PUT / 統合テスト「100MB を 1 バイト超えると 413」
+- 413 は `state='failed'` へ落として `upload_attempts` を 1 増やす（3 回でお知らせ） — 理由: spec の「決めたこと」が「1 回の送信失敗として数え、3 回で上げる」と書いている — 影響: `index.ts` の `countFailure`
+- `retain_until` が NULL の録音の削除は 409 `recording_retained` ではなく 409 `invalid_transition` — 理由: `RecordingRetainedError.retainUntil` は非 null で、期限が決まっていない録音には「いつから消せるか」が無い。保管庫に実体も無い — 影響: `index.ts` の DELETE
+- 「成立予約」は `reservation_id` が入っているだけでなく `status` が `cancelled` / `no_show` 以外であること — 理由: `04-api.md` §3.9 の定義。取り消したご予約の録音を破棄受付より長く持たない — 影響: `readSessionLink()` / 保持期限の 30 日 / 24 時間の分岐
+- `reservation_id` は開始時ではなく**保管時**に受付セッションから引いて書く — 理由: 録り始めの時点ではまだご予約が確定していない（確定は工程の最後） — 影響: `index.ts` の PUT
+- `recording.read` / `recording.manage` を**店舗まで絞る**（`requireStorePermission` の組織単位に上乗せ） — 理由: 非交渉の「権限外店舗の録音を取れない」。担当外店舗の録音は再生も保全も削除もできず、一覧にも出ない — 影響: `permittedStores()` / `readableRecording()` / 一覧の `store_id IN (...)` / テナント分離テスト 1 本
+- 権限外店舗の録音は 403 ではなく **404** — 理由: 403 と答えた時点でその id の録音が在ることを漏らす（既存の `requireStorePermission` の 404 と同じ考え） — 影響: `readableRecording()`
+- `permissions.test.ts` に主体を 2 つ足した（`reader` = `recording.read` / `keeper` = `recording.manage`） — 理由: T-006 が指定する 6 主体のうち 2 つが既存の表に無い。2 つを 1 人に持たせると「消せる人は何でも聞ける」が表から消える — 影響: `ActorName` / `tokens` / membership 同期（既存行は `Partial` なので触っていない）
+- ストリームの表の行だけ、チケットを `beforeAll` で KV へ直に置く — 理由: 表で見たいのは権限であって、チケットの有無で `recording.read` を持つ人まで 401 になると行の意味が消える — 影響: `permissions.test.ts` の `streamTicket`
+- 監査の `action` は 7 つに絞り、`uploading` への遷移は積まない — 理由: 5 分ごとの再送で監査が音声より速く育つ — 影響: `index.ts` の PATCH
+- `recording.stored` / `recording.failed` / 保持期限による `recording.deleted` は `actor_type='system'` — 理由: 人が押した操作ではない（端末が送り終えた結果 / Cron） — 影響: `recordingAudit()` の `actorType` 引数（既存の `auditRow()` は `staff` 固定なので触らず別関数にした）
+- `recording.played` は監査を**先に** `db.batch()` で書き、書けなければチケットを出さない — 理由: T-013 の非交渉。誰が聞いたか残らない再生は持ち出しと区別が付かない — 影響: `index.ts` の playback
+- 再生は `state='stored'` 以外を 404（403 でも 409 でもない） — 理由: 消したあとの録音に「もう無い」と「聞けない」を言い分ける画面を作らない — 影響: playback / stream
+- 掃除は組織を指定せずに全組織を 1 回で走る（内部の保守経路なので） — 理由: Cron は組織を知らない。テナント分離は「行が指すキーだけを消す」ことで担保する — 影響: `purgeRecordings()` / テナント分離テスト「保守の掃除は組織をまたいで他テナントの録音を消さない」（保全で残す形で確かめる）
+- R2 の delete に失敗したら `failed` に数え、**行は `stored` のまま残す** — 理由: 行だけ `deleted` にすると実体が残ったまま二度と拾われない — 影響: `purgeRecordings()`
+- 掃除の 24 時間判定は `state IN ('recording','uploading','failed')` を `created_at < now` で引いてから `isStaleUpload()` に通す — 理由: 境界（ちょうど / +1 秒）の判断を SQL に二重化しない — 影響: 同上
+- お知らせの重複防止は「同じ `code` + `target_id` の `resolved_at IS NULL` が 1 行でもあれば作らない」 — 理由: 4 回目・5 回目の失敗で増えると、対応の 1 件が数に埋もれる — 影響: `raiseUploadFailedAlert()`
+- Cron は `"55 14 * * *"`（UTC = JST 23:55）1 本で、`scheduled` は purge を try/catch で包むだけ — 理由: `04-api.md` §3.2。P8 以降がこの中に足すので、1 本が失敗しても後続を止めない形を先に作る — 影響: `wrangler.jsonc` / `export default { fetch: app.fetch, scheduled }`
+- 一覧のカーソルは `btoa('<時刻>|<id>')` の自前 2 本（録音は `(created_at,id)` 昇順、お知らせは `(occurred_at,id)` 降順） — 理由: 既存の `encodeCursor`（`domain/customers`）は顧客の並べ方に結び付いていて流用できない — 影響: `encodePageCursor` / `decodePageCursor`
+- 統合テストの受付セッションは `helpers.ts` に足さずテストファイル内で直に INSERT — 理由: `helpers.ts` は担当外のファイルで、並行して動く別タスクとぶつかる — 影響: `recording.integration.test.ts` / `tenant-isolation.test.ts`
+- 保持期限の検証は実時刻ではなく `retain_until − updated_at` の差で見る — 理由: 保管した時刻はサーバが決めるので、テストが固定値を注入できない。差なら実時刻に依存しない — 影響: `recording.integration.test.ts` の 30 日 / 24 時間の 2 本
+- 一覧テストの期待順は `failed.sort()` で id 順にそろえる — 理由: 同じ `startedAt` で立てた録音は `(created_at, id)` の id 側で並ぶ（UUID なので挿入順ではない） — 影響: 同ファイルの一覧テスト
+
+### L-t018-t019（22 件）
+
+- ファイル名を `MicDeniedPanel.tsx` / `UploadFailedPanel.tsx` にした（計画の `MicDenied.tsx` / `UploadFailed.tsx` ではなく） — 理由: 指示の「触ってよいファイル」がこの名前を名指ししており、他エージェントとの衝突を避けるため — 影響: `src/web/recording/MicDeniedPanel.tsx` `UploadFailedPanel.tsx` とその `*.test.tsx`
+- 右下の常駐表示（`RecordingBadge` / `RecordingIndicator`）を 2 つの面が自分で描かず、`indicator?: ReactNode` の差込口だけ持つ — 理由: 非交渉「録音の印は画面に 1 か所」＋ `RecordingBadge` は別エージェントの持ち物で未着地のため import できない — 影響: 器（BookingScreen 等）が 1 か所で渡す。モックの灰色版はその差込口に入る
+- 「受付をやめる」は確認ダイアログを自分で持たず `onAbandon` を呼ぶだけにした — 理由: 2 択（入力をやめる／続ける・既定は続ける）は `BookingScreen.tsx` に既にあり、同じものを二度作らない — 影響: `MicDeniedPanel` は導線だけ
+- 直し方 3 手順の文言をモジュール直下の定数 `MIC_FIX_STEPS` 1 か所に置き、export しない — 理由: Q-05 が変わったらここだけ差し替えられる／knip の未使用 export を作らない — 影響: `MicDeniedPanel.tsx`
+- `UploadFailedPanel` は成立予約の 1 状態だけを描く（`reservationCode` は必須） — 理由: モックにその 1 状態しか無く、破棄受付の文言差し替えは `uploadFailedAlert()`（T-009・お知らせ側）の担当 — 影響: `UploadFailedPanel.tsx`
+- 再生の導線を差し込んだのは予約詳細と受付履歴の 2 か所だけで、予約検索（`change/ReservationSearch.tsx`）には差し込まない — 理由: 指示の「触ってよいファイル」に無く、他フェーズのファイルを書き換えない — 影響: `RecordingPlayer` は CHANGE-SEARCH の形（`placement="row"`）を持っているので、差込は 1 行で済む
+- 録音 1 件は `recording?: RecordingSummary | null` という**任意の prop** で受ける（API の応答からは読まない） — 理由: `ReceptionHistoryDetail.recording` は契約でまだ `z.null()`、`ReservationDetail` に録音の欄が無く、契約は別エージェントの持ち物 — 影響: `ReservationDetail.tsx` / `ReceptionHistory.tsx` の prop が 1 つ増える。器が 1 行で渡す
+- 再生の依存（チケット発行・本体取得）を `PlaybackSource` として引数で受ける — 理由: 非交渉「時刻・依存は引数で受ける」／jsdom に `URL.createObjectURL` が無い — 影響: `RecordingPlayer.tsx`。既定値は Hono RPC クライアント
+- `URL.revokeObjectURL()` は「1 回の再生の終わり（ended）」ではなく**アンマウントと開き直しの時点**で呼ぶ — 理由: ended で剥がすと聞き直しのたびにチケットを取り直すことになり、900 秒のチケットの意味が消える — 影響: `RecordingPlayer.tsx`
+- チケットの寿命切れは `now()`（引数で注入）と `expiresAt` の比較で判定し、切れていたら「もう一度開く」に変える — 理由: 実時刻を読まない — 影響: `RecordingPlayer.tsx`
+- `HTMLMediaElement.prototype.play` はテスト側でスタブする — 理由: jsdom が未実装で、`<audio>` そのものは製品コードの正しい手段（依存注入で置き換える対象ではない） — 影響: `RecordingPlayer.test.tsx`
+- 再生位置は `<audio>` の `timeupdate` から読み、状態として持つ — 理由: 実時刻を読まずに「03:24 / 06:12」を進められる唯一の出どころ — 影響: `RecordingPlayer.tsx`
+- 403 のときは面ごと差し替えず、導線の場所に「録音を聞く権限がありません…」を出す — 理由: 面の差し替え（サイドバーから隠す）は器の仕事で、この部品の担当ではない — 影響: `RecordingPlayer.tsx`
+- 導線のボタンには `aria-label`（半角空き 1 つ）を明示的に付けた — 理由: 見た目は全角空きで組むが、全角空きの正規化は読み上げソフトごとに違い、名前が揺れる — 影響: `RecordingPlayer.tsx`
+- 受付履歴（inline）のボタンには長さを添えない — 理由: 右の「03:24 / 06:12」が同じことを言い、同じ数字を 2 か所に置かない — 影響: `RecordingPlayer.tsx`
+- 「聞き終えたところでチケットが切れていたら手元の音声を手放す」を足した — 理由: 900 秒は音声を手元に置いてよい長さそのもので、切れたあとも持ち続けるなら短命にした意味が無い — 影響: `RecordingPlayer.tsx`（`onEnded` と、切れたまま押したときの両方）
+- 「受付のときの録音」は聞ける録音があるときだけ**見出しごと**出す（`hasPlayableRecording`） — 理由: 空の節は「読み込めていない」のか「もう無い」のかを手元から見分けられない — 影響: `ReceptionHistory.tsx` / `RecordingPlayer.tsx`
+- 予約詳細では `ml-auto` を録音の差込口へ移し、✕ はその右に残した — 理由: 録音が無いときも ✕ の位置が動かない — 影響: `ReservationDetail.tsx`
+- ストリームのチケットは RPC の `query` ではなく `fetch` の差し替えで足した — 理由: サーバ側が `zValidator` を通していない素のクエリなので RPC の型に現れない（`ReceptionHistory` と同じ作法） — 影響: `RecordingPlayer.tsx`
+- `MicRecheckState` / `RecordingPlayerPlacement` / `UploadFailedRetryState` を export しない — 理由: 他ファイルが使わない export は knip が落とす — 影響: 3 ファイル
+- 右の「確定したご予約」は `role="group"` をやめ `<aside aria-labelledby>`（complementary）にした — 理由: biome の `useSemanticElements` が group を fieldset へ寄せろと言い、脇に添える 1 枚は complementary が正しい — 影響: `UploadFailedPanel.tsx`
+- EX-MIC-DENIED に「伺った日時・お客様・手書きメモは、読み込み直しても残ります。」の 1 行を足した（モックには無い） — 理由: AC-REC-16 が求める保証が画面から読めないため。DESIGN_RULE の品質フロアで補う範囲 — 影響: `MicDeniedPanel.tsx`
+
+### L-t020-t021-e2e（14 件）
+
+- マイクの許可は `context.grantPermissions(['microphone'])` が答え、`page.addInitScript` の `getUserMedia` は `navigator.permissions.query({name:'microphone'})` を読んで断るか無音の入力を返すだけにした — 理由: 走らせる Chromium に音声入力デバイスが無く（`NotFoundError`）、権限 API だけでは録音まで届かない — 影響: `e2e/recording.spec.ts` の `MIC`
+- 許可が降りたときに返す入力は Web Audio（`AudioContext.createMediaStreamDestination()` + 無音のオシレータ）で合成した 1 本にした — 理由: 実際に音を録らずに、録音機はブラウザ本体の `MediaRecorder` をそのまま通したい（実測で `audio/mp4` 933 バイトが出る） — 影響: 同上
+- `--use-fake-device-for-media-capture` を使わず、`playwright.config.ts` にも `test.use({ launchOptions })` にも手を入れなかった — 理由: 実測で `test.use({ launchOptions })` が project の `use` に効かず（`--lang` も無視された）、上の合成で足りる — 影響: `playwright.config.ts` は無変更（計画 T-020 の launchOptions 追加を採らない）
+- 拒否は「権限を配らない」ことで作った（`NotAllowedError` を投げるのは差し込んだ `getUserMedia`） — 理由: Playwright に「拒否」を明示する API が無く、配らなければ `permissions.query` が `granted` を返さない — 影響: `startWork(page, { mic: 'denied' })`
+- 録音が途中で止まる出来事は track へ `new Event('ended')` を投げて起こす — 理由: `track.stop()` は `ended` を発火しないので、`useRecorder` の `onlost` を通せない — 影響: `__loseRecording()`
+- ご予約を書く日を **9月4日（金）**（画面が歩く側）と **9月11日（金）**（API だけの前提づくり）に分けた — 理由: 画面が置く仮の押さえ（420 秒）と API が直に書くご予約を同じ盤面で争わせない。ほかの e2e が見る日（8/27・8/28・9/2・9/3・change の 9/5 以降）を 1 日も踏まない — 影響: `DAY` / `API_DAY`
+- 予約フローが選ぶご用件を「今のメガネを調整したい」（20 分）にした — 理由: 金曜に `measure` を持つ担当は 小林 学 の 1 人だけで、60 分の「メガネを新しく作る」では 12 本ぶんの時刻を配れない — 影響: `pickPurpose` / `ADJUST`
+- 担当店舗の行 id をほかの e2e と同じ `0f0f0f0f-…` にした — 理由: `store_memberships` は（組織・店舗・利用者）で一意なので、別 id の 2 行目は 500 になる（フル実行で実際に落ちた） — 影響: `MEMBERSHIP_ID`
+- 片づけの境界（30 日 / 24 時間）は `deleted` の**件数**ではなく**その 1 本の state** で見る — 理由: 保守の経路は組織の録音をまとめて見るので、前の test が置いた録音も一緒に消える — 影響: AC-REC-11 / AC-REC-12 の test
+- まだ器に載っていない 3 つ（`MicDeniedPanel` / `UploadFailedPanel` / `RecordingPlayer`）に関わる AC は、ブラウザで通せる半分を操作で見て残りを HTTP のふるまいで固定した — 理由: 器（`BookingScreen` / 予約詳細 / 受付履歴の呼び出し側）が差し込んでおらず、面へ辿り着けない。`change.spec.ts` の UC-CHANGE-06 と同じ作法 — 影響: AC-REC-03 / 04 / 06 / 08 / 09 / 10 / 18 の test と、その頭のコメント
+- モック突き合わせの 2 面（EX-MIC-DENIED / EX-UPLOAD-FAILED）は `test.skip` で置き、`maxDiffPixelRatio` を書かなかった — 理由: 画素で比べる相手が画面に無い。測っていない数を書くと、次の回に下げるべき基準が偽物になる — 影響: `e2e/mock-compare.spec.ts` 末尾（mock project は 43 passed / 2 skipped で緑）
+- AC-REC-16 の「下書きを引き直す」は固定できず、「読み込み直すと許可がもう一度判定される」ことと「前の受付セッションが開いたまま残る」ことで固定した — 理由: 受けかけの受付を読む `GET /api/staff/reception-sessions/:id` が P5 で受付履歴の詳細（`ReceptionHistoryDetail`）を返す経路に変わっており、`BookingScreen` の `ReceptionSession.safeParse` が落ちて必ず新しい受付が立つ（P7 の担当外の食い違い） — 影響: AC-REC-16 の test とそのコメント
+- 業務を終える前に「予約台帳」を 1 回押す形にした — 理由: 予約フローは自分の上のバーを持ち、「業務を終える」は器（`AppShell`）の側にしかない — 影響: AC-REC-20 の test
+- 受付をやめたことは `POST .../close` の 2 度目が 409 `invalid_transition` になることで見た — 理由: 受付セッション 1 件を素で読む経路が無い（上と同じ食い違い） — 影響: UC-REC-09 の test
+

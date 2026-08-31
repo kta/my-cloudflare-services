@@ -1,5 +1,9 @@
 import {
   Actor,
+  Alert,
+  AlertCode,
+  AlertList,
+  AlertListQuery,
   AvailabilityLane,
   AvailabilityQuery,
   AvailabilityReason,
@@ -72,6 +76,20 @@ import {
   ReceptionSessionDraft,
   ReceptionSessionDraftPatch,
   ReceptionSessionStart,
+  Recording,
+  RecordingCode,
+  RecordingContentType,
+  RecordingCreate,
+  RecordingHoldInput,
+  RecordingList,
+  RecordingListQuery,
+  RecordingPlaybackTicket,
+  RecordingPurgeRequest,
+  RecordingPurgeResult,
+  RecordingRetainedError,
+  RecordingState,
+  RecordingStatePatch,
+  RecordingSummary,
   ReservationAssignment,
   ReservationCancelInput,
   ReservationChangeHistory,
@@ -3043,5 +3061,348 @@ describe('ReservationChangeHistory', () => {
     expect(ReservationChangeHistory.parse({ ...line, actorName: null }).actorName).toBeNull()
     const { actorName: _dropped, ...omitted } = line
     expect(ReservationChangeHistory.parse(omitted).actorName).toBeNull()
+  })
+})
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * P7 受付の録音（`specs/glasses_management/features/010-recording`）
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+const recording = {
+  id: UUID,
+  code: 'EY-R-1482',
+  receptionSessionId: UUID2,
+  reservationId: null,
+  state: 'stored',
+  contentType: 'audio/mp4',
+  durationSeconds: 192,
+  bytes: 1_400_000,
+  retainUntil: '2026-09-26T02:08:00.000Z',
+  legalHold: false,
+  uploadAttempts: 1,
+  createdAt: NOW,
+}
+
+const alert = {
+  id: UUID,
+  code: 'recording.upload_failed',
+  severity: 'action',
+  audience: 'store',
+  title: '録音の保存に3回失敗しました',
+  body: 'EY-R-1482　田中 花子 様。ご予約は成立しています。',
+  targetType: 'recording',
+  targetId: UUID2,
+  occurredAt: NOW,
+  readAt: null,
+  resolvedAt: null,
+  resolvedBy: null,
+}
+
+describe('RecordingCode', () => {
+  it('accepts EY-R-0001 and EY-R-10000 but not a reservation code', () => {
+    // 組織で通しの 4 桁ゼロ埋め。9999 を越えた組織だけ 5 桁になる。
+    expect(RecordingCode.parse('EY-R-0001')).toBe('EY-R-0001')
+    expect(RecordingCode.parse('EY-R-1482')).toBe('EY-R-1482')
+    expect(RecordingCode.parse('EY-R-10000')).toBe('EY-R-10000')
+    // ご予約番号（`EY-YYMM-NNNN`）とは別の採番系統なので、取り違えを書式で弾く。
+    expect(() => RecordingCode.parse('EY-2608-0142')).toThrow()
+    expect(() => RecordingCode.parse('EY-R-001')).toThrow()
+    expect(() => RecordingCode.parse('EY-R-100000')).toThrow()
+    expect(() => RecordingCode.parse('ey-r-0001')).toThrow()
+  })
+})
+
+describe('RecordingState', () => {
+  it('is an allow-list of five states and fails closed on anything else', () => {
+    expect(RecordingState.options).toEqual([
+      'recording',
+      'uploading',
+      'stored',
+      'failed',
+      'deleted',
+    ])
+    for (const state of RecordingState.options) expect(RecordingState.parse(state)).toBe(state)
+    // 知らない語を通すと、掃除の Cron が拾えない状態の行が黙って増える。
+    for (const unknown of ['pending', 'purged', 'STORED', '']) {
+      expect(() => RecordingState.parse(unknown), unknown).toThrow()
+    }
+  })
+})
+
+describe('RecordingContentType', () => {
+  it('accepts audio/mp4, audio/webm and audio/mpeg only', () => {
+    expect(RecordingContentType.options).toEqual(['audio/mp4', 'audio/webm', 'audio/mpeg'])
+    // 許可リストの外は 400。R2 に置ける形式を 3 つに絞って再生側の分岐を増やさない。
+    for (const unknown of ['audio/wav', 'video/mp4', 'application/octet-stream', 'audio/*']) {
+      expect(() => RecordingContentType.parse(unknown), unknown).toThrow()
+    }
+  })
+})
+
+describe('RecordingCreate', () => {
+  it('requires a reception session id, a store id and an ISO startedAt', () => {
+    const parsed = RecordingCreate.parse({
+      receptionSessionId: UUID,
+      storeId: UUID2,
+      startedAt: NOW,
+    })
+    expect(parsed.receptionSessionId).toBe(UUID)
+    expect(parsed.storeId).toBe(UUID2)
+    // 既定は iPadOS の Safari が確実に出せる `audio/mp4`。
+    expect(parsed.contentType).toBe('audio/mp4')
+    expect(() => RecordingCreate.parse({ storeId: UUID2, startedAt: NOW })).toThrow()
+    expect(() => RecordingCreate.parse({ receptionSessionId: UUID, startedAt: NOW })).toThrow()
+    expect(() =>
+      RecordingCreate.parse({ receptionSessionId: UUID, storeId: UUID2, startedAt: '2026-08-27' }),
+    ).toThrow()
+  })
+
+  it('rejects an unknown key so a stale client field never lands silently', () => {
+    // R2 のキーは端末が決めるものではない。受けた時点で 400 にする。
+    expect(
+      RecordingCreate.parse({ receptionSessionId: UUID, storeId: UUID2, startedAt: NOW }).storeId,
+    ).toBe(UUID2)
+    expect(() =>
+      RecordingCreate.parse({
+        receptionSessionId: UUID,
+        storeId: UUID2,
+        startedAt: NOW,
+        r2Key: 'recordings/org/store/2026/08/x.m4a',
+      }),
+    ).toThrow()
+    expect(() =>
+      RecordingCreate.parse({
+        receptionSessionId: UUID,
+        storeId: UUID2,
+        startedAt: NOW,
+        organizationId: ORG,
+      }),
+    ).toThrow()
+  })
+})
+
+describe('RecordingStatePatch', () => {
+  it('bounds durationSeconds to 0..21600 and bytes to 0..104857600', () => {
+    expect(RecordingStatePatch.parse({ state: 'stored', durationSeconds: 0 }).durationSeconds).toBe(
+      0,
+    )
+    expect(
+      RecordingStatePatch.parse({ state: 'stored', durationSeconds: 21_600 }).durationSeconds,
+    ).toBe(21_600)
+    expect(() => RecordingStatePatch.parse({ state: 'stored', durationSeconds: -1 })).toThrow()
+    expect(() => RecordingStatePatch.parse({ state: 'stored', durationSeconds: 21_601 })).toThrow()
+    // 100MB。1 録音 1 キーなので、越えた要求は分割せず 1 回の失敗として数える。
+    expect(RecordingStatePatch.parse({ state: 'stored', bytes: 104_857_600 }).bytes).toBe(
+      104_857_600,
+    )
+    expect(() => RecordingStatePatch.parse({ state: 'stored', bytes: 104_857_601 })).toThrow()
+    expect(() => RecordingStatePatch.parse({ state: 'stored', bytes: -1 })).toThrow()
+    expect(() => RecordingStatePatch.parse({ state: 'stored', bytes: 1.5 })).toThrow()
+  })
+
+  it('accepts a failureReason of 120 characters and rejects 121', () => {
+    expect(
+      RecordingStatePatch.parse({ state: 'failed', failureReason: 'あ'.repeat(120) }).failureReason,
+    ).toHaveLength(120)
+    expect(() =>
+      RecordingStatePatch.parse({ state: 'failed', failureReason: 'あ'.repeat(121) }),
+    ).toThrow()
+    expect(RecordingStatePatch.parse({ state: 'failed' }).failureReason).toBeUndefined()
+  })
+})
+
+describe('Recording', () => {
+  it('never carries the R2 key — parsing strips it', () => {
+    // 応答は必ずこのスキーマを通す。`strictObject` なので、行をそのまま渡すと落ちる。
+    expect(() => Recording.parse({ ...recording, r2Key: 'recordings/o/s/2026/08/x.m4a' })).toThrow()
+    expect(Object.keys(Recording.parse(recording))).not.toContain('r2Key')
+    expect(Object.keys(Recording.parse(recording))).not.toContain('downloadUrl')
+  })
+
+  it('keeps reservationId nullable because a discarded reception has no reservation', () => {
+    expect(Recording.parse(recording).reservationId).toBeNull()
+    const { reservationId: _dropped, ...omitted } = recording
+    expect(Recording.parse(omitted).reservationId).toBeNull()
+    expect(Recording.parse({ ...recording, reservationId: UUID2 }).reservationId).toBe(UUID2)
+  })
+
+  it('bounds uploadAttempts to 0..99', () => {
+    expect(Recording.parse({ ...recording, uploadAttempts: 0 }).uploadAttempts).toBe(0)
+    expect(Recording.parse({ ...recording, uploadAttempts: 99 }).uploadAttempts).toBe(99)
+    expect(() => Recording.parse({ ...recording, uploadAttempts: -1 })).toThrow()
+    expect(() => Recording.parse({ ...recording, uploadAttempts: 100 })).toThrow()
+  })
+})
+
+describe('RecordingSummary', () => {
+  it('carries only id, state and durationSeconds', () => {
+    const parsed = RecordingSummary.parse({ id: UUID, state: 'stored', durationSeconds: 192 })
+    expect(Object.keys(parsed).sort()).toEqual(['durationSeconds', 'id', 'state'])
+    // 「03:12」を出すのに要るのは長さだけ。埋め込み側に R2 の手がかりを渡さない。
+    expect(() => RecordingSummary.parse(recording)).toThrow()
+    expect(RecordingSummary.parse({ id: UUID, state: 'failed' }).durationSeconds).toBeNull()
+  })
+})
+
+describe('RecordingListQuery', () => {
+  it('defaults limit to 50 and rejects 0 and 201', () => {
+    expect(RecordingListQuery.parse({}).limit).toBe(50)
+    expect(RecordingListQuery.parse({}).state).toEqual([])
+    expect(RecordingListQuery.parse({ limit: '8' }).limit).toBe(8)
+    expect(RecordingListQuery.parse({ state: 'failed' }).state).toEqual(['failed'])
+    expect(RecordingListQuery.parse({ state: 'failed,stored' }).state).toEqual(['failed', 'stored'])
+    expect(() => RecordingListQuery.parse({ limit: 0 })).toThrow()
+    expect(() => RecordingListQuery.parse({ limit: 201 })).toThrow()
+    expect(() => RecordingListQuery.parse({ state: 'purged' })).toThrow()
+  })
+})
+
+describe('RecordingList', () => {
+  it('has the items / nextCursor / total shape', () => {
+    const list = RecordingList.parse({ items: [recording], total: 1 })
+    expect(list.items[0]?.code).toBe('EY-R-1482')
+    expect(list.nextCursor).toBeNull()
+    expect(RecordingList.parse({ total: 0 }).items).toEqual([])
+  })
+})
+
+describe('RecordingPlaybackTicket', () => {
+  it('requires a token of 32..256 characters', () => {
+    const token = 'a'.repeat(64)
+    const parsed = RecordingPlaybackTicket.parse({ token, expiresAt: NOW, durationSeconds: 192 })
+    expect(parsed.token).toBe(token)
+    expect(RecordingPlaybackTicket.parse({ token, expiresAt: NOW }).durationSeconds).toBeNull()
+    expect(() => RecordingPlaybackTicket.parse({ token: 'a'.repeat(31), expiresAt: NOW })).toThrow()
+    expect(
+      RecordingPlaybackTicket.parse({ token: 'a'.repeat(32), expiresAt: NOW }).token,
+    ).toHaveLength(32)
+    expect(() =>
+      RecordingPlaybackTicket.parse({ token: 'a'.repeat(257), expiresAt: NOW }),
+    ).toThrow()
+  })
+})
+
+describe('RecordingHoldInput', () => {
+  it('requires a reason of 1..120 characters', () => {
+    expect(RecordingHoldInput.parse({ legalHold: true, reason: '苦情の調査' }).legalHold).toBe(true)
+    expect(
+      RecordingHoldInput.parse({ legalHold: false, reason: 'あ'.repeat(120) }).reason,
+    ).toHaveLength(120)
+    // 理由の無い保全は、外していいのかを後から誰も判断できない。
+    expect(() => RecordingHoldInput.parse({ legalHold: true })).toThrow()
+    expect(() => RecordingHoldInput.parse({ legalHold: true, reason: '' })).toThrow()
+    expect(() => RecordingHoldInput.parse({ legalHold: true, reason: 'あ'.repeat(121) })).toThrow()
+  })
+})
+
+describe('RecordingPurgeRequest', () => {
+  it('defaults limit to 100 and accepts an injected now', () => {
+    expect(RecordingPurgeRequest.parse({}).limit).toBe(100)
+    expect(RecordingPurgeRequest.parse({}).now).toBeUndefined()
+    // 保持期限の境界をテストから確かめるための注入口。
+    expect(RecordingPurgeRequest.parse({ now: NOW }).now).toBe(NOW)
+    expect(RecordingPurgeRequest.parse({ limit: 500 }).limit).toBe(500)
+    expect(() => RecordingPurgeRequest.parse({ limit: 0 })).toThrow()
+    expect(() => RecordingPurgeRequest.parse({ limit: 501 })).toThrow()
+    expect(() => RecordingPurgeRequest.parse({ now: '2026-08-27' })).toThrow()
+  })
+})
+
+describe('RecordingPurgeResult', () => {
+  it('counts examined, deleted, skippedHeld and failed', () => {
+    const parsed = RecordingPurgeResult.parse({
+      examined: 12,
+      deleted: 9,
+      skippedHeld: 2,
+      failed: 1,
+    })
+    expect(Object.keys(parsed).sort()).toEqual(['deleted', 'examined', 'failed', 'skippedHeld'])
+    // 保全で残したものと消せなかったものを 1 つの数に混ぜない。
+    expect(parsed.skippedHeld).toBe(2)
+    expect(() => RecordingPurgeResult.parse({ examined: 1, deleted: 0, skippedHeld: 0 })).toThrow()
+    expect(() =>
+      RecordingPurgeResult.parse({ examined: -1, deleted: 0, skippedHeld: 0, failed: 0 }),
+    ).toThrow()
+  })
+})
+
+describe('RecordingRetainedError', () => {
+  it('carries retainUntil and legalHold alongside the error code', () => {
+    const parsed = RecordingRetainedError.parse({
+      error: 'recording_retained',
+      retainUntil: '2026-09-26T02:08:00.000Z',
+      legalHold: false,
+    })
+    expect(parsed.error).toBe('recording_retained')
+    // 「いつから消せるか」を返さないと、画面が「もう一度あとで」としか言えない。
+    expect(parsed.retainUntil).toBe('2026-09-26T02:08:00.000Z')
+    expect(parsed.legalHold).toBe(false)
+    expect(() =>
+      RecordingRetainedError.parse({ error: 'not_found', retainUntil: NOW, legalHold: false }),
+    ).toThrow()
+    expect(() => RecordingRetainedError.parse({ error: 'recording_retained' })).toThrow()
+  })
+})
+
+describe('AlertCode', () => {
+  it('is the ten-value allow-list and spells store.no_shift', () => {
+    expect(AlertCode.options).toHaveLength(10)
+    expect(AlertCode.parse('recording.upload_failed')).toBe('recording.upload_failed')
+    // `staff.no_shift` にしない（`07-nfr.md` §11.3 / §11.4 と同じ綴り）。
+    expect(AlertCode.parse('store.no_shift')).toBe('store.no_shift')
+    expect(() => AlertCode.parse('staff.no_shift')).toThrow()
+    expect(AlertCode.options).toEqual([
+      'recording.upload_failed',
+      'web_booking.pending',
+      'equipment.maintenance_scheduled',
+      'store.closed_with_reservations',
+      'reservation.unclosed',
+      'store.no_shift',
+      'web_booking.auto_cancelled',
+      'notifier.send_failed',
+      'org.not_synced',
+      'd1.capacity_warning',
+    ])
+  })
+})
+
+describe('Alert', () => {
+  it('bounds title to 1..60 and body to 0..120', () => {
+    expect(Alert.parse(alert).title).toBe('録音の保存に3回失敗しました')
+    expect(Alert.parse({ ...alert, title: 'あ'.repeat(60) }).title).toHaveLength(60)
+    expect(() => Alert.parse({ ...alert, title: 'あ'.repeat(61) })).toThrow()
+    expect(() => Alert.parse({ ...alert, title: '' })).toThrow()
+    expect(Alert.parse({ ...alert, body: '' }).body).toBe('')
+    expect(Alert.parse({ ...alert, body: 'あ'.repeat(120) }).body).toHaveLength(120)
+    expect(() => Alert.parse({ ...alert, body: 'あ'.repeat(121) })).toThrow()
+    // 運用の失敗は `audience='ops'` で残し、ALERTS には出さない。
+    expect(Alert.parse({ ...alert, audience: 'ops' }).audience).toBe('ops')
+    const { audience: _dropped, ...omitted } = alert
+    expect(Alert.parse(omitted).audience).toBe('store')
+  })
+})
+
+describe('AlertListQuery', () => {
+  it('defaults audience to store', () => {
+    // 運用のアラートを業務のお知らせに混ぜない。
+    expect(AlertListQuery.parse({}).audience).toBe('store')
+    expect(AlertListQuery.parse({ audience: 'ops' }).audience).toBe('ops')
+    expect(AlertListQuery.parse({}).limit).toBe(50)
+    expect(AlertListQuery.parse({ storeId: UUID }).storeId).toBe(UUID)
+    expect(() => AlertListQuery.parse({ audience: 'everyone' })).toThrow()
+    // `kind` の 4 分類と `counts` は P10（`013-terminals-and-audit`）。
+    expect(() => AlertListQuery.parse({ kind: 'action' })).toThrow()
+  })
+})
+
+describe('AlertList', () => {
+  it('has the items / nextCursor / total shape', () => {
+    const list = AlertList.parse({ items: [alert], nextCursor: null, total: 1 })
+    expect(list.items[0]?.code).toBe('recording.upload_failed')
+    expect(list.total).toBe(1)
+    expect(AlertList.parse({ total: 0 }).items).toEqual([])
+    expect(AlertList.parse({ total: 0 }).nextCursor).toBeNull()
+    // `counts` の 4 分類は P10。
+    expect(() => AlertList.parse({ items: [], total: 0, counts: { all: 0 } })).toThrow()
   })
 })

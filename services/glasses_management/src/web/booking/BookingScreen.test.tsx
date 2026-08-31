@@ -28,6 +28,38 @@ const PURPOSE_ID = 'e0000000-0000-4000-8000-000000000001'
 const NOW = '2026-08-27T02:08:00.000Z'
 const DATE: LocalDate = '2026-08-27'
 const SESSION_KEY = 'eyex.booking.session'
+const RESERVATION_ID = 'b0000000-0000-4000-8000-000000000001'
+const RECORDING_ID = 'a0000000-0000-4000-8000-000000000009'
+
+/** 承ったご予約 1 件。完了の面と、録音だけ失敗した面の右の 4 項目が読む。 */
+function booked() {
+  return {
+    id: RESERVATION_ID,
+    code: 'EY-2608-0142',
+    storeId: STORE_ID,
+    source: 'phone',
+    status: 'booked',
+    startsAt: at('11:00'),
+    endsAt: at('12:00'),
+    durationMinutes: 60,
+    customerId: null,
+    customerName: null,
+    visitCount: null,
+    purposes: [{ purposeId: PURPOSE_ID, nameInternal: 'メガネを新しく作る', sortOrder: 1 }],
+    assignments: [{ kind: 'staff', resourceId: null }],
+    webBookingCode: null,
+    purposeLabel: '新調',
+    purposeLabelInternal: 'メガネを新しく作る',
+    noteCustomer: '',
+    noteInternal: '',
+    version: 1,
+    createdAt: NOW,
+    updatedAt: NOW,
+    createdBy: null,
+    cancelledAt: null,
+    cancelReason: null,
+  }
+}
 
 function at(clock: string): string {
   return new Date(Date.parse(`${DATE}T${clock}:00.000Z`) - 9 * 60 * 60 * 1000).toISOString()
@@ -164,6 +196,8 @@ let board: AvailabilityResponse = AVAILABILITY
 let purposes: VisitPurpose[] = []
 /** 確定の応答。既定は「取れた」。枠を取られた面はここを 409 に替える。 */
 let confirmReply: () => Response = () => json({ error: 'not_found' }, 404)
+/** 録音の本体を送る先。既定は「店内の通信が弱い」（503）。 */
+let contentReply: () => Response = () => json({ error: 'upload_failed' }, 503)
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -178,18 +212,27 @@ beforeEach(() => {
   board = AVAILABILITY
   purposes = []
   confirmReply = () => json({ error: 'not_found' }, 404)
+  contentReply = () => json({ error: 'upload_failed' }, 503)
   sessionStorage.setItem('app.auth.token', 'header.payload.signature')
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input), 'https://example.test')
       const method = (init?.method ?? 'GET').toUpperCase()
-      const body = init?.body === undefined ? undefined : JSON.parse(String(init.body))
+      // 録音の本体だけは JSON ではない（生の Blob を PUT する唯一のルート）。
+      const body =
+        init?.body === undefined || init.body instanceof Blob
+          ? undefined
+          : JSON.parse(String(init.body))
       calls.push({ method, url, body })
       if (url.pathname.endsWith('/business-hours')) return json(HOURS)
       if (url.pathname === '/api/staff/availability') return json(board)
       if (url.pathname === '/api/staff/purposes') return json(purposes)
       if (url.pathname === '/api/staff/reservations' && method === 'POST') return confirmReply()
+      if (url.pathname === '/api/staff/recordings' && method === 'POST') {
+        return json({ id: RECORDING_ID, code: 'EY-R-0001', state: 'recording' })
+      }
+      if (url.pathname.endsWith('/content') && method === 'PUT') return contentReply()
       if (url.pathname === '/api/staff/holds' && method === 'POST') {
         return json({
           id: 'h0000000-0000-4000-8000-000000000001',
@@ -265,6 +308,130 @@ describe('録音の置き場所', () => {
     expect(floating).not.toBeNull()
     expect(floating?.className).toContain('right-5')
     expect(floating?.className).toContain('bottom-5')
+  })
+})
+
+/*
+ * 例外の 2 面（承認済みモック EX-MIC-DENIED / EX-UPLOAD-FAILED）。**器が工程の面ごと
+ * 差し替えているか**を見る。面そのものの文言と並びは `recording/*.test.tsx` が持っている。
+ *
+ * jsdom には `navigator.mediaDevices` も `MediaRecorder` も無いので、この describe の
+ * 中だけ端末の口を据える（`useRecorder` 自身のテストは依存を引数で受け取る形で書いてある）。
+ */
+describe('録音の例外の面', () => {
+  /** 断られる端末。`NotAllowedError` は「設定でマイクをオンに」で直る側の断りである。 */
+  function denyMicrophone() {
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: {
+        getUserMedia: vi.fn(() => {
+          const denied = new Error('Permission denied')
+          denied.name = 'NotAllowedError'
+          return Promise.reject(denied)
+        }),
+      },
+    })
+  }
+
+  /** 録れる端末。`stop()` を呼ばれたら音声を 1 つ返すだけの録音機を据える。 */
+  function allowMicrophone() {
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: {
+        getUserMedia: vi.fn(async () => ({ getTracks: () => [{ stop: vi.fn() }] })),
+      },
+    })
+    class FakeRecorder {
+      static isTypeSupported = () => true
+      ondataavailable: ((event: { data: Blob }) => void) | null = null
+      onstop: (() => void) | null = null
+      onerror: (() => void) | null = null
+      start() {}
+      stop() {
+        this.ondataavailable?.({ data: new Blob(['..']) })
+        this.onstop?.()
+      }
+    }
+    vi.stubGlobal('MediaRecorder', FakeRecorder)
+  }
+
+  afterEach(() => {
+    Reflect.deleteProperty(navigator, 'mediaDevices')
+  })
+
+  it('マイクを断られたら、工程の面ごと「マイクが使えないため、録音できません」に差し替わる', async () => {
+    denyMicrophone()
+    open()
+
+    expect(
+      await screen.findByRole('heading', { name: 'マイクが使えないため、録音できません' }),
+    ).toBeInTheDocument()
+    // 直し方は 3 手順。**受付をやめる導線も同じ面から出る。**
+    const how = screen.getByRole('list', { name: '直し方　この iPad の「設定」で' })
+    expect(within(how).getAllByRole('listitem')).toHaveLength(3)
+    // 工程の帯は出さない（承認済みモックのとおり全面差し替え）。
+    expect(screen.queryByRole('list', { name: '予約の工程　全5工程' })).toBeNull()
+    // 録音の印は 1 か所きり。灰色の「録音していません　--:--」が右下に残る。
+    const printed = screen.getAllByRole('status').filter((node) => node.dataset.bookingRecording)
+    expect(printed).toHaveLength(1)
+    expect(printed[0]).toHaveTextContent('録音していません')
+    expect(printed[0]).toHaveTextContent('--:--')
+  })
+
+  it('「録音せずに続ける」で、同じ受付の工程へそのまま戻る', async () => {
+    denyMicrophone()
+    open()
+    await screen.findByRole('heading', { name: 'マイクが使えないため、録音できません' })
+
+    await userEvent.click(screen.getByRole('button', { name: '録音せずに続ける' }))
+
+    // 許可を説明するだけの別画面を挟まず、工程 1 の帯が戻る。
+    await started()
+    expect(
+      screen.queryByRole('heading', { name: 'マイクが使えないため、録音できません' }),
+    ).toBeNull()
+    expect(exit).not.toHaveBeenCalled()
+  })
+
+  it('承ったのに録音だけ送れなかったら、完了の面の代わりに成立を先に言う面が出る', async () => {
+    allowMicrophone()
+    resume = session(walkedDraft())
+    sessionStorage.setItem(SESSION_KEY, SESSION_ID)
+    confirmReply = () => json(booked(), 200)
+    open('confirm')
+    await started()
+
+    await userEvent.click(screen.getByRole('button', { name: '復唱を終えて予約を確定する' }))
+
+    // 成立が先。予約番号も読める（AC-REC-06）。
+    expect(
+      await screen.findByRole('heading', { name: 'ご予約は確定しています' }),
+    ).toBeInTheDocument()
+    expect(screen.getByText('EY-2608-0142')).toBeInTheDocument()
+    expect(
+      screen.getByRole('heading', { name: '保存できなかったのは、この受付の録音だけです' }),
+    ).toBeInTheDocument()
+    // 完了の面は出さない（同じ面に 2 つの結末を並べない）。
+    expect(screen.queryByRole('heading', { name: 'ご予約を承りました' })).toBeNull()
+    // 右下は「録音は端末に保管中」1 か所きり。
+    const printed = screen.getAllByRole('status').filter((node) => node.dataset.bookingRecording)
+    expect(printed).toHaveLength(1)
+    expect(printed[0]).toHaveTextContent('録音は端末に保管中')
+  })
+
+  it('録音も送れていれば、完了の面のままで例外の面を出さない', async () => {
+    allowMicrophone()
+    resume = session(walkedDraft())
+    sessionStorage.setItem(SESSION_KEY, SESSION_ID)
+    confirmReply = () => json(booked(), 200)
+    contentReply = () => json({ id: RECORDING_ID, state: 'stored' })
+    open('confirm')
+    await started()
+
+    await userEvent.click(screen.getByRole('button', { name: '復唱を終えて予約を確定する' }))
+
+    expect(await screen.findByRole('heading', { name: 'ご予約を承りました' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'ご予約は確定しています' })).toBeNull()
   })
 })
 

@@ -2,6 +2,7 @@ import type {
   LocalDate,
   ReceptionHistoryDetail,
   ReceptionHistoryEntry,
+  RecordingSummary,
   ReservationStatus,
   SearchRelaxation,
 } from '@app/contracts'
@@ -13,6 +14,7 @@ import { shortDate } from '../booking/SlotStep'
 import { client } from '../client'
 import { dateLabel, jstClock, shiftDate } from '../ledger/metrics'
 import { VisitBadge } from '../ledger/Timetable'
+import { hasPlayableRecording, RecordingPlayer } from '../recording/RecordingPlayer'
 
 /*
  * 受付履歴の一覧・詳細・0 件（承認済みモック
@@ -45,8 +47,11 @@ import { VisitBadge } from '../ledger/Timetable'
  * `--text-body` 16px / `--text-lead` 17px / `--text-title` 22px）へ寄せた。
  *
  * この面が描かないもの:
- * - 「受付のときの録音」（`010-recording`。押した先も、録音があるかを知る手段も無い）
  * - 予約の詳細そのもの（`onOpenReservation` で器へ渡すだけ）
+ *
+ * 「受付のときの録音」（HISTORY-LIST の右下）は `recording` を受けたときだけ節ごと出す。
+ * 実測は `.play` = 横並び gap 16px・最大幅 520px、「再生する」min-height 44px / 左右 18px、
+ * バー 高さ 8px・角 4px・地 --surface-2・進み --brand、右に等幅 600 13px の「03:24 / 06:12」。
  */
 
 /** 1 ページの行数（AC-RECEP-28「新しい順に 20 件まで」）。読み足しはカーソルで行う。 */
@@ -102,6 +107,13 @@ export type ReceptionHistoryProps = {
   onOpenReservation: (reservationId: string) => void
   /** この店舗にまだ受付が 1 件も無いときの次の一手。 */
   onStartBooking: () => void
+  /**
+   * 選んでいる 1 件の録音。**器が渡したときだけ**「受付のときの録音」の節が出る。
+   * 詳細の応答から読まないのは、`ReceptionHistoryDetail.recording` が契約でまだ
+   * `null` 固定だからで（`010-recording` の契約は `RecordingSummary` を別に持つ）、
+   * 欄が `RecordingSummary` になったらここへ 1 行で繋ぎ替える。
+   */
+  recording?: RecordingSummary | null
 }
 
 type ListPhase = 'loading' | 'ready' | 'error' | 'forbidden'
@@ -266,6 +278,7 @@ export function ReceptionHistory({
   onQueryChange,
   onOpenReservation,
   onStartBooking,
+  recording = null,
 }: ReceptionHistoryProps) {
   const [filters, setFilters] = useState<HistoryFilters>(() => ({
     ...defaultFilters(today),
@@ -552,6 +565,7 @@ export function ReceptionHistory({
             failed={detailFailed}
             selected={selectedId !== null}
             staffName={staffName}
+            recording={recording}
             onOpenReservation={onOpenReservation}
           />
         </div>
@@ -581,12 +595,14 @@ function HistoryDetail({
   failed,
   selected,
   staffName,
+  recording,
   onOpenReservation,
 }: {
   detail: ReceptionHistoryDetail | null
   failed: boolean
   selected: boolean
   staffName: (id: string | null) => string | null
+  recording: RecordingSummary | null
   onOpenReservation: (reservationId: string) => void
 }) {
   if (!selected) {
@@ -718,6 +734,17 @@ function HistoryDetail({
           </ul>
         )}
       </div>
+
+      {/*
+       * 聞けない録音（無い・端末に残ったまま・消した）のときは**見出しごと出さない**。
+       * 空の節が残ると「読み込めていない」のか「もう無い」のかが手元から見分けられない。
+       */}
+      {hasPlayableRecording(recording) && (
+        <div>
+          <h3 className="m-0 mb-3 text-body font-semibold text-ink-muted">受付のときの録音</h3>
+          <RecordingPlayer recording={recording} placement="inline" />
+        </div>
+      )}
     </section>
   )
 }

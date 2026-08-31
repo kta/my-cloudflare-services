@@ -12,6 +12,14 @@ export default defineConfig({
   testDir: './e2e',
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
+  /*
+   * マイクの用意はここに置かない。走らせる Chromium には入力そのものが無く
+   * （`getUserMedia` は `NotFoundError`）、`--use-fake-device-for-media-capture` を
+   * 足しても同じだった。**マイクが刺さっていないのは「断られた」とは別**なので、
+   * 画面は印を灰にするだけで受付を続ける（EX-MIC-DENIED へは差し替わらない）。
+   * 録音を実際に動かす／断られる筋書きは `e2e/recording.spec.ts` と
+   * `e2e/mock-compare.spec.ts` が `getUserMedia` を差し替えて作る。
+   */
   use: { baseURL: 'http://localhost:4175', trace: 'on-first-retry' },
   /*
    * 承認済みモックを基準画像として使う。参照するのは images/ ではなく reference/ —
