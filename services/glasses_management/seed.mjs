@@ -21,13 +21,14 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { legacySeedMigrationStatements } from './seed-migration.mjs'
 
 const REMOTE = process.argv.includes('--remote')
 // e2e は使い捨ての D1（playwright.config.ts の `withDisposableState`）で走るので、
 // そちらへ入れる。開発者の .wrangler/state は E2E_STATE_PATH が無いときだけ使う。
 const PERSIST_TO = process.env.E2E_STATE_PATH
 const NOW = '2026-08-01T00:00:00.000Z'
-const ORG = 'org-eyex-seed'
+const ORG = 'eyex'
 
 const q = (s) => `'${String(s).replace(/'/g, "''")}'`
 
@@ -121,7 +122,7 @@ const blackoutWindows = businessHours
   ])
 
 /* --- スタッフと技能と勤務（SETTINGS-STAFF） -------------------------------- *
- * 6 名。店長は 山田 大輔（マスタープラン §5 の「高橋 慎輔」は誤り）。
+ * 7 名。店長は 山田 大輔（マスタープラン §5 の「高橋 慎輔」は誤り）。
  * week は 0=日 … 6=土 の勤務帯で、null がお休み。火は店舗の定休なので全員 null。
  * 木に出るのは 佐藤・高橋・中村 の 3 名（LEDGER-STAFF の行）、
  * 金に山田がいない（SETTINGS-STAFF「本日はお休み」／当日は 2026-08-28 金）。
@@ -186,6 +187,16 @@ const staffMembers = [
     adminUserId: 'user-eyex-yamada',
     skills: ['sales_reception'],
     week: [null, '10:00-19:00', null, '10:00-19:00', null, null, '10:00-19:00'],
+    rest: null,
+  },
+  {
+    name: '管理者',
+    kana: '',
+    job: null,
+    role: 'staff',
+    adminUserId: null,
+    skills: [],
+    week: [null, null, null, null, null, null, null],
     rest: null,
   },
 ]
@@ -819,6 +830,8 @@ const fillStore = (id, column, value) =>
   `UPDATE stores SET ${column} = ${typeof value === 'number' ? value : q(value)} WHERE id = ${q(id)} AND ${column} IS NULL;`
 
 const lines = [
+  // `org-eyex-seed` を使っていた既存のローカル D1 を、現在のログイン ID へ収束させる。
+  ...legacySeedMigrationStatements(REMOTE),
   `INSERT OR IGNORE INTO organizations (id, name, plan, is_disabled, created_at, revision) VALUES (${q(ORG)}, 'EYEX', 'contracted', '0', ${q(NOW)}, '1');`,
   ...stores.map(
     (s) =>
@@ -854,7 +867,7 @@ const lines = [
   // 臨時のお休み 1 行。
   `INSERT OR IGNORE INTO store_calendar_exceptions (id, organization_id, store_id, date, kind, opens_at, closes_at, note, created_at, created_by) VALUES (${q(uid('b0040000', 0))}, ${q(ORG)}, ${q(GINZA)}, '2026-09-30', 'closed', NULL, NULL, '棚卸しのため', ${q(NOW)}, NULL);`,
 
-  // スタッフ 6 名。
+  // スタッフ 7 名。
   ...staffMembers.map(
     (m, i) =>
       `INSERT OR IGNORE INTO staff (id, organization_id, store_id, admin_user_id, display_name, kana, job_label, role, max_parallel_reservations, pin_hash, pin_updated_at, is_active, sort_order, created_at, updated_at) VALUES (${q(uid('c0010000', i))}, ${q(ORG)}, ${q(GINZA)}, ${m.adminUserId === null ? 'NULL' : q(m.adminUserId)}, ${q(m.name)}, ${q(m.kana)}, ${m.job === null ? 'NULL' : q(m.job)}, ${q(m.role)}, 1, NULL, NULL, '1', ${i}, ${q(NOW)}, ${q(NOW)});`,
@@ -868,8 +881,8 @@ const lines = [
     ),
   ),
 
-  // 勤務の曜日テンプレート 42 行（6 名 × 7 曜日）。展開した staff_shifts は
-  // 保存時と日次 Cron が作るので、ここでは正本の 42 行だけを置く。
+  // 勤務の曜日テンプレート 49 行（7 名 × 7 曜日）。展開した staff_shifts は
+  // 保存時と日次 Cron が作るので、ここでは正本の 49 行だけを置く。
   ...staffMembers.flatMap((m, i) =>
     m.week.map((band, weekday) => {
       const [startsAt, endsAt] = band === null ? [null, null] : band.split('-')
@@ -1034,4 +1047,4 @@ console.log(
     `田中 花子 様の度数 ${prescriptionSeeds.length} 件・メガネ ${glassesSeeds.length} 本・` +
     `接客のメモ ${noteSeeds.length} 件・過去のご予約 ${pastVisitRows.length} 件`,
 )
-console.log('   業務開始の画面では、お店のコードに org-eyex-seed を入れる。')
+console.log('   業務開始の画面では、お店のコードに eyex を入れる。')

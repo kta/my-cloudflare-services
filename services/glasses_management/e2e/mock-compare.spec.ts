@@ -22,7 +22,7 @@ import { expect, test } from '@playwright/test'
  * （playwright.config.ts の project の並び）ので、撮るのは必ず seed のままの姿である。
  */
 
-const ORG = 'org-eyex-seed'
+const ORG = 'eyex'
 /** seed.mjs が固定 id で入れる EYEX 銀座店と、その 1 人目の担当（佐藤 美咲）。 */
 const GINZA = '11111111-1111-4111-8111-111111111111'
 const SATO = 'c0010000-0000-4000-8000-000000000000'
@@ -570,7 +570,7 @@ test.describe('承認済みモックとの突き合わせ', () => {
 
   test('SETTINGS-STAFF — 設定・スタッフと技能', async ({ page }) => {
     await openSection(page, 'スタッフと技能')
-    await expect(page.getByText('スタッフ　6名')).toBeVisible()
+    await expect(page.getByText('スタッフ　7名')).toBeVisible()
     /*
      * いま許している差:
      *   - 第2サイドバーの 7 項目・「変更を捨てる」・「お知らせ 3」。

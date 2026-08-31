@@ -381,7 +381,7 @@ export function warnBusinessHours(input: {
  *
  * **技能の語を作るのはここ 1 か所である。**空き枠エンジン（`domain/availability.ts`）は
  * 受け取った文字をそのまま並べるだけで、技能の綴りを知らない。肩書きだけを渡すと、
- * 肩書きを持たない担当（世界観データでは 6 名中 5 名）の行が全部空になる。
+ * 肩書きを持たない担当（世界観データでは 7 名中 6 名）の行が全部空になる。
  */
 export function staffSubline(jobLabel: string | null, skills: readonly SkillCode[]): string {
   const parts = [jobLabel ?? '', ...skills.map((skill) => SKILL_LABELS[skill])].filter(

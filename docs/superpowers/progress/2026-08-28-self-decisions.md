@@ -46,7 +46,7 @@
 | D-3 | [新設] `organizations.revision` を `text` で持ち、比較は `Number()` に通す | 文字列比較だと `'10' < '2'` が真になり、revision 10 以降が二度と更新されなくなる | 組織同期 |
 | D-4 | [新設] default-deny の除外に `/api/public/*` を足した | お客様向け Web 予約は未認証で店舗 slug からテナントを解く | 認可の入口 |
 | D-5 | [変更] たたんだサイドバーでもボタンの読み上げ名を残す（`sr-only`）。モックは `font-size:0` で消していた | アイコンだけのボタンに名前が無いのは重大な欠陥 | 見た目は変わらない |
-| D-6 | [新設] `db:seed:local` と `seed.mjs` を足し、`make init` で EYEX と 3 店舗が入るようにした | 開発と e2e の足場 | 組織 id は `org-eyex-seed` |
+| D-6 | [新設] `db:seed:local` と `seed.mjs` を足し、`make init` で EYEX と 3 店舗が入るようにした | 開発と e2e の足場 | 組織 id は `eyex` |
 | D-7 | [新設] Playwright の突き合わせ面を 1194×810 / `scale: 'device'` にした | 810 = 端末 834 − ステータスバー 24。ブラウザに与えられる実際の描画領域 | `playwright.config.ts` |
 | D-8 | [前提] `maxDiffPixelRatio` は「いまその画面に許している差」とし、**下げるだけで上げない**運用にした | 合否ではなく、承認された見た目からの距離を測る道具として使う | 各 mock-compare のテスト |
 

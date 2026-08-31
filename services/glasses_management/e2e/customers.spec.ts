@@ -41,7 +41,7 @@ import { expect, test } from '@playwright/test'
 /** この e2e の tsconfig は Worker 向けで DOM の型を持たない。使う分だけをここで宣言する。 */
 declare function getComputedStyle(node: unknown): { touchAction: string }
 
-const ORG = 'org-eyex-seed'
+const ORG = 'eyex'
 /** seed.mjs が固定 id で入れる EYEX 銀座店と EYEX 丸の内店。 */
 const GINZA = '11111111-1111-4111-8111-111111111111'
 const MARUNOUCHI = '22222222-2222-4222-8222-222222222222'
