@@ -449,9 +449,9 @@ function surnameOf(name: string): string {
  * はじめての方は薄い橙、3 回目以上は薄い緑、1〜2 回目は罫だけ。
  * **この印はお名前の右に添えるものだけ**にしてある —— 回数の列をすでに持つ面
  * （顧客台帳の一覧）には入れない（`docs/frontend/mockups/eyex/README.md` の決め）ので、
- * 印の綴りはこの 1 か所しか無い。
+ * 印の綴りはこの 1 か所しか無い（来店受付ボード・受け付ける面・受付履歴もこれを呼ぶ）。
  */
-function VisitBadge({ count }: { count: number }) {
+export function VisitBadge({ count }: { count: number }) {
   return (
     <span
       className={cn(

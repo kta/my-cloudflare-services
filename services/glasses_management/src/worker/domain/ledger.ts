@@ -136,6 +136,15 @@ export type LedgerInput = {
   maintenance: LedgerMaintenanceRow[]
   /** 当日（JST）の `walk_ins.status='waiting'` の件数。`walk_ins` は P5 なので既定 0。 */
   waitingCount?: number
+  /**
+   * LEDGER-WALKIN の受付パネルが props で受ける 3 欄。**呼び出し側が `walk_ins` を
+   * 数えて渡す**（この関数は D1 を 1 度も読まない）。渡さない画面のために既定を持つ。
+   * `estimatedWaitMinutes` は**空き枠エンジンの結果からしか出さない**ので、
+   * 出せないときは null のまま置く（待ち人数の掛け算で作らない）。
+   */
+  walkinWaitingCount?: number
+  estimatedWaitMinutes?: number | null
+  nextTicketNo?: number
   /** 応答の `serverNow`。**この関数は `Date.now()` を 1 度も呼ばない。** */
   serverNow: Date
 }
@@ -522,6 +531,10 @@ export function buildLedgerView(input: LedgerInput): LedgerView {
       upcoming: drawn.filter((item) => Date.parse(item.row.startsAt) > serverNowMs).length,
       pendingReview: drawn.filter(isPendingReview).length,
     },
+    walkinWaitingCount: input.walkinWaitingCount ?? 0,
+    estimatedWaitMinutes: input.estimatedWaitMinutes ?? null,
+    // その日まだ 1 人も受け付けていなければ次は 001 である。
+    nextTicketNo: input.nextTicketNo ?? 1,
     serverNow: input.serverNow.toISOString(),
   }
 }

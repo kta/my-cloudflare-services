@@ -9,7 +9,7 @@
 | P2 空き枠と予約台帳 | `005-availability-and-ledger` | **完了（Approved）** | 下記 |
 | P3 予約受付 | `006-booking-flow` | **完了（Approved）** | 下記 |
 | P4 顧客台帳 | `007-customer-records` | **完了（Approved）** | 下記 |
-| P5 来店受付とウォークイン | `008-reception-and-walkin` | 未着手 | — |
+| P5 来店受付とウォークイン | `008-reception-and-walkin` | **完了（Approved）** | 下記 |
 | P6 変更と取消 | `009-change-and-cancel` | 未着手 | — |
 | P7 受付の録音 | `010-recording` | 未着手 | — |
 | P8 お客様向けWeb予約 | `011-web-booking` | 未着手 | — |
@@ -226,3 +226,35 @@ pnpm --filter @app/glasses_management e2e → 128 passed
 ```
 
 モック突き合わせは **26 面**（差 1.7〜8.6%）。
+
+
+## P5（2026-08-31）
+
+作ったもの:
+
+- `domain/walkin.ts` — 整理番号の採番（衝突したら再試行・日をまたいだら 1 に戻る）、同時受付の上限
+- `domain/visit-board.ts` — 来店受付ボードの 6 列と 5 状態、担当不在・設備停止の警告。
+  **「いまお待ち N名」はその日の待ちだけを数える**（昨日の行列を数えない）
+- `domain/reception-history.ts` — 受付履歴の並びと絞り込み
+- ルート 7 本（ウォークインの受付・顧客の関連付け・進捗 / 工程 2 本 / 受付履歴 2 本）。
+  `visit_events` は**追記だけ**で、行を書き換えない
+- 画面 5 面（来店受付ボード / 来店受付 / 台帳に重なる受付パネル / 受付履歴 / 0 件）
+- **顧客未特定のままウォークインの受付と接客を始められる。** 後から既存顧客へ関連付けても、
+  新規顧客を作って関連付けてもよい。顧客未登録のまま退店した記録も後から探せる
+
+レビュー: subagent で **2 巡**（Opus。① backend / frontend ② 受入基準 45 本の 1 本ずつの充足確認と
+敵対的な粗探し）。
+
+確かめたこと:
+
+```
+（.dev.vars を退避した CI 相当の状態で）
+bash scripts/check-agent-compat.sh   → ok
+pnpm exec biome check .              → 緑
+pnpm run deps:check                  → 緑
+pnpm -r --if-present typecheck       → 緑
+pnpm run test                        → 緑（2,356 テスト + traceability）
+pnpm --filter @app/glasses_management e2e → 162 passed
+```
+
+モック突き合わせは **36 面**。

@@ -11,7 +11,8 @@ import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-or
  *
  * テーブルはフェーズごとに増える（specs/glasses_management/design/03-data-model.md）。
  * P0（基盤）の 3 つに、P1（店舗の受付条件）の 16 と P2（枠の一次排他）の 1、
- * P3（電話・店頭からの予約受付）の 3 と P4（顧客台帳）の 4 を足した 27 表がここにある。
+ * P3（電話・店頭からの予約受付）の 3 と P4（顧客台帳）の 4、
+ * P5（来店受付とウォークイン）の 2 を足した 29 表がここにある。
  */
 
 /**
@@ -900,5 +901,116 @@ export const customerNotes = sqliteTable(
       t.kind,
       t.status,
     ),
+  ],
+)
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * P5 来店受付とウォークイン（0005_*.sql）
+ * お客様が店に着いてから帰るまでを 2 表で持つ。受付そのもの（reception_sessions）と
+ * 監査（audit_events）は P3 の表をそのまま使い、ここでは作り直さない。
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * 予約なしのご来店。**お客様を特定しないまま受け付けて台帳に載せる**ための表で、
+ * `customer_id` は NULL のまま確定でき、あとから既存顧客にも新規顧客にも紐づけられる。
+ *
+ * 受付と同時に `source='walkin'` の予約を 1 件起こす（`reservation_id` は NOT NULL）。
+ * 担当が決まらない受付は `reservation_slot_locks.target_key='unassigned'` のレーンで枠を取る。
+ * 予約を起こさない形にすると、同時受付の上限（`store_slot_rules.max_parallel`）を数える
+ * 場所が無くなり、目の前のお客様を上限を超えて受け付けてしまう。
+ *
+ * `version` を持つのは、顧客の紐づけと担当決めを 2 台の iPad が同時に触るため。
+ * `PATCH` は `WHERE id=? AND organization_id=? AND version=?` で書き、0 行なら 409 を返す。
+ */
+export const walkIns = sqliteTable(
+  'walk_ins',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    storeId: text('store_id').notNull(),
+    // arrived_at を JST に直した暦日。採番と「いまお待ち N名」の日引きに使う写しで、
+    // arrived_at から毎回計算しない（SQLite に JST の日付関数を持ち込まないため）。
+    visitDate: text('visit_date').notNull(), // 'YYYY-MM-DD'（JST の暦日）
+    // 1〜999。(organization_id, store_id, visit_date) の中で 1 から連番。
+    // 表示は 3 桁ゼロ埋めの 'ウォークイン 004'。
+    ticketNo: integer('ticket_no').notNull(),
+    arrivedAt: text('arrived_at').notNull(), // ISO8601 (UTC)
+    purposeId: text('purpose_id'), // visit_purposes.id。受付パネルの 4 択から選んだとき
+    purposeNote: text('purpose_note'), // 0〜80文字。4 択にないご用件の自由記述
+    customerId: text('customer_id'), // あとから紐づく。受付の時点では NULL でよい
+    reservationId: text('reservation_id').notNull(), // 受付と同時に起こす予約
+    // 'waiting' | 'serving' | 'booked' | 'left'
+    // お待ち／ご案内中／先のご予約にした／お帰り。真偽値の組で表さない
+    // （どれでもない行とどれでもある行を作れてしまう）。
+    status: text('status').notNull(),
+    leftAt: text('left_at'), // ISO8601 (UTC)。status='left' のとき非 NULL
+    version: integer('version').notNull(), // 1 以上。楽観ロック
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => [
+    // 整理番号の重複を DB 側で禁じる。採番は MAX(ticket_no) + 1 を読んでから INSERT
+    // するので、同じ値を読んだ 2 台目はここで弾かれ、+1 して採番し直す（最大 5 回）。
+    // 店舗 × 日でリセットするので visit_date を含める。
+    uniqueIndex('walk_ins_org_store_date_ticket_idx').on(
+      t.organizationId,
+      t.storeId,
+      t.visitDate,
+      t.ticketNo,
+    ),
+    // 台帳の最下段（ウォークインの帯）と受付ボードを受付時刻順に引く。
+    index('walk_ins_org_store_arrived_idx').on(t.organizationId, t.storeId, t.arrivedAt),
+    // 「いまお待ち N名」。**必ず当日で絞る**ので visit_date を status より前に置く
+    // （昨日の waiting を数えないため）。
+    index('walk_ins_org_store_date_status_idx').on(
+      t.organizationId,
+      t.storeId,
+      t.visitDate,
+      t.status,
+    ),
+  ],
+)
+
+/**
+ * ご来店中の工程の記録。RECEPTION-JOURNEY のボード 1 行はこの表の並びそのもので、
+ * 現在地は「同じ subject の `occurred_at` が最大の行」である。
+ *
+ * **追記のみ。UPDATE / DELETE を発行しない。**訂正は打ち消しの行を足す。
+ * だから `updated_at` を持たない（置き場所があると書き換えの経路が生える）。
+ *
+ * 対象は予約とウォークインの 2 種で、`reservation_id` / `walkin_id` の 2 列には割らない
+ * （どちらも NULL の行と両方埋まった行が作れてしまう）。`subject_type` + `subject_id` で持つ。
+ *
+ * `stage` は 8 値（`received` / `waiting` / `consulting` / `fitting` / `measuring` /
+ * `checkout` / `handover` / `left`）。ボードの 6 列に並ぶのは `waiting` と `left` を
+ * 除いた 6 値で、**列の並びは enum の宣言順と一致しない**（画面側の定数に持つ）。
+ * 「ご来店中 N名」は最新の `stage` が `left` でない subject の数で、`handover` も数える。
+ */
+export const visitEvents = sqliteTable(
+  'visit_events',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    storeId: text('store_id').notNull(),
+    subjectType: text('subject_type').notNull(), // 'reservation' | 'walkin'
+    subjectId: text('subject_id').notNull(), // reservations.id または walk_ins.id
+    stage: text('stage').notNull(), // 上の 8 値
+    occurredAt: text('occurred_at').notNull(), // ISO8601 (UTC)
+    // 誰が進めたか。受付は手の空いた人がやるので担当以外も進められ、
+    // 共有端末で個人が確認できていなければ NULL のまま残す。
+    staffId: text('staff_id'), // staff.id
+    note: text('note'), // 0〜120文字。受付時の消し込みの結果もここに残す
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => [
+    // ボードの 1 行（そのお客様の工程を発生順に引く）。同じ工程を 2 回記録できる
+    // （打ち消しの行を足して訂正する）ので一意にしない。
+    index('visit_events_org_subject_idx').on(
+      t.organizationId,
+      t.subjectType,
+      t.subjectId,
+      t.occurredAt,
+    ),
+    // 当日のボード全体と、ANALYTICS-WAIT の日次集計。
+    index('visit_events_org_store_occurred_idx').on(t.organizationId, t.storeId, t.occurredAt),
   ],
 )

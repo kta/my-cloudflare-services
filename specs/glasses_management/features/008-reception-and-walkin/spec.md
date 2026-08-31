@@ -1,7 +1,7 @@
 # 008-reception-and-walkin: 来店受付とウォークイン
 
 - サービス: `glasses_management`
-- ステータス: Draft
+- ステータス: Approved
 
 ## 1. WHAT / WHY
 

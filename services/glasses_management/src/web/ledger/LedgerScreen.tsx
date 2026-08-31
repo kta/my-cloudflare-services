@@ -7,11 +7,13 @@ import type {
   LocalDate,
   ReservationDetail as ReservationDetailShape,
   StaffMember,
+  VisitPurpose,
 } from '@app/contracts'
 import { toJstDateString } from '@app/shared'
 import { cn, focusRing, focusRingOnPine } from '@app/ui'
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { client } from '../client'
+import { WalkinPanel } from '../reception/WalkinPanel'
 import { dateLabel, nowChipLabel, shiftDate } from './metrics'
 import { OfflineBanner } from './OfflineBanner'
 import { ReservationDetail, type ReservationDetailPhase } from './ReservationDetail'
@@ -56,6 +58,8 @@ export type LedgerScreenProps = {
   initialDate?: LocalDate
   /** 最初から開いておくご予約（個人トップの 1 行から来たとき）。 */
   initialReservationId?: string
+  /** 来店受付ボードの「＋ ご来店を受け付ける」から来たとき、受付パネルを開いた姿で出す。 */
+  initialWalkinOpen?: boolean
   /** 予約リストの差し替え口。省くと `ReservationList` をそのまま出す。 */
   renderList?: (view: LedgerView) => ReactNode
   /**
@@ -65,6 +69,11 @@ export type LedgerScreenProps = {
   onBarCenter?: (bar: ReactNode) => void
   /** 設備が 1 台も無い店舗の空の面から「設定を開く」で行く先（IDX-LEDGER-02 の E1）。 */
   onOpenSettings?: () => void
+  /**
+   * 予約リストの「ご来店」を押したとき。ご予約のお客様を受け付ける入口はここ 1 つで、
+   * 器（`App`）が来店受付の面をその 1 件で開く。
+   */
+  onOpenCheckin?: (reservationId: string) => void
   /**
    * 業務の期限が切れた（401）とき。台帳を開いたまま切れると、そのままでは
    * 通信断の帯が出て「再接続を試す」を押し続ける行き止まりになるので、外へ知らせる。
@@ -76,9 +85,11 @@ export function LedgerScreen({
   storeId,
   initialDate,
   initialReservationId,
+  initialWalkinOpen = false,
   renderList,
   onBarCenter,
   onOpenSettings,
+  onOpenCheckin,
   onSessionExpired,
 }: LedgerScreenProps) {
   const [date, setDate] = useState<LocalDate>(() => initialDate ?? toJstDateString(new Date()))
@@ -103,10 +114,33 @@ export function LedgerScreen({
   const [detail, setDetail] = useState<ReservationDetailShape | null>(null)
   const [detailPhase, setDetailPhase] = useState<ReservationDetailPhase>('loading')
   const [anchor, setAnchor] = useState({ left: ARROW_LEFT_PX, top: 0, bandTop: 0 })
+  /*
+   * 店頭のお客様の受付パネル（LEDGER-WALKIN）。台帳の上に右 400px で重ねる。
+   * **入口は来店受付ボードの「＋ ご来店を受け付ける」だけ**にしてある（台帳の
+   * ツールバーにボタンを足すと、承認済みの LEDGER-STAFF / LEDGER-LIST の姿が変わる）。
+   */
+  const [walkinOpen, setWalkinOpen] = useState(initialWalkinOpen)
+  const [purposes, setPurposes] = useState<readonly VisitPurpose[]>([])
   // 担当と場所のお名前。詳細は id しか持たないので、店舗の名簿と突き合わせる。
   const [staffNames, setStaffNames] = useState<Map<string, string>>(() => new Map())
   const [placeNames, setPlaceNames] = useState<Map<string, string>>(() => new Map())
   const stageRef = useRef<HTMLDivElement>(null)
+
+  // ご用件の 4 択（受付パネル）。店舗 1 つにつき 1 度だけ読む。
+  useEffect(() => {
+    let live = true
+    client.api.staff.purposes
+      .$get({ query: { storeId } })
+      .then(async (res) => {
+        if (!live || !res.ok) return
+        const rows: VisitPurpose[] = await res.json()
+        if (live) setPurposes(rows)
+      })
+      .catch(() => undefined)
+    return () => {
+      live = false
+    }
+  }, [storeId])
 
   /**
    * 読めなかった事実は**読めたときにだけ**消す。取り直しの入り口で消すと、通信断の帯が
@@ -369,7 +403,12 @@ export function LedgerScreen({
           読み込んでいます…
         </p>
       ) : (
-        <div ref={stageRef} className="relative flex min-h-0 flex-1 flex-col">
+        /*
+         * 受付パネルを閉じたときの戻り先。パネルは**来店受付ボードから**開くので、
+         * この面に「開いた要素」が無い —— それでも焦点を body へ落とさず、台帳そのものへ返す
+         * （次の Tab が文書の先頭からやり直しにならない）。見た目は変わらない。
+         */
+        <div ref={stageRef} tabIndex={-1} className="relative flex min-h-0 flex-1 flex-col">
           {mode === 'list' ? (
             (renderList?.(shown) ?? (
               <ReservationList
@@ -377,6 +416,7 @@ export function LedgerScreen({
                 filter={filter}
                 onFilterChange={setFilter}
                 isOffline={offline}
+                {...(onOpenCheckin === undefined ? {} : { onCheckin: onOpenCheckin })}
               />
             ))
           ) : (
@@ -385,6 +425,21 @@ export function LedgerScreen({
               selectedReservationId={openId}
               onSelectEntry={(entry) => setOpenId(entry === null ? null : entry.reservationId)}
               onOpenSettings={onOpenSettings}
+            />
+          )}
+          {walkinOpen && (
+            <WalkinPanel
+              storeId={storeId}
+              purposes={purposes}
+              walkinWaitingCount={shown.walkinWaitingCount}
+              estimatedWaitMinutes={shown.estimatedWaitMinutes}
+              nextTicketNo={shown.nextTicketNo}
+              onReceived={() => {
+                setWalkinOpen(false)
+                setReload((count) => count + 1)
+              }}
+              onClose={() => setWalkinOpen(false)}
+              returnFocusTo={stageRef}
             />
           )}
           {openId !== null && (

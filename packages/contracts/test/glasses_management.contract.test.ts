@@ -63,18 +63,24 @@ import {
   PurposeOrderInput,
   PurposeRequirement,
   PurposeRequirementsInput,
+  ReceptionHistoryDetail,
+  ReceptionHistoryEntry,
+  ReceptionHistoryList,
+  ReceptionHistoryQuery,
   ReceptionSession,
   ReceptionSessionClose,
   ReceptionSessionDraft,
   ReceptionSessionDraftPatch,
   ReceptionSessionStart,
   ReservationAssignment,
+  ReservationCancelInput,
   ReservationCode,
   ReservationDetail,
   ReservationPurposeLine,
   ReservationSource,
   ReservationStatus,
   ReservationSummary,
+  SearchRelaxation,
   SettingsImpactItem,
   SettingsImpactReport,
   SettingsImpactRequest,
@@ -97,9 +103,21 @@ import {
   StorePatch,
   StorePermission,
   Version,
+  VisitBoard,
+  VisitBoardCell,
+  VisitBoardQuery,
+  VisitBoardRow,
+  VisitEvent,
+  VisitEventInput,
   VisitPurpose,
   VisitPurposeInput,
   VisitPurposePatch,
+  VisitStage,
+  Walkin,
+  WalkinCreate,
+  WalkinListQuery,
+  WalkinPatch,
+  WalkinSummary,
   WebBookingCode,
   Weekday,
 } from '@app/contracts'
@@ -986,6 +1004,9 @@ const ledgerView = {
   slotMinutes: 30,
   lanes: [ledgerLane],
   counts: { all: 12, upcoming: 7, pendingReview: 1 },
+  walkinWaitingCount: 2,
+  estimatedWaitMinutes: 15,
+  nextTicketNo: 5,
   serverNow: NOW,
 }
 
@@ -2318,5 +2339,530 @@ describe('customer schemas', () => {
         expect(() => schema.parse({ ...valid, ...stale })).toThrow()
       }
     }
+  })
+})
+
+/* --------------------------------------------------------------------------- *
+ * P5 来店受付とウォークイン（`008-reception-and-walkin`）
+ * --------------------------------------------------------------------------- */
+
+const ARRIVED_AT = '2026-08-27T02:02:00.000Z'
+
+const walkinCreate = { storeId: UUID, purposeId: UUID2 }
+
+const walkin = {
+  id: UUID,
+  ticketNo: 5,
+  arrivedAt: ARRIVED_AT,
+  purposeId: UUID2,
+  purposeNote: null,
+  customerId: null,
+  reservationId: uuidOf(3),
+  status: 'waiting',
+  waitedMinutes: 6,
+  leftAt: null,
+  version: 1,
+}
+
+const walkinSummary = {
+  id: UUID,
+  ticketNo: 4,
+  arrivedAt: ARRIVED_AT,
+  waitedMinutes: 6,
+  purposeNote: 'フレームの相談',
+  status: 'waiting',
+}
+
+const visitEventInput = {
+  storeId: UUID,
+  subjectType: 'walkin',
+  subjectId: UUID2,
+  stage: 'consulting',
+}
+
+const boardCell = (over: Record<string, unknown> = {}) => ({
+  stage: 'measuring',
+  state: 'next',
+  at: null,
+  label: '視力測定機 A',
+  note: null,
+  needsAttention: false,
+  ...over,
+})
+
+const boardRow = {
+  subjectType: 'reservation',
+  subjectId: UUID,
+  displayName: '田中 花子 様',
+  visitCount: 4,
+  purposeLabel: '新調相談',
+  cells: [boardCell()],
+  isWaitingTooLong: false,
+}
+
+const historyQuery = { from: '2026-08-01', to: '2026-08-27' }
+
+const historyEntry = {
+  entryId: UUID,
+  sessionId: UUID2,
+  startedAt: NOW,
+  displayName: '田中 花子 様',
+  visitCount: 4,
+  outcome: 'booked',
+  reservationStatus: 'confirmed',
+}
+
+const relaxation = {
+  label: '期間を「今月（8月1日 〜 8月27日）」まで広げる',
+  count: 12,
+  query: { from: '2026-08-01', to: '2026-08-27' },
+}
+
+const historyDetail = {
+  entryId: UUID,
+  sessionId: UUID2,
+  reservation: null,
+  receivedBy: '中村 彩',
+  receivedAt: NOW,
+  changes: [{ occurredAt: NOW, what: '新しく受け付けました', actorName: '中村 彩' }],
+}
+
+describe('WalkinCreate', () => {
+  it('takes no ticket number — the server assigns it', () => {
+    expect(WalkinCreate.parse(walkinCreate).storeId).toBe(UUID)
+    // 整理番号をクライアントから受けると、同時受付でそのまま重複する。
+    expect(() => WalkinCreate.parse({ ...walkinCreate, ticketNo: 5 })).toThrow()
+    expect(() => WalkinCreate.parse({ ...walkinCreate, visitDate: '2026-08-27' })).toThrow()
+  })
+
+  it('accepts exactly one of purposeId and purposeNote', () => {
+    expect(WalkinCreate.parse(walkinCreate).purposeId).toBe(UUID2)
+    const noted = WalkinCreate.parse({ storeId: UUID, purposeNote: 'フレームの相談' })
+    expect([noted.purposeId, noted.purposeNote]).toEqual([undefined, 'フレームの相談'])
+  })
+
+  it('rejects a payload carrying both purposes', () => {
+    expect(() => WalkinCreate.parse({ ...walkinCreate, purposeNote: 'フレームの相談' })).toThrow()
+  })
+
+  it('rejects a payload carrying neither purpose', () => {
+    expect(() => WalkinCreate.parse({ storeId: UUID })).toThrow()
+    // 空文字は「伺っていない」であって自由記述ではない。
+    expect(() => WalkinCreate.parse({ storeId: UUID, purposeNote: '   ' })).toThrow()
+  })
+
+  it('accepts a purposeNote of exactly 80 characters and rejects 81', () => {
+    expect(
+      WalkinCreate.parse({ storeId: UUID, purposeNote: 'あ'.repeat(80) }).purposeNote,
+    ).toHaveLength(80)
+    expect(() => WalkinCreate.parse({ storeId: UUID, purposeNote: 'あ'.repeat(81) })).toThrow()
+  })
+
+  it('allows an explicit null staffId — received without deciding the staff', () => {
+    // 「担当はまだ伺っていない」（欄が無い）と「担当を決めずに受け付ける」（null）を分ける。
+    expect(WalkinCreate.parse({ ...walkinCreate, staffId: null }).staffId).toBeNull()
+    expect('staffId' in WalkinCreate.parse(walkinCreate)).toBe(false)
+    expect(() => WalkinCreate.parse({ ...walkinCreate, staffId: 'unassigned' })).toThrow()
+  })
+
+  it('allows arrivedAt to be omitted — the server fills it in', () => {
+    expect(WalkinCreate.parse(walkinCreate).arrivedAt).toBeUndefined()
+    expect(WalkinCreate.parse({ ...walkinCreate, arrivedAt: ARRIVED_AT }).arrivedAt).toBe(
+      ARRIVED_AT,
+    )
+    expect(() => WalkinCreate.parse({ ...walkinCreate, arrivedAt: '2026-08-27 11:02' })).toThrow()
+  })
+
+  it('rejects an unknown key so a stale client field never lands silently', () => {
+    expect(() => WalkinCreate.parse({ ...walkinCreate, waitedMinutes: 0 })).toThrow()
+    expect(() => WalkinCreate.parse({ ...walkinCreate, organizationId: ORG })).toThrow()
+  })
+})
+
+describe('Walkin', () => {
+  it('bounds ticketNo to 1..999, rejecting 0 and 1000', () => {
+    expect(Walkin.parse({ ...walkin, ticketNo: 1 }).ticketNo).toBe(1)
+    expect(Walkin.parse({ ...walkin, ticketNo: 999 }).ticketNo).toBe(999)
+    for (const ticketNo of [0, 1000, 4.5, -1]) {
+      expect(() => Walkin.parse({ ...walkin, ticketNo })).toThrow()
+    }
+  })
+
+  it('requires waitedMinutes to be a non-negative integer', () => {
+    expect(Walkin.parse({ ...walkin, waitedMinutes: 0 }).waitedMinutes).toBe(0)
+    // 受付時刻が未来でも負の分を出さない（丸めるのはドメイン層）。
+    expect(() => Walkin.parse({ ...walkin, waitedMinutes: -1 })).toThrow()
+    expect(() => Walkin.parse({ ...walkin, waitedMinutes: 6.5 })).toThrow()
+  })
+
+  it('accepts only waiting / serving / booked / left', () => {
+    for (const status of ['waiting', 'serving', 'booked', 'left']) {
+      expect(Walkin.parse({ ...walkin, status }).status).toBe(status)
+    }
+    // 「待たずにお帰り」は `waiting → left` の遷移で数える。別の語を足さない。
+    for (const status of ['abandoned', 'done', 'arrived']) {
+      expect(() => Walkin.parse({ ...walkin, status })).toThrow()
+    }
+  })
+
+  it('allows a null leftAt and rejects a non-datetime string', () => {
+    expect(Walkin.parse(walkin).leftAt).toBeNull()
+    expect(Walkin.parse({ ...walkin, status: 'left', leftAt: NOW }).leftAt).toBe(NOW)
+    expect(() => Walkin.parse({ ...walkin, leftAt: '2026-08-27 11:40' })).toThrow()
+  })
+
+  it('always carries reservationId — the reception opens one booking at the same time', () => {
+    expect(Walkin.parse(walkin).reservationId).toBe(uuidOf(3))
+    const { reservationId: _dropped, ...withoutReservation } = walkin
+    expect(() => Walkin.parse(withoutReservation)).toThrow()
+    expect(() => Walkin.parse({ ...walkin, reservationId: null })).toThrow()
+  })
+})
+
+describe('WalkinListQuery', () => {
+  it('requires date so no list is ever built without one day to narrow it', () => {
+    expect(WalkinListQuery.parse({ storeId: UUID, date: '2026-08-27' }).date).toBe('2026-08-27')
+    // 日付の条件を落とすと、昨日帰られたお客様が今朝の待ち行列に残る。
+    expect(() => WalkinListQuery.parse({ storeId: UUID })).toThrow()
+    expect(() => WalkinListQuery.parse({ storeId: UUID, date: '2026-8-7' })).toThrow()
+  })
+
+  it('takes several statuses as an array', () => {
+    const query = { storeId: UUID, date: '2026-08-27' }
+    expect(WalkinListQuery.parse({ ...query, status: ['waiting', 'serving'] }).status).toEqual([
+      'waiting',
+      'serving',
+    ])
+    // `?status=waiting,serving` の形でも届く。
+    expect(WalkinListQuery.parse({ ...query, status: 'waiting,serving' }).status).toHaveLength(2)
+    expect(WalkinListQuery.parse(query).status).toEqual([])
+    expect(() => WalkinListQuery.parse({ ...query, status: ['abandoned'] })).toThrow()
+  })
+})
+
+describe('WalkinPatch', () => {
+  it('requires version and takes only customerId / staffId / status / reservationId', () => {
+    const patch = WalkinPatch.parse({
+      version: 1,
+      customerId: UUID2,
+      staffId: uuidOf(2),
+      status: 'serving',
+      reservationId: uuidOf(3),
+    })
+    expect([patch.version, patch.status]).toEqual([1, 'serving'])
+    // 版を送らない更新は、2 台の iPad が同じ来店を同時に触ったとき片方を黙って捨てる。
+    expect(() => WalkinPatch.parse({ customerId: UUID2 })).toThrow()
+    for (const stale of [{ ticketNo: 5 }, { purposeId: UUID2 }, { arrivedAt: ARRIVED_AT }]) {
+      expect(() => WalkinPatch.parse({ version: 1, ...stale })).toThrow()
+    }
+  })
+})
+
+describe('WalkinSummary', () => {
+  it('carries only the six fields the ledger band shows', () => {
+    const summary = WalkinSummary.parse(walkinSummary)
+    expect(Object.keys(summary).sort()).toEqual([
+      'arrivedAt',
+      'id',
+      'purposeNote',
+      'status',
+      'ticketNo',
+      'waitedMinutes',
+    ])
+    expect(() => WalkinSummary.parse({ ...walkinSummary, customerId: UUID2 })).toThrow()
+  })
+})
+
+describe('VisitStage', () => {
+  it('takes the eight words received / waiting / consulting / fitting / measuring / checkout / handover / left', () => {
+    for (const stage of [
+      'received',
+      'waiting',
+      'consulting',
+      'fitting',
+      'measuring',
+      'checkout',
+      'handover',
+      'left',
+    ]) {
+      expect(VisitStage.parse(stage)).toBe(stage)
+    }
+    // `left`（退店）を「お渡し」に当てない。`handover` はご来店中に数える別の工程である。
+    for (const stage of ['done', 'arrived', 'lens', 'handoff']) {
+      expect(() => VisitStage.parse(stage)).toThrow()
+    }
+  })
+})
+
+describe('VisitEventInput', () => {
+  it('accepts a note of exactly 120 characters and rejects 121', () => {
+    expect(VisitEventInput.parse({ ...visitEventInput, note: 'あ'.repeat(120) }).note).toHaveLength(
+      120,
+    )
+    expect(() => VisitEventInput.parse({ ...visitEventInput, note: 'あ'.repeat(121) })).toThrow()
+  })
+
+  it('allows occurredAt to be omitted — the server fills it in', () => {
+    expect(VisitEventInput.parse(visitEventInput).occurredAt).toBeUndefined()
+    expect(() =>
+      VisitEventInput.parse({ ...visitEventInput, occurredAt: '2026-08-27 11:10' }),
+    ).toThrow()
+    // 埋めたあとの 1 件は必ず発生時刻を持つ（盤面はこの値で並べる）。
+    const event = VisitEvent.parse({
+      id: UUID,
+      subjectType: 'walkin',
+      subjectId: UUID2,
+      stage: 'consulting',
+      occurredAt: NOW,
+    })
+    expect([event.occurredAt, event.staffId, event.note]).toEqual([NOW, null, null])
+  })
+
+  it('takes the two words reservation and walkin as subjectType', () => {
+    expect(VisitEventInput.parse(visitEventInput).subjectType).toBe('walkin')
+    expect(
+      VisitEventInput.parse({ ...visitEventInput, subjectType: 'reservation' }).subjectType,
+    ).toBe('reservation')
+    for (const subjectType of ['customer', 'session', 'walk_in']) {
+      expect(() => VisitEventInput.parse({ ...visitEventInput, subjectType })).toThrow()
+    }
+  })
+})
+
+describe('VisitBoardCell', () => {
+  it('takes the five words done / doing / next / waiting / empty as state', () => {
+    for (const state of ['done', 'doing', 'next', 'waiting']) {
+      expect(VisitBoardCell.parse(boardCell({ state })).state).toBe(state)
+    }
+    expect(VisitBoardCell.parse({ stage: 'fitting', state: 'empty' }).state).toBe('empty')
+    for (const state of ['skipped', 'todo', 'active']) {
+      expect(() => VisitBoardCell.parse(boardCell({ state }))).toThrow()
+    }
+  })
+
+  it('bounds label to 30 characters', () => {
+    expect(VisitBoardCell.parse(boardCell({ label: 'あ'.repeat(30) })).label).toHaveLength(30)
+    expect(() => VisitBoardCell.parse(boardCell({ label: 'あ'.repeat(31) }))).toThrow()
+  })
+
+  it('keeps the attention sentence in a field of its own, never merged into label', () => {
+    const cell = VisitBoardCell.parse(
+      boardCell({ note: '視力測定機 A は点検で止まっています。', needsAttention: true }),
+    )
+    // 設備名（label）はそのまま残り、注意（note）は別の欄で別の上限を持つ。
+    expect([cell.label, cell.note]).toEqual([
+      '視力測定機 A',
+      '視力測定機 A は点検で止まっています。',
+    ])
+    expect(
+      VisitBoardCell.parse(boardCell({ note: 'あ'.repeat(40), needsAttention: true })).note,
+    ).toHaveLength(40)
+    expect(() =>
+      VisitBoardCell.parse(boardCell({ note: 'あ'.repeat(41), needsAttention: true })),
+    ).toThrow()
+  })
+
+  it('turns needsAttention true exactly when the cell carries an attention sentence', () => {
+    // 色だけで伝えないための欄なので、文と旗が食い違った応答を通さない。
+    expect(() =>
+      VisitBoardCell.parse(boardCell({ note: '本日はお休みです。担当を決め直してください。' })),
+    ).toThrow()
+    expect(() => VisitBoardCell.parse(boardCell({ needsAttention: true }))).toThrow()
+    expect(
+      VisitBoardCell.parse(
+        boardCell({ note: '本日はお休みです。担当を決め直してください。', needsAttention: true }),
+      ).needsAttention,
+    ).toBe(true)
+  })
+
+  it('leaves an empty cell without a time, a label or an attention', () => {
+    const empty = VisitBoardCell.parse({ stage: 'checkout', state: 'empty' })
+    expect([empty.at, empty.label, empty.note, empty.needsAttention]).toEqual([
+      null,
+      '',
+      null,
+      false,
+    ])
+    // 何も起きていない欄に文字を足さない（工程を飛ばした行は飛ばした列を空のまま置く）。
+    for (const filled of [{ at: NOW }, { label: '視力測定機 A' }]) {
+      expect(() => VisitBoardCell.parse({ stage: 'checkout', state: 'empty', ...filled })).toThrow()
+    }
+  })
+})
+
+describe('VisitBoardQuery', () => {
+  it('defaults scope to active', () => {
+    expect(VisitBoardQuery.parse({ storeId: UUID, date: '2026-08-27' }).scope).toBe('active')
+    expect(VisitBoardQuery.parse({ storeId: UUID, date: '2026-08-27', scope: 'all' }).scope).toBe(
+      'all',
+    )
+    expect(() =>
+      VisitBoardQuery.parse({ storeId: UUID, date: '2026-08-27', scope: 'today' }),
+    ).toThrow()
+  })
+})
+
+describe('VisitBoardRow', () => {
+  it('allows a null visitCount on a walk-in row', () => {
+    // 「ウォークイン 003」の行は来店回数の札を持たない（お客様がまだ特定されていない）。
+    const row = VisitBoardRow.parse({
+      ...boardRow,
+      subjectType: 'walkin',
+      displayName: 'ウォークイン 003',
+      visitCount: null,
+    })
+    expect([row.displayName, row.visitCount]).toEqual(['ウォークイン 003', null])
+    expect(VisitBoardRow.parse(boardRow).visitCount).toBe(4)
+  })
+})
+
+describe('VisitBoard', () => {
+  it('always carries serverNow so no board is drawn from the tablet clock', () => {
+    const board = VisitBoard.parse({
+      date: '2026-08-27',
+      activeCount: 4,
+      rows: [boardRow],
+      serverNow: NOW,
+    })
+    expect([board.activeCount, board.serverNow]).toEqual([4, NOW])
+    expect(() =>
+      VisitBoard.parse({ date: '2026-08-27', activeCount: 4, rows: [boardRow] }),
+    ).toThrow()
+  })
+})
+
+describe('ReceptionHistoryQuery', () => {
+  it('accepts a span of exactly 92 days and rejects 93', () => {
+    expect(ReceptionHistoryQuery.parse({ from: '2026-05-27', to: '2026-08-27' }).to).toBe(
+      '2026-08-27',
+    )
+    expect(() => ReceptionHistoryQuery.parse({ from: '2026-05-26', to: '2026-08-27' })).toThrow()
+  })
+
+  it('rejects a span whose from is later than its to', () => {
+    // 逆向きの範囲を 0 件で返すと、画面が黙って空になり理由が分からない。
+    expect(() => ReceptionHistoryQuery.parse({ from: '2026-08-27', to: '2026-08-01' })).toThrow()
+  })
+
+  it('bounds name to 40 characters', () => {
+    expect(ReceptionHistoryQuery.parse({ ...historyQuery, name: '田中' }).name).toBe('田中')
+    expect(() => ReceptionHistoryQuery.parse({ ...historyQuery, name: 'あ'.repeat(41) })).toThrow()
+  })
+
+  it('defaults limit to 50 and rejects 0 and 201', () => {
+    expect(ReceptionHistoryQuery.parse(historyQuery).limit).toBe(50)
+    expect(ReceptionHistoryQuery.parse({ ...historyQuery, limit: '20' }).limit).toBe(20)
+    expect(() => ReceptionHistoryQuery.parse({ ...historyQuery, limit: 0 })).toThrow()
+    expect(() => ReceptionHistoryQuery.parse({ ...historyQuery, limit: 201 })).toThrow()
+  })
+})
+
+describe('ReceptionHistoryEntry', () => {
+  it('allows a null sessionId — a web booking has no reception session', () => {
+    const web = ReceptionHistoryEntry.parse({ ...historyEntry, sessionId: null, outcome: null })
+    expect([web.sessionId, web.outcome]).toEqual([null, null])
+    expect(ReceptionHistoryEntry.parse(historyEntry).sessionId).toBe(UUID2)
+  })
+
+  it('always carries entryId', () => {
+    expect(ReceptionHistoryEntry.parse(historyEntry).entryId).toBe(UUID)
+    const { entryId: _dropped, ...withoutEntryId } = historyEntry
+    expect(() => ReceptionHistoryEntry.parse(withoutEntryId)).toThrow()
+  })
+})
+
+describe('ReceptionHistoryList', () => {
+  it('may carry relaxations only when the list is empty', () => {
+    const empty = ReceptionHistoryList.parse({ items: [], total: 0, relaxations: [relaxation] })
+    expect(empty.relaxations).toHaveLength(1)
+    // 緩められる条件が 1 つも無ければ 0 件のままでよい（行き止まりを作らない工夫であって義務ではない）。
+    expect(ReceptionHistoryList.parse({ items: [], total: 0 }).relaxations).toEqual([])
+  })
+
+  it('rejects a response carrying relaxations alongside one or more items', () => {
+    expect(() =>
+      ReceptionHistoryList.parse({
+        items: [historyEntry],
+        total: 46,
+        relaxations: [relaxation],
+      }),
+    ).toThrow()
+    expect(
+      ReceptionHistoryList.parse({ items: [historyEntry], total: 46, nextCursor: 'c1' }).nextCursor,
+    ).toBe('c1')
+  })
+
+  it('bounds relaxations to three', () => {
+    const three = [1, 2, 3].map((n) => ({ ...relaxation, count: n }))
+    expect(
+      ReceptionHistoryList.parse({ items: [], total: 0, relaxations: three }).relaxations,
+    ).toHaveLength(3)
+    expect(() =>
+      ReceptionHistoryList.parse({ items: [], total: 0, relaxations: [...three, relaxation] }),
+    ).toThrow()
+  })
+})
+
+describe('ReceptionHistoryDetail', () => {
+  it('carries changes as an array and allows a null recording', () => {
+    const detail = ReceptionHistoryDetail.parse(historyDetail)
+    expect(detail.changes).toHaveLength(1)
+    expect(detail.changes[0]?.what).toBe('新しく受け付けました')
+    // 録音は P7（`010-recording`）が埋めるまで常に null である。
+    expect(detail.recording).toBeNull()
+    expect(() => ReceptionHistoryDetail.parse({ ...historyDetail, changes: null })).toThrow()
+  })
+})
+
+describe('SearchRelaxation', () => {
+  it('requires a count of one or more so no candidate points at zero hits', () => {
+    expect(SearchRelaxation.parse(relaxation).count).toBe(12)
+    expect(() => SearchRelaxation.parse({ ...relaxation, count: 0 })).toThrow()
+    expect(() => SearchRelaxation.parse({ ...relaxation, count: 1.5 })).toThrow()
+  })
+
+  it('bounds label to 60 characters', () => {
+    expect(SearchRelaxation.parse({ ...relaxation, label: 'あ'.repeat(60) }).label).toHaveLength(60)
+    expect(() => SearchRelaxation.parse({ ...relaxation, label: 'あ'.repeat(61) })).toThrow()
+    expect(() => SearchRelaxation.parse({ ...relaxation, label: '' })).toThrow()
+  })
+})
+
+describe('LedgerView', () => {
+  it('always carries walkinWaitingCount and nextTicketNo, and allows a null estimatedWaitMinutes', () => {
+    const view = LedgerView.parse(ledgerView)
+    expect([view.walkinWaitingCount, view.nextTicketNo]).toEqual([2, 5])
+    // 目安は空き枠エンジンが出せたときだけ載せる（担当の空きを見ない数字をお客様に伝えない）。
+    expect(
+      LedgerView.parse({ ...ledgerView, estimatedWaitMinutes: null }).estimatedWaitMinutes,
+    ).toBeNull()
+    for (const key of ['walkinWaitingCount', 'nextTicketNo']) {
+      const { [key]: _dropped, ...missing } = ledgerView as Record<string, unknown>
+      expect(() => LedgerView.parse(missing)).toThrow()
+    }
+    expect(() => LedgerView.parse({ ...ledgerView, nextTicketNo: 1000 })).toThrow()
+    expect(() => LedgerView.parse({ ...ledgerView, walkinWaitingCount: -1 })).toThrow()
+  })
+})
+
+describe('ReservationCancelInput', () => {
+  const input = { version: 1, reason: 'no_show' as const }
+
+  it('accepts only the four cancel reasons', () => {
+    for (const reason of ['customer', 'store', 'duplicate', 'no_show']) {
+      expect(ReservationCancelInput.parse({ ...input, reason }).reason).toBe(reason)
+    }
+    expect(() => ReservationCancelInput.parse({ ...input, reason: 'cancelled' })).toThrow()
+    expect(() => ReservationCancelInput.parse({ ...input, reason: '' })).toThrow()
+  })
+
+  it('requires a version of one or more', () => {
+    expect(() => ReservationCancelInput.parse({ reason: 'no_show' })).toThrow()
+    expect(() => ReservationCancelInput.parse({ ...input, version: 0 })).toThrow()
+    expect(() => ReservationCancelInput.parse({ ...input, version: 1.5 })).toThrow()
+  })
+
+  it('refuses a status written straight from the client', () => {
+    expect(() => ReservationCancelInput.parse({ ...input, status: 'done' })).toThrow()
   })
 })

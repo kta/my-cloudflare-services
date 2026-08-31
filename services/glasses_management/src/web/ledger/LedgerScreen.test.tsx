@@ -286,3 +286,24 @@ describe('自動の取り直し', () => {
     }
   })
 })
+
+describe('店頭のお客様の受付パネル', () => {
+  it('閉じたら台帳へフォーカスが戻る（body へ落とさない）', async () => {
+    const user = userEvent.setup()
+    const ledger = serve
+    serve = async (input) =>
+      new URL(String(input), 'https://example.test').pathname === '/api/staff/purposes'
+        ? json([])
+        : ledger(input)
+    render(<LedgerScreen storeId={STORE_ID} initialDate="2026-08-27" initialWalkinOpen />)
+    const panel = await screen.findByRole('complementary', { name: '店頭のお客様の受け付け' })
+    expect(panel).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'やめる' }))
+    await waitFor(() =>
+      expect(screen.queryByRole('complementary', { name: '店頭のお客様の受け付け' })).toBeNull(),
+    )
+    // 受付パネルは来店受付ボードから開くので、この面に開いた要素が無い。
+    // それでも body へ落とさず、台帳そのものへ焦点を返す。
+    expect(document.activeElement).not.toBe(document.body)
+  })
+})

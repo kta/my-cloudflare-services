@@ -80,6 +80,10 @@ function viewOf(
     slotMinutes: 30,
     lanes,
     counts,
+    // 受付パネルの 3 欄（P5）。予約リストは読まないので器だけ置く。
+    walkinWaitingCount: 0,
+    estimatedWaitMinutes: null,
+    nextTicketNo: 1,
     serverNow: SERVER_NOW,
   }
 }
@@ -115,10 +119,24 @@ const DAY = viewOf(
 )
 
 /** 絞り込みを持つ器。画面は絞り込みの状態を持たず、押されたことだけを外へ伝える。 */
-function WithFilter({ view = DAY, isOffline = false }: { view?: LedgerView; isOffline?: boolean }) {
+function WithFilter({
+  view = DAY,
+  isOffline = false,
+  onCheckin,
+}: {
+  view?: LedgerView
+  isOffline?: boolean
+  onCheckin?: (reservationId: string) => void
+}) {
   const [filter, setFilter] = useState<LedgerFilter>('all')
   return (
-    <ReservationList view={view} filter={filter} onFilterChange={setFilter} isOffline={isOffline} />
+    <ReservationList
+      view={view}
+      filter={filter}
+      onFilterChange={setFilter}
+      isOffline={isOffline}
+      {...(onCheckin === undefined ? {} : { onCheckin })}
+    />
   )
 }
 
@@ -275,6 +293,15 @@ describe('予約リスト', () => {
 
     const action = within(rows[2] as HTMLElement).getByRole('button', { name: 'ご来店' })
     expect(action.className).toContain('min-h-11.5')
+  })
+
+  it('「ご来店」を押すと、その予約の来店受付の画面へ渡す', async () => {
+    const onCheckin = vi.fn()
+    render(<WithFilter onCheckin={onCheckin} />)
+    const rows = bodyRows()
+    await userEvent.click(within(rows[2] as HTMLElement).getByRole('button', { name: 'ご来店' }))
+    expect(onCheckin).toHaveBeenCalledTimes(1)
+    expect(onCheckin.mock.calls[0]?.[0]).toEqual(expect.any(String))
   })
 
   it('ご来店の無かった行は押せる操作を持たず「ご来店なし」と書く', () => {
