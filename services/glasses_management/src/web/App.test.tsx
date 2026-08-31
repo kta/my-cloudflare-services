@@ -123,6 +123,53 @@ describe('左サイドバー', () => {
   })
 })
 
+describe('分析', () => {
+  it('分析を開くと、現在の店舗を初期値にしてoverviewを一度読む', async () => {
+    const calls: string[] = []
+    mockFetch((url) => {
+      calls.push(url)
+      if (url.includes('/api/auth/token'))
+        return new Response(JSON.stringify({ token: 't' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      if (url.includes('/api/staff/stores'))
+        return new Response(JSON.stringify(stores), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      if (url.includes('/api/staff/analytics'))
+        return new Response(
+          JSON.stringify({
+            metric: 'overview',
+            from: '2026-08-20',
+            to: '2026-09-03',
+            granularity: 'day',
+            countBy: 'visit_date',
+            series: [{ name: '予約数', pattern: 'solid', points: [] }],
+            summary: [],
+            target: null,
+            suppressed: false,
+            businessDays: 0,
+            pendingDays: 0,
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      return new Response('not found', { status: 404 })
+    })
+    await startWork()
+    await userEvent.click(await screen.findByRole('button', { name: '分析' }))
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: 'トップ' })).toHaveAttribute('aria-selected', 'true'),
+    )
+    expect(screen.getByLabelText('店舗')).toHaveValue(stores[0]?.id)
+    await waitFor(() =>
+      expect(calls.some((url) => url.includes('/api/staff/analytics?'))).toBe(true),
+    )
+    expect(calls.filter((url) => url.includes('/api/staff/analytics/targets'))).toHaveLength(0)
+  })
+})
+
 describe('トップ', () => {
   it('主操作は 2 つだけ', async () => {
     await startWork()

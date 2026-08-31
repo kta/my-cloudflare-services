@@ -1,0 +1,18 @@
+/*
+ * 系列の見分けは色だけに頼らない。色は親要素の text-* トークン、白地は surface
+ * トークンから受けるので、モックの生値や任意色を足さない。
+ */
+.analytics-pattern-hatch {
+  background-image: repeating-linear-gradient(
+    45deg,
+    transparent 0,
+    transparent 4px,
+    color-mix(in srgb, currentColor 42%, var(--color-surface)) 4px,
+    color-mix(in srgb, currentColor 42%, var(--color-surface)) 6px
+  );
+}
+
+.analytics-pattern-dot {
+  background-image: radial-gradient(var(--color-surface) 1px, transparent 1px);
+  background-size: 4px 4px;
+}

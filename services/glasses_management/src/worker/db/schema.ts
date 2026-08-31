@@ -1,4 +1,13 @@
-import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
+import { sql } from 'drizzle-orm'
+import {
+  check,
+  index,
+  integer,
+  real,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from 'drizzle-orm/sqlite-core'
 
 /*
  * D1 は SQLite。このリポジトリの決め:
@@ -501,6 +510,8 @@ export const reservations = sqliteTable(
     ),
     // 顧客詳細の「次のご予約」と来店回数の再計算。
     index('reservations_org_customer_start_idx').on(t.organizationId, t.customerId, t.startsAt),
+    // 分析の「受付日」集計を JST 範囲で読む。
+    index('reservations_org_store_created_idx').on(t.organizationId, t.storeId, t.createdAt),
   ],
 )
 
@@ -1116,6 +1127,46 @@ export const alerts = sqliteTable(
   ],
 )
 
+/**
+ * 分析の唯一の日次集計表。画面は生の業務表ではなくこの表だけを読む。
+ * metric / dimension / key の許可語彙は contracts の AnalyticsDaily* で入口を
+ * 固定し、D1 は日次 upsert の一意性だけを担保する（FK は置かない）。
+ */
+export const analyticsDaily = sqliteTable(
+  'analytics_daily',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    storeId: text('store_id').notNull(),
+    date: text('date').notNull(), // JST 'YYYY-MM-DD'
+    metric: text('metric').notNull(),
+    dimension: text('dimension').notNull(),
+    dimensionKey: text('dimension_key').notNull(),
+    // ロールアップ時点の名称。無効化・削除後も分析表示を保つ。
+    dimensionLabel: text('dimension_label').notNull(),
+    value: integer('value').notNull(),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (t) => [
+    check('analytics_daily_value_nonnegative_check', sql`${t.value} >= 0`),
+    uniqueIndex('analytics_daily_org_store_date_metric_dim_idx').on(
+      t.organizationId,
+      t.storeId,
+      t.date,
+      t.metric,
+      t.dimension,
+      t.dimensionKey,
+    ),
+    index('analytics_daily_org_store_metric_date_idx').on(
+      t.organizationId,
+      t.storeId,
+      t.metric,
+      t.date,
+    ),
+  ],
+)
+
 /* ───────────────────────────────────────────────────────────────────────────
  * P8 お客様向け Web 予約（0007_*.sql）
  * 店舗ごとに「出す・出さない／何を出すか／いつまで受けるか」を持つ 1 表と、
@@ -1215,5 +1266,7 @@ export const webBookings = sqliteTable(
     uniqueIndex('web_bookings_org_public_code_idx').on(t.organizationId, t.publicCode),
     // LEDGER-LIST の「確認待ち 1件」・ALERTS の「Web予約が2件、確認待ちです」。
     index('web_bookings_org_store_status_idx').on(t.organizationId, t.storeId, t.status),
+    // scheduled の pending 自動取消を受信日時順で範囲走査する。
+    index('web_bookings_status_created_idx').on(t.status, t.createdAt),
   ],
 )

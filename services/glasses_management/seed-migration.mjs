@@ -1,5 +1,7 @@
 /** 旧開発 seed の組織 ID を、現在の `eyex` へ一度だけ移す。 */
 export const LEGACY_SEED_ORG = 'org-eyex-seed'
+/** 旧seedが実行日の特別営業に使っていた固定ID。 */
+export const LEGACY_TODAY_EXCEPTION_ID = 'b0040000-0000-4000-8000-000000000001'
 
 export const ORGANIZATION_SCOPED_TABLES = [
   'alerts',
@@ -46,6 +48,7 @@ export function legacySeedMigrationStatements(remote) {
 
   return [
     `DELETE FROM organizations WHERE id = ${current} AND EXISTS (SELECT 1 FROM organizations WHERE id = ${legacy}) AND NOT EXISTS (SELECT 1 FROM stores WHERE organization_id = ${current});`,
+    `DELETE FROM store_calendar_exceptions WHERE id = '${LEGACY_TODAY_EXCEPTION_ID}';`,
     ...ORGANIZATION_SCOPED_TABLES.map(
       (table) =>
         `UPDATE ${table} SET organization_id = ${current} WHERE organization_id = ${legacy} AND ${noCurrentOrganization};`,

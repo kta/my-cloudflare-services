@@ -112,3 +112,15 @@ node index.mjs              # index.html を作り直す
 Split View、VoiceOver の読み上げ順は、この画像の外で決める必要がある。
 実装するときは、ここの hex や px を貼らずに `packages/ui/src/theme.css` の
 セマンティックトークンへ翻訳する。
+
+## 分析のモック無し3タブ（2026-08-31 design-select）
+
+- **採用: 案B** — 「予約の入口」「来店回数」は短い4分類なので縦棒を使い、長い業務語を持つ
+  「ご来店の目的」だけ既存の担当者タブと同じ横棒へ切り替える。正式モックは
+  [`ANALYTICS-SOURCE`](./screens/ANALYTICS-SOURCE.html)／
+  [`ANALYTICS-VISITS`](./screens/ANALYTICS-VISITS.html)／
+  [`ANALYTICS-PURPOSE`](./screens/ANALYTICS-PURPOSE.html)。
+- **不採用: 案A** — 3タブをすべて縦棒に統一する案。目的名の折り返しでラベルと値の対応が弱まり、
+  iPad Split View と文字拡大時に比較しにくくなるため戻さない。
+- 3タブとも、グラフ1つ・「何をいつ基準にどの母数で数えたか」の定義1行・まとめ3項目に限定する。
+- P9ではP10が所有するお知らせ件数や通知UIを追加しない。

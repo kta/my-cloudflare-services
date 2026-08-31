@@ -2,6 +2,7 @@ import type { StaffMember, Store } from '@app/contracts'
 import { auth, toJstDateString } from '@app/shared'
 import { Button, Field, focusRing, focusRingOnPine, Notice, TextInput } from '@app/ui'
 import { type FormEvent, type ReactNode, useCallback, useEffect, useState } from 'react'
+import { AnalyticsPane } from './analytics/AnalyticsPane'
 import { BookingScreen } from './booking/BookingScreen'
 import { ChangeScreen } from './change/ChangeScreen'
 import { client } from './client'
@@ -299,6 +300,17 @@ function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
         ) : current === 'settings' ? (
           store ? (
             <SettingsScreen storeId={store.id} />
+          ) : (
+            <p className="p-11 text-body text-ink-muted">読み込んでいます…</p>
+          )
+        ) : current === 'analytics' ? (
+          store ? (
+            <AnalyticsPane
+              storeId={store.id}
+              stores={stores ?? []}
+              onSessionExpired={onSignOut}
+              onBack={() => navigate('home')}
+            />
           ) : (
             <p className="p-11 text-body text-ink-muted">読み込んでいます…</p>
           )

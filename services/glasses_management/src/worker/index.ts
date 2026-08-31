@@ -2,6 +2,11 @@ import {
   Alert,
   AlertList,
   AlertListQuery,
+  AnalyticsQuery,
+  AnalyticsReport,
+  AnalyticsRollupRequest,
+  AnalyticsRollupResult,
+  AnalyticsTargets,
   AvailabilityQuery,
   type AvailabilityReason,
   AvailabilityResponse,
@@ -106,6 +111,7 @@ import {
   StaffSkillsInput,
   Store,
   StoreDetail,
+  StoreIdQuery,
   StoreMembership,
   StorePatch,
   type StorePermission,
@@ -178,6 +184,12 @@ import {
   webBookingSettings,
 } from './db/schema'
 import { slotLockRequests, slotLockStatements, UNASSIGNED_TARGET_KEY } from './db/slot-locks'
+import { analyticsStoredMetrics, buildAnalyticsReport } from './domain/analytics-report'
+import {
+  type AnalyticsReservation,
+  type AnalyticsVisitEvent,
+  rollupAnalyticsDay,
+} from './domain/analytics-rollup'
 import {
   type AvailabilityInput,
   computeAvailability,
@@ -430,11 +442,15 @@ async function findStore(db: Db, org: string, storeId: string) {
  * **body / query の `organizationId` や `storeId` を認可の根拠にしない。**
  * 店舗に紐づかない面（ご来店の目的）は、同じ組織のどこかの店舗で権限を持っていればよい。
  */
-function requireStorePermission(perm: StorePermission): MiddlewareHandler<Env> {
+function requireStorePermission(
+  perm: StorePermission,
+  input: { storeIdFrom?: 'param' | 'query' } = {},
+): MiddlewareHandler<Env> {
   return async (c, next) => {
     const db = drizzle(c.env.DB)
     const { org, sub } = c.get('auth')
-    const storeId: string | undefined = c.req.param('storeId')
+    const storeId: string | undefined =
+      input.storeIdFrom === 'query' ? c.req.query('storeId') : c.req.param('storeId')
     if (storeId !== undefined && !(await findStore(db, org, storeId))) {
       return c.json({ error: 'not_found' }, 404)
     }
@@ -3161,22 +3177,39 @@ async function applyWebPublications(
     }
     const alert = autoCancelledAlert({ publicCode: row.publicCode })
     // お客様の予約が消える唯一の自動処理なので、台帳・Web・お知らせを 1 バッチで書く。
-    await env.DB.batch([
+    const results = await env.DB.batch([
       env.DB.prepare(
         "UPDATE web_bookings SET status = 'cancelled', cancelled_at = ?, updated_at = ? " +
           "WHERE organization_id = ? AND id = ? AND status = 'pending'",
       ).bind(nowIso, nowIso, row.organizationId, row.id),
       env.DB.prepare(
         "UPDATE reservations SET status = 'cancelled', cancelled_at = ?, cancel_reason = 'store', " +
-          'updated_at = ?, version = version + 1 WHERE organization_id = ? AND id = ?',
-      ).bind(nowIso, nowIso, row.organizationId, row.reservationId),
+          'updated_at = ?, version = version + 1 WHERE organization_id = ? AND id = ? ' +
+          "AND status NOT IN ('cancelled','no_show') AND EXISTS (" +
+          'SELECT 1 FROM web_bookings WHERE organization_id = ? AND id = ? ' +
+          "AND status = 'cancelled' AND cancelled_at = ?)",
+      ).bind(
+        nowIso,
+        nowIso,
+        row.organizationId,
+        row.reservationId,
+        row.organizationId,
+        row.id,
+        nowIso,
+      ),
       env.DB.prepare(
-        'DELETE FROM reservation_slot_locks WHERE organization_id = ? AND reservation_id = ?',
-      ).bind(row.organizationId, row.reservationId),
+        'DELETE FROM reservation_slot_locks WHERE organization_id = ? AND reservation_id = ? ' +
+          'AND EXISTS (SELECT 1 FROM web_bookings WHERE organization_id = ? AND id = ? ' +
+          "AND status = 'cancelled' AND cancelled_at = ?)",
+      ).bind(row.organizationId, row.reservationId, row.organizationId, row.id, nowIso),
       env.DB.prepare(
         'INSERT INTO alerts (id, organization_id, store_id, code, severity, audience, title, body, ' +
           'target_type, target_id, occurred_at, read_at, resolved_at, resolved_by, created_at) ' +
-          "VALUES (?,?,?,?,?,?,?,?,'reservation',?,?,NULL,NULL,NULL,?)",
+          "SELECT ?,?,?,?,?,?,?,?,'reservation',?,?,NULL,NULL,NULL,? " +
+          'WHERE EXISTS (SELECT 1 FROM web_bookings WHERE organization_id = ? AND id = ? ' +
+          "AND status = 'cancelled' AND cancelled_at = ?) " +
+          'AND NOT EXISTS (SELECT 1 FROM alerts WHERE organization_id = ? AND code = ? ' +
+          "AND target_type = 'reservation' AND target_id = ?)",
       ).bind(
         crypto.randomUUID(),
         row.organizationId,
@@ -3189,12 +3222,312 @@ async function applyWebPublications(
         row.reservationId,
         nowIso,
         nowIso,
+        row.organizationId,
+        row.id,
+        nowIso,
+        row.organizationId,
+        alert.code,
+        row.reservationId,
       ),
     ])
+    if ((results[0]?.meta.changes ?? 0) === 0) {
+      skipped += 1
+      continue
+    }
     autoCancelled += 1
   }
   // **自動で取り消した件数を他の数に混ぜない**（0 でないことが単独で読めるようにする）。
   return { applied: found.results.length, skipped, autoCancelled }
+}
+
+type AnalyticsStore = { id: string; organizationId: string }
+
+type AnalyticsRawReservation = {
+  id: string
+  organizationId: string
+  storeId: string
+  customerId: string | null
+  source: 'phone' | 'counter' | 'web' | 'walkin'
+  status: 'confirmed' | 'arrived' | 'serving' | 'done' | 'cancelled' | 'no_show'
+  startsAt: string
+  createdAt: string
+  cancelReason: 'customer' | 'store' | 'duplicate' | 'no_show' | null
+}
+
+function analyticsDates(from: string, to: string): string[] {
+  const dates: string[] = []
+  for (let date = from; date <= to; date = addJstDays(date, 1)) dates.push(date)
+  return dates
+}
+
+function analyticsRetentionCutoff(date: string): string {
+  const value = new Date(`${date.slice(0, 7)}-01T00:00:00.000Z`)
+  value.setUTCMonth(value.getUTCMonth() - 24)
+  return value.toISOString().slice(0, 10)
+}
+
+function analyticsPreviousMonthRange(date: string): { from: string; to: string } {
+  const monthStart = new Date(`${date.slice(0, 7)}-01T00:00:00.000Z`)
+  monthStart.setUTCMonth(monthStart.getUTCMonth() - 1)
+  const from = monthStart.toISOString().slice(0, 10)
+  const next = new Date(monthStart)
+  next.setUTCMonth(next.getUTCMonth() + 1)
+  next.setUTCDate(next.getUTCDate() - 1)
+  return { from, to: next.toISOString().slice(0, 10) }
+}
+
+/** トップの15日グラフを保ったまま、先週〜来週を月曜〜日曜で欠けずに読む。 */
+function analyticsOverviewWeekRange(from: string, to: string): { from: string; to: string } {
+  const dates = analyticsDates(from, to)
+  const center = dates[Math.floor(dates.length / 2)] ?? from
+  const weekday = new Date(`${center}T00:00:00.000Z`).getUTCDay()
+  const monday = addJstDays(center, -((weekday + 6) % 7))
+  return { from: addJstDays(monday, -7), to: addJstDays(monday, 13) }
+}
+
+function encodeAnalyticsStoreCursor(storeId: string): string {
+  return btoa(storeId)
+}
+
+// 最初のページがcatch-up中であることをKVに持つ内部cursor。UUID cursor と区別して、
+// 次回も先頭の同じ3店舗を再処理する。
+const ANALYTICS_RETRY_FIRST_PAGE_CURSOR = btoa('analytics:retry-first-page')
+
+function decodeAnalyticsStoreCursor(cursor: string | undefined): string | null {
+  if (cursor === undefined) return null
+  if (cursor === ANALYTICS_RETRY_FIRST_PAGE_CURSOR) return null
+  try {
+    const storeId = atob(cursor)
+    return /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(storeId) ? storeId : null
+  } catch {
+    return null
+  }
+}
+
+function isAnalyticsClosed(
+  date: string,
+  businessHours: readonly { weekday: number; isClosed: string }[],
+  exceptions: readonly { date: string; kind: string }[],
+): boolean {
+  const exception = exceptions.find((row) => row.date === date)
+  if (exception) return exception.kind === 'closed'
+  const weekday = new Date(`${date}T00:00:00.000Z`).getUTCDay()
+  return businessHours.find((row) => row.weekday === weekday)?.isClosed !== '0'
+}
+
+/**
+ * 最大 3 店舗・31 日を、各店舗ごとの bulk read と JSON upsert で再計算する。
+ * 生表はここだけが読む。表示 API は analytics_daily に閉じる。
+ */
+export async function rollupAnalytics(
+  env: Bindings,
+  input: {
+    from: string
+    to: string
+    limit: number
+    storeCursor?: string
+    now: Date
+    completedThrough?: string
+  },
+) {
+  const cursorId = decodeAnalyticsStoreCursor(input.storeCursor)
+  if (
+    input.storeCursor !== undefined &&
+    input.storeCursor !== ANALYTICS_RETRY_FIRST_PAGE_CURSOR &&
+    cursorId === null
+  )
+    throw new HTTPException(400, { message: 'invalid_cursor' })
+  // 対象店舗が無効化されても、analytics_daily の保持期限だけは全体で必ず進める。
+  await env.DB.prepare('DELETE FROM analytics_daily WHERE date < ?1')
+    .bind(analyticsRetentionCutoff(toJstDateString(input.now)))
+    .run()
+  const storeRows = await env.DB.prepare(
+    "SELECT id, organization_id AS organizationId FROM stores WHERE is_active = '1' " +
+      'AND (?1 IS NULL OR id > ?1) ORDER BY id ASC LIMIT ?2',
+  )
+    .bind(cursorId, input.limit + 1)
+    .all<AnalyticsStore>()
+  const page = storeRows.results.slice(0, input.limit)
+  const lastStore = page.at(-1)
+  const pageNextStoreCursor =
+    storeRows.results.length > input.limit && lastStore !== undefined
+      ? encodeAnalyticsStoreCursor(lastStore.id)
+      : null
+  let upserted = 0
+  let dropped = 0
+  const failedStores: string[] = []
+  let retryCurrentPage = false
+
+  for (const store of page) {
+    try {
+      let storeFrom = input.from
+      let storeTo = input.to
+      if (input.completedThrough !== undefined) {
+        const lastClosed = await env.DB.prepare(
+          "SELECT MAX(date) AS date FROM analytics_daily WHERE organization_id = ?1 AND store_id = ?2 AND metric = 'closed' AND date <= ?3",
+        )
+          .bind(store.organizationId, store.id, input.completedThrough)
+          .first<{ date: string | null }>()
+        storeFrom = lastClosed?.date == null ? input.from : addJstDays(lastClosed.date, 1)
+        // 両端を含め最大31日。遅延分が残れば同じページを次回も処理する。
+        storeTo = addJstDays(storeFrom, 30) < input.to ? addJstDays(storeFrom, 30) : input.to
+      }
+      const lower = toInstant(addJstDays(storeFrom, -90), 0)
+      const windowStart = toInstant(storeFrom, 0)
+      const upper = toInstant(addJstDays(storeTo, 1), 0)
+      // 最終日の23:59受付→翌日相談開始も待ち時間へ入れる。
+      const eventUpper = toInstant(addJstDays(storeTo, 2), 0)
+      const [rawReservations, businessHours, exceptions, rawEvents, staffRows] = await Promise.all([
+        env.DB.prepare(
+          'SELECT id, organization_id AS organizationId, store_id AS storeId, customer_id AS customerId, source, status, starts_at AS startsAt, created_at AS createdAt, cancel_reason AS cancelReason ' +
+            'FROM reservations WHERE organization_id = ?1 AND store_id = ?2 AND ((starts_at >= ?3 AND starts_at < ?4) OR (created_at >= ?5 AND created_at < ?4))',
+        )
+          .bind(store.organizationId, store.id, lower, upper, windowStart)
+          .all<AnalyticsRawReservation>(),
+        env.DB.prepare(
+          'SELECT weekday, is_closed AS isClosed FROM store_business_hours WHERE organization_id = ?1 AND store_id = ?2',
+        )
+          .bind(store.organizationId, store.id)
+          .all<{ weekday: number; isClosed: string }>(),
+        env.DB.prepare(
+          'SELECT date, kind FROM store_calendar_exceptions WHERE organization_id = ?1 AND store_id = ?2 AND date >= ?3 AND date <= ?4',
+        )
+          .bind(store.organizationId, store.id, storeFrom, storeTo)
+          .all<{ date: string; kind: string }>(),
+        env.DB.prepare(
+          'SELECT organization_id AS organizationId, store_id AS storeId, subject_id AS subjectId, stage, occurred_at AS occurredAt ' +
+            'FROM visit_events WHERE organization_id = ?1 AND store_id = ?2 AND occurred_at >= ?3 AND occurred_at < ?4',
+        )
+          .bind(store.organizationId, store.id, windowStart, eventUpper)
+          .all<AnalyticsVisitEvent>(),
+        env.DB.prepare(
+          'SELECT id, display_name AS label, is_active AS isActive FROM staff WHERE organization_id = ?1 AND store_id = ?2 ORDER BY sort_order ASC, id ASC',
+        )
+          .bind(store.organizationId, store.id)
+          .all<{ id: string; label: string; isActive: string }>(),
+      ])
+      const reservationIds = [...new Set(rawReservations.results.map((row) => row.id))]
+      const reservationIdsJson = JSON.stringify(reservationIds)
+      const currentDoneReservationIds = rawReservations.results
+        .filter(
+          (row) => row.status === 'done' && row.startsAt >= windowStart && row.startsAt < upper,
+        )
+        .map((row) => row.id)
+      const currentDoneReservationIdsJson = JSON.stringify(currentDoneReservationIds)
+      const [purposeRows, assignmentRows, priorVisitRows] = await Promise.all([
+        reservationIds.length === 0
+          ? Promise.resolve({
+              results: [] as { reservationId: string; purposeId: string; label: string }[],
+            })
+          : env.DB.prepare(
+              "SELECT rp.reservation_id AS reservationId, rp.purpose_id AS purposeId, COALESCE(p.name_internal, 'ご来店') AS label " +
+                'FROM reservation_purposes rp LEFT JOIN visit_purposes p ON p.organization_id = rp.organization_id AND p.id = rp.purpose_id ' +
+                'WHERE rp.organization_id = ?1 AND rp.reservation_id IN (SELECT value FROM json_each(?2))',
+            )
+              .bind(store.organizationId, reservationIdsJson)
+              .all<{ reservationId: string; purposeId: string; label: string }>(),
+        reservationIds.length === 0
+          ? Promise.resolve({ results: [] as { reservationId: string; staffId: string | null }[] })
+          : env.DB.prepare(
+              "SELECT reservation_id AS reservationId, target_id AS staffId FROM reservation_assignments WHERE organization_id = ?1 AND kind = 'staff' AND reservation_id IN (SELECT value FROM json_each(?2))",
+            )
+              .bind(store.organizationId, reservationIdsJson)
+              .all<{ reservationId: string; staffId: string | null }>(),
+        currentDoneReservationIds.length === 0
+          ? Promise.resolve({
+              results: [] as { reservationId: string; visitCountBefore: number }[],
+            })
+          : env.DB.prepare(
+              "SELECT target.id AS reservationId, COUNT(prior.id) AS visitCountBefore FROM reservations AS target LEFT JOIN reservations AS prior ON prior.organization_id = target.organization_id AND prior.customer_id = target.customer_id AND prior.status = 'done' AND prior.starts_at < target.starts_at WHERE target.organization_id = ?1 AND target.id IN (SELECT value FROM json_each(?2)) GROUP BY target.id",
+            )
+              .bind(store.organizationId, currentDoneReservationIdsJson)
+              .all<{ reservationId: string; visitCountBefore: number }>(),
+      ])
+      const purposes = new Map<string, string[]>()
+      const purposeLabels = new Map<string, string>()
+      for (const row of purposeRows.results)
+        purposes.set(row.reservationId, [...(purposes.get(row.reservationId) ?? []), row.purposeId])
+      for (const row of purposeRows.results) purposeLabels.set(row.purposeId, row.label)
+      const staffByReservation = new Map<string, string | null>()
+      for (const row of assignmentRows.results)
+        if (!staffByReservation.has(row.reservationId))
+          staffByReservation.set(row.reservationId, row.staffId)
+      const visitCountsBefore = new Map(
+        priorVisitRows.results.map((row) => [row.reservationId, row.visitCountBefore]),
+      )
+      const reservations: AnalyticsReservation[] = rawReservations.results.map((row) => ({
+        ...row,
+        staffId: staffByReservation.get(row.id) ?? null,
+        purposeIds: purposes.get(row.id) ?? [],
+        purposeLabels: Object.fromEntries(purposeLabels),
+        visitCountBefore: row.status === 'done' ? (visitCountsBefore.get(row.id) ?? 0) : null,
+      }))
+      const rows = analyticsDates(storeFrom, storeTo).flatMap((date) => {
+        const result = rollupAnalyticsDay({
+          organizationId: store.organizationId,
+          storeId: store.id,
+          date,
+          now: input.now,
+          completedThrough: input.completedThrough,
+          isClosed: isAnalyticsClosed(date, businessHours.results, exceptions.results),
+          reservations,
+          visitEvents: rawEvents.results,
+          staff: staffRows.results.map((staff) => ({
+            id: staff.id,
+            label: staff.label,
+            isActive: staff.isActive === '1',
+          })),
+        })
+        dropped += result.dropped.cancellationReservationIds.length
+        return result.rows
+      })
+      const nowIso = input.now.toISOString()
+      const json = JSON.stringify(
+        rows.map((row) => ({
+          ...row,
+          id: crypto.randomUUID(),
+          createdAt: nowIso,
+          updatedAt: nowIso,
+        })),
+      )
+      const writes = [
+        env.DB.prepare(
+          'DELETE FROM analytics_daily WHERE organization_id = ?1 AND store_id = ?2 AND date >= ?3 AND date <= ?4',
+        ).bind(store.organizationId, store.id, storeFrom, storeTo),
+      ]
+      if (rows.length > 0) {
+        writes.splice(
+          1,
+          0,
+          env.DB.prepare(
+            'INSERT INTO analytics_daily (id, organization_id, store_id, date, metric, dimension, dimension_key, dimension_label, value, created_at, updated_at) ' +
+              "SELECT json_extract(value, '$.id'), json_extract(value, '$.organizationId'), json_extract(value, '$.storeId'), json_extract(value, '$.date'), json_extract(value, '$.metric'), json_extract(value, '$.dimension'), json_extract(value, '$.dimensionKey'), json_extract(value, '$.dimensionLabel'), json_extract(value, '$.value'), json_extract(value, '$.createdAt'), json_extract(value, '$.updatedAt') FROM json_each(?1) WHERE 1 " +
+              'ON CONFLICT(organization_id, store_id, date, metric, dimension, dimension_key) DO UPDATE SET dimension_label = excluded.dimension_label, value = excluded.value, updated_at = excluded.updated_at',
+          ).bind(json),
+        )
+      }
+      await env.DB.batch(writes)
+      upserted += rows.length
+      if (input.completedThrough !== undefined && storeTo < input.completedThrough)
+        retryCurrentPage = true
+    } catch (err) {
+      console.error('analytics rollup failed', { storeId: store.id }, err)
+      failedStores.push(store.id)
+      if (input.completedThrough !== undefined) retryCurrentPage = true
+    }
+  }
+  const nextStoreCursor = retryCurrentPage
+    ? (input.storeCursor ?? ANALYTICS_RETRY_FIRST_PAGE_CURSOR)
+    : pageNextStoreCursor
+  return {
+    processedStores: page.length,
+    failedStores,
+    nextStoreCursor,
+    from: input.from,
+    to: input.to,
+    upserted,
+    dropped,
+  }
 }
 
 const routes = app
@@ -8188,19 +8521,27 @@ const routes = app
           .bind(now, now, org, row.id)
           .run()
       } else {
-        await c.env.DB.batch([
+        const results = await c.env.DB.batch([
           c.env.DB.prepare(
             "UPDATE web_bookings SET status = 'cancelled', cancelled_at = ?, updated_at = ? " +
               "WHERE organization_id = ? AND id = ? AND status = 'pending'",
           ).bind(now, now, org, row.id),
           c.env.DB.prepare(
             "UPDATE reservations SET status = 'cancelled', cancelled_at = ?, cancel_reason = 'store', " +
-              'updated_at = ?, version = version + 1 WHERE organization_id = ? AND id = ?',
-          ).bind(now, now, org, row.reservationId),
+              'updated_at = ?, version = version + 1 WHERE organization_id = ? AND id = ? ' +
+              "AND status NOT IN ('cancelled','no_show') AND EXISTS (" +
+              'SELECT 1 FROM web_bookings WHERE organization_id = ? AND id = ? ' +
+              "AND status = 'cancelled' AND cancelled_at = ?)",
+          ).bind(now, now, org, row.reservationId, org, row.id, now),
           c.env.DB.prepare(
-            'DELETE FROM reservation_slot_locks WHERE organization_id = ? AND reservation_id = ?',
-          ).bind(org, row.reservationId),
+            'DELETE FROM reservation_slot_locks WHERE organization_id = ? AND reservation_id = ? ' +
+              'AND EXISTS (SELECT 1 FROM web_bookings WHERE organization_id = ? AND id = ? ' +
+              "AND status = 'cancelled' AND cancelled_at = ?)",
+          ).bind(org, row.reservationId, org, row.id, now),
         ])
+        if ((results[0]?.meta.changes ?? 0) === 0) {
+          return c.json({ error: 'invalid_transition' }, 409)
+        }
       }
       const detail = await reservationDetailOf(c.env, org, row.reservationId)
       if (detail === null) return c.json({ error: 'not_found' }, 404)
@@ -8961,6 +9302,102 @@ const routes = app
       return c.json(WebPublicationApplyResult.parse(result))
     },
   )
+  .get(
+    '/api/staff/analytics',
+    zValidator('query', AnalyticsQuery),
+    requireStorePermission('analytics.read', { storeIdFrom: 'query' }),
+    async (c) => {
+      const input = c.req.valid('query')
+      // P9 の読出し境界: reservations / events などの生表をここで参照しない。
+      const period = analyticsPreviousMonthRange(input.from)
+      const overviewPeriod = analyticsOverviewWeekRange(input.from, input.to)
+      const metrics = JSON.stringify(analyticsStoredMetrics(input.metric, input.countBy))
+      const statement =
+        'SELECT date, metric, dimension, dimension_key AS dimensionKey, dimension_label AS dimensionLabel, value FROM analytics_daily ' +
+        'WHERE organization_id = ?1 AND store_id = ?2 AND date >= ?3 AND date <= ?4 ' +
+        'AND metric IN (SELECT value FROM json_each(?5))'
+      const [rows, comparisonRows, overviewRows] = await Promise.all([
+        c.env.DB.prepare(statement)
+          .bind(c.get('auth').org, input.storeId, input.from, input.to, metrics)
+          .all<{
+            date: string
+            metric: string
+            dimension: string
+            dimensionKey: string
+            dimensionLabel: string
+            value: number
+          }>(),
+        input.metric === 'wait_time'
+          ? c.env.DB.prepare(statement)
+              .bind(
+                c.get('auth').org,
+                input.storeId,
+                period.from,
+                period.to,
+                JSON.stringify(['wait_seconds_histogram']),
+              )
+              .all<{
+                date: string
+                metric: string
+                dimension: string
+                dimensionKey: string
+                dimensionLabel: string
+                value: number
+              }>()
+          : Promise.resolve({ results: [] }),
+        input.metric === 'overview'
+          ? c.env.DB.prepare(statement)
+              .bind(
+                c.get('auth').org,
+                input.storeId,
+                overviewPeriod.from,
+                overviewPeriod.to,
+                JSON.stringify(['reservations']),
+              )
+              .all<{
+                date: string
+                metric: string
+                dimension: string
+                dimensionKey: string
+                dimensionLabel: string
+                value: number
+              }>()
+          : Promise.resolve({ results: [] }),
+      ])
+      return c.json(
+        AnalyticsReport.parse(
+          buildAnalyticsReport({
+            ...input,
+            rows: rows.results,
+            comparisonRows: comparisonRows.results,
+            overviewRows: overviewRows.results,
+          }),
+        ),
+      )
+    },
+  )
+  .get(
+    '/api/staff/analytics/targets',
+    zValidator('query', StoreIdQuery),
+    requireStorePermission('analytics.read', { storeIdFrom: 'query' }),
+    (c) =>
+      c.json(
+        AnalyticsTargets.parse({
+          waitMinutes: 8,
+          cancellationRatePercent: 10,
+          revisitWindowDays: 90,
+        }),
+      ),
+  )
+  .post(
+    '/api/internal/maintenance/analytics/rollup',
+    zValidator('json', AnalyticsRollupRequest),
+    async (c) => {
+      const input = c.req.valid('json')
+      const result = await rollupAnalytics(c.env, { ...input, now: new Date() })
+      return c.json(AnalyticsRollupResult.parse(result))
+    },
+  )
 
 // web 側はこの型だけを（type-only で）読み、`hc<AppType>` のクライアントを作る。
 export type AppType = typeof routes
@@ -8973,12 +9410,78 @@ export type AppType = typeof routes
  * 処理を足していくので、try/catch で包む形を最初から作っておく（1 本目が投げたせいで
  * 勤務の窓送りが止まる、という壊れ方を作らない）。
  */
-async function scheduled(_controller: ScheduledController, env: Bindings): Promise<void> {
+type ScheduledMaintenanceTasks = {
+  applyWebPublications: (now: Date) => Promise<unknown>
+  readRollupCursor: () => Promise<string | undefined>
+  rollupAnalytics: (input: {
+    from: string
+    to: string
+    limit: number
+    storeCursor?: string
+    now: Date
+    completedThrough?: string
+  }) => Promise<{ nextStoreCursor: string | null; failedStores: string[]; dropped: number }>
+  writeRollupCursor: (cursor: string | null) => Promise<unknown>
+  purgeRecordings: (now: Date) => Promise<unknown>
+}
+
+export async function runScheduledMaintenance(
+  now: Date,
+  tasks: ScheduledMaintenanceTasks,
+): Promise<void> {
   try {
-    await purgeRecordings(env, { now: new Date(), limit: 100 })
+    await tasks.applyWebPublications(now)
+  } catch (err) {
+    console.error('scheduled web publications apply failed', err)
+  }
+  try {
+    const today = toJstDateString(now)
+    // 各店舗のclosed最終確定日の翌日から、最大31日ずつ追いつく。遅延が残るページは
+    // 同じcursorを保持し、追いついた店舗だけ通常の昨日〜7日先へ戻る。
+    const from = addJstDays(today, -1)
+    const to = addJstDays(today, 7)
+    const completedThrough = addJstDays(today, -1)
+    const storeCursor = await tasks.readRollupCursor()
+    const result = await tasks.rollupAnalytics({
+      from,
+      to,
+      limit: 3,
+      storeCursor,
+      now,
+      completedThrough,
+    })
+    if (result.failedStores.length > 0 || result.dropped > 0)
+      console.error('scheduled analytics rollup completed with anomalies', {
+        failedStores: result.failedStores,
+        dropped: result.dropped,
+      })
+    await tasks.writeRollupCursor(result.nextStoreCursor)
+  } catch (err) {
+    console.error('scheduled analytics rollup failed', err)
+  }
+  try {
+    await tasks.purgeRecordings(now)
   } catch (err) {
     console.error('scheduled recordings purge failed', err)
   }
+}
+
+async function scheduled(controller: ScheduledController, env: Bindings): Promise<void> {
+  // Cloudflare が配った scheduledTime を唯一の時計にする（JST 00:00 の境界を再取得しない）。
+  const now = new Date(controller.scheduledTime)
+  await runScheduledMaintenance(now, {
+    applyWebPublications: (clock) => applyWebPublications(env, { now: clock, limit: 100 }),
+    readRollupCursor: async () =>
+      (await env.SHORT_LIVED.get('analytics:rollup:store-cursor')) ?? undefined,
+    rollupAnalytics: (input) => rollupAnalytics(env, input),
+    writeRollupCursor: (cursor) =>
+      cursor === null
+        ? env.SHORT_LIVED.delete('analytics:rollup:store-cursor')
+        : env.SHORT_LIVED.put('analytics:rollup:store-cursor', cursor, {
+            expirationTtl: 172_800,
+          }),
+    purgeRecordings: (clock) => purgeRecordings(env, { now: clock, limit: 100 }),
+  })
 }
 
 export default { fetch: app.fetch, scheduled }

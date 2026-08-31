@@ -7,6 +7,7 @@ import { getTableConfig } from 'drizzle-orm/sqlite-core'
 import { describe, expect, it } from 'vitest'
 import {
   alerts,
+  analyticsDaily,
   auditEvents,
   customerGlasses,
   customerNotes,
@@ -398,6 +399,14 @@ describe('reservations', () => {
       'starts_at',
     ])
     expect(isUnique(table, 'reservations_org_store_start_idx')).toBe(false)
+  })
+
+  it('受付日での分析範囲走査用 index を持つ', () => {
+    expect(columnsOf(table, 'reservations_org_store_created_idx')).toEqual([
+      'organization_id',
+      'store_id',
+      'created_at',
+    ])
   })
 
   it('組織の中で予約番号が一意である', () => {
@@ -1130,7 +1139,8 @@ describe('web_bookings', () => {
       'status',
     ])
     expect(isUnique(table, 'web_bookings_org_store_status_idx')).toBe(false)
-    expect(table.indexes).toHaveLength(3)
+    expect(columnsOf(table, 'web_bookings_status_created_idx')).toEqual(['status', 'created_at'])
+    expect(table.indexes).toHaveLength(4)
   })
 
   it('確認鍵と確認番号はハッシュの列しか持たない', () => {
@@ -1173,5 +1183,55 @@ describe('web_bookings', () => {
     expect(table.columns.find((c) => c.name === 'cancelled_at')?.notNull).toBe(false)
     expect(table.columns.find((c) => c.name === 'updated_at')?.notNull).toBe(true)
     expect(table.columns.filter((c) => c.hasDefault)).toHaveLength(0)
+  })
+})
+
+describe('analytics_daily', () => {
+  const table = getTableConfig(analyticsDaily)
+
+  it('has only the non-null aggregate columns and no foreign key', () => {
+    expect(table.name).toBe('analytics_daily')
+    expect(table.foreignKeys).toHaveLength(0)
+    expect(table.columns.map((column) => column.name)).toEqual([
+      'id',
+      'organization_id',
+      'store_id',
+      'date',
+      'metric',
+      'dimension',
+      'dimension_key',
+      'dimension_label',
+      'value',
+      'created_at',
+      'updated_at',
+    ])
+    for (const column of table.columns) expect(column.notNull, column.name).toBe(true)
+    expect(
+      table.columns.find((column) => column.name === 'dimension_label')?.default,
+    ).toBeUndefined()
+    expect(table.columns.find((column) => column.name === 'value')?.columnType).toBe(
+      'SQLiteInteger',
+    )
+    expect(table.checks.map((constraint) => constraint.name)).toContain(
+      'analytics_daily_value_nonnegative_check',
+    )
+  })
+
+  it('makes a same-day histogram bucket idempotent and reads periods by metric', () => {
+    expect(isUnique(table, 'analytics_daily_org_store_date_metric_dim_idx')).toBe(true)
+    expect(columnsOf(table, 'analytics_daily_org_store_date_metric_dim_idx')).toEqual([
+      'organization_id',
+      'store_id',
+      'date',
+      'metric',
+      'dimension',
+      'dimension_key',
+    ])
+    expect(columnsOf(table, 'analytics_daily_org_store_metric_date_idx')).toEqual([
+      'organization_id',
+      'store_id',
+      'metric',
+      'date',
+    ])
   })
 })

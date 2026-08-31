@@ -135,15 +135,6 @@ function shiftDay(date: string, days: number): string {
     .slice(0, 10)
 }
 
-function clock(at: string): string {
-  return new Intl.DateTimeFormat('ja-JP', {
-    timeZone: 'Asia/Tokyo',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).format(new Date(at))
-}
-
 type PublicDay = {
   date: string
   isClosed: boolean
@@ -374,9 +365,8 @@ test('店長は受付を開始する何時間先からと、何日先まで受�
 
   /*
    * 10 日先までは枠が返り、11 日先からは 1 つも選べない。
-   * **seed の勤務は 2026年8月27日 から 35 日ぶんしか無い**ので、それより先を見ても
-   * 「受付の窓の外だから空いていない」のか「勤務が無いから空いていない」のか分からない。
-   * 窓を縮めて、勤務のある範囲の中だけで境目を見る。
+   * E2Eは注入した実行日から45日分の勤務を使い捨てD1に展開する。
+   * 受付窓の境目だけを見るため、窓を10日へ縮めて11日目と比べる。
    */
   const today = jstDay()
   const inside = await request.get(`/api/public/stores/${SLUG}/availability`, {

@@ -49,6 +49,49 @@ async function listStores(token: string) {
   }
 }
 
+async function analyticsTenant(name: string, permission = true) {
+  const org = orgId()
+  const token = await tokenFor(org)
+  const storeId = await seedStore(org, name, `analytics-${crypto.randomUUID().slice(0, 8)}`)
+  await SELF.fetch(`${BASE}/api/internal/store-memberships/sync`, {
+    method: 'POST',
+    headers: INTERNAL_HEADERS,
+    body: JSON.stringify({
+      id: crypto.randomUUID(),
+      organizationId: org,
+      storeId,
+      userId: `dev:${org}`,
+      permissions: permission ? ['analytics.read'] : [],
+      createdAt: NOW,
+    }),
+  })
+  return { org, token, storeId }
+}
+
+async function seedAnalytics(tenant: { org: string; storeId: string }, value: number) {
+  await env.DB.prepare(
+    'INSERT INTO analytics_daily (id, organization_id, store_id, date, metric, dimension, dimension_key, dimension_label, value, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+  )
+    .bind(
+      crypto.randomUUID(),
+      tenant.org,
+      tenant.storeId,
+      '2026-08-27',
+      'reservations',
+      'total',
+      '',
+      '合計',
+      value,
+      NOW,
+      NOW,
+    )
+    .run()
+}
+
+function analyticsPath(storeId: string, extra = '') {
+  return `/api/staff/analytics?storeId=${storeId}&metric=overview&from=2026-08-01&to=2026-08-31${extra}`
+}
+
 describe('複数テナントの相互不可視', () => {
   it('3 テナントが同時に店舗を持っても、各自の店舗しか見えない', async () => {
     const [a, b, c] = [orgId(), orgId(), orgId()]
@@ -79,6 +122,87 @@ describe('複数テナントの相互不可視', () => {
     await seedStore(b, 'B の銀座店', `ginza-${crypto.randomUUID().slice(0, 8)}`)
     expect((await listStores(ta)).stores.map((s) => s.name)).toEqual(['A の銀座店'])
     expect((await listStores(tb)).stores.map((s) => s.name)).toEqual(['B の銀座店'])
+  })
+})
+
+describe('分析は3テナント・店舗権限で隔離する', () => {
+  it('同じ期間・metricでもJWTの組織に属する analytics_daily だけを返す', async () => {
+    const [a, b, c] = await Promise.all([
+      analyticsTenant('分析 A'),
+      analyticsTenant('分析 B'),
+      analyticsTenant('分析 C'),
+    ])
+    await Promise.all([seedAnalytics(a, 11), seedAnalytics(b, 22), seedAnalytics(c, 33)])
+
+    for (const [tenant, own, foreign] of [
+      [a, '11', '22'],
+      [b, '22', '33'],
+      [c, '33', '11'],
+    ] as const) {
+      const response = await SELF.fetch(`${BASE}${analyticsPath(tenant.storeId)}`, {
+        headers: authed(tenant.token),
+      })
+      expect(response.status).toBe(200)
+      const body = JSON.stringify(await response.json())
+      expect(body).toContain(own)
+      expect(body).not.toContain(foreign)
+    }
+  })
+
+  it('他org storeは404、同orgの担当外またはanalytics.read無しは403、forged orgは400', async () => {
+    const mine = await analyticsTenant('分析 A')
+    const theirs = await analyticsTenant('分析 B')
+    const outsideStore = await seedStore(
+      mine.org,
+      '同組織の別店舗',
+      `outside-${crypto.randomUUID().slice(0, 8)}`,
+    )
+    const noPermission = await analyticsTenant('分析 権限なし', false)
+
+    expect(
+      (await SELF.fetch(`${BASE}${analyticsPath(theirs.storeId)}`, { headers: authed(mine.token) }))
+        .status,
+    ).toBe(404)
+    expect(
+      (await SELF.fetch(`${BASE}${analyticsPath(outsideStore)}`, { headers: authed(mine.token) }))
+        .status,
+    ).toBe(403)
+    expect(
+      (
+        await SELF.fetch(`${BASE}${analyticsPath(noPermission.storeId)}`, {
+          headers: authed(noPermission.token),
+        })
+      ).status,
+    ).toBe(403)
+    expect(
+      (
+        await SELF.fetch(`${BASE}${analyticsPath(mine.storeId, `&organizationId=${theirs.org}`)}`, {
+          headers: authed(mine.token),
+        })
+      ).status,
+    ).toBe(400)
+  })
+
+  it('内部rollupはテナントJWTを拒否し、他orgの日次行を更新しない', async () => {
+    const [mine, theirs] = await Promise.all([analyticsTenant('分析 A'), analyticsTenant('分析 B')])
+    await seedAnalytics(theirs, 99)
+    const before = await env.DB.prepare(
+      'SELECT value FROM analytics_daily WHERE organization_id = ?',
+    )
+      .bind(theirs.org)
+      .all<{ value: number }>()
+    const denied = await SELF.fetch(`${BASE}/api/internal/maintenance/analytics/rollup`, {
+      method: 'POST',
+      headers: authed(mine.token),
+      body: JSON.stringify({ from: '2026-08-01', to: '2026-08-31', limit: 3 }),
+    })
+    expect(denied.status).toBe(401)
+    const after = await env.DB.prepare(
+      'SELECT value FROM analytics_daily WHERE organization_id = ?',
+    )
+      .bind(theirs.org)
+      .all<{ value: number }>()
+    expect(after.results).toEqual(before.results)
   })
 })
 

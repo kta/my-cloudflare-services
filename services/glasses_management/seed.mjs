@@ -21,6 +21,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { dynamicE2eShiftDates } from './seed-e2e.mjs'
 import { legacySeedMigrationStatements } from './seed-migration.mjs'
 
 const REMOTE = process.argv.includes('--remote')
@@ -277,7 +278,9 @@ const jstDays = (from, days) => {
 }
 const weekdayOf = (date) => new Date(`${date}T00:00:00.000Z`).getUTCDay()
 
-const shiftRows = jstDays(SHIFT_FROM, SHIFT_DAYS).flatMap((date, dayIndex) =>
+const shiftDates = jstDays(SHIFT_FROM, SHIFT_DAYS)
+
+const shiftRows = shiftDates.flatMap((date, dayIndex) =>
   staffMembers.flatMap((m, i) => {
     const band = m.week[weekdayOf(date)]
     if (band === null) return []
@@ -289,6 +292,42 @@ const shiftRows = jstDays(SHIFT_FROM, SHIFT_DAYS).flatMap((date, dayIndex) =>
       rows.push({
         n: 100_000 + i * 100 + dayIndex,
         staffIndex: i,
+        date,
+        startsAt: restStart,
+        endsAt: restEnd,
+        kind: 'break',
+      })
+    }
+    return rows
+  }),
+)
+
+// 使い捨てE2E D1だけ、テスト開始時に注入したJST日付から45日分を足す。
+// 開発用seedと承認済みmockの固定日付はそのまま保つ。
+const e2eToday = PERSIST_TO === undefined ? undefined : process.env.E2E_TODAY
+const e2eShiftDates =
+  e2eToday === undefined ? [] : dynamicE2eShiftDates(e2eToday, SHIFT_FROM, SHIFT_DAYS, 45)
+const e2eShiftRows = e2eShiftDates.flatMap((date) =>
+  staffMembers.flatMap((member, staffIndex) => {
+    const band = member.week[weekdayOf(date)]
+    if (band === null) return []
+    const [startsAt, endsAt] = band.split('-')
+    const dateOrdinal = Math.floor(Date.parse(`${date}T00:00:00.000Z`) / MS_PER_DAY)
+    const rows = [
+      {
+        id: uid('c0060000', dateOrdinal * 100 + staffIndex * 2),
+        staffIndex,
+        date,
+        startsAt,
+        endsAt,
+        kind: 'work',
+      },
+    ]
+    if (member.rest !== null) {
+      const [restStart, restEnd] = member.rest.split('-')
+      rows.push({
+        id: uid('c0060000', dateOrdinal * 100 + staffIndex * 2 + 1),
+        staffIndex,
         date,
         startsAt: restStart,
         endsAt: restEnd,
@@ -825,6 +864,170 @@ const memberships = [
   },
 ]
 
+/* --- 分析（P9 E2E 固定集計） ---------------------------------------------- */
+const ANALYTICS_OTHER_ORG = 'org-analytics-other-seed'
+const ANALYTICS_OTHER_STORE = '44444444-4444-4444-8444-444444444444'
+const analyticsRows = []
+const analyticsRow = (storeId, date, metric, dimension, key, label, value) => {
+  analyticsRows.push({ storeId, date, metric, dimension, key, label, value })
+}
+// 6か月表示でも欠測通知を誤って出さないよう、日次ロールアップ済みの営業状態を置く。
+for (
+  let day = new Date('2026-03-01T00:00:00.000Z');
+  day <= new Date('2026-07-31T00:00:00.000Z');
+  day.setUTCDate(day.getUTCDate() + 1)
+) {
+  analyticsRow(
+    GINZA,
+    day.toISOString().slice(0, 10),
+    'closed',
+    'total',
+    '',
+    '営業状態',
+    day.getUTCDay() === 2 ? 1 : 0,
+  )
+}
+const august = Array.from(
+  { length: 31 },
+  (_, index) => `2026-08-${String(index + 1).padStart(2, '0')}`,
+)
+for (const [index, date] of august.entries()) {
+  const weekday = new Date(`${date}T00:00:00Z`).getUTCDay()
+  analyticsRow(GINZA, date, 'closed', 'total', '', '営業状態', weekday === 2 ? 1 : 0)
+  // 週の予約は 8/17–23=68、8/24–30=72、8/31–9/6=42、月合計は320件。
+  const reservations =
+    index < 16
+      ? index === 0
+        ? 18
+        : 8
+      : index <= 22
+        ? index < 21
+          ? 10
+          : 9
+        : index === 26
+          ? 72
+          : index === 30
+            ? 42
+            : 0
+  analyticsRow(GINZA, date, 'reservations', 'total', '', 'ご予約', reservations)
+  analyticsRow(GINZA, date, 'reservations_received', 'total', '', '受付', 6 + (index % 3))
+}
+// 9/1 は火曜の定休として書く。9/2–3 は行を置かず pending 2 日にする。
+analyticsRow(GINZA, '2026-09-01', 'closed', 'total', '', '営業状態', 1)
+analyticsRow(GINZA, '2026-09-01', 'reservations', 'total', '', 'ご予約', 0)
+for (const [hour, value] of [
+  ['10', 84],
+  ['11', 96],
+  ['14', 72],
+  ['16', 68],
+]) {
+  analyticsRow(GINZA, '2026-08-27', 'reservations', 'hour', hour, `${hour}時台`, value)
+}
+for (const [weekday, value] of [
+  ['0', 44],
+  ['1', 52],
+  ['3', 58],
+  ['4', 72],
+  ['5', 50],
+  ['6', 44],
+]) {
+  analyticsRow(
+    GINZA,
+    '2026-08-27',
+    'reservations',
+    'hour',
+    `weekday:${weekday}`,
+    `${weekday}曜日`,
+    value,
+  )
+}
+const analyticsStaff = [
+  ['c0010000-0000-4000-8000-000000000000', '佐藤 美咲', 82, 41, 21],
+  ['c0010000-0000-4000-8000-000000000001', '高橋 健', 64, 32, 15],
+  ['c0010000-0000-4000-8000-000000000002', '中村 彩', 58, 29, 14],
+  ['c0010000-0000-4000-8000-000000000003', '小林 学', 42, 21, 10],
+  ['c0010000-0000-4000-8000-000000000004', '渡辺 由紀', 34, 19, 9],
+  ['c0010000-0000-4000-8000-000000000005', '山田 大輔', 0, 0, 0],
+  ['unassigned', '担当が未定', 48, 0, 0],
+]
+for (const [id, label, receptions, eligible, returning] of analyticsStaff) {
+  analyticsRow(GINZA, '2026-08-27', 'receptions', 'staff', id, label, receptions)
+  analyticsRow(GINZA, '2026-08-27', 'revisit_eligible', 'staff', id, label, eligible)
+  analyticsRow(GINZA, '2026-08-27', 'revisit_returning_90d', 'staff', id, label, returning)
+}
+analyticsRow(GINZA, '2026-08-27', 'receptions', 'total', '', '完了来店', 328)
+analyticsRow(
+  GINZA,
+  '2026-07-31',
+  'wait_seconds_histogram',
+  'wait_seconds',
+  'hour:10:480',
+  '10時台・480秒',
+  328,
+)
+analyticsRow(
+  GINZA,
+  '2026-08-31',
+  'wait_seconds_histogram',
+  'wait_seconds',
+  'hour:10:481',
+  '10時台・481秒',
+  328,
+)
+for (const [key, label, value] of [
+  ['phone', 'お電話', 80],
+  ['counter', '店頭', 70],
+  ['web', 'Web予約', 90],
+  ['walkin', 'ウォークイン', 80],
+]) {
+  analyticsRow(GINZA, '2026-08-27', 'reservations', 'source', key, label, value)
+}
+for (const [key, label, value] of [
+  ['first', '初めて', 90],
+  ['second', '2回目', 80],
+  ['third_to_fifth', '3〜5回', 100],
+  ['sixth_or_more', '6回以上', 58],
+]) {
+  analyticsRow(GINZA, '2026-08-27', 'receptions', 'visit_frequency', key, label, value)
+}
+for (const [key, label, value] of [
+  ['e0010000-0000-4000-8000-000000000000', 'メガネを新しく作る', 140],
+  ['e0010000-0000-4000-8000-000000000001', '視力測定だけ', 100],
+  ['e0010000-0000-4000-8000-000000000002', 'フィッティング', 80],
+]) {
+  analyticsRow(GINZA, '2026-08-27', 'reservations', 'purpose', key, label, value)
+}
+for (let month = 3; month <= 8; month += 1) {
+  const date = `2026-${String(month).padStart(2, '0')}-28`
+  const scheduled = month === 7 ? 311 : 400
+  analyticsRow(GINZA, date, 'scheduled_reservations', 'total', '', '予定総数', scheduled)
+  const counts = month === 7 ? [12, 8, 6, 5, 6] : [4, 3, 2, 2, 2]
+  for (const [index, [key, label]] of [
+    ['customer', 'お客様のご都合'],
+    ['store', '店舗の都合'],
+    ['duplicate', '予約の重複'],
+    ['no_show', 'ご来店がなかった'],
+    ['web', 'Webからの取消'],
+  ].entries()) {
+    analyticsRow(GINZA, date, 'cancellations', 'cancellation_category', key, label, counts[index])
+  }
+}
+for (const [metric, dimension, key, label, value] of [
+  ['closed', 'total', '', '営業状態', 0],
+  ['reservations', 'total', '', 'ご予約', 111],
+  ['receptions', 'staff', 'marunouchi-staff', '丸の内 担当', 111],
+])
+  analyticsRow(MARUNOUCHI, '2026-08-27', metric, dimension, key, label, value)
+analyticsRow(
+  ANALYTICS_OTHER_STORE,
+  '2026-08-27',
+  'receptions',
+  'staff',
+  'other-staff',
+  '別組織の担当',
+  999,
+)
+
 /** まだ空の列だけを埋める（手で直した行は上書きしない）。数は引用符で包まない。 */
 const fillStore = (id, column, value) =>
   `UPDATE stores SET ${column} = ${typeof value === 'number' ? value : q(value)} WHERE id = ${q(id)} AND ${column} IS NULL;`
@@ -833,6 +1036,8 @@ const lines = [
   // `org-eyex-seed` を使っていた既存のローカル D1 を、現在のログイン ID へ収束させる。
   ...legacySeedMigrationStatements(REMOTE),
   `INSERT OR IGNORE INTO organizations (id, name, plan, is_disabled, created_at, revision) VALUES (${q(ORG)}, 'EYEX', 'contracted', '0', ${q(NOW)}, '1');`,
+  `INSERT OR IGNORE INTO organizations (id, name, plan, is_disabled, created_at, revision) VALUES (${q(ANALYTICS_OTHER_ORG)}, '別組織', 'contracted', '0', ${q(NOW)}, '1');`,
+  `INSERT OR IGNORE INTO stores (id, organization_id, name, slug, phone, address, access_note, is_active, created_at) VALUES (${q(ANALYTICS_OTHER_STORE)}, ${q(ANALYTICS_OTHER_ORG)}, '別組織店', 'analytics-other', '', '', '', '1', ${q(NOW)});`,
   ...stores.map(
     (s) =>
       `INSERT OR IGNORE INTO stores (id, organization_id, name, slug, phone, address, access_note, is_active, created_at) VALUES (${q(s.id)}, ${q(ORG)}, ${q(s.name)}, ${q(s.slug)}, ${q(s.phone)}, ${q(s.address)}, ${q(s.accessNote)}, '1', ${q(NOW)});`,
@@ -919,6 +1124,12 @@ const lines = [
       `INSERT OR IGNORE INTO store_memberships (id, organization_id, store_id, user_id, permissions, created_at) VALUES (${q(uid('f0010000', i))}, ${q(ORG)}, ${q(GINZA)}, ${q(m.userId)}, ${q(m.permissions)}, ${q(NOW)});`,
   ),
 
+  // analytics_daily は E2E の表示専用に固定する。dimension_label はロールアップ時の名称snapshot。
+  ...analyticsRows.map(
+    (row, index) =>
+      `INSERT OR IGNORE INTO analytics_daily (id, organization_id, store_id, date, metric, dimension, dimension_key, dimension_label, value, created_at, updated_at) VALUES (${q(uid('0b010000', index))}, ${q(row.storeId === ANALYTICS_OTHER_STORE ? ANALYTICS_OTHER_ORG : ORG)}, ${q(row.storeId)}, ${q(row.date)}, ${q(row.metric)}, ${q(row.dimension)}, ${q(row.key)}, ${q(row.label)}, ${row.value}, ${q(NOW)}, ${q(NOW)});`,
+  ),
+
   // お客様 44 名（モックの 8 行 ＋ 候補の 田中 一郎 様 ＋ 松本 一郎 様 ＋ 控え 34 名）。
   ...allCustomers.map(
     (c) =>
@@ -964,6 +1175,10 @@ const lines = [
   ...shiftRows.map(
     (r) =>
       `INSERT OR IGNORE INTO staff_shifts (id, organization_id, store_id, staff_id, date, starts_at, ends_at, kind, created_at) VALUES (${q(uid('c0040000', r.n))}, ${q(ORG)}, ${q(GINZA)}, ${q(uid('c0010000', r.staffIndex))}, ${q(r.date)}, ${q(r.startsAt)}, ${q(r.endsAt)}, ${q(r.kind)}, ${q(NOW)});`,
+  ),
+  ...e2eShiftRows.map(
+    (r) =>
+      `INSERT OR IGNORE INTO staff_shifts (id, organization_id, store_id, staff_id, date, starts_at, ends_at, kind, created_at) VALUES (${q(r.id)}, ${q(ORG)}, ${q(GINZA)}, ${q(uid('c0010000', r.staffIndex))}, ${q(r.date)}, ${q(r.startsAt)}, ${q(r.endsAt)}, ${q(r.kind)}, ${q(NOW)});`,
   ),
 
   // 2026年8月27日（木）のご予約 12 行。3 件だけ `customer_id` が入る
