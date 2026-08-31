@@ -332,9 +332,50 @@ describe('ウォークインの受付', () => {
 
     const chosen = await createWalkin(
       t.token,
-      walkinBody(t.storeId, '11:32', { purposeNote: undefined, purposeId: t.purposeId }),
+      walkinBody(t.storeId, '11:32', {
+        purposeNote: undefined,
+        purposeId: t.purposeId,
+        durationMinutes: 60,
+      }),
     )
     expect(chosen.body).toMatchObject({ purposeId: t.purposeId, purposeNote: null })
+  })
+
+  it('受付時に選んだ顧客を予約にも保存し、退店後の来店回数へ反映する', async () => {
+    const t = await receptionTenant()
+    const customerId = await seedCustomer(t.org, {
+      name: '田中 花子',
+      kana: 'たなか はなこ',
+      phone: `090-2222-${String(Math.floor(Math.random() * 9000) + 1000)}`,
+    })
+    const walkin = await createWalkin(t.token, walkinBody(t.storeId, '11:02', { customerId }))
+    const reservation = await env.DB.prepare(
+      'SELECT customer_id AS customerId FROM reservations WHERE organization_id = ? AND id = ?',
+    )
+      .bind(t.org, walkin.body.reservationId)
+      .first<{ customerId: string | null }>()
+    expect(reservation?.customerId).toBe(customerId)
+
+    await postVisit(t.token, {
+      storeId: t.storeId,
+      subjectType: 'walkin',
+      subjectId: walkin.body.id,
+      stage: 'consulting',
+      occurredAt: jstAt(LEDGER_DATE, '11:05'),
+    })
+    await postVisit(t.token, {
+      storeId: t.storeId,
+      subjectType: 'walkin',
+      subjectId: walkin.body.id,
+      stage: 'left',
+      occurredAt: jstAt(LEDGER_DATE, '12:05'),
+    })
+    const customer = await env.DB.prepare(
+      'SELECT visit_count AS visitCount FROM customers WHERE organization_id = ? AND id = ?',
+    )
+      .bind(t.org, customerId)
+      .first<{ visitCount: number }>()
+    expect(customer?.visitCount).toBe(1)
   })
 
   it('同じ Idempotency-Key の再送は同じ整理番号の同じ 1 件を返す', async () => {
@@ -349,6 +390,42 @@ describe('ウォークインの受付', () => {
     expect(again.status).toBe(200)
     expect(again.body).toEqual(first.body)
     expect(await walkinRows(t.org, t.storeId, LEDGER_DATE)).toHaveLength(1)
+  })
+
+  it('同じ Idempotency-Key の再送は受付後に目的設定が削除されても保存済み応答を返す', async () => {
+    const t = await receptionTenant()
+    const key = crypto.randomUUID()
+    const body = walkinBody(t.storeId, '11:02', {
+      purposeNote: undefined,
+      purposeId: t.purposeId,
+      durationMinutes: 60,
+    })
+
+    const first = await createWalkin(t.token, body, key)
+    expect(first.status).toBe(200)
+    await env.DB.prepare('DELETE FROM visit_purposes WHERE organization_id = ? AND id = ?')
+      .bind(t.org, t.purposeId)
+      .run()
+
+    const replay = await createWalkin(t.token, body, key)
+    expect(replay.status).toBe(200)
+    expect(replay.body).toEqual(first.body)
+    expect(await walkinRows(t.org, t.storeId, LEDGER_DATE)).toHaveLength(1)
+  })
+
+  it('目的の所要時間より短い durationMinutes では枠を過少占有しない', async () => {
+    const t = await receptionTenant()
+    const created = await createWalkin(
+      t.token,
+      walkinBody(t.storeId, '11:02', {
+        purposeNote: undefined,
+        purposeId: t.purposeId,
+        durationMinutes: 55,
+      }),
+    )
+
+    expect(created.status).toBe(422)
+    expect(await walkinRows(t.org, t.storeId, LEDGER_DATE)).toHaveLength(0)
   })
 
   it('同じキーで中身が違う再送は 409 idempotency_conflict', async () => {
@@ -428,6 +505,35 @@ describe('工程を進める', () => {
     const row = board.rows.find((entry) => entry.subjectId === walkin.body.id)
     expect(row?.displayName).toBe('ウォークイン 001')
     expect(row?.visitCount).toBeNull()
+  })
+
+  it('最新工程より古い occurredAt は状態と盤面を食い違わせない', async () => {
+    const t = await receptionTenant()
+    const walkin = await createWalkin(t.token, walkinBody(t.storeId, '11:02'))
+    await postVisit(t.token, {
+      storeId: t.storeId,
+      subjectType: 'walkin',
+      subjectId: walkin.body.id,
+      stage: 'consulting',
+      occurredAt: jstAt(LEDGER_DATE, '11:10'),
+    })
+
+    const stale = await postVisit(t.token, {
+      storeId: t.storeId,
+      subjectType: 'walkin',
+      subjectId: walkin.body.id,
+      stage: 'left',
+      occurredAt: jstAt(LEDGER_DATE, '11:05'),
+    })
+
+    expect(stale.status).toBe(409)
+    expect(
+      (await visitEventRows(t.org, String(walkin.body.id))).map((event) => event.stage),
+    ).toEqual(['consulting'])
+    expect((await walkinRows(t.org, t.storeId, LEDGER_DATE))[0]).toMatchObject({
+      status: 'serving',
+      leftAt: null,
+    })
   })
 
   it('工程の記録は追記だけで、前の行が書き換わらない', async () => {
@@ -539,6 +645,26 @@ describe('工程を進める', () => {
 })
 
 describe('あとから結びつける', () => {
+  it('同じ会社でも別店舗の予約には付け替えられない', async () => {
+    const t = await receptionTenant()
+    const otherStoreId = await insertStore(t.org, 'EYEX 新宿店')
+    const otherReservationId = await insertReservation(t.org, {
+      storeId: otherStoreId,
+      startsAt: jstAt(LEDGER_DATE, '13:00'),
+      durationMinutes: 60,
+    })
+    const walkin = await createWalkin(t.token, walkinBody(t.storeId, '11:02'))
+
+    const rejected = await patchWalkin(t.token, String(walkin.body.id), {
+      version: walkin.body.version,
+      reservationId: otherReservationId,
+    })
+
+    expect(rejected.status).toBe(404)
+    const rows = await walkinRows(t.org, t.storeId, LEDGER_DATE)
+    expect(rows[0]?.reservationId).toBe(walkin.body.reservationId)
+  })
+
   it('電話番号の下 4 桁で見つけた顧客を紐づけると、表示が整理番号から名前に変わる', async () => {
     const t = await receptionTenant()
     const phone = `090-1234-${String(Math.floor(Math.random() * 9000) + 1000)}`
@@ -613,6 +739,208 @@ describe('あとから結びつける', () => {
       .bind(t.org, customerId)
       .first<{ visitCount: number }>()
     expect(row?.visitCount).toBe(1)
+  })
+
+  it('接客中の来店を紐づけても退店までは初回・最終来店に数えない', async () => {
+    const t = await receptionTenant()
+    const customerId = await seedCustomer(t.org, {
+      name: '田中 花子',
+      kana: 'たなか はなこ',
+      phone: `080-1111-${String(Math.floor(Math.random() * 9000) + 1000)}`,
+    })
+    const walkin = await createWalkin(t.token, walkinBody(t.storeId, '11:02'))
+    await postVisit(t.token, {
+      storeId: t.storeId,
+      subjectType: 'walkin',
+      subjectId: walkin.body.id,
+      stage: 'consulting',
+      occurredAt: jstAt(LEDGER_DATE, '11:05'),
+    })
+    const current = await listWalkins(t.token, { storeId: t.storeId, date: LEDGER_DATE })
+    const serving = current.items.find((item) => item.id === walkin.body.id)
+    await patchWalkin(t.token, String(walkin.body.id), {
+      version: serving?.version,
+      customerId,
+    })
+
+    const row = await env.DB.prepare(
+      'SELECT visit_count AS visitCount, first_visit_at AS firstVisitAt, last_visit_at AS lastVisitAt FROM customers WHERE organization_id = ? AND id = ?',
+    )
+      .bind(t.org, customerId)
+      .first<{ visitCount: number; firstVisitAt: string | null; lastVisitAt: string | null }>()
+    expect(row).toEqual({ visitCount: 0, firstVisitAt: null, lastVisitAt: null })
+  })
+
+  it('別テナントの担当者をウォークインへ割り当てられない', async () => {
+    const t = await receptionTenant()
+    const other = await receptionTenant()
+    const walkin = await createWalkin(t.token, walkinBody(t.storeId, '11:02'))
+
+    const rejected = await patchWalkin(t.token, String(walkin.body.id), {
+      version: walkin.body.version,
+      staffId: other.staffId,
+    })
+
+    expect(rejected.status).toBe(404)
+    const assignment = await env.DB.prepare(
+      "SELECT target_id AS targetId FROM reservation_assignments WHERE organization_id = ? AND reservation_id = ? AND kind = 'staff'",
+    )
+      .bind(t.org, walkin.body.reservationId)
+      .first<{ targetId: string | null }>()
+    expect(assignment?.targetId).toBeNull()
+  })
+
+  it('同じ時間に埋まっている担当者へ変更すると割当と枠を変えず 409 にする', async () => {
+    const t = await receptionTenant({ maxParallel: 3 })
+    await createWalkin(t.token, walkinBody(t.storeId, '11:02', { staffId: t.staffId }))
+    const unassigned = await createWalkin(t.token, walkinBody(t.storeId, '11:04'))
+
+    const rejected = await patchWalkin(t.token, String(unassigned.body.id), {
+      version: unassigned.body.version,
+      staffId: t.staffId,
+    })
+
+    expect(rejected.status).toBe(409)
+    expect(rejected.body).toMatchObject({ error: 'slot_taken' })
+    const assignment = await env.DB.prepare(
+      "SELECT target_id AS targetId FROM reservation_assignments WHERE organization_id = ? AND reservation_id = ? AND kind = 'staff'",
+    )
+      .bind(t.org, unassigned.body.reservationId)
+      .first<{ targetId: string | null }>()
+    expect(assignment?.targetId).toBeNull()
+    const locks = await env.DB.prepare(
+      "SELECT target_key AS targetKey FROM reservation_slot_locks WHERE organization_id = ? AND reservation_id = ? AND kind = 'staff' ORDER BY slot_start",
+    )
+      .bind(t.org, unassigned.body.reservationId)
+      .all<{ targetKey: string }>()
+    expect(new Set(locks.results.map((row) => row.targetKey))).toEqual(new Set(['unassigned']))
+  })
+
+  it('複数枠の後半だけ競合しても、先頭枠を部分取得せず担当変更を断る', async () => {
+    const t = await receptionTenant({ maxParallel: 3 })
+    await createWalkin(
+      t.token,
+      walkinBody(t.storeId, '11:32', { staffId: t.staffId, startsAt: jstAt(LEDGER_DATE, '11:30') }),
+    )
+    const unassigned = await createWalkin(
+      t.token,
+      walkinBody(t.storeId, '11:02', {
+        purposeNote: undefined,
+        purposeId: t.purposeId,
+        durationMinutes: 60,
+      }),
+    )
+
+    const rejected = await patchWalkin(t.token, String(unassigned.body.id), {
+      version: unassigned.body.version,
+      staffId: t.staffId,
+    })
+
+    expect(rejected.status).toBe(409)
+    expect(rejected.body).toMatchObject({ error: 'slot_taken' })
+    const staffLocks = await env.DB.prepare(
+      "SELECT slot_start AS slotStart FROM reservation_slot_locks WHERE organization_id = ? AND reservation_id = ? AND kind = 'staff' AND target_key = ?",
+    )
+      .bind(t.org, unassigned.body.reservationId, t.staffId)
+      .all<{ slotStart: string }>()
+    expect(staffLocks.results).toEqual([])
+    const assignment = await env.DB.prepare(
+      "SELECT target_id AS targetId FROM reservation_assignments WHERE organization_id = ? AND reservation_id = ? AND kind = 'staff'",
+    )
+      .bind(t.org, unassigned.body.reservationId)
+      .first<{ targetId: string | null }>()
+    expect(assignment?.targetId).toBeNull()
+  })
+
+  it('空いている担当者へ変更すると未定レーンの枠も担当者レーンへ移す', async () => {
+    const t = await receptionTenant({ maxParallel: 3 })
+    const unassigned = await createWalkin(t.token, walkinBody(t.storeId, '11:04'))
+
+    const assigned = await patchWalkin(t.token, String(unassigned.body.id), {
+      version: unassigned.body.version,
+      staffId: t.staffId,
+    })
+
+    expect(assigned.status).toBe(200)
+    const locks = await env.DB.prepare(
+      "SELECT target_key AS targetKey FROM reservation_slot_locks WHERE organization_id = ? AND reservation_id = ? AND kind = 'staff' ORDER BY slot_start",
+    )
+      .bind(t.org, unassigned.body.reservationId)
+      .all<{ targetKey: string }>()
+    expect(new Set(locks.results.map((row) => row.targetKey))).toEqual(new Set([t.staffId]))
+  })
+
+  it('古い版の担当変更は 409 で割当と枠を一切変えない', async () => {
+    const t = await receptionTenant({ maxParallel: 3 })
+    const unassigned = await createWalkin(t.token, walkinBody(t.storeId, '11:04'))
+    const advanced = await patchWalkin(t.token, String(unassigned.body.id), {
+      version: unassigned.body.version,
+      status: 'serving',
+    })
+    expect(advanced.status).toBe(200)
+
+    const rejected = await patchWalkin(t.token, String(unassigned.body.id), {
+      version: unassigned.body.version,
+      staffId: t.staffId,
+    })
+
+    expect(rejected.status).toBe(409)
+    expect(rejected.body).toMatchObject({ error: 'version_conflict' })
+    const assignment = await env.DB.prepare(
+      "SELECT target_id AS targetId FROM reservation_assignments WHERE organization_id = ? AND reservation_id = ? AND kind = 'staff'",
+    )
+      .bind(t.org, unassigned.body.reservationId)
+      .first<{ targetId: string | null }>()
+    expect(assignment?.targetId).toBeNull()
+    const locks = await env.DB.prepare(
+      "SELECT DISTINCT target_key AS targetKey FROM reservation_slot_locks WHERE organization_id = ? AND reservation_id = ? AND kind = 'staff'",
+    )
+      .bind(t.org, unassigned.body.reservationId)
+      .all<{ targetKey: string }>()
+    expect(locks.results).toEqual([{ targetKey: 'unassigned' }])
+  })
+
+  it('無効化済みの担当者は勤務と技能が残っていても割り当てない', async () => {
+    const t = await receptionTenant({ maxParallel: 3 })
+    const inactiveId = await insertStaff(t.org, t.storeId, {
+      displayName: '無効化済みスタッフ',
+      maxParallelReservations: 1,
+    })
+    await insertShift(t.org, t.storeId, inactiveId)
+    await env.DB.prepare('UPDATE staff SET is_active = 0 WHERE organization_id = ? AND id = ?')
+      .bind(t.org, inactiveId)
+      .run()
+    const unassigned = await createWalkin(t.token, walkinBody(t.storeId, '11:04'))
+
+    const rejected = await patchWalkin(t.token, String(unassigned.body.id), {
+      version: unassigned.body.version,
+      staffId: inactiveId,
+    })
+
+    expect(rejected.status).toBe(404)
+    const assignment = await env.DB.prepare(
+      "SELECT target_id AS targetId FROM reservation_assignments WHERE organization_id = ? AND reservation_id = ? AND kind = 'staff'",
+    )
+      .bind(t.org, unassigned.body.reservationId)
+      .first<{ targetId: string | null }>()
+    expect(assignment?.targetId).toBeNull()
+  })
+
+  it('予約時間に勤務していない担当者へ変更できない', async () => {
+    const t = await receptionTenant({ maxParallel: 3 })
+    const offDutyId = await insertStaff(t.org, t.storeId, {
+      displayName: '勤務外スタッフ',
+      maxParallelReservations: 1,
+    })
+    const unassigned = await createWalkin(t.token, walkinBody(t.storeId, '11:04'))
+
+    const rejected = await patchWalkin(t.token, String(unassigned.body.id), {
+      version: unassigned.body.version,
+      staffId: offDutyId,
+    })
+
+    expect(rejected.status).toBe(409)
+    expect(rejected.body).toMatchObject({ error: 'purpose_unavailable' })
   })
 
   it('新しく登録したお客様に紐づけると、その来店が初めてのご来店になる', async () => {

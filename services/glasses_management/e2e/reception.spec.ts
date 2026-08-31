@@ -797,7 +797,7 @@ test('「次にやること　視力測定機 A」を押すと対応中になり
     /^お客様\s+フレーム選び\s+対応中/,
   )
   await expect(cell(page, 'お客様', '視力測定')).toHaveAccessibleName(
-    'お客様　視力測定　次にやること　視力測定機 A',
+    /^お客様\s+視力測定\s+次にやること\s+視力測定機 A/,
   )
 
   await cell(page, 'お客様', '視力測定').click()

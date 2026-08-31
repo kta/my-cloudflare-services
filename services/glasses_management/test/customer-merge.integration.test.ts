@@ -479,7 +479,7 @@ describe('来店回数の書き戻し', () => {
     expect(merged.body.customer?.visitCount).toBe(2)
   })
 
-  it('last_visit_at は来店済み（arrived / serving / done）の最終 starts_at の JST 暦日になる', async () => {
+  it('last_visit_at は接客中を除き done の最終 starts_at の JST 暦日になる', async () => {
     const f = await fixture()
     // UTC 15:00 をまたぐ 1 件。JST では翌日の 0 時なので暦日は 8 月 28 日。
     await insertVisit(f.org, {
@@ -496,12 +496,12 @@ describe('来店回数の書き戻し', () => {
     )
       .bind(f.primaryId)
       .first<{ lastVisitAt: string }>()
-    expect(row?.lastVisitAt).toBe('2026-08-27T15:00:00.000Z')
+    expect(row?.lastVisitAt).toBe('2026-05-12T02:00:00.000Z')
     const res = await SELF.fetch(`${BASE}/api/staff/customers/${f.primaryId}`, {
       headers: authed(f.manager),
     })
     const detail = (await res.json()) as { lastVisitAt: string | null }
-    expect(detail.lastVisitAt).toBe('2026-08-28')
+    expect(detail.lastVisitAt).toBe('2026-05-12')
   })
 
   it('first_visit_at は最初の来店済みの日で、あとから来る予約で書き換わらない', async () => {

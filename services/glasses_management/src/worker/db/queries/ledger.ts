@@ -231,12 +231,35 @@ export async function readLedgerDay(
     // 帯 1 本ごとにご用件の一覧を引き直すことになる（設定の表は小さいが、
     // 1 日 5,400 回の面で行数を掛け算しない）。この表は組織あたり数件〜数十件である。
     db
-      .select({ id: visitPurposes.id, nameShort: visitPurposes.nameShort })
+      .select({
+        id: visitPurposes.id,
+        nameShort: visitPurposes.nameShort,
+        kind: purposeRequirements.kind,
+        value: purposeRequirements.value,
+      })
       .from(visitPurposes)
+      .leftJoin(
+        purposeRequirements,
+        and(
+          eq(purposeRequirements.organizationId, visitPurposes.organizationId),
+          eq(purposeRequirements.purposeId, visitPurposes.id),
+        ),
+      )
       .where(eq(visitPurposes.organizationId, org)),
   ])
 
   const nameShortById = new Map(purposeNameRows.map((row) => [row.id, row.nameShort]))
+  const ledgerRequirements = new Map<
+    string,
+    { skills: SkillCode[]; equipmentKinds: EquipmentKind[] }
+  >()
+  for (const row of purposeNameRows) {
+    if (row.kind === null || row.value === null) continue
+    const entry = ledgerRequirements.get(row.id) ?? { skills: [], equipmentKinds: [] }
+    if (row.kind === 'skill') entry.skills.push(row.value as SkillCode)
+    if (row.kind === 'equipment_kind') entry.equipmentKinds.push(row.value as EquipmentKind)
+    ledgerRequirements.set(row.id, entry)
+  }
 
   return {
     hours: hours.map(toWeeklyHours),
@@ -257,6 +280,7 @@ export async function readLedgerDay(
     equipment: equipmentRows.map((row) => ({
       id: row.id,
       name: row.name,
+      kind: row.kind as EquipmentKind,
       roleLabel: row.roleLabel,
       sortOrder: row.sortOrder,
       isActive: isOn(row.isActive),
@@ -275,7 +299,15 @@ export async function readLedgerDay(
       const nameShort = nameShortById.get(row.purposeId)
       return nameShort === undefined
         ? []
-        : [{ reservationId: row.reservationId, nameShort, sortOrder: row.sortOrder }]
+        : [
+            {
+              reservationId: row.reservationId,
+              nameShort,
+              sortOrder: row.sortOrder,
+              requiredSkills: ledgerRequirements.get(row.purposeId)?.skills ?? [],
+              requiredEquipmentKinds: ledgerRequirements.get(row.purposeId)?.equipmentKinds ?? [],
+            },
+          ]
     }),
   }
 }

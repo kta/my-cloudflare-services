@@ -107,6 +107,8 @@ export type SlotLockBatchInput = {
   /** このバッチの時刻。同じ予約の古い行と新しい行をこの値で見分ける。 */
   createdAt: string
   requests: readonly SlotLockRequest[]
+  /** 呼び出し元の楽観ロックなど、容量判定と同時に満たす条件。 */
+  additionalGuard?: { condition: string; params: readonly unknown[] }
   /** id の作り方を差し替えられるようにしておく（既定は `crypto.randomUUID()`）。 */
   newId?: () => string
 }
@@ -165,7 +167,7 @@ export function slotLockStatements(
     db
       .prepare(
         'INSERT INTO reservation_slot_locks (id, organization_id, store_id, reservation_id, kind, target_key, slot_start, created_at) ' +
-          `SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (${guard})`,
+          `SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE NOT EXISTS (${guard})${input.additionalGuard === undefined ? '' : ` AND ${input.additionalGuard.condition}`}`,
       )
       .bind(
         newId(),
@@ -177,6 +179,7 @@ export function slotLockStatements(
         request.slotStart,
         input.createdAt,
         ...guardParams,
+        ...(input.additionalGuard?.params ?? []),
       ),
   )
 }
