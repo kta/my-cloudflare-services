@@ -18,6 +18,7 @@ declare global {
       INTERNAL_KEY: string
       JWT_SECRET: string
       AUTH_DEV_GRANT: string
+      TEST_NOW: string
     }
   }
 }

@@ -33,7 +33,7 @@ import { expect, test } from '@playwright/test'
  * EX-CONFLICT の 6 面はすべてブラウザから通しで操作している。
  */
 
-const ORG = 'org-eyex-seed'
+const ORG = 'eyex'
 /** seed.mjs が固定 id で入れる EYEX 銀座店と、丸の内店（別店舗を見せない証明に使う）。 */
 const GINZA = '11111111-1111-4111-8111-111111111111'
 const MARUNOUCHI = '22222222-2222-4222-8222-222222222222'

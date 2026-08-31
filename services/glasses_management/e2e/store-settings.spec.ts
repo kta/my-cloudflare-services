@@ -13,7 +13,7 @@ import { expect, test } from '@playwright/test'
  * この面より先に走る（playwright.config.ts の project の並び）。
  */
 
-const ORG = 'org-eyex-seed'
+const ORG = 'eyex'
 /** seed.mjs が固定 id で入れる EYEX 銀座店。 */
 const GINZA = '11111111-1111-4111-8111-111111111111'
 /** dev グラントが載せる `sub`。担当店舗の `userId` はこれに合わせる。 */
@@ -362,7 +362,7 @@ test('臨時のお休みをもう一度押して保存すると営業日へ戻�
 // @e2e-covers UC-SET-07 AC-SET-10
 test('スタッフを選ぶと右がその人の設定になり、持っている技能に ✓ が付く', async ({ page }) => {
   await openSettings(page, 'スタッフと技能')
-  await expect(page.getByText('スタッフ　6名')).toBeVisible()
+  await expect(page.getByText('スタッフ　7名')).toBeVisible()
 
   const list = page.getByRole('list', { name: 'スタッフ' })
   await expect(list.getByRole('listitem').nth(5)).toContainText('山田 大輔')
@@ -655,9 +655,9 @@ test('件数の変化は割り込まない知らせとして伝わり、警告�
  */
 
 // @e2e-covers UC-SET-12 AC-SET-20
-test('スタッフを足すと 7名になり、いま使えるを切っても行は消えない', async ({ page }) => {
+test('スタッフを足すと 8名になり、いま使えるを切っても行は消えない', async ({ page }) => {
   await openSettings(page, 'スタッフと技能')
-  await expect(page.getByText('スタッフ　6名')).toBeVisible()
+  await expect(page.getByText('スタッフ　7名')).toBeVisible()
 
   await page.getByRole('button', { name: '＋ スタッフを足す' }).click()
   const form = page.getByRole('form', { name: 'スタッフを足す' })
@@ -667,7 +667,7 @@ test('スタッフを足すと 7名になり、いま使えるを切っても行
   await form.getByRole('button', { name: '販売・受付', exact: true }).click()
   await form.getByRole('button', { name: 'このスタッフを足す' }).click()
 
-  await expect(page.getByText('スタッフ　7名')).toBeVisible()
+  await expect(page.getByText('スタッフ　8名')).toBeVisible()
   const list = page.getByRole('list', { name: 'スタッフ' })
   const row = list.getByRole('listitem').filter({ hasText: '木村 涼' })
   await expect(row).toContainText('販売・受付')
@@ -676,7 +676,7 @@ test('スタッフを足すと 7名になり、いま使えるを切っても行
   await page.getByRole('switch', { name: /いま使える/ }).click()
   await save(page)
   // 退職した人の行は消さずに残す。過去のご予約から名前が消えないため。
-  await expect(page.getByText('スタッフ　7名')).toBeVisible()
+  await expect(page.getByText('スタッフ　8名')).toBeVisible()
   await expect(row).toBeVisible()
 })
 

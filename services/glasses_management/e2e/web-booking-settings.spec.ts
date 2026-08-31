@@ -14,7 +14,7 @@ import { expect, test } from '@playwright/test'
  * 承認済みモックとの突き合わせ（mock / mock-phone）はこの面より先に済んでいる。
  */
 
-const ORG = 'org-eyex-seed'
+const ORG = 'eyex'
 const SLUG = 'ginza'
 /** seed.mjs が固定 id で入れる EYEX 銀座店。 */
 const GINZA = '11111111-1111-4111-8111-111111111111'
@@ -189,7 +189,7 @@ async function bookAsCustomer(
 }
 
 /**
- * その枠に付けられる担当を 1 人引く。**誰でもよいわけではない** —— 銀座店の 6 名は
+ * その枠に付けられる担当を 1 人引く。**誰でもよいわけではない** —— 銀座店の 7 名は
  * 曜日ごとに勤務が違い、その日休みの担当へ移すと 409 `purpose_unavailable` で断られる。
  * 誰が空いているかは業務側の空き枠エンジンが知っているので、それを読む。
  */
