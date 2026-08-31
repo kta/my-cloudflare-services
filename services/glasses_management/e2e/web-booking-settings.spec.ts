@@ -1,5 +1,6 @@
 import type { APIRequestContext, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
+import { enterSharedWorkspace } from './terminal-start'
 
 /**
  * お客様向け Web 予約（011-web-booking）のうち、**お店側**の 8 本。
@@ -137,15 +138,6 @@ function shiftDay(date: string, days: number): string {
     .slice(0, 10)
 }
 
-function clock(at: string): string {
-  return new Intl.DateTimeFormat('ja-JP', {
-    timeZone: 'Asia/Tokyo',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).format(new Date(at))
-}
-
 type PublicDay = {
   date: string
   isClosed: boolean
@@ -221,6 +213,7 @@ async function startWork(page: Page): Promise<void> {
   await page.goto('/')
   await page.getByLabel('お店のコード').fill(ORG)
   await page.getByRole('button', { name: '業務を始める' }).click()
+  await enterSharedWorkspace(page)
   await expect(page.locator('header').first()).toContainText('EYEX 銀座店')
 }
 

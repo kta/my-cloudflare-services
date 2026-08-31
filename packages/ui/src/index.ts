@@ -19,3 +19,4 @@ export {
   TextInput,
 } from './components'
 export { Dialog } from './dialog'
+export { Keypad, type KeypadProps, PinField, type PinFieldProps, TryMeter } from './keypad'

@@ -1,5 +1,6 @@
 import type { APIRequestContext, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
+import { enterSharedWorkspace } from './terminal-start'
 
 /**
  * 店舗の受付条件（004-store-settings）の受け入れ基準を、実ブラウザと実 Worker で確かめる。
@@ -86,6 +87,7 @@ async function startWork(page: Page): Promise<void> {
   await page.goto('/')
   await page.getByLabel('お店のコード').fill(ORG)
   await page.getByRole('button', { name: '業務を始める' }).click()
+  await enterSharedWorkspace(page)
   await expect(page.locator('header').first()).toContainText('EYEX 銀座店')
 }
 
@@ -154,9 +156,9 @@ test('設定を開くと店舗の情報が出て、お店の基本と行き方�
   await expect(page.getByLabel('最寄り駅')).toHaveValue('東京メトロ 銀座駅')
   await expect(page.getByLabel('出口と所要時間')).toHaveValue('A1出口から徒歩3分')
   await expect(page.getByLabel('駐車場')).toHaveValue('提携駐車場はありません')
-  // 第2サイドバーはモックの 14 項目ではなく 7 項目だけを出す（P1 の決め #1）。
-  // 6 項目だったところへ P8 が「Web予約の公開」を足して 7 項目になった。
-  await expect(sectionNav(page).getByRole('button')).toHaveCount(7)
+  // 第2サイドバーはモックの 14 項目ではなく 8 項目だけを出す（P1 の決め #1）。
+  // 6 項目だったところへ P8 が「Web予約の公開」を、P10 が「端末」を足して 8 項目になった。
+  await expect(sectionNav(page).getByRole('button')).toHaveCount(8)
 })
 
 // @e2e-covers AC-SET-02
@@ -598,7 +600,12 @@ test('スタッフの権限で保存すると、店長だけができると断�
     await expect(page.getByRole('heading', { name: 'この操作は店長だけができます' })).toBeVisible()
     await expect(
       page.getByText(
-        '営業時間を変えられるのは 店長 だけです。中村 彩（スタッフ）の権限では保存できません。営業時間はまだ何も変わっていません。',
+        /*
+         * P10 から、その場に店長がいる端末では 403 のその場に EX-PERMISSION の壁が出る
+         * （`PermissionWall`）。断り文の最後の一句は面ごとの名前ではなく
+         * 「設定はまだ何も変わっていません。」で揃えてある。
+         */
+        '営業時間を変えられるのは 店長 だけです。中村 彩（スタッフ）の権限では保存できません。設定はまだ何も変わっていません。',
       ),
     ).toBeVisible()
     await expect(page.getByText('下書きは残っています')).toBeVisible()

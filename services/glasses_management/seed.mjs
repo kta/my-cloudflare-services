@@ -18,7 +18,7 @@
  * id が同じときだけなので、ここで crypto.randomUUID() を呼んではならない。
  */
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -1165,6 +1165,145 @@ assertSeed('2026年8月の受付', sumOfMetric(ORG, GINZA, 'receptions', 'staff'
 assertSeed('丸の内店の受付', sumOfMetric(ORG, MARUNOUCHI, 'receptions', 'staff'), 142)
 assertSeed('別組織の受付', sumOfMetric(RIVAL_ORG, RIVAL_STORE, 'receptions', 'staff'), 9)
 
+/* --- 端末と暗証番号（P10 `013-terminals-and-audit`） ---------------------- *
+ * 業務開始の画面（START-DEVICE-MODE / LOGIN-SHARED / LOGIN-STAFF）は、端末が 1 台も
+ * 登録されていないと先へ進めない。銀座店の 3 台（承認済みモックの置き場所）と、個人の
+ * 端末 1 台、それに別組織の 1 台を置く。
+ *
+ * **平文の暗証番号は 1 度も INSERT しない。** ここで作るのはハッシュだけで、作り方は
+ * サーバ（`src/worker/index.ts` の `pinHashOf`）と同じ
+ * —— PBKDF2-HMAC-SHA256 10,000 回（salt は `app:pin:<組織>:<主体>`）→ pepper で HMAC。
+ * 開発の足場なので、店舗共通の `2580` とスタッフの `4821` はここに書いてよい
+ * （どちらも同じ数字の並びでも連番でもないので `weak_pin` に当たらない）。
+ * 本番の暗証番号は「設定 › 端末」「設定 › スタッフ」から作り直す。 */
+const SHARED_PIN = '2580'
+const STAFF_PIN = '4821'
+const PIN_STRETCH_ITERATIONS = 10_000
+const PEPPER = process.env.AUTH_PEPPER ?? readPepper() ?? 'dev-auth-pepper'
+
+/** `.dev.vars` の AUTH_PEPPER（無ければ null）。seed は Worker の外で走るので自分で読む。 */
+function readPepper() {
+  try {
+    const found = readFileSync(join(import.meta.dirname, '.dev.vars'), 'utf8').match(
+      /^AUTH_PEPPER=(.*)$/m,
+    )
+    return found === null ? null : found[1].trim()
+  } catch {
+    return null
+  }
+}
+
+const toBase64 = (bytes) => Buffer.from(new Uint8Array(bytes)).toString('base64')
+
+/** `packages/shared` の `stretchPin` → `hashStretched` と同じ 2 段。 */
+async function pinHash(pin, organizationId, subjectId) {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, [
+    'deriveBits',
+  ])
+  const bits = await crypto.subtle.deriveBits(
+    {
+      name: 'PBKDF2',
+      hash: 'SHA-256',
+      salt: new TextEncoder().encode(`app:pin:${organizationId}:${subjectId}`),
+      iterations: PIN_STRETCH_ITERATIONS,
+    },
+    key,
+    256,
+  )
+  const mac = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(PEPPER),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  )
+  return `hmac$${toBase64(await crypto.subtle.sign('HMAC', mac, new TextEncoder().encode(toBase64(bits))))}`
+}
+
+/*
+ * 置き場所の 3 台と個人の 1 台。`last_seen_at` は固定の過去にする —— 「業務中」は
+ * 5 分以内の通信で決まるので、seed の値で作れない（作ると走らせた時刻で揺れる）。
+ * その姿を撮る E2E は応答を差し替える。
+ */
+const terminalRows = [
+  {
+    id: uid('d0010000', 1),
+    org: ORG,
+    store: GINZA,
+    name: '銀座店 レジ横iPad',
+    kind: 'shared',
+    placeNote: 'レジの右側　固定スタンド',
+    deviceLabel: '',
+    lastSeenAt: null,
+    pin: SHARED_PIN,
+  },
+  {
+    id: uid('d0010000', 2),
+    org: ORG,
+    store: GINZA,
+    name: '銀座店 受付iPad',
+    kind: 'shared',
+    placeNote: '入口の受付台',
+    deviceLabel: '',
+    lastSeenAt: '2026-08-26T09:32:00.000Z',
+    pin: SHARED_PIN,
+  },
+  {
+    id: uid('d0010000', 3),
+    org: ORG,
+    store: GINZA,
+    name: '銀座店 検査室iPad',
+    kind: 'shared',
+    placeNote: '検査室 1　測定機の脇',
+    deviceLabel: '',
+    lastSeenAt: '2026-08-26T09:42:00.000Z',
+    pin: SHARED_PIN,
+  },
+  {
+    // 個人の端末。暗証番号はスタッフ一人ひとりのものを使うので、端末側は持たない。
+    id: uid('d0010000', 4),
+    org: ORG,
+    store: GINZA,
+    name: '銀座店 個人の端末',
+    kind: 'personal',
+    placeNote: '',
+    deviceLabel: 'EYEX-iPad-07',
+    lastSeenAt: null,
+    pin: null,
+  },
+  {
+    // 別組織にも 1 台。テナント分離の E2E も業務開始の画面を通るため。
+    id: uid('d0010000', 5),
+    org: RIVAL_ORG,
+    store: RIVAL_STORE,
+    name: 'ミライ光学 レジ横iPad',
+    kind: 'shared',
+    placeNote: 'レジの左側',
+    deviceLabel: '',
+    lastSeenAt: null,
+    pin: SHARED_PIN,
+  },
+]
+
+const terminalInserts = await Promise.all(
+  terminalRows.map(async (t) => {
+    const hash = t.pin === null ? null : await pinHash(t.pin, t.org, t.id)
+    return (
+      'INSERT OR IGNORE INTO terminals (id, organization_id, store_id, name, kind, place_note, device_label, pin_hash, auto_lock_seconds, last_seen_at, is_active, version, created_at) VALUES (' +
+      `${q(t.id)}, ${q(t.org)}, ${q(t.store)}, ${q(t.name)}, ${q(t.kind)}, ${q(t.placeNote)}, ${q(t.deviceLabel)}, ${hash === null ? 'NULL' : q(hash)}, 120, ${t.lastSeenAt === null ? 'NULL' : q(t.lastSeenAt)}, '1', 1, ${q(NOW)});`
+    )
+  }),
+)
+
+/** 銀座店のスタッフ全員に同じ暗証番号を置く（まだ持っていない行だけ）。 */
+const staffPinUpdates = await Promise.all(
+  staffMembers.map(async (_m, i) => {
+    const id = uid('c0010000', i)
+    const hash = await pinHash(STAFF_PIN, ORG, id)
+    return `UPDATE staff SET pin_hash = ${q(hash)}, pin_updated_at = ${q(NOW)} WHERE organization_id = ${q(ORG)} AND id = ${q(id)} AND pin_hash IS NULL;`
+  }),
+)
+
 /** まだ空の列だけを埋める（手で直した行は上書きしない）。数は引用符で包まない。 */
 const fillStore = (id, column, value) =>
   `UPDATE stores SET ${column} = ${typeof value === 'number' ? value : q(value)} WHERE id = ${q(id)} AND ${column} IS NULL;`
@@ -1383,6 +1522,10 @@ const lines = [
     (r, i) =>
       `INSERT OR IGNORE INTO analytics_daily (id, organization_id, store_id, date, metric, dimension, dimension_key, value, created_at, updated_at) VALUES (${q(uid('9a010000', i))}, ${q(r.org)}, ${q(r.store)}, ${q(r.date)}, ${q(r.metric)}, ${q(r.dimension)}, ${q(r.dimensionKey)}, ${r.value}, ${q(NOW)}, ${q(NOW)});`,
   ),
+
+  // 端末（P10）と、そのスタッフの暗証番号。ハッシュだけを書く。
+  ...terminalInserts,
+  ...staffPinUpdates,
 ]
 
 const sqlPath = join(mkdtempSync(join(tmpdir(), 'glasses-seed-')), 'seed.sql')

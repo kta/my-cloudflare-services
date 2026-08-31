@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
+import { CHECKOUT_IPAD, enterSharedWorkspace } from './terminal-start'
 
 /**
  * 分析（012-analytics）の受け入れ基準を、実ブラウザと実 Worker で確かめる。
@@ -34,6 +35,7 @@ async function startWork(page: Page, org = ORG): Promise<void> {
   await page.goto('/')
   await page.getByLabel('お店のコード').fill(org)
   await page.getByRole('button', { name: '業務を始める' }).click()
+  await enterSharedWorkspace(page, org === ORG ? CHECKOUT_IPAD : 'ミライ光学 レジ横iPad')
   await page.getByRole('navigation', { name: '画面の切り替え' }).waitFor()
 }
 
@@ -296,15 +298,20 @@ test('切り口はキーボードだけで、群の名前とともに選び替�
   await expect(page.getByRole('radiogroup', { name: '集計の種類' })).toBeVisible()
   await expect(page.getByRole('radiogroup', { name: 'かぞえる日' })).toBeVisible()
 
-  await page.getByRole('radio', { name: '日別', exact: true }).focus()
-  await page.keyboard.press('ArrowRight')
-  await expect(page.getByRole('radio', { name: '月別', exact: true })).toBeChecked()
-  await page.getByRole('radio', { name: '月別', exact: true }).focus()
-  await page.keyboard.press('ArrowLeft')
-  await expect(page.getByRole('radio', { name: '日別', exact: true })).toBeChecked()
+  // 札は読み込みが済んでから描かれるので、`focus()` してから `page.keyboard` で打つと、
+  // その間の描き直しで札が差し替わったときに打鍵が宙に浮く。`locator.press()` は
+  // 打つ直前に札を引き直して焦点を当てるので、この取りこぼしが起きない。
+  const daily = page.getByRole('radio', { name: '日別', exact: true })
+  const monthly = page.getByRole('radio', { name: '月別', exact: true })
+  await expect(daily).toBeChecked()
+  await daily.press('ArrowRight')
+  await expect(monthly).toBeChecked()
+  await monthly.press('ArrowLeft')
+  await expect(daily).toBeChecked()
 
-  await page.getByRole('radio', { name: 'ご来店日' }).focus()
-  await page.keyboard.press('ArrowRight')
+  const byVisit = page.getByRole('radio', { name: 'ご来店日' })
+  await expect(byVisit).toBeChecked()
+  await byVisit.press('ArrowRight')
   await expect(page.getByRole('radio', { name: '受付日' })).toBeChecked()
 })
 

@@ -78,6 +78,9 @@ export function TextInput({
   return (
     <input
       ref={ref}
+      /* 共有端末では前のお客様の入力が次の方に補完されてはいけない。既定で切っておき、
+         お客様ご自身が打つ Web 予約の欄だけが `autoComplete` を明示して上書きする。 */
+      autoComplete="off"
       className={cn(
         controlBase,
         'w-full border border-line bg-surface px-3 py-2 text-ink',
@@ -98,6 +101,7 @@ export function Textarea({
   return (
     <textarea
       ref={ref}
+      autoComplete="off"
       className={cn(
         controlBase,
         'w-full border border-line bg-surface px-3 py-2 text-ink',

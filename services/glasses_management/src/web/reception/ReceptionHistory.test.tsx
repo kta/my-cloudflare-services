@@ -536,3 +536,60 @@ describe('受付履歴が 0 件', () => {
     ).toEqual(['期間8月25日 〜 8月26日', '担当佐藤 美咲', '結果取消'])
   })
 })
+
+/*
+ * 録音の保全（P10 UC-TERM-09 / AC-TERM-10）。この面が持つのは入口だけで、
+ * ご本人の確認（MODE-PERSONAL）を挟むかどうかは器が決める。
+ */
+describe('録音の保全', () => {
+  const RECORDING = {
+    id: 'f0000000-0000-4000-8000-000000000001',
+    code: 'RC-260827-0001',
+    receptionSessionId: HANAKO.sessionId as string,
+    reservationId: NON_NULL_RESERVATION.id,
+    state: 'stored' as const,
+    contentType: 'audio/mp4' as const,
+    durationSeconds: 192,
+    bytes: 1024,
+    retainUntil: at('2026-11-27', '11:08'),
+    legalHold: false,
+    uploadAttempts: 1,
+    createdAt: at('2026-08-27', '11:08'),
+  }
+
+  function openWith(recordings: (typeof RECORDING)[], onPreserve = preserve) {
+    render(
+      <ReceptionHistory
+        storeId={STORE_ID}
+        today={TODAY}
+        staff={STAFF}
+        onOpenReservation={openReservation}
+        onStartBooking={startBooking}
+        recordings={recordings}
+        onPreserveRecording={onPreserve}
+      />,
+    )
+  }
+
+  const preserve = vi.fn()
+
+  it('保全されていない録音には「この録音を保全する」が出て、押すとその 1 本を器へ渡す', async () => {
+    preserve.mockClear()
+    openWith([RECORDING])
+    await screen.findByRole('group', { name: '受付の一覧' })
+    await userEvent.click(rows()[0] as HTMLElement)
+    const button = await screen.findByRole('button', { name: 'この録音を保全する' })
+    await userEvent.click(button)
+    expect(preserve).toHaveBeenCalledWith(RECORDING)
+  })
+
+  it('すでに保全された録音にはボタンを出さず、保全されていることを字で言う', async () => {
+    openWith([{ ...RECORDING, legalHold: true }])
+    await screen.findByRole('group', { name: '受付の一覧' })
+    await userEvent.click(rows()[0] as HTMLElement)
+    expect(
+      await screen.findByText('この録音は保全されています。期限が来ても消えません。'),
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'この録音を保全する' })).toBeNull()
+  })
+})

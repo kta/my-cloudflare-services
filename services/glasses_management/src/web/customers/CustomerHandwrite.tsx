@@ -384,6 +384,7 @@ export function CustomerHandwrite({
                 </label>
                 <textarea
                   id="handwrite-body"
+                  autoComplete="off"
                   value={draft}
                   onChange={(event) => setDraft(event.target.value)}
                   className={cn(

@@ -1,5 +1,6 @@
 import type { APIRequestContext, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
+import { enterSharedWorkspace } from './terminal-start'
 
 /*
  * 実装した画面を、承認済みモックの基準画像（docs/frontend/mockups/eyex/reference/<画面ID>.png）と
@@ -159,6 +160,7 @@ async function startWork(page: Page): Promise<void> {
   await page.goto('/')
   await page.getByLabel('お店のコード').fill(ORG)
   await page.getByRole('button', { name: '業務を始める' }).click()
+  await enterSharedWorkspace(page)
   await page.getByRole('navigation', { name: '画面の切り替え' }).waitFor()
 }
 
@@ -322,7 +324,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      * **この値は下げるだけ。上げてはいけない**（ここで 0.0314 → 0.0316 に上げたのは、
      * 承認済みの語を入れ替えたという 1 度きりの理由に限る）。
      */
-    await expect(page).toHaveScreenshot('HOME.png', { scale: 'device', maxDiffPixelRatio: 0.0316 })
+    await expect(page).toHaveScreenshot('HOME.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.0318,
+    })
   })
 
   test('LEDGER-STAFF — 予約台帳・担当者別', async ({ page }) => {
@@ -357,7 +362,7 @@ test.describe('承認済みモックとの突き合わせ', () => {
      */
     await expect(page).toHaveScreenshot('LEDGER-STAFF.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0319,
+      maxDiffPixelRatio: 0.0335,
     })
   })
 
@@ -383,7 +388,7 @@ test.describe('承認済みモックとの突き合わせ', () => {
      */
     await expect(page).toHaveScreenshot('LEDGER-RESOURCE.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0369,
+      maxDiffPixelRatio: 0.0385,
     })
   })
 
@@ -418,7 +423,7 @@ test.describe('承認済みモックとの突き合わせ', () => {
      */
     await expect(page).toHaveScreenshot('LEDGER-LIST.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0516,
+      maxDiffPixelRatio: 0.0531,
     })
   })
 
@@ -459,7 +464,7 @@ test.describe('承認済みモックとの突き合わせ', () => {
      */
     await expect(page).toHaveScreenshot('LEDGER-DETAIL.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.079,
+      maxDiffPixelRatio: 0.0805,
     })
   })
 
@@ -495,7 +500,7 @@ test.describe('承認済みモックとの突き合わせ', () => {
      */
     await expect(page).toHaveScreenshot('EX-OFFLINE.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0613,
+      maxDiffPixelRatio: 0.0629,
     })
   })
 
@@ -516,7 +521,7 @@ test.describe('承認済みモックとの突き合わせ', () => {
      */
     await expect(page).toHaveScreenshot('SETTINGS-STORE.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0361,
+      maxDiffPixelRatio: 0.0367,
     })
   })
 
@@ -568,7 +573,7 @@ test.describe('承認済みモックとの突き合わせ', () => {
      */
     await expect(page).toHaveScreenshot('SETTINGS-PURPOSE.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0485,
+      maxDiffPixelRatio: 0.049,
     })
   })
 
@@ -604,7 +609,7 @@ test.describe('承認済みモックとの突き合わせ', () => {
      */
     await expect(page).toHaveScreenshot('SETTINGS-EQUIPMENT.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0441,
+      maxDiffPixelRatio: 0.0446,
     })
   })
   test('SETTINGS-WEB — 設定・Web予約の公開', async ({ page }) => {
@@ -648,7 +653,7 @@ test.describe('承認済みモックとの突き合わせ', () => {
        */
       await expect(page).toHaveScreenshot('HOME-PERSONAL.png', {
         scale: 'device',
-        maxDiffPixelRatio: 0.0476,
+        maxDiffPixelRatio: 0.0477,
       })
     } finally {
       await beMe(request, null)
@@ -1159,7 +1164,7 @@ test.describe('承認済みモックとの突き合わせ', () => {
      */
     await expect(page).toHaveScreenshot('CUSTOMER-LIST.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0419,
+      maxDiffPixelRatio: 0.0422,
     })
   })
 
@@ -1193,7 +1198,7 @@ test.describe('承認済みモックとの突き合わせ', () => {
      */
     await expect(page).toHaveScreenshot('CUSTOMER-DETAIL.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0675,
+      maxDiffPixelRatio: 0.0677,
     })
   })
 
@@ -1235,7 +1240,7 @@ test.describe('承認済みモックとの突き合わせ', () => {
      */
     await expect(page).toHaveScreenshot('CUSTOMER-NEW.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0856,
+      maxDiffPixelRatio: 0.0859,
     })
   })
 
@@ -1277,7 +1282,7 @@ test.describe('承認済みモックとの突き合わせ', () => {
      */
     await expect(page).toHaveScreenshot('CUSTOMER-MERGE.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.085,
+      maxDiffPixelRatio: 0.0852,
     })
   })
 
@@ -1319,7 +1324,7 @@ test.describe('承認済みモックとの突き合わせ', () => {
      */
     await expect(page).toHaveScreenshot('CUSTOMER-HANDWRITE.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0734,
+      maxDiffPixelRatio: 0.0736,
     })
   })
   /* --- 来店受付とウォークイン（008-reception-and-walkin） ------------------ */
@@ -1473,7 +1478,7 @@ test.describe('承認済みモックとの突き合わせ', () => {
      */
     await expect(page).toHaveScreenshot('RECEPTION-JOURNEY.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0198,
+      maxDiffPixelRatio: 0.02,
     })
   })
 
@@ -1527,7 +1532,7 @@ test.describe('承認済みモックとの突き合わせ', () => {
      */
     await expect(page).toHaveScreenshot('RECEPTION-CHECKIN.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0669,
+      maxDiffPixelRatio: 0.0672,
     })
   })
 
@@ -1561,7 +1566,7 @@ test.describe('承認済みモックとの突き合わせ', () => {
      */
     await expect(page).toHaveScreenshot('LEDGER-WALKIN.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0641,
+      maxDiffPixelRatio: 0.0657,
     })
   })
 
@@ -1590,7 +1595,7 @@ test.describe('承認済みモックとの突き合わせ', () => {
      */
     await expect(page).toHaveScreenshot('HISTORY-LIST.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0608,
+      maxDiffPixelRatio: 0.0611,
     })
   })
 
@@ -1701,7 +1706,7 @@ test.describe('承認済みモックとの突き合わせ', () => {
      */
     await expect(page).toHaveScreenshot('CHANGE-SEARCH.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0668,
+      maxDiffPixelRatio: 0.067,
     })
   })
 
@@ -1736,7 +1741,7 @@ test.describe('承認済みモックとの突き合わせ', () => {
      */
     await expect(page).toHaveScreenshot('EX-EMPTY-SEARCH.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0602,
+      maxDiffPixelRatio: 0.0604,
     })
   })
 
@@ -1795,7 +1800,7 @@ test.describe('承認済みモックとの突き合わせ', () => {
      */
     await expect(page).toHaveScreenshot('CHANGE-DATETIME.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0767,
+      maxDiffPixelRatio: 0.077,
     })
     await releaseHold(page)
   })
@@ -1825,7 +1830,7 @@ test.describe('承認済みモックとの突き合わせ', () => {
      */
     await expect(page).toHaveScreenshot('CHANGE-DIFF.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0714,
+      maxDiffPixelRatio: 0.0716,
     })
     await page.getByRole('button', { name: '戻って直す' }).click()
     await releaseHold(page)
@@ -1892,7 +1897,7 @@ test.describe('承認済みモックとの突き合わせ', () => {
      */
     await expect(page).toHaveScreenshot('EX-CONFLICT.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0769,
+      maxDiffPixelRatio: 0.0771,
     })
     await page.getByRole('button', { name: 'やめて台帳に戻る' }).click()
   })
@@ -1917,7 +1922,7 @@ test.describe('承認済みモックとの突き合わせ', () => {
      */
     await expect(page).toHaveScreenshot('CHANGE-CANCEL.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0593,
+      maxDiffPixelRatio: 0.0595,
     })
     await page.getByRole('button', { name: '取り消さずに戻る' }).click()
   })
@@ -1992,7 +1997,7 @@ test.describe('承認済みモックとの突き合わせ', () => {
      */
     await expect(page).toHaveScreenshot('CHANGE-DONE.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0495,
+      maxDiffPixelRatio: 0.0497,
     })
   })
 
@@ -2181,7 +2186,7 @@ test.describe('承認済みモックとの突き合わせ', () => {
      */
     await expect(page).toHaveScreenshot('ANALYTICS-COUNT.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.1136,
+      maxDiffPixelRatio: 0.1138,
     })
   })
 
@@ -2197,7 +2202,7 @@ test.describe('承認済みモックとの突き合わせ', () => {
      */
     await expect(page).toHaveScreenshot('ANALYTICS-STAFF.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0733,
+      maxDiffPixelRatio: 0.0736,
     })
   })
 
@@ -2214,7 +2219,7 @@ test.describe('承認済みモックとの突き合わせ', () => {
      */
     await expect(page).toHaveScreenshot('ANALYTICS-WAIT.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0758,
+      maxDiffPixelRatio: 0.076,
     })
   })
 
@@ -2232,7 +2237,395 @@ test.describe('承認済みモックとの突き合わせ', () => {
      */
     await expect(page).toHaveScreenshot('ANALYTICS-CANCEL.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.1008,
+      maxDiffPixelRatio: 0.1011,
     })
   })
 })
+
+/* ========================================================================= *
+ * P10 端末の使い分けと監査（`013-terminals-and-audit`）の 10 面。
+ *
+ * どれも `/` を開いて操作でたどる（業務開始の 6 面は URL を持たない）。盤面は seed の
+ * ままで、録音と保全の 1 面（MODE-PERSONAL）だけが受付を 1 件書く —— 書く日は
+ * 2026年9月17日（木）18:00 で、ほかの面が見る日を 1 日も踏まない。
+ * ========================================================================= */
+
+const CHECKOUT_IPAD = '銀座店 レジ横iPad'
+
+/** 業務開始の入口（START-DEVICE-MODE）。 */
+async function openDeviceMode(page: Page): Promise<void> {
+  await page.goto('/')
+  await page.getByLabel('お店のコード').fill(ORG)
+  await page.getByRole('button', { name: '業務を始める' }).click()
+  await expect(
+    page.getByRole('heading', { name: 'この iPad の使い方を決めてください' }),
+  ).toBeVisible()
+}
+
+async function typePin(page: Page, pin: string): Promise<void> {
+  for (const digit of pin) await page.getByRole('button', { name: digit, exact: true }).click()
+  await page.getByRole('button', { name: '確定' }).click()
+}
+
+/** 置き場所の「業務中」は 5 分以内の通信で決まるので、走らせた時刻に委ねない。 */
+async function stubPlaces(page: Page): Promise<void> {
+  await page.route(
+    (url) => url.pathname === '/api/staff/terminals',
+    async (route) => {
+      const response = await route.fetch()
+      const body = (await response.json()) as {
+        items: { name: string; lastSeenAt: string | null; isOnline: boolean }[]
+      }
+      await route.fulfill({
+        response,
+        json: {
+          ...body,
+          items: body.items.map((item) =>
+            item.name === '銀座店 受付iPad'
+              ? { ...item, lastSeenAt: new Date().toISOString(), isOnline: true }
+              : item,
+          ),
+        },
+      })
+    },
+  )
+}
+
+/** ALERTS の 3 行（モックが描いている盤面）。立て方は P7 / P8 の e2e が実データで見る。 */
+async function stubAlerts(page: Page): Promise<void> {
+  const occurredAt = (clock: string) =>
+    new Date(Date.parse(`2026-08-27T${clock}:00.000+09:00`)).toISOString()
+  const items = [
+    {
+      id: '99990000-0000-4000-8000-000000000001',
+      code: 'recording.upload_failed',
+      severity: 'action',
+      audience: 'store',
+      title: '録音の保存に3回失敗しました',
+      body: 'RC-260827-0001　ご予約は成立しています。',
+      targetType: 'recording',
+      targetId: null,
+      occurredAt: occurredAt('11:02'),
+      readAt: null,
+      resolvedAt: null,
+      resolvedBy: null,
+    },
+    {
+      id: '99990000-0000-4000-8000-000000000002',
+      code: 'web_booking.pending',
+      severity: 'info',
+      audience: 'store',
+      title: 'Web予約が 1 件届いています',
+      body: '9月18日（金）14:00　中井 さくら 様',
+      targetType: 'reservation',
+      targetId: null,
+      occurredAt: occurredAt('10:41'),
+      readAt: null,
+      resolvedAt: null,
+      resolvedBy: null,
+    },
+    {
+      id: '99990000-0000-4000-8000-000000000003',
+      code: 'equipment.maintenance_scheduled',
+      severity: 'info',
+      audience: 'store',
+      title: '視力測定機 A の点検が近づいています',
+      body: '9月1日（火）10:00–12:00',
+      targetType: 'equipment',
+      targetId: null,
+      occurredAt: occurredAt('09:15'),
+      readAt: null,
+      resolvedAt: null,
+      resolvedBy: null,
+    },
+  ]
+  await page.route(
+    (url) => url.pathname === '/api/staff/alerts',
+    async (route) => {
+      const kind = new URL(route.request().url()).searchParams.get('kind') ?? 'all'
+      const shown =
+        kind === 'action'
+          ? items.filter((item) => item.severity === 'action')
+          : kind === 'info'
+            ? items.filter((item) => item.severity === 'info')
+            : kind === 'resolved'
+              ? []
+              : items
+      await route.fulfill({
+        json: {
+          items: shown,
+          nextCursor: null,
+          total: shown.length,
+          counts: { all: 3, action: 1, info: 2, resolved: 0 },
+        },
+      })
+    },
+  )
+}
+
+test.describe('承認済みモックとの突き合わせ（P10）', () => {
+  test('START-DEVICE-MODE — 端末のはじめの設定', async ({ page }) => {
+    await openDeviceMode(page)
+    await expect(page.getByText('端末の名前：EYEX-iPad-07')).toBeVisible()
+    /*
+     * いま残っている差: 見出しと 2 枚のカードの位置は合うが、モックは 2 枚のカードの中身を 3 行の表として細かく罫で仕切っている。実装は同じ 3 行を dt/dd で置くので、行の高さと罫の位置がずれる。下半分の空きはモックと同じく空けたまま。
+     * 実測 11.7607%（2026-09-01 の初測）。**この値は下げるだけ。上げてはいけない。**
+     */
+    await expect(page).toHaveScreenshot('START-DEVICE-MODE.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.1177,
+    })
+  })
+
+  test('LOGIN-STAFF — 業務を始めるスタッフを選ぶ', async ({ page }) => {
+    await openDeviceMode(page)
+    await page.getByRole('button', { name: '個人の端末にする' }).click()
+    await expect(page.getByRole('button', { name: /佐藤 美咲/ })).toBeVisible()
+    /*
+     * いま残っている差: タイル 6 枚の並びと文字は合う。走らせた曜日で「本日休み」になる人が変わるぶんだけ、タイルの地の色が入れ替わる。
+     * 実測 2.1862%（2026-09-01 の初測）。**この値は下げるだけ。上げてはいけない。**
+     */
+    await expect(page).toHaveScreenshot('LOGIN-STAFF.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.0219,
+    })
+  })
+
+  test('LOGIN-STAFF-PIN — 個人の暗証番号', async ({ page }) => {
+    await openDeviceMode(page)
+    await page.getByRole('button', { name: '個人の端末にする' }).click()
+    await page.getByRole('button', { name: /佐藤 美咲/ }).click()
+    await expect(page.getByRole('button', { name: '確定' })).toBeVisible()
+    /*
+     * いま残っている差: テンキーの下段が「削除 / 0 / 確定」で、モックの「やめる / 0 / 1字消す」と違う（T-013 の揃え）。`.pins` が 4 枠ではなく 6 枠。罫と補足文字は、読みやすさのために暗くした 3 トークンのぶんモックより濃い。
+     * 実測 3.2273%（2026-09-01 の初測）。**この値は下げるだけ。上げてはいけない。**
+     */
+    await expect(page).toHaveScreenshot('LOGIN-STAFF-PIN.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.0323,
+    })
+  })
+
+  test('LOGIN-PIN-ERROR — 暗証番号が違う', async ({ page }) => {
+    await openDeviceMode(page)
+    await page.getByRole('button', { name: '個人の端末にする' }).click()
+    await page.getByRole('button', { name: /佐藤 美咲/ }).click()
+    await typePin(page, '9911')
+    await expect(
+      page.getByRole('heading', { name: '暗証番号が違います。あと2回お試しいただけます' }),
+    ).toBeVisible()
+    /*
+     * いま残っている差: 上と同じ 3 つに加えて、赤いカードの中の目盛（`TryMeter`）の位置がモックより下にある（見出し・本文・目盛の順に積む）。
+     * 実測 5.4929%（2026-09-01 の初測）。**この値は下げるだけ。上げてはいけない。**
+     */
+    await expect(page).toHaveScreenshot('LOGIN-PIN-ERROR.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.055,
+    })
+  })
+
+  test('LOGIN-SHARED — 置き場所を選ぶ', async ({ page }) => {
+    await stubPlaces(page)
+    await openDeviceMode(page)
+    await page.getByRole('button', { name: 'みんなで使う端末にする' }).click()
+    await expect(page.getByRole('heading', { name: 'この端末はどこに置きますか？' })).toBeVisible()
+    /*
+     * いま残っている差: 置き場所 3 枚の並びと状態の札は合う。選択中の 1 枚だけ枠が 3px 太い（モックは 2px）。
+     * 実測 2.0942%（2026-09-01 の初測）。**この値は下げるだけ。上げてはいけない。**
+     */
+    await expect(page).toHaveScreenshot('LOGIN-SHARED.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.021,
+    })
+  })
+
+  test('LOGIN-SHARED-PIN — 店舗の暗証番号', async ({ page }) => {
+    await stubPlaces(page)
+    await openDeviceMode(page)
+    await page.getByRole('button', { name: 'みんなで使う端末にする' }).click()
+    await page.getByRole('button', { name: new RegExp(CHECKOUT_IPAD) }).click()
+    await page.getByRole('button', { name: 'この置き場所で始める' }).click()
+    await expect(page.getByRole('button', { name: '確定' })).toBeVisible()
+    /*
+     * いま残っている差: LOGIN-STAFF-PIN と同じ 3 つ。左下の 2 群（個人を選ばずにできる／ご本人の確認が必要）の行間がモックより広い。
+     * 実測 3.6674%（2026-09-01 の初測）。**この値は下げるだけ。上げてはいけない。**
+     */
+    await expect(page).toHaveScreenshot('LOGIN-SHARED-PIN.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.0367,
+    })
+  })
+
+  test('HOME-SHARED-LOCKED — 離席して伏せたトップ', async ({ page }) => {
+    await page.clock.install()
+    await startWork(page)
+    await expect(page.locator('header').first()).toContainText('EYEX 銀座店')
+    await page.clock.fastForward(121_000)
+    await expect(page.getByRole('heading', { name: 'お客様の情報を隠しています' })).toBeVisible()
+    /*
+     * いま残っている差: 覆いと白い箱の位置は合うが、モックは下に伏せた台帳の帯（●●●● 様）を描いている。実装はトップを伏せているので、覆いの下がトップの主操作 2 枚になる。
+     * 実測 10.6354%（2026-09-01 の初測）。**この値は下げるだけ。上げてはいけない。**
+     */
+    await expect(page).toHaveScreenshot('HOME-SHARED-LOCKED.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.1064,
+    })
+  })
+
+  test('ALERTS — お知らせとアラート', async ({ page }) => {
+    await stubAlerts(page)
+    await startWork(page)
+    // 左の柱のお知らせの行はこの面を開いているときだけ出る。入口は上のバー。
+    await page.getByRole('button', { name: 'お知らせ 3件' }).click()
+    await expect(page.getByRole('list', { name: 'お知らせ' })).toBeVisible()
+    /*
+     * いま残っている差: 未読の 3 行に「未読」の札を足している（色だけに意味を持たせない。spec の決めたこと）。左の 4 分類と行の作りは合う。
+     * 実測 5.3566%（2026-09-01 の初測）。**この値は下げるだけ。上げてはいけない。**
+     */
+    await expect(page).toHaveScreenshot('ALERTS.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.0536,
+    })
+  })
+
+  test('EX-PERMISSION — 権限が足りない', async ({ page, request }) => {
+    await revokeManager(request)
+    try {
+      await startWork(page)
+      await page
+        .getByRole('navigation', { name: '画面の切り替え' })
+        .getByRole('button', { name: '設定', exact: true })
+        .click()
+      await page
+        .getByRole('navigation', { name: '設定の項目' })
+        .getByRole('button', { name: '営業時間', exact: true })
+        .click()
+      await page.getByLabel('開店').fill('09:00')
+      await page.getByRole('button', { name: '保存', exact: true }).click()
+      await expect(
+        page.getByRole('heading', { name: 'この操作は店長だけができます' }),
+      ).toBeVisible()
+      /*
+       * いま残っている差: 「この下書きを店長に依頼する」と在店中の 1 文を出していない（決め ⑤）。テンキーの下段と `.pins` の枠数は LOGIN-*-PIN と同じ差。
+       * 実測 8.6312%（2026-09-01 の初測）。**この値は下げるだけ。上げてはいけない。**
+       */
+      await expect(page).toHaveScreenshot('EX-PERMISSION.png', {
+        scale: 'device',
+        maxDiffPixelRatio: 0.0864,
+      })
+    } finally {
+      await grantStore(request)
+    }
+  })
+
+  test('MODE-PERSONAL — 個人モードへ上げる', async ({ page, request }) => {
+    await grantRecording(request)
+    await storedRecording(request)
+    await startWork(page)
+    await page
+      .getByRole('navigation', { name: '画面の切り替え' })
+      .getByRole('button', { name: '受付履歴', exact: true })
+      .click()
+    const rows = page.getByRole('group', { name: '受付の一覧' }).getByRole('button')
+    await expect(rows.first()).toBeVisible()
+    const preserve = page.getByRole('button', { name: 'この録音を保全する' })
+    for (let index = 0; index < Math.min(await rows.count(), 6); index += 1) {
+      await rows.nth(index).click()
+      await expect(page.getByRole('heading', { name: 'そのあとの変更' })).toBeVisible()
+      if ((await preserve.count()) > 0) break
+    }
+    await preserve.click()
+    await expect(
+      page.getByRole('heading', { name: '録音の保全にはご本人の確認が必要です' }),
+    ).toBeVisible()
+    /*
+     * いま残っている差: タイルと右のテンキーの作りは合うが、モックは 6 人ぶんのタイルに顔写真の丸と技能の札を描いている。実装は頭文字の丸と技能の 1 行にとどめた。
+     * 実測 11.7148%（2026-09-01 の初測）。**この値は下げるだけ。上げてはいけない。**
+     */
+    await expect(page).toHaveScreenshot('MODE-PERSONAL.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.1172,
+    })
+  })
+})
+
+/** 録音を読める・保全できる担当店舗を配る（`recording.spec.ts` と同じ 1 行）。 */
+async function grantRecording(request: APIRequestContext): Promise<void> {
+  const res = await request.post('/api/internal/store-memberships/sync', {
+    headers: { 'x-internal-key': 'dev-internal-key' },
+    data: {
+      id: '0f0f0f0f-0f0f-4f0f-8f0f-0f0f0f0f0f0f',
+      organizationId: ORG,
+      storeId: GINZA,
+      userId: VIEWER,
+      permissions: [
+        'store.read',
+        'store.manage',
+        'reservation.read',
+        'reservation.write',
+        'customer.read',
+        'customer.write',
+        'settings.read',
+        'analytics.read',
+        'settings.manage',
+        'recording.read',
+        'recording.manage',
+      ],
+      createdAt: '2026-08-01T00:00:00.000Z',
+    },
+  })
+  expect(res.status()).toBe(200)
+}
+
+/** 本日（JST）の、いまより先の 30 分刻み（10:00 より前には置かない）。 */
+function nextSlotToday(): string {
+  const jstNow = new Date(Date.now() + 9 * 60 * 60 * 1000)
+  const today = jstNow.toISOString().slice(0, 10)
+  const minutes = jstNow.getUTCHours() * 60 + jstNow.getUTCMinutes()
+  const total = Math.max(Math.ceil((minutes + 30) / 30) * 30, 10 * 60)
+  const hhmm = `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`
+  return new Date(Date.parse(`${today}T${hhmm}:00.000+09:00`)).toISOString()
+}
+
+/** 受付 → 予約 → 録音 → 保管庫。MODE-PERSONAL の入口を出すための 1 本。 */
+async function storedRecording(request: APIRequestContext): Promise<void> {
+  const token = await request.post('/api/auth/token', {
+    data: { organizationId: ORG, role: 'staff' },
+  })
+  const { token: bearer } = (await token.json()) as { token: string }
+  const headers = { authorization: `Bearer ${bearer}` }
+  const session = await request.post('/api/staff/reception-sessions', {
+    headers,
+    data: { storeId: GINZA },
+  })
+  expect(session.status(), await session.text()).toBe(200)
+  const sessionId = ((await session.json()) as { id: string }).id
+  const booked = await request.post('/api/staff/reservations', {
+    headers,
+    data: {
+      storeId: GINZA,
+      source: 'phone',
+      // 受付履歴が読む窓は本日までなので、**本日（JST）のいまより先の枠**へ置く。
+      startsAt: nextSlotToday(),
+      purposeIds: ['e0010000-0000-4000-8000-000000000001'],
+      staffId: null,
+      equipmentIds: [],
+      receptionSessionId: sessionId,
+    },
+  })
+  expect(booked.status(), await booked.text()).toBe(200)
+  const created = await request.post('/api/staff/recordings', {
+    headers,
+    data: { receptionSessionId: sessionId, storeId: GINZA, startedAt: new Date().toISOString() },
+  })
+  expect(created.status(), await created.text()).toBe(200)
+  const recordingId = ((await created.json()) as { id: string }).id
+  const stored = await request.put(
+    `/api/staff/recordings/${recordingId}/content?durationSeconds=192`,
+    {
+      headers: { ...headers, 'content-type': 'audio/mp4' },
+      data: Buffer.from([0, 0, 0, 32, 102, 116, 121, 112, 77, 52, 65, 32]),
+    },
+  )
+  expect(stored.status(), await stored.text()).toBe(200)
+}

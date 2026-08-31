@@ -366,6 +366,45 @@ CHANGE-DATETIME / CHANGE-DIFF / EX-CONFLICT）だけを実測し、CHANGE-CANCEL
 | AC-REC-20 | `services/glasses_management/e2e/recording.spec.ts` — 端末セッションが失効しても未送信の録音は残る |
 | UC-REC-09 | `services/glasses_management/e2e/recording.spec.ts` — 受付をやめても記録と録音が残る |
 
+| UC-TERM-01 | `services/glasses_management/e2e/terminals.spec.ts` — 端末の使い方をまだ決めていないときは、個人と共有の違いを 3 行で読める |
+| AC-TERM-01 | `services/glasses_management/e2e/terminals.spec.ts` — 端末の使い方をまだ決めていないときは、個人と共有の違いを 3 行で読める |
+| UC-TERM-02 | `services/glasses_management/e2e/terminals.spec.ts` — 個人の端末では、本日休みのスタッフは押せず文字でも「本日休み」と出る |
+| AC-TERM-02 | `services/glasses_management/e2e/terminals.spec.ts` — 個人の端末では、本日休みのスタッフは押せず文字でも「本日休み」と出る |
+| UC-TERM-03 | `services/glasses_management/e2e/terminals.spec.ts` — 個人の端末は 4 桁を入れると確定でき、左の柱に「佐藤 美咲の iPad」が出る |
+| AC-TERM-03 | `services/glasses_management/e2e/terminals.spec.ts` — 個人の端末は 4 桁を入れると確定でき、左の柱に「佐藤 美咲の iPad」が出る |
+| UC-TERM-05 | `services/glasses_management/e2e/terminals.spec.ts` — 置き場所には状態が文字で添えられ、選ぶと線引きが読める |
+| AC-TERM-04 | `services/glasses_management/e2e/terminals.spec.ts` — 置き場所には状態が文字で添えられ、選ぶと線引きが読める |
+| UC-TERM-06 | `services/glasses_management/e2e/terminals.spec.ts` — 共有端末は店舗の暗証番号で始まり、左の柱に置き場所と「共有で使っています」が出る |
+| AC-TERM-05 | `services/glasses_management/e2e/terminals.spec.ts` — 共有端末は店舗の暗証番号で始まり、左の柱に置き場所と「共有で使っています」が出る |
+| UC-TERM-04 | `services/glasses_management/e2e/terminals.spec.ts` — 暗証番号を 1 回間違えると、残りの回数と続けたときに起きることと直し方が同じ画面に出る |
+| AC-TERM-06 | `services/glasses_management/e2e/terminals.spec.ts` — 暗証番号を 1 回間違えると、残りの回数と続けたときに起きることと直し方が同じ画面に出る |
+| AC-TERM-07 | `services/glasses_management/e2e/terminals.spec.ts` — 3 回続けて間違えると 30 秒待つことが文字で出て、そのあいだは確定できない |
+| UC-TERM-07 | `services/glasses_management/e2e/terminals.spec.ts` — 共有モードのまま予約を確定でき、その受付履歴に端末の名前が残る |
+| AC-TERM-08 | `services/glasses_management/e2e/terminals.spec.ts` — 共有モードのまま予約を確定でき、その受付履歴に端末の名前が残る |
+| UC-TERM-08 | `services/glasses_management/e2e/terminals.spec.ts` — 共有モードで 2 分さわらないと、お名前と電話番号だけを伏せて覆う |
+| AC-TERM-09 | `services/glasses_management/e2e/terminals.spec.ts` — 共有モードで 2 分さわらないと、お名前と電話番号だけを伏せて覆う |
+| UC-TERM-09 | `services/glasses_management/e2e/terminals.spec.ts` — 共有モードで録音の保全を始めると、ご本人の確認を求め、録音は消さない |
+| AC-TERM-10 | `services/glasses_management/e2e/terminals.spec.ts` — 共有モードで録音の保全を始めると、ご本人の確認を求め、録音は消さない |
+| AC-TERM-11 | `services/glasses_management/e2e/terminals.spec.ts` — 暗証番号が通ると元の操作へ戻り、「いまは共有モード」が消えてその操作ができる |
+| UC-TERM-10 | `services/glasses_management/e2e/terminals.spec.ts` — 個人モードは 2 分で共有モードへ戻り、同じ操作でもう一度確認を求める |
+| AC-TERM-12 | `services/glasses_management/e2e/terminals.spec.ts` — 個人モードは 2 分で共有モードへ戻り、同じ操作でもう一度確認を求める |
+| UC-TERM-11 | `services/glasses_management/e2e/terminals.spec.ts` — スタッフの権限で設定を保存すると、足りない権限と下書きと店長の暗証番号が同じ画面に出る |
+| AC-TERM-13 | `services/glasses_management/e2e/terminals.spec.ts` — スタッフの権限で設定を保存すると、足りない権限と下書きと店長の暗証番号が同じ画面に出る |
+| UC-TERM-12 | `services/glasses_management/e2e/terminals.spec.ts` — 通信が切れても台帳は読めたままで、打ちかけの入力は消えない |
+| AC-TERM-14 | `services/glasses_management/e2e/terminals.spec.ts` — 通信が切れても台帳は読めたままで、打ちかけの入力は消えない |
+| UC-TERM-13 | `services/glasses_management/e2e/terminals.spec.ts` — 日時を変えた 1 件は、受付履歴の「そのあとの変更」から時系列で読み返せる |
+| AC-TERM-15 | `services/glasses_management/e2e/terminals.spec.ts` — 日時を変えた 1 件は、受付履歴の「そのあとの変更」から時系列で読み返せる |
+| UC-TERM-14 | `services/glasses_management/e2e/terminals.spec.ts` — お知らせは対応が必要とお知らせに分かれ、未読には札が付き、まとめて既読にできる |
+| AC-TERM-16 | `services/glasses_management/e2e/terminals.spec.ts` — お知らせは対応が必要とお知らせに分かれ、未読には札が付き、まとめて既読にできる |
+| AC-TERM-17 | `services/glasses_management/e2e/terminals.spec.ts` — 裏に回ったまま 2 分を越えて表へ戻ると、戻った時点でもう伏せられている |
+| AC-TERM-18 | `services/glasses_management/e2e/terminals.spec.ts` — お知らせの入口は「お知らせ 3件」と読まれ、柱をたたんでも変わらない |
+| AC-TERM-19 | `services/glasses_management/e2e/terminals.spec.ts` — 3 桁しか入れていない「確定」は、押せない理由を一緒に読み上げる |
+| AC-TERM-20 | `services/glasses_management/e2e/terminals.spec.ts` — 共有端末の入力欄はすべて autocomplete="off" で、前のお客様の値を候補に出さない |
+| AC-TERM-21 | `services/glasses_management/e2e/terminals.spec.ts` — 共有端末の「使い方を変える」から、個人の端末として選び直せる |
+| UC-TERM-15 | `services/glasses_management/e2e/terminals.spec.ts` — 「もう一度送る」が通ったお知らせは、その場で対応済みになって一覧から外れる |
+| AC-TERM-22 | `services/glasses_management/e2e/terminals.spec.ts` — 「もう一度送る」が通ったお知らせは、その場で対応済みになって一覧から外れる |
+| UC-TERM-16 | `services/glasses_management/e2e/terminals.spec.ts` — 店長は「設定 › 端末の設定」で、端末の一覧と直す欄を開ける |
+
 validator 自体は `scripts/check-e2e-traceability.test.mjs` で unit test する。通常の実行は次の
 とおり。
 

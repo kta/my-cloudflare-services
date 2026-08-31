@@ -273,6 +273,11 @@ export type ChangeBatchInput = {
   assignments: readonly ChangeAssignment[]
   /** 共有端末で個人が未確認なら null。 */
   actorId: string | null
+  /**
+   * 監査に残す主体（P10）。端末が名乗った業務セッションだけが決める。渡さなければ
+   * これまでどおり担当（`actorId`）が主体になる。
+   */
+  auditActor?: { type: string; id: string | null; terminalId: string | null }
   /** 1 操作でまとまった行を束ねる。 */
   correlationId: string
   /** 監査に残す変更前後。平文のお名前・お電話番号を入れない（`07-nfr.md` §6.6）。 */
@@ -292,6 +297,11 @@ export type CancelBatchInput = {
   /** サーバ時刻。`cancelled_at` と監査の時刻になる。 */
   now: Date
   actorId: string | null
+  /**
+   * 監査に残す主体（P10）。端末が名乗った業務セッションだけが決める。渡さなければ
+   * これまでどおり担当（`actorId`）が主体になる。
+   */
+  auditActor?: { type: string; id: string | null; terminalId: string | null }
   correlationId: string
   audit: { before: unknown }
   newId?: () => string
@@ -412,13 +422,15 @@ export function buildChangeBatch(input: ChangeBatchInput): D1PreparedStatement[]
   statements.push(
     db
       .prepare(
-        `${AUDIT_COLUMNS}SELECT ?, ?, ?, 'staff', ?, NULL, 'reservation.rescheduled', 'reservation', ?, ?, ?, ?, ? WHERE ${guards}`,
+        `${AUDIT_COLUMNS}SELECT ?, ?, ?, ?, ?, ?, 'reservation.rescheduled', 'reservations', ?, ?, ?, ?, ? WHERE ${guards}`,
       )
       .bind(
         newId(),
         input.organizationId,
         input.storeId,
-        input.actorId,
+        input.auditActor?.type ?? 'staff',
+        input.auditActor === undefined ? input.actorId : input.auditActor.id,
+        input.auditActor?.terminalId ?? null,
         input.reservationId,
         JSON.stringify(input.audit.before),
         JSON.stringify(input.audit.after),
@@ -483,13 +495,15 @@ export function buildCancelBatch(input: CancelBatchInput): D1PreparedStatement[]
       .bind(input.organizationId, input.reservationId, ...version),
     db
       .prepare(
-        `${AUDIT_COLUMNS}SELECT ?, ?, ?, 'staff', ?, NULL, 'reservation.cancelled', 'reservation', ?, ?, ?, ?, ? WHERE ${VERSION_GUARD}`,
+        `${AUDIT_COLUMNS}SELECT ?, ?, ?, ?, ?, ?, 'reservation.cancelled', 'reservations', ?, ?, ?, ?, ? WHERE ${VERSION_GUARD}`,
       )
       .bind(
         newId(),
         input.organizationId,
         input.storeId,
-        input.actorId,
+        input.auditActor?.type ?? 'staff',
+        input.auditActor === undefined ? input.actorId : input.auditActor.id,
+        input.auditActor?.terminalId ?? null,
         input.reservationId,
         JSON.stringify(input.audit.before),
         JSON.stringify({ status: outcome.status, cancelReason: outcome.reason }),

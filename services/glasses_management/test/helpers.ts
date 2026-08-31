@@ -559,3 +559,178 @@ export async function grantStorePermissions(
     }),
   })
 }
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * P10 端末の使い分けと監査
+ *
+ * 端末の暗証番号は**ハッシュにするのがサーバの仕事**なので、材料を D1 へ直に置かず
+ * 必ず API を通す（助手が自前でハッシュを作ると、本番と違う塩で照合できなくなる）。
+ * `last_seen_at` のように API から書けない列だけ D1 へ直に触る。
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+/** JSON の応答をそのまま運ぶ形。状態コードと本文を両方見る行が多いのでまとめる。 */
+export type ApiResult = { status: number; body: Record<string, unknown> | null }
+
+async function asResult(res: Response): Promise<ApiResult> {
+  return {
+    status: res.status,
+    body: (await res.json().catch(() => null)) as Record<string, unknown> | null,
+  }
+}
+
+/**
+ * 端末を 1 台登録する（`POST /api/staff/terminals?storeId=...`）。
+ * `TerminalInput` は店舗を持たないので、店舗はクエリで渡す。
+ */
+export async function createTerminal(
+  token: string,
+  input: {
+    storeId: string
+    name?: string
+    kind?: 'shared' | 'personal'
+    placeNote?: string
+    deviceLabel?: string
+    autoLockSeconds?: number
+    isActive?: boolean
+    pin?: string
+  },
+): Promise<ApiResult> {
+  const { storeId, ...body } = input
+  const res = await SELF.fetch(`${BASE}/api/staff/terminals?storeId=${storeId}`, {
+    method: 'POST',
+    headers: authed(token),
+    body: JSON.stringify({
+      name: body.name ?? '銀座店 レジ横iPad',
+      kind: body.kind ?? 'shared',
+      placeNote: body.placeNote ?? 'レジの右側　固定スタンド',
+      deviceLabel: body.deviceLabel ?? 'EYEX-iPad-07',
+      autoLockSeconds: body.autoLockSeconds ?? 120,
+      isActive: body.isActive ?? true,
+      ...(body.pin === undefined ? {} : { pin: body.pin }),
+    }),
+  })
+  return asResult(res)
+}
+
+/** 本人の暗証番号を設定する（`PUT /api/staff/stores/:storeId/staff/:staffId/pin`）。 */
+export async function setStaffPin(
+  token: string,
+  storeId: string,
+  staffId: string,
+  pin: string,
+): Promise<ApiResult> {
+  const res = await SELF.fetch(`${BASE}/api/staff/stores/${storeId}/staff/${staffId}/pin`, {
+    method: 'PUT',
+    headers: authed(token),
+    body: JSON.stringify({ pin }),
+  })
+  return asResult(res)
+}
+
+/** 業務を始める（`POST /api/staff/terminals/:terminalId/sessions`）。 */
+export async function startSession(
+  token: string,
+  terminalId: string,
+  body: Record<string, unknown>,
+): Promise<ApiResult> {
+  const res = await SELF.fetch(`${BASE}/api/staff/terminals/${terminalId}/sessions`, {
+    method: 'POST',
+    headers: authed(token),
+    body: JSON.stringify(body),
+  })
+  return asResult(res)
+}
+
+/** 個人モードへ上げる（`POST /api/staff/terminals/:terminalId/elevate`）。 */
+export async function elevate(
+  token: string,
+  terminalId: string,
+  staffId: string,
+  pin: string,
+  reason: 'recording' | 'attention' | 'settings' | 'customer_merge' = 'settings',
+): Promise<ApiResult> {
+  const res = await SELF.fetch(`${BASE}/api/staff/terminals/${terminalId}/elevate`, {
+    method: 'POST',
+    headers: authed(token),
+    body: JSON.stringify({ staffId, pin, reason }),
+  })
+  return asResult(res)
+}
+
+/** 「つながっているか」の材料。列は `last_seen_at` だけで、状態は持たない。 */
+export async function touchTerminal(
+  org: string,
+  terminalId: string,
+  lastSeenAt: string | null,
+): Promise<void> {
+  await env.DB.prepare('UPDATE terminals SET last_seen_at = ? WHERE organization_id = ? AND id = ?')
+    .bind(lastSeenAt, org, terminalId)
+    .run()
+}
+
+/** お知らせ 1 件を D1 へ直に置く（立てる側は P7 / P8 の仕事）。 */
+export async function insertAlert(
+  org: string,
+  storeId: string,
+  input: {
+    code?: string
+    severity?: 'info' | 'action'
+    audience?: 'store' | 'ops'
+    title?: string
+    occurredAt?: string
+    readAt?: string | null
+    resolvedAt?: string | null
+  } = {},
+): Promise<string> {
+  const id = crypto.randomUUID()
+  await env.DB.prepare(
+    'INSERT INTO alerts (id, organization_id, store_id, code, severity, audience, title, body, target_type, target_id, occurred_at, read_at, resolved_at, resolved_by, created_at) VALUES (?,?,?,?,?,?,?,NULL,NULL,NULL,?,?,?,NULL,?)',
+  )
+    .bind(
+      id,
+      org,
+      storeId,
+      input.code ?? 'recording.upload_failed',
+      input.severity ?? 'action',
+      input.audience ?? 'store',
+      input.title ?? '録音の保存に3回失敗しました',
+      input.occurredAt ?? FIXED_NOW,
+      input.readAt ?? null,
+      input.resolvedAt ?? null,
+      FIXED_NOW,
+    )
+    .run()
+  return id
+}
+
+/** 監査の行をそのまま読む（追記専用なので、読み出しの API を通さず数える行がある）。 */
+export async function auditRowsOf(org: string): Promise<
+  Array<{
+    action: string
+    actor_type: string
+    actor_id: string | null
+    terminal_id: string | null
+    target_type: string
+    target_id: string
+    before_json: string | null
+    after_json: string | null
+    correlation_id: string | null
+  }>
+> {
+  const { results } = await env.DB.prepare(
+    'SELECT action, actor_type, actor_id, terminal_id, target_type, target_id, before_json, after_json, correlation_id FROM audit_events WHERE organization_id = ? ORDER BY occurred_at, rowid',
+  )
+    .bind(org)
+    .all<{
+      action: string
+      actor_type: string
+      actor_id: string | null
+      terminal_id: string | null
+      target_type: string
+      target_id: string
+      before_json: string | null
+      after_json: string | null
+      correlation_id: string | null
+    }>()
+  return results
+}

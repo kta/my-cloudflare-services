@@ -13,7 +13,8 @@ import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-or
  * P0（基盤）の 3 つに、P1（店舗の受付条件）の 16 と P2（枠の一次排他）の 1、
  * P3（電話・店頭からの予約受付）の 3 と P4（顧客台帳）の 4、
  * P5（来店受付とウォークイン）の 2 と P7（受付の録音）の 2、
- * P8（お客様向け Web 予約）の 2 と P9（分析）の 1 を足した 34 表がここにある。
+ * P8（お客様向け Web 予約）の 2 と P9（分析）の 1、
+ * P10（端末の使い分けと監査）の 2 を足した 36 表がここにある。
  */
 
 /**
@@ -1272,5 +1273,78 @@ export const analyticsDaily = sqliteTable(
       t.metric,
       t.date,
     ),
+  ],
+)
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * P10 端末の使い分けと監査（013-terminals-and-audit）
+ * 同じアプリを「持ち歩く個人の iPad」と「レジ横に据え置く共有の iPad」の
+ * どちらとしても使う。端末そのものを操作の主体にできるので、共有モードでは
+ * 個人ログイン無しで日常業務が回り、責任の残る操作の前だけ個人モードへ上げる。
+ * 監査（audit_events）とお知らせ（alerts）は P3 / P7 の表をそのまま使い、
+ * ここでは作り直さない。
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * 店舗に置く iPad の 1 台。共有（レジ横・受付台）のときだけ端末側に暗証番号の
+ * ハッシュを持ち、個人の端末は本人（staff.pin_hash）で照合する。
+ * `auto_lock_seconds` の既定は 120 だが、DDL の DEFAULT に意味を持たせない決めなので
+ * アプリ層が入れる。`version` は楽観ロックで、PATCH が合わなければ 409 を返す。
+ *
+ * 「つながっているか」は列に持たない。`last_seen_at` が 5 分以内かどうかで
+ * 毎回計算する（状態を 2 か所に持つと必ずずれる）。
+ */
+export const terminals = sqliteTable(
+  'terminals',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    storeId: text('store_id').notNull(),
+    name: text('name').notNull(), // '銀座店 レジ横iPad'（1〜60文字）
+    kind: text('kind').notNull(), // 'shared' | 'personal'
+    placeNote: text('place_note'), // 'レジの右側　固定スタンド'
+    deviceLabel: text('device_label'), // 'EYEX-iPad-07'
+    pinHash: text('pin_hash'), // 共有端末の店舗共通 PIN。平文は保存しない
+    autoLockSeconds: integer('auto_lock_seconds').notNull(), // 既定 120（30〜1800）
+    lastSeenAt: text('last_seen_at'), // ISO8601 (UTC)。一度もつながっていなければ NULL
+    isActive: text('is_active').notNull(), // '0' | '1'
+    version: integer('version').notNull(), // 1 以上。PATCH のたびに +1
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => [
+    // LOGIN-SHARED の置き場所一覧（作成の古い順に並べる）。
+    index('terminals_org_store_created_idx').on(t.organizationId, t.storeId, t.createdAt),
+  ],
+)
+
+/**
+ * 端末で開いている業務。`mode='personal'` のときだけ `staff_id` が入る。
+ * 寿命は `expires_at`（開始 + `auto_lock_seconds`）で、業務を終えたときと
+ * 置き場所を別の端末に引き継がれたときは `revoked_at` を書いて**行は残す**
+ * （いつ誰から誰へ移ったかを監査から追えるようにするため）。
+ */
+export const terminalSessions = sqliteTable(
+  'terminal_sessions',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    storeId: text('store_id').notNull(),
+    terminalId: text('terminal_id').notNull(),
+    staffId: text('staff_id'), // 'shared' では NULL
+    mode: text('mode').notNull(), // 'shared' | 'personal'
+    startedAt: text('started_at').notNull(), // ISO8601 (UTC)
+    expiresAt: text('expires_at').notNull(), // started_at + auto_lock_seconds
+    revokedAt: text('revoked_at'), // 業務の終了・引き継ぎ・失効で埋める
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => [
+    // 1 端末の「いま誰が使っているか」（新しい順に 1 本目を見る）。
+    index('terminal_sessions_org_terminal_started_idx').on(
+      t.organizationId,
+      t.terminalId,
+      t.startedAt,
+    ),
+    // 期限切れの掃除。
+    index('terminal_sessions_org_expires_idx').on(t.organizationId, t.expiresAt),
   ],
 )

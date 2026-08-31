@@ -17,6 +17,7 @@ export default defineConfig({
           INTERNAL_KEY: 'dev-internal-key',
           JWT_SECRET: 'dev-jwt-secret-change-me',
           AUTH_DEV_GRANT: 'true',
+          AUTH_PEPPER: 'dev-auth-pepper',
         },
         // notifier への同期送信はスタブで受ける。呼び出しの有無と本文を
         // vi.spyOn(env.NOTIFIER, 'fetch') で検証する。

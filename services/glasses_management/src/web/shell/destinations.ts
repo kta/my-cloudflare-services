@@ -15,6 +15,12 @@ export type Destination = {
 /** 「＋ 予約を取る」より上に置く、いちばん上の行き先（モックの並び）。 */
 export const HOME_DESTINATION: Destination = { key: 'home', label: 'トップ', icon: 'home' }
 
+/**
+ * お知らせ（ALERTS）。**この面を開いているときだけ**サイドバーに出す
+ * （承認済みモック 68 枚がそうなっている）。ほかの画面の入口は上のバーのボタン。
+ */
+export const ALERTS_DESTINATION: Destination = { key: 'alerts', label: 'お知らせ', icon: 'alerts' }
+
 /** 「＋ 予約を取る」より下に並ぶ行き先。 */
 export const DESTINATIONS: readonly Destination[] = [
   { key: 'ledger', label: '予約台帳', icon: 'ledger' },

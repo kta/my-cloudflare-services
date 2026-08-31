@@ -2572,6 +2572,12 @@ export type Alert = z.infer<typeof Alert>
 export const AlertListQuery = z.strictObject({
   storeId: Uuid.optional(),
   audience: z.enum(['store', 'ops']).default('store'),
+  /**
+   * ALERTS 左ペインの 4 分類。`all` は未対応すべて、`action` / `info` はその内訳、
+   * `resolved` は**本日（JST）に `resolved_at` が入ったもの**を数える
+   * （右ペインの見出しが「本日 8月27日（木）」であるため）。
+   */
+  kind: z.enum(['all', 'action', 'info', 'resolved']).default('all'),
   limit: Limit,
   cursor: Cursor.optional(),
 })
@@ -2582,6 +2588,18 @@ export const AlertList = z.strictObject({
   items: Alert.array().default([]),
   nextCursor: Cursor.nullable().default(null),
   total: CountInteger,
+  /**
+   * 4 分類の件数。左ペインは 4 つを同時に出すので、`kind` で絞ったときも
+   * 4 つすべてを返す。数えるのは `audience='store'` の行だけである。
+   */
+  counts: z
+    .strictObject({
+      all: CountInteger,
+      action: CountInteger,
+      info: CountInteger,
+      resolved: CountInteger,
+    })
+    .default({ all: 0, action: 0, info: 0, resolved: 0 }),
 })
 export type AlertList = z.infer<typeof AlertList>
 
@@ -3098,3 +3116,265 @@ export const AnalyticsRollupResult = z.strictObject({
   failed: CountInteger,
 })
 export type AnalyticsRollupResult = z.infer<typeof AnalyticsRollupResult>
+
+/* ------------------------------------------------------------------------- *
+ * P10 端末の使い分けと監査（`specs/glasses_management/features/013-terminals-and-audit`）
+ *
+ * 同じアプリを「スタッフが持ち歩く個人の iPad」と「レジ横に据え置く共有の iPad」の
+ * どちらとしても使う。**平文の暗証番号は保存も応答もログ出力もしない**ので、
+ * この節のどの応答スキーマにも `pin` / `pinHash` を置かない（`z.strictObject` に
+ * しているので、D1 の行をそのまま返すと落ちる）。
+ * ------------------------------------------------------------------------- */
+
+/* --- 暗証番号 ------------------------------------------------------------- */
+
+/**
+ * 暗証番号。**4〜6 桁の半角数字だけ**（`04-api.md` §4.1）。
+ * 全角数字も空白も受けない（テンキー以外から来た値をここで落とす）。
+ */
+export const Pin = z.string().regex(/^\d{4,6}$/)
+export type Pin = z.infer<typeof Pin>
+
+/** 端末に暗証番号を設定する（`PUT /api/staff/stores/:storeId/staff/:staffId/pin`）。 */
+export const StaffPinInput = z.strictObject({ pin: Pin })
+export type StaffPinInput = z.infer<typeof StaffPinInput>
+
+/** 設定の結果。**暗証番号そのものを返さない。** */
+export const PinSetResult = z.strictObject({ staffId: Uuid, updatedAt: IsoDateTime })
+export type PinSetResult = z.infer<typeof PinSetResult>
+
+/**
+ * 暗証番号が違ったときの 401。残り回数を返さないと画面が
+ * 「あと2回お試しいただけます」と書けない。**入力された値は返さない。**
+ */
+export const PinInvalidError = z.strictObject({
+  error: z.literal('pin_invalid'),
+  remainingAttempts: z.number().int().min(0).max(2),
+})
+export type PinInvalidError = z.infer<typeof PinInvalidError>
+
+/**
+ * 3 回続けて間違えたときの 429。待ち時間は 30 秒で、明けたら失敗回数は 0 に戻る。
+ */
+export const PinLockedError = z.strictObject({
+  error: z.literal('pin_locked'),
+  retryAfterSeconds: z.number().int().min(1).max(300),
+  remainingAttempts: z.literal(0),
+})
+export type PinLockedError = z.infer<typeof PinLockedError>
+
+/* --- 端末 ----------------------------------------------------------------- */
+
+/** 端末の使い方。`shared` は置き場所（レジ横）、`personal` は持ち歩く 1 台。 */
+export const TerminalKind = z.enum(['shared', 'personal'])
+export type TerminalKind = z.infer<typeof TerminalKind>
+
+/**
+ * 端末 1 台。`name` の上限は **60 文字**（`04-api.md` §4.2 を正とする。
+ * `03-data-model.md` §10.1 の「1〜30文字」は採らない）。
+ *
+ * `hasPin` と `isOnline` は**サーバで計算して返す真偽値**で、D1 の列ではない
+ * （`hasPin` は `pin_hash` の有無、`isOnline` は `last_seen_at` が 5 分以内か）。
+ * `version` は楽観ロックで、`TerminalPatch` が必ず持って来る。
+ */
+export const Terminal = z.strictObject({
+  id: Uuid,
+  storeId: Uuid,
+  name: z.string().trim().min(1).max(60),
+  kind: TerminalKind,
+  placeNote: z.string().max(40).default(''),
+  deviceLabel: z.string().max(30).default(''),
+  autoLockSeconds: z.number().int().min(30).max(1800).default(120),
+  isActive: z.boolean().default(true),
+  hasPin: z.boolean(),
+  lastSeenAt: IsoDateTime.nullable().default(null),
+  isOnline: z.boolean(),
+  version: z.number().int().min(1),
+  createdAt: IsoDateTime,
+})
+export type Terminal = z.infer<typeof Terminal>
+
+/** 置き場所の一覧（`GET /api/staff/terminals`）。 */
+export const TerminalListQuery = z.strictObject({
+  storeId: Uuid,
+  includeInactive: QueryFlag,
+  kind: TerminalKind.optional(),
+})
+export type TerminalListQuery = z.infer<typeof TerminalListQuery>
+
+/**
+ * 端末の登録（`POST /api/staff/terminals`）。`pin` はここでだけ受け取り、
+ * ハッシュにしてから保存する。**応答には載せない。**
+ */
+export const TerminalInput = z.strictObject({
+  name: z.string().trim().min(1).max(60),
+  kind: TerminalKind,
+  placeNote: z.string().max(40).default(''),
+  deviceLabel: z.string().max(30).default(''),
+  autoLockSeconds: z.number().int().min(30).max(1800).default(120),
+  isActive: z.boolean().default(true),
+  pin: Pin.optional(),
+})
+export type TerminalInput = z.infer<typeof TerminalInput>
+
+/**
+ * 端末の更新（`PATCH /api/staff/terminals/:terminalId`）。
+ * **`version` だけ必須**で、合わなければ 409 `version_conflict` を返す。
+ */
+export const TerminalPatch = z.strictObject({
+  version: z.number().int().min(1),
+  name: z.string().trim().min(1).max(60).optional(),
+  kind: TerminalKind.optional(),
+  placeNote: z.string().max(40).optional(),
+  deviceLabel: z.string().max(30).optional(),
+  autoLockSeconds: z.number().int().min(30).max(1800).optional(),
+  isActive: z.boolean().optional(),
+  pin: Pin.optional(),
+})
+export type TerminalPatch = z.infer<typeof TerminalPatch>
+
+/**
+ * 業務の開始（`POST /api/staff/terminals/:terminalId/sessions`）。
+ * **`mode` の判別つき union**にして、個人は `staffId` 必須・共有は `staffId` を持てない
+ * ようにする（共有の開始に担当の id が混ざると、責任の所在が曖昧になる）。
+ */
+export const TerminalSessionStart = z.discriminatedUnion('mode', [
+  z.strictObject({ mode: z.literal('shared'), pin: Pin }),
+  z.strictObject({ mode: z.literal('personal'), staffId: Uuid, pin: Pin }),
+])
+export type TerminalSessionStart = z.infer<typeof TerminalSessionStart>
+
+/** 開いた業務のセッション。共有のときは `staffId` が `null` である。 */
+export const TerminalSession = z.strictObject({
+  id: Uuid,
+  terminalId: Uuid,
+  staffId: Uuid.nullable().default(null),
+  mode: TerminalKind,
+  startedAt: IsoDateTime,
+  expiresAt: IsoDateTime,
+})
+export type TerminalSession = z.infer<typeof TerminalSession>
+
+/**
+ * 個人モードへの昇格（`POST /api/staff/terminals/:terminalId/elevate`）。
+ * `reason` は**用件 4 語の許可リスト**で、画面の「録音の保全」「注意ごとの公開」
+ * 「設定の変更」「お客様のおまとめ」に 1 対 1 で対応する。知らない用件は落とす。
+ */
+export const ReauthInput = z.strictObject({
+  staffId: Uuid,
+  pin: Pin,
+  reason: z.enum(['recording', 'attention', 'settings', 'customer_merge']),
+})
+export type ReauthInput = z.infer<typeof ReauthInput>
+
+/* --- 監査 ----------------------------------------------------------------- */
+
+/**
+ * 監査の主体。共有モードの書き込みは `terminal`、個人モードは `staff`、
+ * 端末セッションが 1 本も無い経路（内部同期）は `system` になる。
+ */
+export const AuditActorType = z.enum(['staff', 'terminal', 'system', 'customer'])
+export type AuditActorType = z.infer<typeof AuditActorType>
+
+/**
+ * 監査の対象。**対象のテーブル名そのまま（snake_case・複数形）**で綴る
+ * （`07-nfr.md` §7.2）。`03-data-model.md` §10.3 の単数形の列挙は
+ * `customer_notes` / `alerts` / `store_business_hours` を表せないので採らない。
+ * **知らない値は落とす（fail close）。**
+ */
+export const AuditTargetType = z.enum([
+  'organizations',
+  'stores',
+  'store_business_hours',
+  'store_blackout_windows',
+  'store_calendar_exceptions',
+  'store_slot_rules',
+  'staff',
+  'staff_skills',
+  'staff_weekly_shifts',
+  'staff_shifts',
+  'equipment',
+  'equipment_maintenance',
+  'visit_purposes',
+  'purpose_requirements',
+  'reservations',
+  'walk_ins',
+  'reception_sessions',
+  'customers',
+  'customer_notes',
+  'recordings',
+  'web_bookings',
+  'web_booking_settings',
+  'alerts',
+  'terminals',
+])
+export type AuditTargetType = z.infer<typeof AuditTargetType>
+
+/**
+ * 監査 1 件。**追記専用**で、書き換える経路を作らない。
+ * `beforeJson` / `afterJson` は表ごとに形が違うので `unknown` のまま運び、
+ * 中身は `changedFields()` が「変わった項目だけ」に絞る
+ * （`pin` / `pinHash` / `email` を含むキーは落とす）。
+ */
+export const AuditEvent = z.strictObject({
+  id: Uuid,
+  occurredAt: IsoDateTime,
+  actorType: AuditActorType,
+  actorId: z.string().min(1).max(200).nullable().default(null),
+  terminalId: Uuid.nullable().default(null),
+  action: z.string().min(1).max(80),
+  targetType: AuditTargetType,
+  targetId: z.string().min(1).max(200),
+  correlationId: Uuid.nullable().default(null),
+  beforeJson: z.unknown(),
+  afterJson: z.unknown(),
+})
+export type AuditEvent = z.infer<typeof AuditEvent>
+
+/**
+ * 監査の読み返し（`GET /api/staff/audit`）。`from` / `to` は**暦日**で受ける
+ * （画面が日付で絞るため）。`OFFSET` を使わないので続きは `cursor` でたどる。
+ */
+export const AuditSearchQuery = z.strictObject({
+  storeId: Uuid.optional(),
+  from: LocalDate.optional(),
+  to: LocalDate.optional(),
+  actorId: Uuid.optional(),
+  action: z.string().min(1).max(80).optional(),
+  limit: Limit,
+  cursor: Cursor.optional(),
+})
+export type AuditSearchQuery = z.infer<typeof AuditSearchQuery>
+
+/** 監査の応答（`04-api.md` §1.2 の `{ items, nextCursor, total }`）。 */
+export const AuditEventList = z.strictObject({
+  items: AuditEvent.array().default([]),
+  nextCursor: Cursor.nullable().default(null),
+  total: CountInteger,
+})
+export type AuditEventList = z.infer<typeof AuditEventList>
+
+/* --- お知らせの書き込み --------------------------------------------------- */
+
+/**
+ * お知らせ 1 件の更新（`PATCH /api/staff/alerts/:alertId`）。
+ * `readAt: null` を受けるのは、既読にしたものをもう一度未読へ戻せるようにするため。
+ * **両方欠けた本文は落とす**（何も起きない PATCH を通さない）。
+ */
+export const AlertPatch = z
+  .strictObject({
+    readAt: IsoDateTime.nullable().optional(),
+    resolved: z.boolean().optional(),
+  })
+  .refine((value) => value.readAt !== undefined || value.resolved !== undefined, {
+    message: 'readAt か resolved のどちらかが要る',
+  })
+export type AlertPatch = z.infer<typeof AlertPatch>
+
+/** 「すべて既読にする」（`POST /api/staff/alerts/read-all`）。 */
+export const AlertReadAllInput = z.strictObject({ storeId: Uuid.optional() })
+export type AlertReadAllInput = z.infer<typeof AlertReadAllInput>
+
+/** 既読にした件数。0 件でも成功として返す（押した結果が読めるようにする）。 */
+export const AlertReadAllResult = z.strictObject({ updated: CountInteger })
+export type AlertReadAllResult = z.infer<typeof AlertReadAllResult>

@@ -21,6 +21,7 @@ export type SettingsSectionKey =
   | 'staff'
   | 'equipment'
   | 'web'
+  | 'terminals'
 
 export type SettingsSection = {
   key: SettingsSectionKey
@@ -39,6 +40,9 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   { key: 'staff', label: 'スタッフと技能' },
   { key: 'equipment', label: '設備と点検' },
   { key: 'web', label: 'Web予約の公開' },
+  // P10 が足した 8 つ目。モックの第2サイドバーの「端末の登録」とは別の名前にする
+  // （ここで作るのは登録だけでなく、使い方・暗証番号・伏せるまでの時間の直しである）。
+  { key: 'terminals', label: '端末の設定' },
 ]
 
 /** 保存の顛末。器の保存バーがこの 4 つを言い分ける。 */

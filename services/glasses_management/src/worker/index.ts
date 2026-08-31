@@ -2,12 +2,17 @@ import {
   Alert,
   AlertList,
   AlertListQuery,
+  AlertPatch,
+  AlertReadAllInput,
+  AlertReadAllResult,
   type AnalyticsMetric,
   AnalyticsQuery,
   AnalyticsReport,
   AnalyticsRollupRequest,
   AnalyticsRollupResult,
   AnalyticsTargets,
+  AuditEventList,
+  AuditSearchQuery,
   AvailabilityQuery,
   type AvailabilityReason,
   AvailabilityResponse,
@@ -49,6 +54,7 @@ import {
   NotificationJob,
   NotificationResult,
   OrganizationSync,
+  PinSetResult,
   type Plan,
   PublicAvailabilityQuery,
   PublicAvailabilityResponse,
@@ -68,6 +74,7 @@ import {
   PurposeListQuery,
   PurposeOrderInput,
   PurposeRequirementsInput,
+  ReauthInput,
   ReceptionHistoryDetail,
   ReceptionHistoryList,
   ReceptionHistoryQuery,
@@ -105,6 +112,7 @@ import {
   StaffMember,
   StaffMemberInput,
   StaffMemberPatch,
+  StaffPinInput,
   StaffReservationCreate,
   StaffShift,
   StaffShiftQuery,
@@ -116,6 +124,12 @@ import {
   StoreMembership,
   StorePatch,
   type StorePermission,
+  Terminal,
+  TerminalInput,
+  TerminalListQuery,
+  TerminalPatch,
+  TerminalSession,
+  TerminalSessionStart,
   VisitBoard,
   VisitBoardQuery,
   VisitEvent,
@@ -138,12 +152,15 @@ import {
 } from '@app/contracts'
 import {
   type AuthVariables,
+  hashStretched,
   internalAuth,
   type OrgResolver,
   requireActiveOrg,
   signAccessToken,
+  stretchPin,
   tenantAuth,
   toJstDateString,
+  verifyStretched,
 } from '@app/shared'
 import type {
   D1Database,
@@ -181,6 +198,7 @@ import {
   storeSettingsRevision,
   storeSlotRules,
   stores,
+  terminals,
   visitPurposes,
   webBookingSettings,
 } from './db/schema'
@@ -188,6 +206,7 @@ import { slotLockRequests, slotLockStatements, UNASSIGNED_TARGET_KEY } from './d
 import { ANALYTICS_TARGETS, addDays } from './domain/analytics'
 import { buildReport, type DailyRow } from './domain/analytics-report'
 import { type AnalyticsRow, rollupDay } from './domain/analytics-rollup'
+import { type AuditActor, auditInsert, changedFields, resolveActor } from './domain/audit'
 import {
   type AvailabilityInput,
   computeAvailability,
@@ -242,6 +261,7 @@ import {
   shortLivedKey,
   verifyManagementCode,
 } from './domain/management-code'
+import { isPinLocked, isWeakPin, nextFailureState, pinFailureKey } from './domain/pin'
 import { issueTicket, verifyTicket } from './domain/playback'
 import { buildHistoryList, type ReceptionHistoryRow } from './domain/reception-history'
 import { nextRecordingCode, nextState, r2KeyFor, uploadFailedAlert } from './domain/recording'
@@ -271,6 +291,7 @@ import {
   validateHoursInput,
   warnBusinessHours,
 } from './domain/store-settings'
+import { expiresAtFrom, isOnline, isSessionLive } from './domain/terminal-session'
 import { type BoardSubjectRow, buildBoard, planBoardSteps } from './domain/visit-board'
 import { jstVisitDate, nextTicketNo, waitedMinutes } from './domain/walkin'
 import {
@@ -303,6 +324,11 @@ export type Bindings = {
   INTERNAL_KEY: string
   /** アクセス JWT の HS256 署名鍵。admin（認証の正本）と同じ値。 */
   JWT_SECRET: string
+  /**
+   * 暗証番号のハッシュに混ぜる pepper（`wrangler secret put AUTH_PEPPER`）。
+   * **binding ではなく secret** なので `wrangler.jsonc` の `vars` には置かない。
+   */
+  AUTH_PEPPER: string
   /**
    * お客様のご予約ページの公開ドメイン（`eyex.jp`）。SETTINGS-WEB の「ご案内のページ」を
    * `stores.slug` と繋いで組み立てるためだけに使う。**この値を表に持たない。**
@@ -410,6 +436,33 @@ const UUID_PATTERN = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{
 /** 空白区切りの許可リストに含まれるか。知らない語は届かない（同期で fail close 済み）。 */
 const allows = (permissions: string, perm: StorePermission): boolean =>
   permissions.split(' ').includes(perm)
+
+/**
+ * その店舗でその権限を持っているか。パスに `:storeId` を持たない面
+ * （`/api/staff/terminals/:terminalId`）は、**行を引いてからその行の店舗で**
+ * 見直す必要がある —— `requireStorePermission()` は `:storeId` が無いと
+ * 「組織のどこかの店舗で持っているか」までしか見ないので、これが無いと
+ * 銀座店の店長が新宿店の端末の名前と暗証番号を書き換えられる。
+ */
+async function grantedOnStore(
+  db: Db,
+  org: string,
+  sub: string,
+  storeId: string,
+  perm: StorePermission,
+): Promise<boolean> {
+  const rows = await db
+    .select({ permissions: storeMemberships.permissions })
+    .from(storeMemberships)
+    .where(
+      and(
+        eq(storeMemberships.organizationId, org),
+        eq(storeMemberships.userId, sub),
+        eq(storeMemberships.storeId, storeId),
+      ),
+    )
+  return rows.some((row) => allows(row.permissions, perm))
+}
 
 /**
  * お客様に読み上げていただく Web のご予約番号（`EY-W-2608-0006`）。
@@ -1917,6 +1970,11 @@ function auditRow(
     /** 組織そのものへの操作（受付履歴の閲覧）だけ null になる。 */
     storeId: string | null
     actorId: string | null
+    /**
+     * P10 の主体。共有端末からの操作は端末そのものが主体になる
+     * （`013-terminals-and-audit`）。渡さない経路は担当そのままの `staff` に落ちる。
+     */
+    actor?: AuditActor
     action: string
     targetType: string
     targetId: string
@@ -1941,16 +1999,23 @@ function auditRow(
       : input.appliedVisitEventId !== undefined
         ? [input.organizationId, input.appliedVisitEventId]
         : []
+  const actor: AuditActor = input.actor ?? {
+    type: 'staff',
+    id: input.actorId,
+    terminalId: null,
+  }
   return db
     .prepare(
       'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
-        `SELECT ?, ?, ?, 'staff', ?, NULL, ?, ?, ?, NULL, ?, ?, ?${guard}`,
+        `SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?${guard}`,
     )
     .bind(
       crypto.randomUUID(),
       input.organizationId,
       input.storeId,
-      input.actorId,
+      actor.type,
+      actor.id,
+      actor.terminalId,
       input.action,
       input.targetType,
       input.targetId,
@@ -2464,7 +2529,7 @@ function recordingAudit(
   return db
     .prepare(
       'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
-        "VALUES (?,?,?,?,?,NULL,?,'recording',?,NULL,?,?,?)",
+        "VALUES (?,?,?,?,?,NULL,?,'recordings',?,NULL,?,?,?)",
     )
     .bind(
       crypto.randomUUID(),
@@ -3473,6 +3538,293 @@ async function rollupAnalytics(
   }
 }
 
+/* ───────────────────────────────────────────────────────────────────────────
+ * P10 端末の使い分けと監査（`013-terminals-and-audit`）
+ *
+ * 平文の暗証番号はここに 1 度も置かない。受け取った値はその場でストレッチして
+ * pepper で HMAC にし、保存も応答もログ出力もしない（`07-nfr.md` §7.1）。
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * サーバ側のストレッチ回数。パスワード（クライアント 600k）と違い、暗証番号は
+ * テンキーしか無い端末から生の 4〜6 桁が届くのでサーバで伸ばす。
+ * **Workers Free の CPU 10ms に収まる回数**にとどめ、強度は pepper（HMAC）で担う。
+ */
+const PIN_STRETCH_ITERATIONS = 10_000
+/**
+ * 連続失敗の置き場（KV）の寿命。**Workers KV の下限が 60 秒**なので 60 を渡し、
+ * 「30 秒ちょうどはまだ入力できない」の境界は `isPinLocked()` が時刻で見る
+ * （寿命に境界を任せない）。
+ */
+const PIN_FAILURE_TTL_SECONDS = 60
+
+/** 昇格が要る用件 4 語。画面はこの語をそのまま読み上げる。 */
+const ELEVATE_SUBJECT = {
+  recording: '録音の保全',
+  attention: '注意ごとの公開',
+  settings: '設定の変更',
+  customer_merge: 'お客様のおまとめ',
+} as const
+
+/** 暗証番号 → 保存形式。**戻り値以外のどこにも平文を残さない。** */
+async function pinHashOf(
+  pin: string,
+  org: string,
+  subjectId: string,
+  pepper: string,
+): Promise<string> {
+  return hashStretched(await stretchPin(pin, org, subjectId, PIN_STRETCH_ITERATIONS), pepper)
+}
+
+/** 保存済みハッシュとの照合。未設定（NULL）は「合わない」— 401 pin_invalid に落ちる。 */
+async function pinMatches(
+  pin: string,
+  org: string,
+  subjectId: string,
+  pepper: string,
+  storedHash: string | null,
+): Promise<boolean> {
+  if (storedHash === null) return false
+  return verifyStretched(
+    await stretchPin(pin, org, subjectId, PIN_STRETCH_ITERATIONS),
+    pepper,
+    storedHash,
+  )
+}
+
+/** 失敗回数の控え。D1 に行を作らず、KV にだけ置いて自然に消えるようにする。 */
+type PinFailureRecord = { attempts: number; lockedAt: string | null }
+
+async function readPinFailure(kv: KVNamespace, key: string): Promise<PinFailureRecord | null> {
+  const raw = await kv.get(key)
+  if (raw === null) return null
+  const parsed: unknown = JSON.parse(raw)
+  if (typeof parsed !== 'object' || parsed === null) return null
+  const record = parsed as Partial<PinFailureRecord>
+  return {
+    attempts: typeof record.attempts === 'number' ? record.attempts : 0,
+    lockedAt: typeof record.lockedAt === 'string' ? record.lockedAt : null,
+  }
+}
+
+/** 端末で開いている業務 1 本。主体を決める材料でもある。 */
+type SessionRow = {
+  id: string
+  storeId: string
+  terminalId: string
+  staffId: string | null
+  mode: string
+  expiresAt: string
+  revokedAt: string | null
+}
+
+const SESSION_COLUMNS =
+  'SELECT id, store_id AS storeId, terminal_id AS terminalId, staff_id AS staffId, mode, ' +
+  'expires_at AS expiresAt, revoked_at AS revokedAt FROM terminal_sessions '
+
+/** 1 端末で生きている業務（新しい順）。**期限ちょうどはまだ生きている。** */
+async function liveSessionsOf(
+  db: D1Database,
+  org: string,
+  terminalId: string,
+  now: Date,
+): Promise<SessionRow[]> {
+  const { results } = await db
+    .prepare(
+      `${SESSION_COLUMNS}WHERE organization_id = ? AND terminal_id = ? AND revoked_at IS NULL ` +
+        'ORDER BY started_at DESC, rowid DESC',
+    )
+    .bind(org, terminalId)
+    .all<SessionRow>()
+  return results.filter((row) => isSessionLive(row, now))
+}
+
+/** `x-terminal-session` が指す業務。他テナントの id は「無い」として扱う。 */
+async function sessionFromHeader(c: Context<Env>, org: string): Promise<SessionRow | null> {
+  const headerId = c.req.header('x-terminal-session')
+  if (headerId === undefined || !UUID_PATTERN.test(headerId)) return null
+  const row = await c.env.DB.prepare(`${SESSION_COLUMNS}WHERE organization_id = ? AND id = ?`)
+    .bind(org, headerId)
+    .first<SessionRow>()
+  return row ?? null
+}
+
+/**
+ * 「いま生きています」を残す。`isOnline` は列に状態を持たず `last_seen_at` の
+ * 古さだけで決まるので、**端末が名乗って叩いたときにここで 1 回だけ**触る
+ * （一覧に並ぶ他の端末は触らない —— 触ると全台がいつまでも「つながっています」になる）。
+ */
+async function touchNamedTerminal(c: Context<Env>, org: string, now: Date): Promise<void> {
+  const named = await sessionFromHeader(c, org)
+  if (named === null || !isSessionLive(named, now)) return
+  await c.env.DB.prepare(
+    'UPDATE terminals SET last_seen_at = ? WHERE organization_id = ? AND id = ?',
+  )
+    .bind(now.toISOString(), org, named.terminalId)
+    .run()
+}
+
+/**
+ * 監査に残す主体を決める。**リクエストの入力から作らない。**
+ *
+ * 見るのは 2 つだけ — 端末が名乗った `x-terminal-session` と、その端末で開いている業務。
+ * どちらも無ければ `system`（端末を 1 台も登録していない最初の 1 回がここを通る）。
+ */
+async function actorOf(
+  c: Context<Env>,
+  org: string,
+  terminalId: string | null,
+  now: Date,
+): Promise<AuditActor> {
+  const named = await sessionFromHeader(c, org)
+  if (named !== null && isSessionLive(named, now)) return resolveActor(named)
+  if (terminalId === null) return resolveActor(null)
+  return resolveActor((await liveSessionsOf(c.env.DB, org, terminalId, now))[0] ?? null)
+}
+
+/**
+ * 書き込みの主体（P10）。端末が名乗っていればそれが主体で、名乗りが無い経路
+ * （まだ端末を登録していない・保守の経路・テスト）はこれまでどおりその担当のままにする
+ * —— ここで `system` に落とすと、受付履歴の「誰が」が空になる。
+ */
+async function writerActor(
+  c: Context<Env>,
+  org: string,
+  actorId: string | null,
+  now: Date,
+): Promise<AuditActor> {
+  const actor = await actorOf(c, org, null, now)
+  return actor.type === 'system' ? { type: 'staff', id: actorId, terminalId: null } : actor
+}
+
+/**
+ * 責任の残る操作の前に個人モードを要求する。
+ *
+ * 見るのは**端末が名乗った `x-terminal-session` だけ**である。名乗りが無い主体
+ * （端末をまだ 1 台も登録していない最初の 1 回・保守の経路）は `system` として通す —
+ * ここで止めると、最初の 1 台が永久に登録できない。名乗った業務が共有モードや
+ * 期限切れなら **403 `personal_mode_required`**（401 にしない。切れているのは
+ * 端末セッションであって JWT ではない）。
+ */
+function requirePersonalMode(subject: string): MiddlewareHandler<Env> {
+  return async (c, next) => {
+    const { org } = c.get('auth')
+    const named = await sessionFromHeader(c, org)
+    if (named === null) {
+      await next()
+      return
+    }
+    if (named.mode !== 'personal' || !isSessionLive(named, new Date())) {
+      return c.json({ error: 'personal_mode_required', subject }, 403)
+    }
+    await next()
+  }
+}
+
+/** D1 の 1 行 → 契約の `Terminal`。**`pin_hash` は 1 度も外へ出さない。** */
+function toTerminal(row: typeof terminals.$inferSelect, now: Date) {
+  return {
+    id: row.id,
+    storeId: row.storeId,
+    name: row.name,
+    kind: row.kind as 'shared' | 'personal',
+    placeNote: row.placeNote ?? '',
+    deviceLabel: row.deviceLabel ?? '',
+    autoLockSeconds: row.autoLockSeconds,
+    isActive: isOn(row.isActive),
+    hasPin: row.pinHash !== null,
+    lastSeenAt: row.lastSeenAt,
+    isOnline: isOnline(row.lastSeenAt, now),
+    version: row.version,
+    createdAt: row.createdAt,
+  }
+}
+
+/** 開いた業務 → 契約の `TerminalSession`。 */
+function toSession(row: {
+  id: string
+  terminalId: string
+  staffId: string | null
+  mode: string
+  startedAt: string
+  expiresAt: string
+}) {
+  return {
+    id: row.id,
+    terminalId: row.terminalId,
+    staffId: row.staffId,
+    mode: row.mode as 'shared' | 'personal',
+    startedAt: row.startedAt,
+    expiresAt: row.expiresAt,
+  }
+}
+
+/**
+ * 暗証番号が合わなかったときの応答。**入力された値は残さない**（監査に載せるのは
+ * 端末 id と担当 id まで）。3 回目で 30 秒の待ちに入る。
+ */
+async function rejectPin(
+  c: Context<Env>,
+  input: {
+    org: string
+    storeId: string
+    terminalId: string
+    staffId: string | null
+    now: Date
+    record: PinFailureRecord | null
+  },
+) {
+  const state = nextFailureState(input.record?.attempts ?? 0)
+  const key = pinFailureKey(input.org, input.terminalId, input.staffId)
+  await c.env.SHORT_LIVED.put(
+    key,
+    JSON.stringify({
+      attempts: state.locked ? 0 : state.attempts,
+      lockedAt: state.locked ? input.now.toISOString() : null,
+    } satisfies PinFailureRecord),
+    { expirationTtl: PIN_FAILURE_TTL_SECONDS },
+  )
+  await auditInsert(c.env.DB, {
+    organizationId: input.org,
+    storeId: input.storeId,
+    actor: { type: 'terminal', id: input.terminalId, terminalId: input.terminalId },
+    action: 'terminal.pin.failed',
+    targetType: 'terminals',
+    targetId: input.terminalId,
+    after: { staffId: input.staffId, remainingAttempts: state.remainingAttempts },
+    correlationId: crypto.randomUUID(),
+    occurredAt: input.now.toISOString(),
+  }).run()
+  if (state.locked) {
+    return c.json(
+      {
+        error: 'pin_locked' as const,
+        retryAfterSeconds: state.retryAfterSeconds,
+        remainingAttempts: 0 as const,
+      },
+      429,
+    )
+  }
+  return c.json({ error: 'pin_invalid' as const, remainingAttempts: state.remainingAttempts }, 401)
+}
+
+/** 監査の続き読み（`(occurred_at, rowid)` の複合カーソル）。**OFFSET を使わない。** */
+type AuditCursor = { occurredAt: string; rowid: number }
+
+function encodeAuditCursor(cursor: AuditCursor): string {
+  return btoa(`${cursor.occurredAt}|${cursor.rowid}`)
+}
+
+function decodeAuditCursor(raw: string): AuditCursor | null {
+  try {
+    const [occurredAt, rowid] = atob(raw).split('|')
+    if (occurredAt === undefined || rowid === undefined) return null
+    return { occurredAt, rowid: Number(rowid) }
+  } catch {
+    return null
+  }
+}
+
 const routes = app
   .get('/api/health', (c) => c.json({ status: 'ok' as const }))
 
@@ -3507,6 +3859,30 @@ const routes = app
           revision: row.revision,
         },
       })
+    // 配信が実際に効いたときだけ監査に残す。**端末セッションが 1 本も無い経路**なので
+    // 主体は `system`（誰の名前でもない）。組織そのものへの操作なので store_id は NULL。
+    if (existing !== undefined) {
+      const changed = changedFields(
+        {
+          name: existing.name,
+          plan: existing.plan ?? 'free',
+          isDisabled: existing.isDisabled === '1',
+        },
+        { name: row.name, plan: row.plan, isDisabled: row.isDisabled === '1' },
+      )
+      await auditInsert(c.env.DB, {
+        organizationId: incoming.id,
+        storeId: null,
+        actor: resolveActor(null),
+        action: 'organization.synced',
+        targetType: 'organizations',
+        targetId: incoming.id,
+        before: changed.before,
+        after: changed.after,
+        correlationId: crypto.randomUUID(),
+        occurredAt: new Date().toISOString(),
+      }).run()
+    }
     return c.json(OrganizationSync.parse(incoming), 200)
   })
 
@@ -5113,6 +5489,8 @@ const routes = app
           ...units.map((unit) => ({ kind: 'equipment' as const, targetId: unit.id })),
         ],
         actorId,
+        // 主体は端末が名乗った業務セッションだけが決める（P10）。
+        auditActor: await writerActor(c, org, actorId, now),
         correlationId: crypto.randomUUID(),
         // 監査は追記専用。平文のお名前・お電話番号を入れない（`07-nfr.md` §6.6）。
         audit: {
@@ -5259,6 +5637,7 @@ const routes = app
           reason: input.reason,
           now,
           actorId,
+          auditActor: await writerActor(c, org, actorId, now),
           correlationId: crypto.randomUUID(),
           audit: { before: { status: found.status } },
         }),
@@ -5299,8 +5678,10 @@ const routes = app
 
     const rows = await c.env.DB.prepare(
       'SELECT a.action, a.before_json AS beforeJson, a.after_json AS afterJson, ' +
-        'a.occurred_at AS occurredAt, s.display_name AS actorName FROM audit_events a ' +
+        'a.occurred_at AS occurredAt, COALESCE(s.display_name, t.name) AS actorName FROM audit_events a ' +
         'LEFT JOIN staff s ON s.organization_id = a.organization_id AND s.id = a.actor_id ' +
+        // 共有端末の操作は端末そのものが主体なので、名前は `terminals` から引く（P10）。
+        'LEFT JOIN terminals t ON t.organization_id = a.organization_id AND t.id = a.actor_id ' +
         'WHERE a.organization_id = ? AND a.target_id = ? ORDER BY a.occurred_at, a.id',
     )
       .bind(org, reservationId)
@@ -5603,6 +5984,8 @@ const routes = app
           noteCustomer: input.noteCustomer,
           noteInternal: input.noteInternal,
           actorId,
+          // 主体は端末が名乗った業務セッションだけが決める（P10 `013-terminals-and-audit`）。
+          auditActor: await writerActor(c, org, actorId, now),
           correlationId,
           receptionSessionId,
           idempotency: idempotencyKey === null ? null : { key: idempotencyKey, response: detail },
@@ -6099,7 +6482,7 @@ const routes = app
         // ④ 監査は追記専用。**平文のお名前・お電話番号を入れない**（`07-nfr.md` §6.6）。
         c.env.DB.prepare(
           'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
-            `SELECT ?, ?, ?, 'staff', ?, NULL, 'customer.merged', 'customer', ?, NULL, ?, ?, ? WHERE ${guard.clause}`,
+            `SELECT ?, ?, ?, 'staff', ?, NULL, 'customer.merged', 'customers', ?, NULL, ?, ?, ? WHERE ${guard.clause}`,
         ).bind(
           crypto.randomUUID(),
           org,
@@ -6582,6 +6965,8 @@ const routes = app
     const endsAt = new Date(Date.parse(startsAt) + durationMinutes * MS_PER_MINUTE).toISOString()
 
     const actorId = await actorStaffId(db, org, input.storeId, sub)
+    // 共有端末からのご来店受付は端末そのものが主体になる（P10）。
+    const walkinActor = await writerActor(c, org, actorId, new Date())
     const correlationId = crypto.randomUUID()
 
     for (let attempt = 1; attempt <= WALKIN_TICKET_ATTEMPTS; attempt += 1) {
@@ -6665,6 +7050,7 @@ const routes = app
               organizationId: org,
               storeId: input.storeId,
               actorId,
+              actor: walkinActor,
               action: 'walkin.created',
               targetType: 'walk_ins',
               targetId: walkinId,
@@ -7035,6 +7421,8 @@ const routes = app
     const eventId = crypto.randomUUID()
     const correlationId = crypto.randomUUID()
     const actorId = await actorStaffId(db, org, input.storeId, sub)
+    // 工程の進みも、共有端末からなら端末が主体（P10）。
+    const visitActor = await writerActor(c, org, actorId, new Date())
     const eventApplied: Guard = {
       condition: 'EXISTS (SELECT 1 FROM visit_events WHERE organization_id = ? AND id = ?)',
       params: [org, eventId],
@@ -7112,6 +7500,7 @@ const routes = app
         organizationId: org,
         storeId: input.storeId,
         actorId,
+        actor: visitActor,
         action: 'visit.stage.changed',
         targetType: input.subjectType === 'walkin' ? 'walk_ins' : 'reservations',
         targetId: input.subjectId,
@@ -7471,8 +7860,10 @@ const routes = app
         ? { results: [] as AuditChangeRecord[] }
         : await c.env.DB.prepare(
             'SELECT a.action, a.before_json AS beforeJson, a.after_json AS afterJson, a.occurred_at AS occurredAt, ' +
-              's.display_name AS actorName FROM audit_events a ' +
+              'COALESCE(s.display_name, t.name) AS actorName FROM audit_events a ' +
               'LEFT JOIN staff s ON s.organization_id = a.organization_id AND s.id = a.actor_id ' +
+              // 共有端末の操作は端末が主体なので、名前は `terminals` から引く（P10）。
+              'LEFT JOIN terminals t ON t.organization_id = a.organization_id AND t.id = a.actor_id ' +
               `WHERE a.organization_id = ? AND a.target_id IN (${targets.map(() => '?').join(',')}) ` +
               'ORDER BY a.occurred_at, a.id',
           )
@@ -8178,22 +8569,55 @@ const routes = app
       clauses.push('store_id = ?')
       params.push(query.storeId)
     }
-    const where = `organization_id = ? AND ${clauses.join(' AND ')}`
+    const scope = `organization_id = ? AND ${clauses.join(' AND ')}`
+    // 4 分類。「対応済み」だけは**本日（JST）に片付いたもの**を数える
+    // （右ペインの見出しが「本日」なので、昨日片付けたものは残らない）。
+    const today = toJstDateString(new Date())
+    const resolvedToday = 'resolved_at >= ? AND resolved_at < ?'
+    const resolvedParams = [jstDayStart(today), jstDayStart(addDays(today, 1))]
+    const kindClause: Record<'all' | 'action' | 'info' | 'resolved', string> = {
+      all: 'resolved_at IS NULL',
+      action: "resolved_at IS NULL AND severity = 'action'",
+      info: "resolved_at IS NULL AND severity = 'info'",
+      resolved: resolvedToday,
+    }
+    const kindParams = query.kind === 'resolved' ? resolvedParams : []
+    const where = `${scope} AND ${kindClause[query.kind]}`
 
     // 新しい順。続きは `(occurred_at, id)` を降順にたどる。
     const cursor = decodePageCursor(query.cursor)
     const page = cursor === null ? '' : ' AND (occurred_at < ? OR (occurred_at = ? AND id < ?))'
     const pageParams = cursor === null ? [] : [cursor.at, cursor.at, cursor.id]
 
+    // 数えるのは `audience='store'` の行だけ（運用のアラートは業務の数に混ぜない）。
+    const countScope = scope.replace('audience = ?', "audience = 'store'")
+    const countParams = params.filter((_, index) => index !== 1)
     const read = await c.env.DB.batch([
-      c.env.DB.prepare(`SELECT COUNT(*) AS total FROM alerts WHERE ${where}`).bind(...params),
+      c.env.DB.prepare(`SELECT COUNT(*) AS total FROM alerts WHERE ${where}`).bind(
+        ...params,
+        ...kindParams,
+      ),
       c.env.DB.prepare(
         'SELECT id, code, severity, audience, title, body, target_type AS targetType, ' +
           'target_id AS targetId, occurred_at AS occurredAt, read_at AS readAt, ' +
           `resolved_at AS resolvedAt, resolved_by AS resolvedBy FROM alerts WHERE ${where}${page} ` +
           'ORDER BY occurred_at DESC, id DESC LIMIT ?',
-      ).bind(...params, ...pageParams, query.limit + 1),
+      ).bind(...params, ...kindParams, ...pageParams, query.limit + 1),
+      c.env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM alerts WHERE ${countScope} AND ${kindClause.all}`,
+      ).bind(...countParams),
+      c.env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM alerts WHERE ${countScope} AND ${kindClause.action}`,
+      ).bind(...countParams),
+      c.env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM alerts WHERE ${countScope} AND ${kindClause.info}`,
+      ).bind(...countParams),
+      c.env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM alerts WHERE ${countScope} AND ${kindClause.resolved}`,
+      ).bind(...countParams, ...resolvedParams),
     ])
+    const countAt = (index: number): number =>
+      ((read[index]?.results ?? []) as { n: number }[])[0]?.n ?? 0
 
     const found = (read[1]?.results ?? []) as { id: string; occurredAt: string }[]
     const items = found.slice(0, query.limit)
@@ -8206,8 +8630,109 @@ const routes = app
             ? encodePageCursor(last.occurredAt, last.id)
             : null,
         total: ((read[0]?.results ?? []) as { total: number }[])[0]?.total ?? 0,
+        counts: {
+          all: countAt(2),
+          action: countAt(3),
+          info: countAt(4),
+          resolved: countAt(5),
+        },
       }),
     )
+  })
+
+  /**
+   * お知らせ 1 件の更新（既読・対応済み）。**列は足さない** — `alerts` の
+   * `read_at` / `resolved_at` / `resolved_by` に書くだけである。
+   * 「誰が片付けたか」は個人モードのときだけ残る（共有端末は null）。
+   */
+  .patch('/api/staff/alerts/:alertId', zValidator('json', AlertPatch), async (c) => {
+    const { org } = c.get('auth')
+    const alertId = c.req.param('alertId')
+    const row = await c.env.DB.prepare(
+      'SELECT id, store_id AS storeId, read_at AS readAt, resolved_at AS resolvedAt ' +
+        'FROM alerts WHERE organization_id = ? AND id = ?',
+    )
+      .bind(org, alertId)
+      .first<{ id: string; storeId: string; readAt: string | null; resolvedAt: string | null }>()
+    if (row === null) return c.json({ error: 'not_found' }, 404)
+    const patch = c.req.valid('json')
+    const now = new Date()
+    const nowIso = now.toISOString()
+    const session = await sessionFromHeader(c, org)
+    const resolvedBy =
+      session !== null && session.mode === 'personal' && isSessionLive(session, now)
+        ? session.staffId
+        : null
+    const readAt = patch.readAt === undefined ? row.readAt : patch.readAt
+    const resolvedAt =
+      patch.resolved === undefined ? row.resolvedAt : patch.resolved ? nowIso : null
+    const actor = await actorOf(c, org, null, now)
+    const correlationId = crypto.randomUUID()
+    const writes = [
+      c.env.DB.prepare(
+        'UPDATE alerts SET read_at = ?, resolved_at = ?, resolved_by = ? WHERE organization_id = ? AND id = ?',
+      ).bind(readAt, resolvedAt, resolvedAt === null ? null : resolvedBy, org, alertId),
+    ]
+    if (patch.readAt !== undefined && patch.readAt !== row.readAt) {
+      writes.push(
+        auditInsert(c.env.DB, {
+          organizationId: org,
+          storeId: row.storeId,
+          actor,
+          action: 'alert.read',
+          targetType: 'alerts',
+          targetId: alertId,
+          after: { readAt },
+          correlationId,
+          occurredAt: nowIso,
+        }),
+      )
+    }
+    if (patch.resolved !== undefined) {
+      writes.push(
+        auditInsert(c.env.DB, {
+          organizationId: org,
+          storeId: row.storeId,
+          actor,
+          action: 'alert.resolved',
+          targetType: 'alerts',
+          targetId: alertId,
+          after: { resolved: patch.resolved, resolvedBy: resolvedAt === null ? null : resolvedBy },
+          correlationId,
+          occurredAt: nowIso,
+        }),
+      )
+    }
+    await c.env.DB.batch(writes)
+    const updated = await c.env.DB.prepare(
+      'SELECT id, code, severity, audience, title, body, target_type AS targetType, ' +
+        'target_id AS targetId, occurred_at AS occurredAt, read_at AS readAt, ' +
+        'resolved_at AS resolvedAt, resolved_by AS resolvedBy FROM alerts ' +
+        'WHERE organization_id = ? AND id = ?',
+    )
+      .bind(org, alertId)
+      .first()
+    return c.json(Alert.parse(updated))
+  })
+
+  /**
+   * 「すべて既読にする」。**選択中の店舗の未読だけ**を埋める。
+   * 0 件でも 200 で返す（押した結果が読めるようにする）。既読は監査に残さない。
+   */
+  .post('/api/staff/alerts/read-all', zValidator('json', AlertReadAllInput), async (c) => {
+    const { org } = c.get('auth')
+    const input = c.req.valid('json')
+    const nowIso = new Date().toISOString()
+    const params: unknown[] = [nowIso, org]
+    let where = "organization_id = ? AND audience = 'store' AND read_at IS NULL"
+    if (input.storeId !== undefined) {
+      where += ' AND store_id = ?'
+      params.push(input.storeId)
+    }
+    const result = await c.env.DB.prepare(`UPDATE alerts SET read_at = ? WHERE ${where}`)
+      .bind(...params)
+      .run()
+    return c.json(AlertReadAllResult.parse({ updated: result.meta.changes ?? 0 }))
   })
 
   /**
@@ -8334,7 +8859,7 @@ const routes = app
         c.env.DB.prepare(
           'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, ' +
             'action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
-            `SELECT ?, ?, ?, 'staff', ?, NULL, 'settings.web_booking.updated', 'store', ?, NULL, ?, ?, ? WHERE ${guard}`,
+            `SELECT ?, ?, ?, 'staff', ?, NULL, 'settings.web_booking.updated', 'stores', ?, NULL, ?, ?, ? WHERE ${guard}`,
         ).bind(
           crypto.randomUUID(),
           org,
@@ -9362,6 +9887,605 @@ const routes = app
         limit: input.limit,
       })
       return c.json(AnalyticsRollupResult.parse(result))
+    },
+  )
+
+  /* --- P10 端末の使い分けと監査 ------------------------------------------ */
+
+  /**
+   * 置き場所の一覧（LOGIN-SHARED）。**誰でも読める** — レジ横の iPad は個人ログインの
+   * 前にこの一覧を出すので、ここに権限の壁を置くと最初の 1 画面が出ない。
+   * `hasPin` と `isOnline` は列に持たず、毎回計算して返す。
+   */
+  .get('/api/staff/terminals', async (c) => {
+    const db = drizzle(c.env.DB)
+    const { org } = c.get('auth')
+    const query = validQuery(c, TerminalListQuery, c.req.query())
+    // 他社の店舗 id を指されたとき、**その店舗が在ることを 404 で漏らさない**（一律 403）。
+    if (!(await findStore(db, org, query.storeId))) return c.json({ error: 'forbidden' }, 403)
+    const now = new Date()
+    // 名乗って叩いた端末だけ「いま生きています」を残してから読む（自分は online で返る）。
+    await touchNamedTerminal(c, org, now)
+    const rows = await db
+      .select()
+      .from(terminals)
+      .where(and(eq(terminals.organizationId, org), eq(terminals.storeId, query.storeId)))
+      .orderBy(asc(terminals.createdAt))
+    const items = rows
+      .filter((row) => query.includeInactive || isOn(row.isActive))
+      .filter((row) => query.kind === undefined || row.kind === query.kind)
+      .map((row) => toTerminal(row, now))
+    return c.json({ items: Terminal.array().parse(items) })
+  })
+
+  /**
+   * 端末の登録。`pin` はここでだけ受け取り、ハッシュにしてから保存する。
+   * **応答にも監査にも載せない。**
+   */
+  .post(
+    '/api/staff/terminals',
+    requireStorePermission('terminal.manage', { storeIdFrom: 'query' }),
+    requirePersonalMode(ELEVATE_SUBJECT.settings),
+    zValidator('json', TerminalInput),
+    async (c) => {
+      const db = drizzle(c.env.DB)
+      const { org } = c.get('auth')
+      const storeId = String(c.req.query('storeId'))
+      if (!(await findStore(db, org, storeId))) return c.json({ error: 'not_found' }, 404)
+      const input = c.req.valid('json')
+      if (input.pin !== undefined && isWeakPin(input.pin)) {
+        return c.json({ error: 'weak_pin' }, 400)
+      }
+      const now = new Date()
+      const nowIso = now.toISOString()
+      const id = crypto.randomUUID()
+      const row = {
+        id,
+        organizationId: org,
+        storeId,
+        name: input.name,
+        kind: input.kind,
+        placeNote: input.placeNote,
+        deviceLabel: input.deviceLabel,
+        pinHash:
+          input.pin === undefined ? null : await pinHashOf(input.pin, org, id, c.env.AUTH_PEPPER),
+        autoLockSeconds: input.autoLockSeconds,
+        lastSeenAt: null,
+        isActive: flag(input.isActive),
+        version: FIRST_VERSION,
+        createdAt: nowIso,
+      }
+      await db.insert(terminals).values(row)
+      await auditInsert(c.env.DB, {
+        organizationId: org,
+        storeId,
+        actor: await actorOf(c, org, null, now),
+        action: 'terminal.created',
+        targetType: 'terminals',
+        targetId: id,
+        after: { name: input.name, kind: input.kind, autoLockSeconds: input.autoLockSeconds },
+        correlationId: crypto.randomUUID(),
+        occurredAt: nowIso,
+      }).run()
+      return c.json(Terminal.parse(toTerminal(row, now)), 201)
+    },
+  )
+
+  /**
+   * 端末の更新。**版が合わなければ 409** で、行も監査も 1 つも動かさない。
+   * D1 のバッチは 0 行しか当たらない `UPDATE` でも中断しないので、監査の追記にも
+   * 本処理と同じ版の条件（`WHERE EXISTS`）を当てる。
+   */
+  .patch(
+    '/api/staff/terminals/:terminalId',
+    requireStorePermission('terminal.manage'),
+    requirePersonalMode(ELEVATE_SUBJECT.settings),
+    zValidator('json', TerminalPatch),
+    async (c) => {
+      const db = drizzle(c.env.DB)
+      const { org } = c.get('auth')
+      const terminalId = c.req.param('terminalId')
+      const rows = await db
+        .select()
+        .from(terminals)
+        .where(and(eq(terminals.organizationId, org), eq(terminals.id, terminalId)))
+      const current = rows[0]
+      if (current === undefined) return c.json({ error: 'not_found' }, 404)
+      // 権限は**その端末が置かれた店舗**で見直す（`:storeId` がパスに無いため）。
+      const { sub } = c.get('auth')
+      if (!(await grantedOnStore(db, org, sub, current.storeId, 'terminal.manage'))) {
+        return c.json({ error: 'forbidden' }, 403)
+      }
+      const patch = c.req.valid('json')
+      if (patch.pin !== undefined && isWeakPin(patch.pin)) {
+        return c.json({ error: 'weak_pin' }, 400)
+      }
+      const now = new Date()
+      const next = {
+        name: patch.name ?? current.name,
+        kind: patch.kind ?? (current.kind as 'shared' | 'personal'),
+        placeNote: patch.placeNote ?? current.placeNote ?? '',
+        deviceLabel: patch.deviceLabel ?? current.deviceLabel ?? '',
+        autoLockSeconds: patch.autoLockSeconds ?? current.autoLockSeconds,
+        isActive: patch.isActive ?? isOn(current.isActive),
+      }
+      const changed = changedFields(
+        {
+          name: current.name,
+          kind: current.kind,
+          placeNote: current.placeNote ?? '',
+          deviceLabel: current.deviceLabel ?? '',
+          autoLockSeconds: current.autoLockSeconds,
+          isActive: isOn(current.isActive),
+        },
+        next,
+      )
+      const guard = {
+        clause:
+          'EXISTS (SELECT 1 FROM terminals WHERE organization_id = ? AND id = ? AND version = ?)',
+        params: [org, terminalId, patch.version],
+      }
+      const pinHash =
+        patch.pin === undefined
+          ? current.pinHash
+          : await pinHashOf(patch.pin, org, terminalId, c.env.AUTH_PEPPER)
+      const [, applied] = await c.env.DB.batch([
+        auditInsert(c.env.DB, {
+          organizationId: org,
+          storeId: current.storeId,
+          actor: await actorOf(c, org, terminalId, now),
+          action: 'terminal.updated',
+          targetType: 'terminals',
+          targetId: terminalId,
+          before: changed.before,
+          after: changed.after,
+          correlationId: crypto.randomUUID(),
+          occurredAt: now.toISOString(),
+          guard,
+        }),
+        // **必ず最後。**この 1 文の `meta.changes` だけが 409 かどうかを知っている。
+        c.env.DB.prepare(
+          'UPDATE terminals SET name = ?, kind = ?, place_note = ?, device_label = ?, ' +
+            'auto_lock_seconds = ?, is_active = ?, pin_hash = ?, version = version + 1 ' +
+            'WHERE organization_id = ? AND id = ? AND version = ?',
+        ).bind(
+          next.name,
+          next.kind,
+          next.placeNote,
+          next.deviceLabel,
+          next.autoLockSeconds,
+          flag(next.isActive),
+          pinHash,
+          org,
+          terminalId,
+          patch.version,
+        ),
+      ])
+      if ((applied?.meta.changes ?? 0) === 0) {
+        return c.json({ error: 'version_conflict', current: current.version }, 409)
+      }
+      return c.json(
+        Terminal.parse(
+          toTerminal(
+            {
+              ...current,
+              ...next,
+              isActive: flag(next.isActive),
+              pinHash,
+              version: current.version + 1,
+            },
+            now,
+          ),
+        ),
+      )
+    },
+  )
+
+  /**
+   * 業務の開始（LOGIN-SHARED / LOGIN-STAFF）。**JWT だけで通る** — 共有端末は
+   * 個人ログイン無しで日常業務を回すのが目的である。置き場所を別の端末に
+   * 引き継ぐときは、前の業務に `revoked_at` を書いて**行は残す**。
+   */
+  .post(
+    '/api/staff/terminals/:terminalId/sessions',
+    zValidator('json', TerminalSessionStart),
+    async (c) => {
+      const db = drizzle(c.env.DB)
+      const { org } = c.get('auth')
+      const terminalId = c.req.param('terminalId')
+      const rows = await db
+        .select()
+        .from(terminals)
+        .where(and(eq(terminals.organizationId, org), eq(terminals.id, terminalId)))
+      const terminal = rows[0]
+      if (terminal === undefined) return c.json({ error: 'not_found' }, 404)
+      const input = c.req.valid('json')
+      const staffId = input.mode === 'personal' ? input.staffId : null
+      const now = new Date()
+      const record = await readPinFailure(
+        c.env.SHORT_LIVED,
+        pinFailureKey(org, terminalId, staffId),
+      )
+      if (
+        isPinLocked(
+          record?.lockedAt === undefined || record.lockedAt === null
+            ? null
+            : new Date(record.lockedAt),
+          now,
+        )
+      ) {
+        return c.json({ error: 'pin_locked', retryAfterSeconds: 30, remainingAttempts: 0 }, 429)
+      }
+      let storedHash: string | null = terminal.pinHash
+      if (staffId !== null) {
+        const staffRow = await db
+          .select({ pinHash: staff.pinHash })
+          .from(staff)
+          .where(
+            and(
+              eq(staff.organizationId, org),
+              eq(staff.storeId, terminal.storeId),
+              eq(staff.id, staffId),
+            ),
+          )
+        // 自分の組織・自分の店舗に居ないスタッフは「無い」— 暗証番号を照合する前に 404。
+        if (staffRow[0] === undefined) return c.json({ error: 'not_found' }, 404)
+        storedHash = staffRow[0].pinHash
+      }
+      const subjectId = staffId ?? terminalId
+      if (!(await pinMatches(input.pin, org, subjectId, c.env.AUTH_PEPPER, storedHash))) {
+        return rejectPin(c, {
+          org,
+          storeId: terminal.storeId,
+          terminalId,
+          staffId,
+          now,
+          record,
+        })
+      }
+      await c.env.SHORT_LIVED.delete(pinFailureKey(org, terminalId, staffId))
+      const nowIso = now.toISOString()
+      const session = {
+        id: crypto.randomUUID(),
+        terminalId,
+        staffId,
+        mode: input.mode,
+        startedAt: nowIso,
+        expiresAt: expiresAtFrom(now, terminal.autoLockSeconds),
+      }
+      const correlationId = crypto.randomUUID()
+      const previous = await liveSessionsOf(c.env.DB, org, terminalId, now)
+      const actor = { type: 'terminal' as const, id: terminalId, terminalId }
+      await c.env.DB.batch([
+        c.env.DB.prepare(
+          'UPDATE terminal_sessions SET revoked_at = ? WHERE organization_id = ? AND terminal_id = ? AND revoked_at IS NULL',
+        ).bind(nowIso, org, terminalId),
+        ...previous.map((row) =>
+          auditInsert(c.env.DB, {
+            organizationId: org,
+            storeId: terminal.storeId,
+            actor,
+            action: 'terminal.session.ended',
+            targetType: 'terminals',
+            targetId: row.id,
+            after: { reason: 'taken_over' },
+            correlationId,
+            occurredAt: nowIso,
+          }),
+        ),
+        c.env.DB.prepare(
+          'INSERT INTO terminal_sessions (id, organization_id, store_id, terminal_id, staff_id, mode, started_at, expires_at, revoked_at, created_at) ' +
+            'VALUES (?,?,?,?,?,?,?,?,NULL,?)',
+        ).bind(
+          session.id,
+          org,
+          terminal.storeId,
+          terminalId,
+          staffId,
+          input.mode,
+          nowIso,
+          session.expiresAt,
+          nowIso,
+        ),
+        auditInsert(c.env.DB, {
+          organizationId: org,
+          storeId: terminal.storeId,
+          actor: staffId === null ? actor : { type: 'staff' as const, id: staffId, terminalId },
+          action: 'terminal.session.started',
+          targetType: 'terminals',
+          targetId: session.id,
+          after: { mode: input.mode, staffId },
+          correlationId,
+          occurredAt: nowIso,
+        }),
+        c.env.DB.prepare(
+          'UPDATE terminals SET last_seen_at = ? WHERE organization_id = ? AND id = ?',
+        ).bind(nowIso, org, terminalId),
+      ])
+      return c.json(TerminalSession.parse(toSession(session)), 201)
+    },
+  )
+
+  /** 業務の終了。行は消さず `revoked_at` を書く（いつ誰から誰へ移ったかを残す）。 */
+  .delete('/api/staff/terminals/:terminalId/sessions/:sessionId', async (c) => {
+    const { org } = c.get('auth')
+    const terminalId = c.req.param('terminalId')
+    const sessionId = c.req.param('sessionId')
+    const row = await c.env.DB.prepare(
+      `${SESSION_COLUMNS}WHERE organization_id = ? AND terminal_id = ? AND id = ? AND revoked_at IS NULL`,
+    )
+      .bind(org, terminalId, sessionId)
+      .first<SessionRow>()
+    if (row === null) return c.json({ error: 'not_found' }, 404)
+    const now = new Date()
+    const nowIso = now.toISOString()
+    await c.env.DB.batch([
+      c.env.DB.prepare(
+        'UPDATE terminal_sessions SET revoked_at = ? WHERE organization_id = ? AND id = ? AND revoked_at IS NULL',
+      ).bind(nowIso, org, sessionId),
+      auditInsert(c.env.DB, {
+        organizationId: org,
+        storeId: row.storeId,
+        actor: resolveActor(row),
+        action: 'terminal.session.ended',
+        targetType: 'terminals',
+        targetId: sessionId,
+        after: { reason: 'ended' },
+        correlationId: crypto.randomUUID(),
+        occurredAt: nowIso,
+      }),
+      c.env.DB.prepare(
+        'UPDATE terminals SET last_seen_at = ? WHERE organization_id = ? AND id = ?',
+      ).bind(nowIso, org, terminalId),
+    ])
+    return c.body(null, 204)
+  })
+
+  /**
+   * 個人モードへの昇格（MODE-PERSONAL / EX-PERMISSION）。共有の業務を閉じてから
+   * 本人の業務を開く。**用件は 4 語の許可リスト**で、知らない用件は契約が落とす。
+   */
+  .post('/api/staff/terminals/:terminalId/elevate', zValidator('json', ReauthInput), async (c) => {
+    const db = drizzle(c.env.DB)
+    const { org } = c.get('auth')
+    const terminalId = c.req.param('terminalId')
+    const rows = await db
+      .select()
+      .from(terminals)
+      .where(and(eq(terminals.organizationId, org), eq(terminals.id, terminalId)))
+    const terminal = rows[0]
+    if (terminal === undefined) return c.json({ error: 'not_found' }, 404)
+    const now = new Date()
+    const live = await liveSessionsOf(c.env.DB, org, terminalId, now)
+    // 業務が 1 本も開いていない端末は「まだ誰も使っていない」— 昇格の前に開始が要る。
+    if (live.length === 0) return c.json({ error: 'not_found' }, 404)
+    const input = c.req.valid('json')
+    const record = await readPinFailure(
+      c.env.SHORT_LIVED,
+      pinFailureKey(org, terminalId, input.staffId),
+    )
+    if (isPinLocked(record?.lockedAt == null ? null : new Date(record.lockedAt), now)) {
+      return c.json({ error: 'pin_locked', retryAfterSeconds: 30, remainingAttempts: 0 }, 429)
+    }
+    const staffRows = await db
+      .select({ pinHash: staff.pinHash })
+      .from(staff)
+      .where(
+        and(
+          eq(staff.organizationId, org),
+          eq(staff.storeId, terminal.storeId),
+          eq(staff.id, input.staffId),
+        ),
+      )
+    if (
+      !(await pinMatches(
+        input.pin,
+        org,
+        input.staffId,
+        c.env.AUTH_PEPPER,
+        staffRows[0]?.pinHash ?? null,
+      ))
+    ) {
+      return rejectPin(c, {
+        org,
+        storeId: terminal.storeId,
+        terminalId,
+        staffId: input.staffId,
+        now,
+        record,
+      })
+    }
+    await c.env.SHORT_LIVED.delete(pinFailureKey(org, terminalId, input.staffId))
+    const nowIso = now.toISOString()
+    const session = {
+      id: crypto.randomUUID(),
+      terminalId,
+      staffId: input.staffId,
+      mode: 'personal' as const,
+      startedAt: nowIso,
+      expiresAt: expiresAtFrom(now, terminal.autoLockSeconds),
+    }
+    const correlationId = crypto.randomUUID()
+    await c.env.DB.batch([
+      c.env.DB.prepare(
+        'UPDATE terminal_sessions SET revoked_at = ? WHERE organization_id = ? AND terminal_id = ? AND revoked_at IS NULL',
+      ).bind(nowIso, org, terminalId),
+      c.env.DB.prepare(
+        'INSERT INTO terminal_sessions (id, organization_id, store_id, terminal_id, staff_id, mode, started_at, expires_at, revoked_at, created_at) ' +
+          'VALUES (?,?,?,?,?,?,?,?,NULL,?)',
+      ).bind(
+        session.id,
+        org,
+        terminal.storeId,
+        terminalId,
+        input.staffId,
+        'personal',
+        nowIso,
+        session.expiresAt,
+        nowIso,
+      ),
+      auditInsert(c.env.DB, {
+        organizationId: org,
+        storeId: terminal.storeId,
+        actor: { type: 'staff', id: input.staffId, terminalId },
+        action: 'terminal.mode.elevated',
+        targetType: 'terminals',
+        targetId: terminalId,
+        // 設定の変更のための昇格だけは、あとから理由で引けるように別の語で残す。
+        after: { reason: input.reason === 'settings' ? 'settings_approval' : input.reason },
+        correlationId,
+        occurredAt: nowIso,
+      }),
+      c.env.DB.prepare(
+        'UPDATE terminals SET last_seen_at = ? WHERE organization_id = ? AND id = ?',
+      ).bind(nowIso, org, terminalId),
+    ])
+    return c.json(TerminalSession.parse(toSession(session)), 201)
+  })
+
+  /**
+   * 本人の暗証番号の設定。**平文も保存形式も応答に載せない。**
+   * 監査に残すのは「持っているかどうか」だけである（`07-nfr.md` §7.1）。
+   */
+  .put(
+    '/api/staff/stores/:storeId/staff/:staffId/pin',
+    requireStorePermission('settings.manage'),
+    requirePersonalMode(ELEVATE_SUBJECT.settings),
+    zValidator('json', StaffPinInput),
+    async (c) => {
+      const db = drizzle(c.env.DB)
+      const { org } = c.get('auth')
+      const storeId = c.req.param('storeId')
+      const staffId = c.req.param('staffId')
+      const input = c.req.valid('json')
+      if (isWeakPin(input.pin)) return c.json({ error: 'weak_pin' }, 400)
+      const rows = await db
+        .select({ id: staff.id, pinHash: staff.pinHash })
+        .from(staff)
+        .where(
+          and(eq(staff.organizationId, org), eq(staff.storeId, storeId), eq(staff.id, staffId)),
+        )
+      const current = rows[0]
+      if (current === undefined) return c.json({ error: 'not_found' }, 404)
+      const now = new Date()
+      const nowIso = now.toISOString()
+      await c.env.DB.batch([
+        c.env.DB.prepare(
+          'UPDATE staff SET pin_hash = ?, pin_updated_at = ?, updated_at = ? WHERE organization_id = ? AND store_id = ? AND id = ?',
+        ).bind(
+          await pinHashOf(input.pin, org, staffId, c.env.AUTH_PEPPER),
+          nowIso,
+          nowIso,
+          org,
+          storeId,
+          staffId,
+        ),
+        auditInsert(c.env.DB, {
+          organizationId: org,
+          storeId,
+          actor: await actorOf(c, org, null, now),
+          action: 'settings.changed',
+          targetType: 'staff',
+          targetId: staffId,
+          before: { hasPin: current.pinHash !== null },
+          after: { hasPin: true },
+          correlationId: crypto.randomUUID(),
+          occurredAt: nowIso,
+        }),
+      ])
+      return c.json(PinSetResult.parse({ staffId, updatedAt: nowIso }))
+    },
+  )
+
+  /**
+   * 監査の読み返し（AUDIT-VIEW）。**閲覧そのものは監査に残さない。**
+   * `OFFSET` を使わず `(occurred_at, rowid)` の複合カーソルで続きをたどる。
+   */
+  .get(
+    '/api/staff/audit',
+    requireStorePermission('audit.read', { storeIdFrom: 'query' }),
+    async (c) => {
+      const { org } = c.get('auth')
+      const query = validQuery(c, AuditSearchQuery, c.req.query())
+      const where: string[] = ['organization_id = ?']
+      const params: unknown[] = [org]
+      if (query.storeId !== undefined) {
+        where.push('store_id = ?')
+        params.push(query.storeId)
+      }
+      if (query.actorId !== undefined) {
+        where.push('actor_id = ?')
+        params.push(query.actorId)
+      }
+      if (query.action !== undefined) {
+        where.push('action = ?')
+        params.push(query.action)
+      }
+      if (query.from !== undefined) {
+        where.push('occurred_at >= ?')
+        params.push(toInstant(query.from, 0))
+      }
+      if (query.to !== undefined) {
+        where.push('occurred_at < ?')
+        params.push(toInstant(query.to, MINUTES_PER_DAY))
+      }
+      const clause = where.join(' AND ')
+      const total = await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM audit_events WHERE ${clause}`)
+        .bind(...params)
+        .first<{ n: number }>()
+      const cursor = query.cursor === undefined ? null : decodeAuditCursor(query.cursor)
+      const pageWhere =
+        cursor === null
+          ? clause
+          : `${clause} AND (occurred_at < ? OR (occurred_at = ? AND rowid < ?))`
+      const pageParams =
+        cursor === null ? params : [...params, cursor.occurredAt, cursor.occurredAt, cursor.rowid]
+      const { results } = await c.env.DB.prepare(
+        'SELECT rowid AS rowid, id, occurred_at AS occurredAt, actor_type AS actorType, ' +
+          'actor_id AS actorId, terminal_id AS terminalId, action, target_type AS targetType, ' +
+          'target_id AS targetId, correlation_id AS correlationId, before_json AS beforeJson, ' +
+          `after_json AS afterJson FROM audit_events WHERE ${pageWhere} ` +
+          'ORDER BY occurred_at DESC, rowid DESC LIMIT ?',
+      )
+        .bind(...pageParams, query.limit + 1)
+        .all<{
+          rowid: number
+          id: string
+          occurredAt: string
+          actorType: string
+          actorId: string | null
+          terminalId: string | null
+          action: string
+          targetType: string
+          targetId: string
+          correlationId: string | null
+          beforeJson: string | null
+          afterJson: string | null
+        }>()
+      const page = results.slice(0, query.limit)
+      const last = page.at(-1)
+      return c.json(
+        AuditEventList.parse({
+          items: page.map((row) => ({
+            id: row.id,
+            occurredAt: row.occurredAt,
+            actorType: row.actorType,
+            actorId: row.actorId,
+            terminalId: row.terminalId,
+            action: row.action,
+            targetType: row.targetType,
+            targetId: row.targetId,
+            correlationId: row.correlationId,
+            beforeJson: row.beforeJson === null ? null : JSON.parse(row.beforeJson),
+            afterJson: row.afterJson === null ? null : JSON.parse(row.afterJson),
+          })),
+          nextCursor:
+            results.length > query.limit && last !== undefined
+              ? encodeAuditCursor({ occurredAt: last.occurredAt, rowid: last.rowid })
+              : null,
+          total: total?.n ?? 0,
+        }),
+      )
     },
   )
 

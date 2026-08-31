@@ -1,5 +1,6 @@
 import type { APIRequestContext, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
+import { enterSharedWorkspace } from './terminal-start'
 
 /**
  * 予約の検索・変更・取消（009-change-and-cancel）の受け入れ基準を、実ブラウザと実 Worker で
@@ -276,6 +277,7 @@ async function startWork(page: Page, nowIso: string): Promise<void> {
     await code.fill(ORG)
     await page.getByRole('button', { name: '業務を始める' }).click()
   }
+  await enterSharedWorkspace(page)
   await rail.waitFor()
 }
 

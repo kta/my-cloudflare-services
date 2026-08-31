@@ -1,5 +1,6 @@
 import type { APIRequestContext, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
+import { enterSharedWorkspace } from './terminal-start'
 
 /**
  * 受付の録音（010-recording）の受け入れ基準を、実ブラウザと実 Worker で確かめる。
@@ -187,6 +188,7 @@ async function startWork(
   await page.goto('/')
   await page.getByLabel('お店のコード').fill(ORG)
   await page.getByRole('button', { name: '業務を始める' }).click()
+  await enterSharedWorkspace(page)
   await expect(page.locator('header').first()).toContainText('EYEX 銀座店')
 }
 
@@ -1175,6 +1177,7 @@ test('端末セッションが失効しても未送信の録音は残る', async
   await page.unrouteAll()
   await page.getByLabel('お店のコード').fill(ORG)
   await page.getByRole('button', { name: '業務を始める' }).click()
+  await enterSharedWorkspace(page)
   await startBooking(page)
   await expect(async () => {
     expect((await page.evaluate(READ_OUTBOX)) as string[]).toHaveLength(0)

@@ -44,8 +44,6 @@ const uid = (group: string, n: number) => `${group}-0000-4000-8000-${String(n).p
 const NEW_GLASSES = uid('e0010000', 0)
 /** かけ具合の調整（20 分）。必要資源を持たないので、枠を埋めずに 1 件だけ取りたいとき用。 */
 const ADJUST = uid('e0010000', 1)
-/** 佐藤 美咲（担当の 1 人目）。台帳の「確認待ち」から外すのに使う。 */
-const SATO = uid('c0010000', 0)
 /** `.dev.vars` の dev 値。preview も同じ値を読む。 */
 const INTERNAL_KEY = 'dev-internal-key'
 

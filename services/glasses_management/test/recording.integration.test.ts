@@ -168,7 +168,7 @@ async function storedObjects(org: string): Promise<string[]> {
 /** 1 本の録音に残った操作を古い順に。 */
 async function auditActions(recordingId: string): Promise<string[]> {
   const found = await env.DB.prepare(
-    "SELECT action FROM audit_events WHERE target_type = 'recording' AND target_id = ? ORDER BY occurred_at ASC, rowid ASC",
+    "SELECT action FROM audit_events WHERE target_type = 'recordings' AND target_id = ? ORDER BY occurred_at ASC, rowid ASC",
   )
     .bind(recordingId)
     .all<{ action: string }>()
@@ -829,7 +829,7 @@ describe('録音の監査', () => {
 
     const found = await env.DB.prepare(
       'SELECT action, actor_type AS actorType, occurred_at AS occurredAt, store_id AS storeId ' +
-        "FROM audit_events WHERE organization_id = ? AND target_type = 'recording' AND target_id = ? " +
+        "FROM audit_events WHERE organization_id = ? AND target_type = 'recordings' AND target_id = ? " +
         'ORDER BY occurred_at ASC, rowid ASC',
     )
       .bind(tenant.org, recording.id)

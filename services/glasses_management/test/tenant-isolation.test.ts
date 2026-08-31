@@ -8,12 +8,15 @@
  * D1 はテストファイル内で共有されるので、組織 id は毎回ユニークに作る。
  */
 import { env, SELF } from 'cloudflare:test'
+import { signAccessToken } from '@app/shared'
 import { describe, expect, it } from 'vitest'
 import {
   authed,
   BASE,
+  createTerminal,
   grantStorePermissions,
   INTERNAL_HEADERS,
+  insertAlert,
   insertAnalyticsDaily,
   insertBusinessHours,
   insertReservation,
@@ -27,6 +30,8 @@ import {
   LEDGER_DATE,
   markAnalyticsDays,
   orgId,
+  setStaffPin,
+  startSession,
   syncOrganization,
   tokenFor,
 } from './helpers'
@@ -2031,5 +2036,243 @@ describe('分析は組織と店舗を越えない', () => {
       body: JSON.stringify({}),
     })
     expect(res.status).toBe(401)
+  })
+})
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * P10 端末・セッション・お知らせ・監査
+ *
+ * 端末は「置き場所」なので、他社の置き場所が見えるだけで店舗名が漏れる。
+ * セッションは他社の業務を止められる（引き継ぎで失効させられる）ので、
+ * 見えないだけでは足りず**触れない**ことまで見る。
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+/** 弱くない 4 桁。共有端末と本人でそれぞれ使う。 */
+const TERMINAL_PIN = '4831'
+const TENANT_STAFF_PIN = '2748'
+
+/** 1 テナントぶんの足場（店舗・権限・PIN 付きスタッフ・端末 1 台）。 */
+async function seedTenant(storeName: string): Promise<{
+  org: string
+  token: string
+  storeId: string
+  staffId: string
+  terminalId: string
+}> {
+  const org = orgId()
+  const token = await tokenFor(org)
+  const storeId = await seedStore(org, storeName, `t-${crypto.randomUUID().slice(0, 8)}`)
+  await grantStorePermissions(org, storeId, `dev:${org}`, [
+    'settings.read',
+    'settings.manage',
+    'terminal.manage',
+    'audit.read',
+  ])
+  const staffId = await insertStaff(org, storeId, { displayName: '佐藤 美咲' })
+  await setStaffPin(token, storeId, staffId, TENANT_STAFF_PIN)
+  const terminal = await createTerminal(token, {
+    storeId,
+    name: 'レジ横iPad',
+    pin: TERMINAL_PIN,
+    autoLockSeconds: 1800,
+  })
+  return { org, token, storeId, staffId, terminalId: String(terminal.body?.id) }
+}
+
+describe('端末とセッションは組織をまたがない', () => {
+  it('3 テナントが同じ名前の端末を持っても、各自の端末しか見えない', async () => {
+    const [a, b, c] = await Promise.all([
+      seedTenant('EYEX 銀座店'),
+      seedTenant('B 新宿店'),
+      seedTenant('C 渋谷店'),
+    ])
+    for (const tenant of [a, b, c]) {
+      const res = await SELF.fetch(`${BASE}/api/staff/terminals?storeId=${tenant.storeId}`, {
+        headers: authed(tenant.token),
+      })
+      expect(res.status).toBe(200)
+      const body = (await res.json()) as { items: Array<{ id: string; name: string }> }
+      expect(body.items.map((item) => item.id)).toEqual([tenant.terminalId])
+      expect(body.items.map((item) => item.name)).toEqual(['レジ横iPad'])
+    }
+    // 他社の店舗 id を指したときは、その店舗が在ることを 404 で漏らさず 403。
+    const crossed = await SELF.fetch(`${BASE}/api/staff/terminals?storeId=${b.storeId}`, {
+      headers: authed(a.token),
+    })
+    expect(crossed.status).toBe(403)
+  })
+
+  it('他テナントの terminalId でセッションを開こうとしても 404 になる', async () => {
+    const [mine, theirs] = await Promise.all([seedTenant('A 店'), seedTenant('B 店')])
+    const opened = await startSession(mine.token, theirs.terminalId, {
+      mode: 'shared',
+      pin: TERMINAL_PIN,
+    })
+    expect(opened.status).toBe(404)
+    const rows = await env.DB.prepare(
+      'SELECT COUNT(*) AS n FROM terminal_sessions WHERE terminal_id = ?',
+    )
+      .bind(theirs.terminalId)
+      .first<{ n: number }>()
+    expect(rows?.n).toBe(0)
+  })
+
+  it('他テナントの staffId を混ぜた個人ログインは 404 で、自分のテナントのスタッフとして開かない', async () => {
+    const [mine, theirs] = await Promise.all([seedTenant('A 店'), seedTenant('B 店')])
+    const opened = await startSession(mine.token, mine.terminalId, {
+      mode: 'personal',
+      staffId: theirs.staffId,
+      pin: TENANT_STAFF_PIN,
+    })
+    expect(opened.status).toBe(404)
+    const rows = await env.DB.prepare(
+      'SELECT COUNT(*) AS n FROM terminal_sessions WHERE organization_id = ?',
+    )
+      .bind(mine.org)
+      .first<{ n: number }>()
+    expect(rows?.n).toBe(0)
+  })
+
+  it('他テナントのセッション id を DELETE しても 404 で、相手のセッションは生きたままである', async () => {
+    const [mine, theirs] = await Promise.all([seedTenant('A 店'), seedTenant('B 店')])
+    const theirSession = await startSession(theirs.token, theirs.terminalId, {
+      mode: 'shared',
+      pin: TERMINAL_PIN,
+    })
+    const res = await SELF.fetch(
+      `${BASE}/api/staff/terminals/${mine.terminalId}/sessions/${String(theirSession.body?.id)}`,
+      { method: 'DELETE', headers: authed(mine.token) },
+    )
+    expect(res.status).toBe(404)
+    const row = await env.DB.prepare('SELECT revoked_at FROM terminal_sessions WHERE id = ?')
+      .bind(String(theirSession.body?.id))
+      .first<{ revoked_at: string | null }>()
+    expect(row?.revoked_at).toBeNull()
+  })
+
+  it('本文に別のテナントの organizationId を混ぜても、保存されるのは JWT の org である', async () => {
+    const [mine, theirs] = await Promise.all([seedTenant('A 店'), seedTenant('B 店')])
+    const res = await SELF.fetch(`${BASE}/api/staff/terminals?storeId=${mine.storeId}`, {
+      method: 'POST',
+      headers: authed(mine.token),
+      body: JSON.stringify({
+        name: '偽装した端末',
+        kind: 'shared',
+        placeNote: '',
+        deviceLabel: '',
+        autoLockSeconds: 1800,
+        isActive: true,
+        pin: TERMINAL_PIN,
+        organizationId: theirs.org,
+        storeId: theirs.storeId,
+      }),
+    })
+    // `z.strictObject` なので知らない欄は 400 で落ちる。通ってしまったときは、
+    // 保存された行が JWT の org でなければならない。
+    if (res.status === 201) {
+      const created = (await res.json()) as { id: string }
+      const row = await env.DB.prepare(
+        'SELECT organization_id, store_id FROM terminals WHERE id = ?',
+      )
+        .bind(created.id)
+        .first<{ organization_id: string; store_id: string }>()
+      expect(row).toMatchObject({ organization_id: mine.org, store_id: mine.storeId })
+    } else {
+      expect(res.status).toBe(400)
+    }
+    const theirCount = await env.DB.prepare(
+      'SELECT COUNT(*) AS n FROM terminals WHERE organization_id = ?',
+    )
+      .bind(theirs.org)
+      .first<{ n: number }>()
+    expect(theirCount?.n).toBe(1)
+  })
+})
+
+describe('お知らせと監査は組織をまたがない', () => {
+  it('他テナントの alertId を PATCH しても 404 で、相手の行は既読にならない', async () => {
+    const [mine, theirs] = await Promise.all([seedTenant('A 店'), seedTenant('B 店')])
+    const theirAlert = await insertAlert(theirs.org, theirs.storeId)
+    const res = await SELF.fetch(`${BASE}/api/staff/alerts/${theirAlert}`, {
+      method: 'PATCH',
+      headers: authed(mine.token),
+      body: JSON.stringify({ readAt: NOW }),
+    })
+    expect(res.status).toBe(404)
+    const row = await env.DB.prepare('SELECT read_at FROM alerts WHERE id = ?')
+      .bind(theirAlert)
+      .first<{ read_at: string | null }>()
+    expect(row?.read_at).toBeNull()
+  })
+
+  it('read-all は自分のテナントの、しかも選択中店舗の行だけを既読にする', async () => {
+    const mine = await seedTenant('A 銀座店')
+    const theirs = await seedTenant('B 新宿店')
+    const otherStoreId = await seedStore(
+      mine.org,
+      'A 丸の内店',
+      `t-${crypto.randomUUID().slice(0, 8)}`,
+    )
+    const target = await insertAlert(mine.org, mine.storeId)
+    const otherStore = await insertAlert(mine.org, otherStoreId)
+    const otherTenant = await insertAlert(theirs.org, theirs.storeId)
+
+    const res = await SELF.fetch(`${BASE}/api/staff/alerts/read-all`, {
+      method: 'POST',
+      headers: authed(mine.token),
+      body: JSON.stringify({ storeId: mine.storeId }),
+    })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ updated: 1 })
+    for (const [id, expected] of [
+      [target, true],
+      [otherStore, false],
+      [otherTenant, false],
+    ] as const) {
+      const row = await env.DB.prepare('SELECT read_at FROM alerts WHERE id = ?')
+        .bind(id)
+        .first<{ read_at: string | null }>()
+      expect(row?.read_at !== null).toBe(expected)
+    }
+  })
+
+  it('GET /api/staff/audit は他テナントの監査を 1 行も返さない', async () => {
+    const [mine, theirs] = await Promise.all([seedTenant('A 店'), seedTenant('B 店')])
+    await startSession(theirs.token, theirs.terminalId, { mode: 'shared', pin: TERMINAL_PIN })
+    await startSession(mine.token, mine.terminalId, { mode: 'shared', pin: TERMINAL_PIN })
+    const res = await SELF.fetch(`${BASE}/api/staff/audit?storeId=${mine.storeId}`, {
+      headers: authed(mine.token),
+    })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      items: Array<{ terminalId: string | null }>
+      total: number
+    }
+    expect(body.items.length).toBeGreaterThan(0)
+    for (const item of body.items) {
+      expect(item.terminalId).not.toBe(theirs.terminalId)
+    }
+    expect(JSON.stringify(body)).not.toContain(theirs.org)
+    expect(JSON.stringify(body)).not.toContain(theirs.terminalId)
+  })
+
+  it('無効化されたテナント（403）と未同期のテナント（503）は端末の一覧でも取り違えない', async () => {
+    const disabled = await seedTenant('停止された店')
+    await syncOrganization({ id: disabled.org, isDisabled: true, revision: 9 })
+    const stopped = await SELF.fetch(`${BASE}/api/staff/terminals?storeId=${disabled.storeId}`, {
+      headers: authed(disabled.token),
+    })
+    expect(stopped.status).toBe(403)
+
+    // 同期がまだ届いていない組織は 503（再試行できる）。403 と混ぜない。
+    const unsynced = orgId()
+    const token = await signAccessToken(
+      { sub: `dev:${unsynced}`, org: unsynced, email: 'a@example.test', role: 'staff' },
+      'dev-jwt-secret-change-me',
+    )
+    const pending = await SELF.fetch(`${BASE}/api/staff/terminals?storeId=${crypto.randomUUID()}`, {
+      headers: authed(token),
+    })
+    expect(pending.status).toBe(503)
   })
 })

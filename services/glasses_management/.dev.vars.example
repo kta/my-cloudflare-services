@@ -4,3 +4,5 @@ INTERNAL_KEY=dev-internal-key
 JWT_SECRET=dev-jwt-secret-change-me
 # credential 無しの dev トークングラント(/api/auth/token)を有効化。本番では設定しない(fail close)。
 AUTH_DEV_GRANT=true
+# 暗証番号のハッシュに混ぜる pepper。本番は `wrangler secret put AUTH_PEPPER`。
+AUTH_PEPPER=dev-auth-pepper
