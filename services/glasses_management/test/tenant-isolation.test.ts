@@ -1246,3 +1246,197 @@ describe('来店受付は組織をまたがない', () => {
     }
   })
 })
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * P6 予約の検索・変更・取消
+ * 4 ルート（検索・変更・取消・経緯）はどれも `reservationId` か `storeId` を
+ * 外から受け取る。**他社の id を指した要求は「無い」（404）**にして、存在の有無も
+ * 漏らさない。検索は選択中店舗にも固定するので、同じ組織の別店舗も結果に出ない。
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+/** お客様を 1 人置いて、そのご予約に結ぶ（検索がお名前で当たるようにする）。 */
+let isolationCustomerSeq = 0
+async function seedCustomerFor(org: string, reservationId: string, name: string): Promise<void> {
+  const id = crypto.randomUUID()
+  await env.DB.prepare(
+    'INSERT INTO customers (id, organization_id, customer_number, name, kana, phone, phone_normalized, phone_last4, email, birth_date, address, memo, first_visit_at, last_visit_at, visit_count, merged_into_id, version, created_store_id, created_terminal_id, created_at, updated_at) ' +
+      "VALUES (?,?,?,?,'たなか はなこ','090-1234-5678','09012345678','5678',NULL,NULL,NULL,'',NULL,NULL,0,NULL,1,NULL,NULL,?,?)",
+  )
+    .bind(id, org, `G-${String(90000 + ++isolationCustomerSeq)}`, name, NOW, NOW)
+    .run()
+  await env.DB.prepare(
+    'UPDATE reservations SET customer_id = ? WHERE organization_id = ? AND id = ?',
+  )
+    .bind(id, org, reservationId)
+    .run()
+}
+
+type SearchResult = { items: { id: string }[]; total: number }
+
+async function searchByName(token: string, storeId: string, name: string) {
+  const query = new URLSearchParams({ storeId, name })
+  const found = await callAs(token)('GET', `/api/staff/reservations?${query.toString()}`)
+  return { status: found.status, body: found.body as unknown as SearchResult }
+}
+
+async function lockCountOf(org: string, reservationId: string): Promise<number> {
+  const row = await env.DB.prepare(
+    'SELECT COUNT(*) AS n FROM reservation_slot_locks WHERE organization_id = ? AND reservation_id = ?',
+  )
+    .bind(org, reservationId)
+    .first<{ n: number }>()
+  return row?.n ?? 0
+}
+
+describe('予約の検索・変更・取消は組織をまたがない', () => {
+  it('3 テナントが同じお名前のご予約を持っても、自分のご予約しか検索に出ない', async () => {
+    const [a, b, c] = [
+      await ledgerTenant('A 銀座店'),
+      await ledgerTenant('B 銀座店'),
+      await ledgerTenant('C 銀座店'),
+    ]
+    const seeded: Record<string, string> = {}
+    for (const tenant of [a, b, c]) {
+      const reservationId = await insertReservation(tenant.org, {
+        storeId: tenant.storeId,
+        startsAt: jstAt(LEDGER_DATE, '11:00'),
+        staffId: tenant.staffId,
+        purposes: [{ id: tenant.purposeId }],
+      })
+      await seedCustomerFor(tenant.org, reservationId, '田中 花子')
+      seeded[tenant.org] = reservationId
+    }
+
+    for (const tenant of [a, b, c]) {
+      const found = await searchByName(tenant.token, tenant.storeId, '田中')
+      expect(found.status).toBe(200)
+      expect(found.body.items.map((item) => item.id)).toEqual([seeded[tenant.org]])
+      expect(found.body.total).toBe(1)
+    }
+  })
+
+  it('他テナントの reservationId を URL に入れて変更しても 404 で、相手の行は 1 行も変わらない', async () => {
+    const [mine, theirs] = [await ledgerTenant(), await ledgerTenant('B 店')]
+    const reservationId = await insertReservation(theirs.org, {
+      storeId: theirs.storeId,
+      startsAt: jstAt(LEDGER_DATE, '11:00'),
+      staffId: theirs.staffId,
+      purposes: [{ id: theirs.purposeId }],
+      slotLocks: true,
+    })
+
+    const denied = await callAs(mine.token)('PATCH', `/api/staff/reservations/${reservationId}`, {
+      version: 1,
+      startsAt: jstAt(LEDGER_DATE, '14:00'),
+    })
+    // 403 にしない（存在の有無を漏らさない）。
+    expect(denied.status).toBe(404)
+
+    const row = await env.DB.prepare(
+      'SELECT starts_at AS startsAt, version FROM reservations WHERE organization_id = ? AND id = ?',
+    )
+      .bind(theirs.org, reservationId)
+      .first<{ startsAt: string; version: number }>()
+    expect(row).toMatchObject({ startsAt: jstAt(LEDGER_DATE, '11:00'), version: 1 })
+  })
+
+  it('他テナントの reservationId を取り消しても 404 で、相手の枠のロックが消えない', async () => {
+    const [mine, theirs] = [await ledgerTenant(), await ledgerTenant('B 店')]
+    const reservationId = await insertReservation(theirs.org, {
+      storeId: theirs.storeId,
+      startsAt: jstAt(LEDGER_DATE, '11:00'),
+      staffId: theirs.staffId,
+      purposes: [{ id: theirs.purposeId }],
+      slotLocks: true,
+    })
+    const before = await lockCountOf(theirs.org, reservationId)
+    expect(before).toBeGreaterThan(0)
+
+    const denied = await callAs(mine.token)(
+      'POST',
+      `/api/staff/reservations/${reservationId}/cancel`,
+      { version: 1, reason: 'customer' },
+    )
+    expect(denied.status).toBe(404)
+    expect(await lockCountOf(theirs.org, reservationId)).toBe(before)
+  })
+
+  it('他テナントの reservationId の経緯は 404 になる', async () => {
+    const [mine, theirs] = [await ledgerTenant(), await ledgerTenant('B 店')]
+    const reservationId = await insertReservation(theirs.org, {
+      storeId: theirs.storeId,
+      startsAt: jstAt(LEDGER_DATE, '11:00'),
+      staffId: theirs.staffId,
+      purposes: [{ id: theirs.purposeId }],
+    })
+
+    const denied = await callAs(mine.token)(
+      'GET',
+      `/api/staff/reservations/${reservationId}/history`,
+    )
+    expect(denied.status).toBe(404)
+    expect(denied.body).toMatchObject({ error: 'not_found' })
+  })
+
+  it('クエリに他テナントの organizationId を混ぜても自分のご予約しか返らない', async () => {
+    const [mine, theirs] = [await ledgerTenant(), await ledgerTenant('B 店')]
+    const theirReservation = await insertReservation(theirs.org, {
+      storeId: theirs.storeId,
+      startsAt: jstAt(LEDGER_DATE, '11:00'),
+      staffId: theirs.staffId,
+      purposes: [{ id: theirs.purposeId }],
+    })
+    await seedCustomerFor(theirs.org, theirReservation, '田中 花子')
+    const myReservation = await insertReservation(mine.org, {
+      storeId: mine.storeId,
+      startsAt: jstAt(LEDGER_DATE, '11:30'),
+      staffId: mine.staffId,
+      purposes: [{ id: mine.purposeId }],
+    })
+    await seedCustomerFor(mine.org, myReservation, '田中 花子')
+
+    // 契約は `z.strictObject` なので、知らないキーはそもそも通らない（400）。
+    // 組織は JWT の `org` だけが決め、クエリからは決して来ない。
+    const spoofed = new URLSearchParams({
+      storeId: mine.storeId,
+      name: '田中',
+      organizationId: theirs.org,
+    })
+    const rejected = await callAs(mine.token)(
+      'GET',
+      `/api/staff/reservations?${spoofed.toString()}`,
+    )
+    expect(rejected.status).toBe(400)
+
+    // 同じ条件から偽装だけ抜くと、自分のご予約だけが返る。
+    const found = await searchByName(mine.token, mine.storeId, '田中')
+    expect(found.body.items.map((item) => item.id)).toEqual([myReservation])
+    expect(found.body.items.map((item) => item.id)).not.toContain(theirReservation)
+  })
+
+  it('別の店舗の reservationId は、同じ組織でも選択中店舗の外なら結果に出ない', async () => {
+    // Q-04 のいまの前提。別店舗のご予約は見せない（押せない導線を置かない）。
+    const mine = await ledgerTenant()
+    const another = await insertStore(mine.org, 'EYEX 丸の内店')
+    await insertBusinessHours(mine.org, another)
+    await insertSlotRules(mine.org, another)
+    const here = await insertReservation(mine.org, {
+      storeId: mine.storeId,
+      startsAt: jstAt(LEDGER_DATE, '11:00'),
+      staffId: mine.staffId,
+      purposes: [{ id: mine.purposeId }],
+    })
+    await seedCustomerFor(mine.org, here, '田中 花子')
+    const there = await insertReservation(mine.org, {
+      storeId: another,
+      startsAt: jstAt(LEDGER_DATE, '14:00'),
+      staffId: null,
+      purposes: [{ id: mine.purposeId }],
+    })
+    await seedCustomerFor(mine.org, there, '田中 太郎')
+
+    const found = await searchByName(mine.token, mine.storeId, '田中')
+    expect(found.body.items.map((item) => item.id)).toEqual([here])
+    expect(found.body.items.map((item) => item.id)).not.toContain(there)
+  })
+})

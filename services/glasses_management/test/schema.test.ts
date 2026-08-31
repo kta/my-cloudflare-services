@@ -420,6 +420,26 @@ describe('reservations', () => {
       'starts_at',
     ])
   })
+
+  it('version / cancelled_at / cancel_reason を持つ', () => {
+    // 変更・取消（P6）はこの 3 列だけで足りる。表も列も足さない。
+    // 版はバッチの最後の UPDATE が +1 する軸なので NOT NULL の整数で持つ
+    // （NULL 可にすると版の EXISTS ガードが NULL 比較で必ず外れ、409 のはずの
+    //  要求が「1 行も当たらないまま成功」に化ける）。
+    expect(table.columns.find((c) => c.name === 'version')?.columnType).toBe('SQLiteInteger')
+    expect(table.columns.find((c) => c.name === 'version')?.notNull).toBe(true)
+    // 取り消していないご予約は 2 列とも NULL。取消の理由は 4 語の text で、
+    // 真偽値（is_cancelled）に潰さない — ANALYTICS-CANCEL の内訳が作れなくなる。
+    for (const name of ['cancelled_at', 'cancel_reason']) {
+      expect(
+        table.columns.find((c) => c.name === name),
+        name,
+      ).toBeDefined()
+      expect(table.columns.find((c) => c.name === name)?.notNull, name).toBe(false)
+    }
+    expect(table.columns.find((c) => c.name === 'cancel_reason')?.columnType).toBe('SQLiteText')
+    expect(table.columns.filter((c) => c.name.startsWith('is_'))).toHaveLength(0)
+  })
 })
 
 describe('reservation_purposes', () => {

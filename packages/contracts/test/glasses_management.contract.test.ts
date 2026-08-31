@@ -74,9 +74,13 @@ import {
   ReceptionSessionStart,
   ReservationAssignment,
   ReservationCancelInput,
+  ReservationChangeHistory,
+  ReservationChangeInput,
   ReservationCode,
   ReservationDetail,
+  ReservationList,
   ReservationPurposeLine,
+  ReservationSearchQuery,
   ReservationSource,
   ReservationStatus,
   ReservationSummary,
@@ -2864,5 +2868,180 @@ describe('ReservationCancelInput', () => {
 
   it('refuses a status written straight from the client', () => {
     expect(() => ReservationCancelInput.parse({ ...input, status: 'done' })).toThrow()
+  })
+})
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * P6 予約の検索・変更・取消（`009-change-and-cancel`）
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+const reservationSummary = {
+  id: UUID,
+  code: 'EY-2608-0142',
+  startsAt: START,
+  durationMinutes: 60,
+  status: 'confirmed',
+  source: 'phone',
+  customerName: '田中 花子',
+  visitCount: 4,
+  purposeLabel: '新調相談・視力測定',
+  staffName: '佐藤 美咲',
+}
+
+describe('ReservationSearchQuery', () => {
+  it('accepts a name, a phone or a code on its own', () => {
+    // お客様が読み上げてくださるのは 3 つのうちどれか 1 つである。
+    expect(ReservationSearchQuery.parse({ name: '田中' }).name).toBe('田中')
+    expect(ReservationSearchQuery.parse({ phone: '5678' }).phone).toBe('5678')
+    expect(ReservationSearchQuery.parse({ code: 'EY-2608-0142' }).code).toBe('EY-2608-0142')
+    expect(ReservationSearchQuery.parse({ kana: 'たなか はなこ' }).kana).toBe('たなか はなこ')
+  })
+
+  it('takes a phone of exactly four digits or of full length, and rejects five to nine', () => {
+    // 下 4 桁は `customers.phone_last4` の完全一致、全桁は `phone_normalized` の前方一致。
+    expect(ReservationSearchQuery.parse({ phone: '5678' }).phone).toBe('5678')
+    expect(ReservationSearchQuery.parse({ phone: '090-1234-5678' }).phone).toBe('090-1234-5678')
+    expect(ReservationSearchQuery.parse({ phone: '09012345678' }).phone).toBe('09012345678')
+    // 途中まで打った 5〜9 桁を通すと、どちらの経路にも乗らない問い合わせが作れてしまう。
+    for (const phone of ['56789', '123456', '1234567', '12345678', '123456789']) {
+      expect(() => ReservationSearchQuery.parse({ phone }), phone).toThrow()
+    }
+  })
+
+  it('takes both EY-2608-0142 and EY-W-2608-0031 as a code', () => {
+    // お客様が読み上げるのは Web のご予約番号のほうなので、両方の書式で引けるようにする。
+    expect(ReservationSearchQuery.parse({ code: 'EY-2608-0142' }).code).toBe('EY-2608-0142')
+    expect(ReservationSearchQuery.parse({ code: 'EY-W-2608-0031' }).code).toBe('EY-W-2608-0031')
+    expect(() => ReservationSearchQuery.parse({ code: 'EY-2608-014' })).toThrow()
+    expect(() => ReservationSearchQuery.parse({ code: '0142' })).toThrow()
+  })
+
+  it('takes a code that has carried over into five digits', () => {
+    // 組織 × YYMM の連番が 9999 を越えた月は 5 桁になる。
+    expect(ReservationSearchQuery.parse({ code: 'EY-2608-10000' }).code).toBe('EY-2608-10000')
+    expect(ReservationSearchQuery.parse({ code: 'EY-W-2608-10000' }).code).toBe('EY-W-2608-10000')
+    expect(() => ReservationSearchQuery.parse({ code: 'EY-2608-100000' })).toThrow()
+  })
+
+  it('defaults includeCancelled to false', () => {
+    // 取り消されたご予約は既定で並べない（「取消済み」の札を押したときだけ加わる）。
+    expect(ReservationSearchQuery.parse({ name: '田中' }).includeCancelled).toBe(false)
+    expect(ReservationSearchQuery.parse({ includeCancelled: 'true' }).includeCancelled).toBe(true)
+    expect(ReservationSearchQuery.parse({ includeCancelled: '1' }).includeCancelled).toBe(true)
+    expect(ReservationSearchQuery.parse({ includeCancelled: '0' }).includeCancelled).toBe(false)
+  })
+
+  it('takes only false for crossStore', () => {
+    // Q-04 のいまの前提。別店舗のご予約は見せないので、画面に押せない導線を置かない。
+    // 答えが来たら `z.boolean()` へ戻す（そのときだけ true が通るようになる）。
+    expect(ReservationSearchQuery.parse({ name: '田中' }).crossStore).toBe(false)
+    expect(ReservationSearchQuery.parse({ crossStore: false }).crossStore).toBe(false)
+    expect(() => ReservationSearchQuery.parse({ crossStore: true })).toThrow()
+  })
+
+  it('rejects an unknown key', () => {
+    expect(() => ReservationSearchQuery.parse({ name: '田中', storeIds: [UUID] })).toThrow()
+    expect(() => ReservationSearchQuery.parse({ name: '田中', organizationId: ORG })).toThrow()
+  })
+})
+
+describe('ReservationList', () => {
+  it('carries one to three relaxations only when the result is empty', () => {
+    const empty = ReservationList.parse({ items: [], total: 0, relaxations: [relaxation] })
+    expect(empty.relaxations).toHaveLength(1)
+    expect(ReservationList.parse({ items: [], total: 0 }).relaxations).toEqual([])
+    const three = [1, 2, 3].map((n) => ({ ...relaxation, count: n }))
+    expect(ReservationList.parse({ items: [], total: 0, relaxations: three })).toBeTruthy()
+    expect(() =>
+      ReservationList.parse({ items: [], total: 0, relaxations: [...three, relaxation] }),
+    ).toThrow()
+    // 1 件以上あるのに候補が付くと、いま見えている一覧が信用できなくなる。
+    expect(() =>
+      ReservationList.parse({ items: [reservationSummary], total: 4, relaxations: [relaxation] }),
+    ).toThrow()
+    expect(ReservationList.parse({ items: [reservationSummary], total: 4 }).items[0]?.code).toBe(
+      'EY-2608-0142',
+    )
+  })
+})
+
+describe('ReservationSummary', () => {
+  it('allows a null staffName — the row is drawn as 担当が未定', () => {
+    const undecided = ReservationSummary.parse({ ...reservationSummary, staffName: null })
+    expect(undecided.staffName).toBeNull()
+    const { staffName: _dropped, ...omitted } = reservationSummary
+    expect(ReservationSummary.parse(omitted).staffName).toBeNull()
+    expect(ReservationSummary.parse(reservationSummary).staffName).toBe('佐藤 美咲')
+  })
+})
+
+describe('ReservationChangeInput', () => {
+  it('requires a version and lets every other field be omitted', () => {
+    expect(ReservationChangeInput.parse({ version: 3, startsAt: START }).version).toBe(3)
+    expect(
+      ReservationChangeInput.parse({ version: 3, durationMinutes: 90 }).startsAt,
+    ).toBeUndefined()
+    expect(ReservationChangeInput.parse({ version: 3, purposeIds: [UUID] }).purposeIds).toEqual([
+      UUID,
+    ])
+    expect(
+      ReservationChangeInput.parse({ version: 3, noteInternal: '車でお越し' }).noteCustomer,
+    ).toBeUndefined()
+    // 版が無い変更は楽観ロックを外して送っているのと同じなので通さない。
+    expect(() => ReservationChangeInput.parse({ startsAt: START })).toThrow()
+    expect(() => ReservationChangeInput.parse({ version: 0, startsAt: START })).toThrow()
+  })
+
+  it('takes a null staffId — 担当をあとで決める へ戻す', () => {
+    expect(ReservationChangeInput.parse({ version: 3, staffId: null }).staffId).toBeNull()
+    expect(ReservationChangeInput.parse({ version: 3, staffId: UUID2 }).staffId).toBe(UUID2)
+  })
+
+  it('defaults notify to false', () => {
+    // CHANGE-DIFF「お電話でのご予約のため、メールは送りません。」
+    expect(ReservationChangeInput.parse({ version: 3, startsAt: START }).notify).toBe(false)
+    expect(ReservationChangeInput.parse({ version: 3, startsAt: START, notify: true }).notify).toBe(
+      true,
+    )
+  })
+
+  it('rejects the same purpose or the same equipment twice', () => {
+    // 変更は確定と同じ占有行を積み直すので、同じ id を 2 回受けると枠が二重に減る。
+    expect(() => ReservationChangeInput.parse({ version: 3, purposeIds: [UUID, UUID] })).toThrow()
+    expect(() => ReservationChangeInput.parse({ version: 3, equipmentIds: [UUID, UUID] })).toThrow()
+    expect(
+      ReservationChangeInput.parse({ version: 3, equipmentIds: [UUID, UUID2] }).equipmentIds,
+    ).toEqual([UUID, UUID2])
+  })
+
+  it('rejects an input that changes nothing', () => {
+    // 何も変わらない要求を通すと、版だけが進んで差分表が空のまま監査に 1 行残る。
+    expect(() => ReservationChangeInput.parse({ version: 3 })).toThrow()
+    expect(() => ReservationChangeInput.parse({ version: 3, notify: true })).toThrow()
+  })
+})
+
+describe('ReservationCancelInput（理由の必須）', () => {
+  it('rejects an input with no reason', () => {
+    // 理由の無い取消は ANALYTICS-CANCEL の内訳と受付履歴の説明を空にする。
+    expect(() => ReservationCancelInput.parse({ version: 1 })).toThrow()
+    // 既定値も持たない（押し間違いが「お客様のご都合」として残らないようにする）。
+    expect(ReservationCancelInput.parse({ version: 1, reason: 'store' }).reason).toBe('store')
+  })
+})
+
+describe('ReservationChangeHistory', () => {
+  it('bounds what to 120 characters and allows a null actorName', () => {
+    const line = { occurredAt: NOW, what: 'ご来店時刻を 11:00 から 14:00 へ', actorName: '中村 彩' }
+    expect(ReservationChangeHistory.parse(line).what).toBe('ご来店時刻を 11:00 から 14:00 へ')
+    expect(ReservationChangeHistory.parse({ ...line, what: 'あ'.repeat(120) }).what).toHaveLength(
+      120,
+    )
+    expect(() => ReservationChangeHistory.parse({ ...line, what: 'あ'.repeat(121) })).toThrow()
+    expect(() => ReservationChangeHistory.parse({ ...line, what: '' })).toThrow()
+    // 共有端末でご本人の確認をしていない操作は名前が残らない。
+    expect(ReservationChangeHistory.parse({ ...line, actorName: null }).actorName).toBeNull()
+    const { actorName: _dropped, ...omitted } = line
+    expect(ReservationChangeHistory.parse(omitted).actorName).toBeNull()
   })
 })

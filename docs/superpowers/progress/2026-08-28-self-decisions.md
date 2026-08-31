@@ -1550,3 +1550,173 @@
 - `role="group"` の div は `<fieldset aria-label>` にした — 理由: biome の `a11y/useSemanticElements` が落ちる（既存の `CustomerList.tsx` と同じ書き方） — 影響: 待ち状況の帯・ご用件・候補・絞り込み・受付の一覧
 - `getByText` の期待値では全角空白を半角に畳んで書く — 理由: dom-testing-library は DOM 側だけを正規化し、期待文字列は素通しで比べる（`getByRole` の name は素通しなので全角空白のまま書ける） — 影響: 0 件の言い直しの 1 本
 
+
+## K. P6（予約の検索・変更・取消）の実装で決めたこと
+
+**全 135 件**。
+
+### K-backend-review（8 件）
+
+- `EY-W-` のご予約番号は出どころも `web` に絞る — 理由: 業務側の番号へ直すだけだと、同じ連番のお電話のご予約が当たり、受付が別のお客様のご予約を開く（実 D1 で再現した） — 影響: `src/worker/index.ts` の `reservationSearchInput` / `GET /api/staff/reservations` の結果
+- 出どころの並びは `undefined`（絞らない）と `[]`（どの行にも当たらない）を分ける — 理由: `EY-W-` の番号に「お電話でのご予約だけ」が重なった要求で、空を「絞らない」と読むとその番号を持たない行が当たる — 影響: `domain/reservation-search.ts` の `resolveSearch` / `matchesRow`
+- 矛盾した条件は `1 = 0` で表す（早期 return にしない） — 理由: 早期 return にすると 0 件のときの緩和候補（「「お電話でのご予約だけ」を外す」）が出せなくなる — 影響: `resolveSearch`
+- `filterReservations` が緩和候補の件数を数える、と書いてあった説明を実物に合わせた — 理由: 実際に数えているのはルートの `countReservations`（SQL の `COUNT(*)`）で、説明が嘘になっていた — 影響: `domain/reservation-search.ts` の冒頭・`relaxationsFor` / `filterReservations` の説明（挙動は変えない）
+- 担当・状態・期間の片側だけの絞り込みに通しテストを 1 本足した — 理由: `EXISTS` の子問い合わせも片側だけの半開区間も 1 文字間違えると 500 に化けるのに、実 D1 に投げるテストが 1 本も無かった — 影響: `test/reservation-change.integration.test.ts`
+- 空の出どころの単体テストを 2 本足した — 理由: 上で足した分岐を固定する（`reservation-search.ts` の branch カバレッジが 75.9% → 80.9%） — 影響: `test/reservation-search.test.ts`
+- T-011 の 7 本を `test/availability.test.ts` に新設しない — 理由: `excludeReservationId` / `excludeReceptionSessionId` は P2 の `availability.ts` に既にあり、除外の挙動は `availability.time.test.ts` と `reservation-change.time.test.ts` で既に固定されている。同じことを二度書かない — 影響: なし
+- 取消の 409 で `walk_ins` が書き換わらないことは実 D1 で確かめたがテストは足さない — 理由: 版のガードが効いていることを確認済みで、計画の T-006 の 14 本に含まれていない — 影響: なし（確認のみ）
+
+### K-backend-round2（9 件）
+
+- ご用件を入れ替えない変更では `visit_purposes` を読み直さず、いまの `reservation_purposes` を積み直す — 理由: 所要は「予約した時点の写し」で凍結する決め（`03-data-model.md` §7.2）を PATCH が破っていた — 影響: `src/worker/index.ts` の PATCH。設定でご用件の所要を直したあと日時だけを動かしても、そのご予約の所要が黙って書き換わらない
+- 変更バッチの `batchAt` を `max(now, reservation.updated_at + 1ms)` にする — 理由: 古い枠と新しい枠を `created_at` で見分けるので、同じミリ秒に 2 度直すと ① が新しい枠を積んだあと枠のガードが外れて「409 を返しながら占有行だけ増える」 — 影響: `src/worker/index.ts` の PATCH。`Math.max` なので分岐は増えない
+- `created_at` を使う識別そのものは変えない（id で見分ける形に作り替えない） — 理由: 並びとガードの形は P6 の TODO T-010 が明文で決めている。最終巡で SQL の骨格を作り替えるより、時刻の一意性を保証するほうが変更が小さい — 影響: `domain/reservation-change.ts` は 1 文字も変えていない
+- 止めたご用件（`is_active='0'`）を持つご予約が変更できない件は**直さず報告する** — 理由: 直すには「止めた目的の技能要件をどう見るか」を決める必要があり、仕様（人間の承認事項）に当たる — 影響: なし（報告のみ）
+- 検索の `cursor` を受けて無視している件も**直さず報告する** — 理由: `nextCursor` は常に null で画面が読み足さないので実害が無い。契約から欄を落とすのは P8 の Web 予約と共用する形に触る — 影響: なし（報告のみ）
+- 足したテストは既存ファイルへ追記し、新しいテストファイルを作らない — 理由: 1 巡目の書き方・語り口・ヘルパー（`changeTenant` / `book` / `locksOf`）に揃え、同じものを二度作らない — 影響: `test/reservation-change.integration.test.ts` / `test/reservation-change.test.ts` / `test/reservation-search.test.ts`
+- 電話の前方一致テストは 2 人の番号を「先頭 10 桁が同じ」に作り替える — 理由: 契約は 5〜9 桁を落とすので、共通の前方一致を作るには 10 文字以上の入力が要る — 影響: `test/reservation-change.integration.test.ts`
+- 日付をまたぐ検索の材料は `insertReservation` で直に置く — 理由: `book()`（API）と `nextReservationCode()`（ヘルパー）は採番の系統が別で、同じ組織で混ぜると `reservations.code` の一意制約に当たる — 影響: `test/reservation-change.integration.test.ts`
+- `src/web/**` と `e2e/**` は 1 文字も触らない — 理由: 担当の範囲外 — 影響: web の 2 本の間欠失敗は報告だけにとどめる
+
+### K-cancel-done-conflict（18 件）
+
+- 置き場所を `src/web/change/` にした（TODO の本文は `src/web/search/`）— 理由: 担当指示のファイル一覧が `change/` を名指ししており、他エージェントの `search/` と衝突させないため — 影響: `src/web/change/ChangeCancel.tsx` `ChangeDone.tsx` `ConflictPanel.tsx` と同名の `*.test.tsx`
+- `@app/ui` の `ChoiceGroup` を使わず、この面の中で `<fieldset>` + `<input type="radio">` として組んだ — 理由: `packages/ui` に `ChoiceGroup` は存在せず、packages/ui は担当外で新設できないため — 影響: `ChangeCancel.tsx` の理由 4 択（役割は radiogroup、既定は未選択）
+- 取消の主操作は本物の `disabled` 属性で止め、押せない理由は `aria-label` に持たせた — 理由: 既存 P3 の `StepBar` と同じ止め方に揃えるため（`aria-disabled` + クリック握りつぶしは押せたように見える） — 影響: 「この予約を取り消す」ボタン
+- 例外の段を `loading / notFound / error / forbidden` の 4 つにした — 理由: 「空」は「そのご予約が見つからない」ことなので、既存 `CustomerDetail` の `notFound` に語を揃えた — 影響: 3 面すべての `phase` prop
+- CHANGE-DONE の取消版で、左の小見出しを「取り消したご予約」に差し替えた — 理由: 「変更後のご予約」は取り消しの面では嘘になるため（文言だけ差し替えるという TODO の枠内） — 影響: `ChangeDone.tsx` の `kind='cancelled'`
+- CHANGE-DONE の取消版は予約番号のピルから「予約番号は変わりません」を落とした — 理由: 取り消した予約に番号の不変を約束する意味が無いため — 影響: `ChangeDone.tsx`
+- 完了画面の通知の 1 行はモックの「お電話でのご予約のため、メールは送っていません。」ではなく TODO の「お客様へのご連絡は、お電話でお願いします。」を出す — 理由: TODO T-018 の指示（変更・取消のメールは送らない） — 影響: `ChangeDone.tsx`
+- EX-CONFLICT の行の描き分けは「旧値がある行＝変わった行（太字＋旧値に取り消し線）／旧値が無い行＝変わらない行（薄字）」の 1 つの規則にした — 理由: モックは相手側の「担当 佐藤 美咲」を旧値なしで太字にしており規則が二重になっているため — 影響: `ConflictPanel.tsx` の行の描画
+- EX-CONFLICT は自分では一切書き込まず、出口 4 つはすべて親へ選択を報せるだけにした — 理由: 「選ぶまでどちらの内容も書き換わりません」を形で保証するため — 影響: `ConflictPanel.tsx` は `fetch` を持たない（テストで `fetch` が呼ばれないことを見る）
+- 「1項目ずつ選ぶ」の保存ボタン名を「選んだ内容で保存する」にした — 理由: モックに名前が無く、全行を選ぶまで押せない主操作である旨を名前で伝えるため — 影響: `ConflictPanel.tsx`
+- モックの日時レンジの区切りは en dash（–）のまま採り、予約番号だけ半角ハイフンにした — 理由: TODO が予約番号についてだけ半角ハイフンを指示しているため — 影響: 3 面の日時表示
+- 「お客様のご都合」の補足を「お客様からのお申し出」にした — 理由: モックはこの札が選択中で補足が「選択中」になっており、未選択のときの説明文が存在しないため — 影響: `ChangeCancel.tsx` の理由 4 択
+- 選択中の札は補足を「選択中」に差し替える（モックどおり） — 理由: 選択を色だけで伝えないため。ラジオなので状態は読み上げにも届く — 影響: `ChangeCancel.tsx`
+- 見出しの補足（「まだ取り消していません」等）を `<h2>` の外へ出した — 理由: 中に入れると見出しの読み上げ名に補足が混ざる — 影響: `ChangeCancel.tsx` の 2 つの見出し
+- `role="group"` は `<div>` ではなく `<fieldset>` で表した — 理由: biome の `lint/a11y/useSemanticElements` と、出荷済み `DoneStep` の書き方に揃えるため — 影響: `ChangeCancel.tsx` / `ChangeDone.tsx`
+- CHANGE-DONE の脚注はモックの `position: absolute` を採らず面の末尾に流した — 理由: 中身が伸びたときに本文へ重なるため — 影響: `ChangeDone.tsx`
+- 全角空白を含む文はテストで `getByText(/部分/)` → `textContent` の完全一致で照合した — 理由: testing-library の既定の正規化は全角空白を半角へ潰すが、文字列マッチャ側は潰さないので `getByText('…　…')` が必ず外れる — 影響: `ChangeDone.test.tsx` の 2 か所
+- 1 項目ずつ選ぶときのラジオは各面の行の中に置き、`name` を行の key で束ねた — 理由: 別枠に選択欄を作ると同じ内容が 2 度並ぶため — 影響: `ConflictPanel.tsx`
+
+### K-change-screens（14 件）
+
+- 画面のファイルを `src/web/change/` に置いた（TODO の本文は `src/web/search/`）— 理由: 割り当てが `change/` を名指ししており、取消・完了・競合を持つ別の担当と同じディレクトリで衝突させないため — 影響: `src/web/change/*.tsx`
+- T-013 のラベル変更で `src/web/shell/destinations.ts` と `src/web/App.test.tsx` を触った（割り当ての一覧には無い）— 理由: ラベルの実体はこの 2 ファイルにしか無く、片方だけ直すと web テストが落ちるから。T-013 は自分だけの担当なので衝突しない — 影響: サイドバーの「予約を検索」→「予約を探す」
+- 工程バー（4 段）を `ChangeDateTime.tsx` の中に書いた — 理由: `@app/ui` に `StepBar` は無く、`booking/StepBar.tsx` は 5 工程の `BOOKING_STEPS` に固定されていて他人のファイルだから — 影響: `ChangeDateTime.tsx` の `StepBar`
+- 409 `slot_taken` は `booking/ConflictNotice.tsx` を**そのまま呼ぶ** — 理由: BOOK-CONFLICT と同じ形にする指示で、同じものを二度作らないため — 影響: `ChangeDiff.tsx`（`slotTaken` prop）
+- 409 `version_conflict` は「同じご予約を、ほかの端末でも直していました」＋左右 2 面＋戻り道だけを出す暫定面にした — 理由: EX-CONFLICT の 4 つの出口は T-019（別の担当）の受け持ちで、押して何も起きないボタンを並べないため — 影響: `ChangeScreen.tsx` の `VersionConflictPane`
+- 取り消し・担当場所の変更・完了の 3 面は `onCancelReservation` / `onChangeSlot` の任意 prop で外へ開け、渡されないときは 1 行で断る — 理由: T-018 の受け持ちで、器から入口を消すと後から配線できないため — 影響: `ChangeScreen.tsx`
+- 変更の確定に成功したら CHANGE-DONE を出さず、`role="status"` の 1 行（「ご予約の変更を承りました。予約番号は変わりません。」）を出して検索へ戻す — 理由: CHANGE-DONE は T-018 の受け持ち — 影響: `ChangeScreen.tsx`
+- 詳細の「／090-1234-5678」はお客様の台帳から 1 本引いて出す — 理由: `ReservationDetail` にお電話番号の欄が無く、モックの 1 行を落とさずに済む唯一の道だから — 影響: `ChangeScreen.tsx` の `GET /api/staff/customers/:customerId`
+- 詳細の「録音を聞く 03:12」は出さない — 理由: 録音は P7（`010-recording`）。押して何も起きないボタンを置かない — 影響: `ReservationSearch.tsx`
+- EX-EMPTY-SEARCH の「丸の内店・新宿店のご予約も含める」を出さない — 理由: Q-04 のいまの前提（別店舗のご予約は見せない）— 影響: `ReservationSearch.tsx` の「ほかの探し方」は 2 行
+- 「顧客台帳で調べる」は顧客台帳へ移るだけで、入れたお名前をまだ引き継げない — 理由: `CustomerScreen` / `CustomerList` に初期検索語の prop が無く、そこは自分の担当ファイルではないから。`ChangeScreen` は `onOpenCustomers(name)` で名前を渡しており、受け口が付けば 1 行で繋がる — 影響: `App.tsx`（AC-CHANGE-24 の残り）
+- 絞り込みと日付・時刻の並びを `role="group"` ではなく `<fieldset aria-label=…>` にした — 理由: Biome の `a11y/useSemanticElements` — 影響: `ReservationSearch.tsx` / `ChangeDateTime.tsx`（読み上げの役割は group のまま）
+- 候補の先頭の「いまのまま」は、サーバが返さなくても画面が 1 枠だけ自分で置く — 理由: 自分の枠は必ず取れるのに、格子の刻みからずれていると返ってこないことがあるから（AC-CHANGE-25）— 影響: `ChangeDateTime.tsx`
+- `now` は `App.tsx` が毎描画で読み直す（時計の tick を持たない）— 理由: 暦日（JST）は日付が変わるまで同じ文字列なので取り直しの合図にならず、`BookingScreen` の tick を二重に作らずに済むから — 影響: 仮の押さえの残り時間は再描画のたびに更新される
+
+### K-contracts-schema（10 件）
+
+- `crossStore` を素直に `z.literal(false).default(false)` にした（クエリ文字列の `'false'` を受ける形にしない） — 理由: Q-04 のいまの前提で画面がこの欄を一切送らず、`QueryFlag` 相当の寛容さを足すと「押せない導線が実は効く」形が契約に残るため — 影響: packages/contracts/src/glasses_management.ts の `ReservationSearchQuery.crossStore`
+- `ReservationSearchQuery` に「どれか 1 つは必須」の refine を足さなかった — 理由: T-001 の 6 項目にその境界が無く、`書いてある以上のことをしない` に従った（全走査の抑止は T-009 の `resolveSearch` が organization_id / store_id を必ず先頭に置くことで担保する） — 影響: 空クエリは 200 で店舗 1 日分の既定範囲を返す
+- `ReservationSearchQuery.from` / `to` を両方 optional にし、`spanWithinDays` の refine を足さなかった — 理由: 設計 §4.5 が `from`・`to?` と書き、期間の上限は P6 の TODO に無い — 影響: 期間の広さの検証はドメイン側（T-009）に残る
+- `ReservationSearchQuery.status` / `source` は `QueryWordList` を再利用した — 理由: P5 の `ReceptionHistoryQuery` と同じ「知らない語を黙って落とさない」形に揃えるため — 影響: `?source=web,phone` が配列でもカンマ区切りでも通る
+- `ReservationChangeInput.version` を `z.number().int().min(1)`（`Version` の nonnegative ではなく）にした — 理由: 隣の `ReservationCancelInput` が同じ形で、存在する予約の版は必ず 1 以上である — 影響: `version: 0` は 400
+- `ReservationChangeInput` に `purposeIds` / `equipmentIds` の重複拒否 refine を足した — 理由: 変更は確定と同じ `reservation_purposes` / `reservation_assignments` / `reservation_slot_locks` を積むので、P3 が `StaffReservationCreate` で閉じた「同じ設備で枠が 2 つ減る」穴が変更経路だけ開いたままになる — 影響: 同じ id を 2 回送る変更は 400
+- `ReservationCancelInput` に `notify` を足さなかった — 理由: P6 の決めごとで変更・取消のメールは送らない（`NotificationJob` に型が無い）ため、受けても使い道が無い欄になる。T-001 の 6 項目にも無い — 影響: 取消の入力は `version` / `reason` の 2 欄のまま
+- `ReservationChangeHistory` を非公開から `export` へ変えた（定義そのものは触らない） — 理由: `GET /api/staff/reservations/:id/history` の応答型として T-012 が使い、契約テストからも直接 parse するため — 影響: packages/contracts/src/index.ts の re-export に 1 行追加
+- T-002 は `reservations` の `version` / `cancelled_at` / `cancel_reason` の 1 本だけを足した — 理由: 残る 6 本（org_store_start / org_code / customers の phone・phone_last4・kana / slot_locks の reservation / audit_events の target）は P2・P4 の describe が同じ対象列を既に固定済みで、名前を変えただけの同じ検査を二度置かない — 影響: services/glasses_management/test/schema.test.ts
+- migration を 1 本も生成しなかった — 理由: T-002 のとおり表も列も足しておらず、`db:generate` が差分を出さないことを確認した — 影響: services/glasses_management/migrations/ は 0005 のまま
+
+### K-domain（17 件）
+
+- `resolveSearch` は SQL 断片（`where` の配列 ＋ パラメータ）を返し、行の当たり判定は同じ条件を読む `filterReservations` に分ける — 理由: T-003 の「どの条件でどの行が当たるか」は行を要るが、SQL は打てないため。緩和候補の件数もこの 1 本で数えて「押す前の件数」と「押したあとの件数」を食い違わせない（`reception-history.ts` の `filterHistory` と同じ形） — 影響: `src/worker/domain/reservation-search.ts` の export が 3 本（`resolveSearch` / `filterReservations` / `relaxationsFor`）になる
+- `LIKE` のパターンは SQL の連結（`'%' || ? || '%'`）ではなく**あらかじめ組み立てた値**で渡す — 理由: `customers.ts` の `CustomerFilter` と同じ形にし、「電話番号の列に当たるパターンは必ず `%` で終わり `%` で始まらない」をテストが値で見られるようにするため（SQL の形だけでは前方一致と後方一致を見分けられない） — 影響: `resolveSearch` の断片は `c.name LIKE ? ESCAPE '\'` の形になる
+- `EY-W-` の予約番号は `web_bookings.public_code` を指す条件として返すが、その表は P8（`011-web-booking`）まで存在しない — 理由: 契約が 2 書式を受けるので条件は解けなければならないが、表を先に作るのは P6 の範囲外（「表も列も足さない」） — 影響: `ResolvedSearch.codeTarget` が `'web_bookings'` のときルートは 0 件を返してよい
+- `kana` の欄はかなの列だけに当て、`name` の欄は名前とかなの両方に当てる — 理由: AC-CHANGE-02 は「お名前」欄にかなを打つ操作で、画面に `kana` 専用の欄は無い — 影響: `resolveSearch` の名前条件が `(c.name LIKE ? OR c.kana LIKE ?)` になる
+- `staffId` の絞り込みも条件に出す — 理由: 契約が受ける欄をドメインが黙って捨てると「200 を返しながら 1 件も絞られていない」絞り込みになる（`ReceptionHistoryQuery` の `outcome` と同じ壊れ方） — 影響: `reservation_assignments` の `EXISTS` 断片が 1 本増える
+- T-003 の一覧は 19 本しか名指ししていないので、`source` の絞り込み 1 本を足して 20 本にする — 理由: 完了条件が 20 本で、`source` は実装する条件のうち唯一テストの無いもの — 影響: `test/reservation-search.test.ts`
+- `cancelOutcome(reason, now)` は時刻を引数で受ける — 理由: `cancelled_at` にサーバ時刻を入れるので、`Date.now()` を呼ぶと実時刻に依存したテストになる（非交渉の「時刻は引数で受ける」） — 影響: 計画の `cancelOutcome(reason)` に第 2 引数が付く
+- 新しい枠の INSERT（1 文目）にも**版のガード**を付ける — 理由: 付けないと版が合わないときに新しい枠だけが入り、古い枠と両取りになって「409 が二重予約を作る」。AC-CHANGE-27 の「枠の押さえが 1 行も書き換わっていない」を満たせない — 影響: `buildChangeBatch` の 1 文目が `WHERE NOT EXISTS (上限) AND EXISTS (版)` になる
+- 版を +1 する `UPDATE reservations` にも**枠のガード**を付ける — 理由: 付けないと枠が取れなかったとき（409 `slot_taken`）に本体と版だけが進み、AC-CHANGE-26 の「いまのご予約は元のまま残る」が崩れる — 影響: `buildChangeBatch` の最後の文
+- 取消も版を +1 する `UPDATE reservations` を**最後**に置く（`04-api.md` §4.5 の表の並びを採らない） — 理由: バッチは 1 トランザクションで前の文の書き込みが見えるので、UPDATE を先に置くと後続の `EXISTS (… version = ?V)` が必ず外れ、枠の DELETE と監査が 1 度も走らない — 影響: `buildCancelBatch` の並びは 枠の DELETE → 監査 → 本体の UPDATE
+- 枠のガードにも `organization_id` を書く（計画の断片には無い） — 理由: 全 D1 クエリをテナントで絞る決め（AGENTS ルール 6）と、`reservation_slot_locks` の索引の先頭列が `organization_id` であるため（`booking.ts` の `LOCKED` と同じ理由） — 影響: `buildChangeBatch` / `buildCancelBatch` の全文
+- `slotCount`（`?N`）は引数で受けず `requests.length` から出す — 理由: 要求する枠の本数を 2 か所に持つと、片方だけ直したときにガードが必ず外れる — 影響: `ChangeBatchInput` に `slotCount` を置かない
+- 読み上げ文は担当が未定のとき「担当は…」の節をまるごと落とす — 理由: 「担当は担当が未定、」と読める文を作らない。文書に未定のときの文言が無い — 影響: `sayOnConfirm`
+- `availability.ts` の「自分を除く」引数（`excludeReservationId` / `excludeReceptionSessionId`）は P2 で既に入っている — 理由: 既存の挙動を変えない範囲で足すものが無い（`buildOccupancy` が 2 つとも読んでいる） — 影響: このタスクでは `availability.ts` を 1 行も書き換えない
+- `relaxationsFor(query, counts)` の `counts` に `total`（いまの検索の総件数）を載せる — 理由: 「1 件以上あるときは候補を作らない」を件数と同じ 1 つの引数で決めるため（計画どおり引数は 2 つのまま） — 影響: `RelaxationCounts = { total } & Partial<Record<'period'|'source'|'cancelled', number>>`
+- `DiffCell` / `ChangePurposeLine` / `ChangeAssignment` / `SearchCondition` / `CodeTarget` は export しない — 理由: 他ファイルが名前で使わないので knip の未使用 export になる（export するのは他ファイルが使うものだけ） — 影響: 型は export した型の中から構造的に使える
+- 並び替えは `localeCompare` を使わず素の文字列比較にする — 理由: SQLite の既定照合（BINARY）と同じ並びにしないと、`ORDER BY c.name` で読んだ順とドメインが並べた順が食い違う — 影響: `filterReservations` の比較と `ResolvedSearch.orderBy`
+
+### K-e2e（20 件）
+
+- UC 10 本と AC 27 本を **1 ID = 1 test（計 37 本）** にする — 理由: 担当指示が「1 本につき Playwright test 1 本」と書いている（既存の reception.spec.ts は UC を AC に相乗りさせているが、指示を正本にする） — 影響: `e2e/change.spec.ts`
+- 端末の時計を `page.clock.setFixedTime` で **2026年8月27日** に据えて検索する — 理由: seed のご予約は 2026-08-27 にしか無く、`ChangeScreen` の「これから」は端末の暦日を `from` にするので、実時刻のままだと seed が 1 件も出ない — 影響: `e2e/change.spec.ts` の検索系 test 全部
+- 0 件の面は **端末の時計を 2026年8月26日 に据えて「今日」を押す**ことで作る — 理由: 「Web予約だけ」を立てる操作が画面に無い（`ReservationSearch` の source の札は `conditionsFromQuery` 経由でしか立たない）ので、UI から作れる 0 件は期間の絞りだけである — 影響: AC-CHANGE-09 / 10 / 22 / 24 / UC-CHANGE-02
+- 「Web予約だけ」を外す案（AC-CHANGE-10 の文言そのもの）は **HTTP のふるまいで固定**する — 理由: 同上。案の作り方（外した条件以外はそのまま）はサーバの責任で、画面は再送するだけである — 影響: AC-CHANGE-10
+- 盤面を書き換える test（変更の確定・取消・競合）は **seed の 8月27日 に触らず、2026年9月 の営業日に自前のご予約を作って使う** — 理由: `change.spec.ts` は ipad project で `ledger.spec.ts` / `reception.spec.ts` より先に走り、seed の 12 件を動かすとそれらが壊れる — 影響: `e2e/change.spec.ts` の変更・取消系 test 全部
+- 自前のご予約に **`equipmentIds` を渡さない** — 理由: `POST /api/staff/reservations` は設備を渡すと 409 `purpose_unavailable`（`BLOCKING_REASON.no_equipment`）になる（実測） — 影響: 差分表の「場所」の行は「決まっていません」のまま
+- CHANGE-CANCEL / CHANGE-DONE / EX-CONFLICT の 3 面は **器（`ChangeScreen` / `App`）が読み込んでいない**ので、その AC は HTTP のふるまいで固定する — 理由: `ChangeCancel.tsx` / `ChangeDone.tsx` / `ConflictPanel.tsx` は出荷されているが、`ChangeScreen` は `onCancelReservation` が未定義のとき「取り消しの画面はこれから作ります。」と答えるだけで、ブラウザから開けない（P4 / P5 の同じ扱いを踏襲） — 影響: AC-CHANGE-16 / 17 / 20 / 21 / 23、UC-CHANGE-05 / 07
+- 版の競合の面は **`ChangeScreen` の `VersionConflictPane`**（器に載っている簡素版）で確かめる — 理由: `ConflictPanel`（EX-CONFLICT の本体）は器に載っていないが、409 `version_conflict` の受け止め方そのものは器に載っている側で見られる — 影響: AC-CHANGE-19 / UC-CHANGE-08、mock-compare の EX-CONFLICT
+- mock-compare は **5 面を実測し、CHANGE-CANCEL と CHANGE-DONE の 2 面は `test.skip` で置く** — 理由: 器に入口が無く、ブラウザでその面を出せない。全面が差になる比率を基準線として刻むと「下げるだけ」の規律が意味を失う — 影響: `e2e/mock-compare.spec.ts`
+- AC-CHANGE-01 の「結果 4件」は **seed の実数（1件）で固定**し、行の中身（`8/27（木）11:00　田中 花子 様　4回目　…`）だけをモックの文言と突き合わせる — 理由: 田中 花子 様の「これから」のご予約は seed に 1 件しか無く、自前で足しても `reservations.customer_id` が NULL になるのでお名前で引けない — 影響: AC-CHANGE-01
+- ご用件の語は seed の `name_short`（「新調相談・視力測定」）で固定する — 理由: 一覧の行はモックの「メガネを新しく作る」ではなく短い名前を連ねる決め（`purposeLabelsOf`） — 影響: AC-CHANGE-01 / 08
+- 自前のご予約は **14:00 に置き 16:00 へ動かす** — 理由: 佐藤 美咲 は seed のどの勤務日も 13:00–14:00 が休憩で、13:00 に置くと 409 になる — 影響: `e2e/change.spec.ts` の変更系 test 全部
+- 担当の置き直しは **小林 学（`c0010000-…-03`）**へ寄せる — 理由: 「メガネを新しく作る」が要求する技能 `measure` を持つのは 佐藤 美咲 と 小林 学 だけで、高橋 健 へ移すと 409 `purpose_unavailable` — 影響: UC-CHANGE-06 / AC-CHANGE-27
+- 使う日から **2026-09-02 と 2026-09-03 を外す** — 理由: mock-compare の BOOK-06-DONE が 9/2 14:00 に 1 件書き、booking.spec が 9/3 をまるごと使う（どちらも先に走る） — 影響: `DAYS`
+- 日曜（9/6・9/13・9/20・9/27）に **17:00 からの 60 分を置かない** — 理由: 店舗が 18:00 に閉まり、片付け 10 分を含めると営業時間の外になる — 影響: `DAYS` の割り当て
+- 「理由が要る」と「押した 1 回では消えない」の 2 本は **同じ日の 11:00 と 14:00** に置く — 理由: 勤務が入っている日（8/27〜9/30、火曜と 9/30 を除く）が 19 本ぶん足りない — 影響: `DAYS.reasonRequired` / `DAYS.safeDefault`
+- `getByRole` の `name` に **U+3000 を含む正規表現を使わない** — 理由: 文字列は accessible name と一緒に空白正規化されるが、正規表現は正規化されないので U+3000 が半角空白に化けた名前と噛み合わない — 影響: 案の札を引く 3 本
+- UC-CHANGE-10 は **取消の 1 行が経緯に出ない**ことを欠陥として test のコメントに書き残し、ご予約に残った跡（`status` / `cancelReason`）でたどる形にした — 理由: `buildCancelBatch` が監査へ `cancelReason` を書き、`changeLabel` が `reason` を読むので綴りが噛み合わない。直すのは担当外のファイル — 影響: `e2e/change.spec.ts` の UC-CHANGE-10
+- HOME の突き合わせを 0.0314 → 0.0316 へ**上げた** — 理由: サイドバーの行き先を「予約を検索」→「予約を探す」に変えた P6 の決めで 436 画素増えた（モックの画像は直さない既知差分） — 影響: `e2e/mock-compare.spec.ts` の HOME
+- mock-compare は 5 面を実測し、CHANGE-CANCEL と CHANGE-DONE は `test.skip` で置いた — 理由: 器が `ChangeCancel` / `ChangeDone` を読み込んでおらず、ブラウザからその面を出せない — 影響: `e2e/mock-compare.spec.ts`
+
+### K-frontend-review（14 件）
+
+- `ChangeCancel` / `ChangeDone` / `ConflictPanel` を `ChangeScreen` に載せた — 理由: 出荷済みなのに器から開けず、取消・完了・競合の 3 面がブラウザから到達不能だった — 影響: src/web/change/ChangeScreen.tsx、e2e/change.spec.ts、e2e/mock-compare.spec.ts
+- `VersionConflictPane`（簡素版）を削除して `ConflictPanel` に置き換えた — 理由: 同じ役目の面が 2 つあり、モックの 4 つの出口が出ていなかった — 影響: ChangeScreen.tsx
+- 競合の相手の端末名は「ほかの端末」、自分は「この端末」 — 理由: 端末の登録簿が製品に無く、409 の応答も `savedBy`（人の名前）しか載せない。無い名前をでっち上げない — 影響: ConflictPanel への `theirs.terminalName` / `mine.terminalName`
+- 完了の脚注の操作者・時刻は `GET /api/staff/reservations/:id/history` の最後の 1 行から取る — 理由: 監査に実際に残った行をそのまま読む（端末の時計を読まない） — 影響: ChangeScreen.tsx
+- 仮の押さえの残り時間を 1 秒ずつ進める時計を器に持たせた — 理由: `now` が App の描画時刻の 1 回きりで、残り 60 秒の警告（Q-06）が実機で永久に出なかった — 影響: ChangeScreen.tsx / App.tsx
+- トップの「予約を変更する」を `予約を探す` へ繋いだ — 理由: 押しても何も起きない主操作が 1 つ置かれていた — 影響: App.tsx
+- 「顧客台帳で調べる」が入れたお名前を顧客台帳の検索欄へ引き継ぐようにした（AC-CHANGE-24） — 理由: 器が名前を捨てていた — 影響: App.tsx / customers/CustomerScreen.tsx / customers/CustomerList.tsx
+- `ConflictPanel` の端末名を空にできるようにした — 理由: 「ほかの端末 の 中村 彩 が保存しました」が日本語として回りくどく、端末名を持たない経路が実在する — 影響: ConflictPanel.tsx / ConflictPanel.test.tsx
+- 「1項目ずつ選ぶ」で日時に相手を選んだら、相手を残す道へ落とす — 理由: この面が書ける項目は日時だけ（担当・場所は BOOK-03 の再利用で入口が無い）。書けない項目のラジオで保存できたことにしない — 影響: ChangeScreen.tsx の `resolveConflict`
+- `CustomerList` にも `initialQuery` を足した — 理由: 器だけに渡すと結果は絞られるのに検索欄が空で、何で絞られているのか読めない — 影響: customers/CustomerList.tsx / CustomerScreen.tsx
+- e2e の `startWork` を「業務開始の面が出たときだけ入力する」形にした — 理由: 1 本の test が 2 度画面を開くと `sessionStorage` が残っていて業務開始の面が出ず、待ち続けて落ちる — 影響: e2e/change.spec.ts
+- 取り消しの理由のラジオは `check({ force: true })` で押す — 理由: 触れる大きさ 96px を `<label>` で取り、実体の radio は `sr-only`。実機は札を押すが Playwright は input を押しにいく — 影響: e2e/change.spec.ts
+- CHANGE-DONE のモック撮影は確定の応答を差し替える — 理由: seed の 8月27日 を実際に動かすと、あとに走る台帳・来店受付の e2e が数える 12 件が変わる — 影響: e2e/mock-compare.spec.ts
+- EX-CONFLICT の `maxDiffPixelRatio` を 0.0726 → 0.0769 に引き直した — 理由: 前の値は簡素版 `VersionConflictPane` を撮った基準線で、前の回のコメントが「器が載せ替えたら測り直す」と決めていた（緩めたのではなく対象が入れ替わった） — 影響: e2e/mock-compare.spec.ts
+
+### K-frontend-round2（11 件）
+
+- CHANGE-DATETIME の時刻の札を 8 枚の窓（`SLOT_WINDOW`）にした — 理由: 18 枚並ぶと「…を確保します。」の1文と仮の押さえの残り時間が 810pt の外へ出て、60秒警告の「まだ入力中です」を押せなかった（引き算の規準「選択の札は8つまで」にも反していた） — 影響: `src/web/change/ChangeDateTime.tsx` / 同 test / `e2e/change.spec.ts`
+- 「ほかの時刻も見る（あとN件）」を格子の空き2枠（`col-span-2`）に置いた — 理由: 下に1行足すと 60px 増えて上と同じ切れ方に戻る。窓が8なので5列の2段目は必ず2枠余る — 影響: 同上（お時間グループの button 数が 8→9 になり e2e/unit の数え方を直した）
+- 選んでいる時刻が窓の外なら初めから全部出す — 理由: 選んだ札が消えると「選択中」が読めなくなる（P3 `booking/DateTimeStep.tsx` と同じ手当て） — 影響: `ChangeDateTime.tsx`
+- 工程バーの通過した札に ✓ を付けた — 理由: 通過／未通過を色（薄緑と灰）だけで伝えていた。P3 `booking/StepBar.tsx` が同じ理由で既に付けている — 影響: `ChangeDateTime.tsx` / `ChangeDateTime.test.tsx`
+- 「結果 N件」を `role="status"` にした — 理由: 0件のときだけ読み上げに届き、絞り込みで4件→3件になったことは目で見ない人に届かなかった — 影響: `ReservationSearch.tsx`
+- 右ペインの お客様／担当と場所 の補足に「／」を前置した — 理由: モックは `田中 花子 様 4回目 ／090-1234-5678` / `佐藤 美咲 ／視力測定機 A・相談カウンター 1` と書いている — 影響: `ReservationSearch.tsx` / 同 test / `ChangeScreen.test.tsx`
+- 設備の連結を `' ／ '` から `'／'` にした（CHANGE-CANCEL / CHANGE-DONE） — 理由: 前後の空白で「視力測定機 A／相談カウンター 2」が2行に折り返していた。モックは1行 — 影響: `ChangeCancel.tsx` / `ChangeDone.tsx` / それぞれの test
+- CHANGE-CANCEL のお電話番号と「4回目」の札から `font-mono` を外した — 理由: モックの `.target dd small` と `.visits` は `var(--sans)`（等幅はモックでは予約番号と録音の秒数だけ） — 影響: `ChangeCancel.tsx`
+- サイドバーの「トップ」を消さない — 理由: P0 の器の決めで、全モックの基準線が動く。担当ファイル外 — 影響: 7面すべての差の 24〜57% がここで、5% の目標には届かない
+- 予約番号の欄を残す — 理由: モック CHANGE-SEARCH は2欄しか描いていないが、3欄は spec（AC-CHANGE-01）の要求で、同じ器の EX-EMPTY-SEARCH のモックには3欄ある — 影響: CHANGE-SEARCH の差にこの1欄ぶん（約155px）の下ずれが残る
+- `maxDiffPixelRatio` は実測を5桁で切り上げた値にした — 理由: 4桁だと切り上げ幅が実測を下回る面があり、緩めた値のまま残る — 影響: `e2e/mock-compare.spec.ts`
+
+### K-routes（14 件）
+
+- `POST /api/staff/reservations/:reservationId/cancel` を新設せず P5 の既存ルートを P6 の要求まで広げた — 理由: 同じパスを 2 本チェーンに置いても Hono は先に登録した 1 本しか呼ばず、後の 1 本が死にコードになる — 影響: `src/worker/index.ts` の既存 cancel ルート（409 に `current` を足す・監査の並びはそのまま）
+- 版の競合の 409 本文に `current`（version / startsAt / endsAt / staffName / equipmentNames / savedAt / savedBy）を足した — 理由: 画面が EX-CONFLICT を描くのに相手の内容が要り、読み直しの往復を 1 回減らす（T-012 の指定どおり） — 影響: PATCH と cancel の 409 本文。既存テストは `toMatchObject` なので壊れない
+- 検索は `storeId` を省いた要求を 400 で断る — 理由: 契約は任意だが Q-04 のいまの前提で「選択中店舗に固定」なので、店舗の無い問い合わせは組織まるごとの走査になる — 影響: `GET /api/staff/reservations`
+- `EY-W-` の予約番号は `web_bookings` を引かず `reservations.code` へ機械的に読み戻す — 理由: `web_bookings` の表は P8（011-web-booking）が作る。`webBookingCodeOf` が業務側の番号から作っている番号なので、同じ規則の逆を引けば採番の系統を 2 つ持たずに済む — 影響: `GET /api/staff/reservations` の `code` 条件
+- 緩和候補は `relaxationsFor` を 2 段で呼ぶ（案ごとに 1 回ずつ空撃ちして緩めたクエリを受け取り、その件数を数えてからもう 1 度呼ぶ） — 理由: 期間を広げる幅の規則をドメインに 1 つだけ置き、ルートが同じ計算を複製しない — 影響: `GET /api/staff/reservations`
+- 取消済み・ご来店なし・完了のご予約への `PATCH` は 409 `invalid_transition` で断る — 理由: 枠のロックが既に無い行の版だけを進めると、空き枠と台帳の見え方が食い違う — 影響: `PATCH /api/staff/reservations/:reservationId`
+- `changeLabel` に `reservation.rescheduled` / `reservation.cancelled` の言い方を足した — 理由: AC-CHANGE-18 が受付履歴の「そのあとの変更」に変更前後の 1 行を求めている。経緯のルートと受付履歴が同じ 1 か所から文を作る — 影響: `GET /api/staff/reservations/:id/history` と `GET /api/staff/reception-sessions/:sessionId`
+- 権限表の取消プールを 5 件 → 10 件に広げた — 理由: P5 の「ご来店がなかった」と P6 の「理由を選んで取り消す」がそれぞれ主体 5 種ぶん食べるため — 影響: `test/permissions.test.ts` の `beforeAll`
+- テナント分離の「他テナントの organizationId を混ぜる」は 400 を期待する — 理由: `ReservationSearchQuery` は `z.strictObject` なので知らないキーはそもそも通らない。偽装の道が契約の段で閉じていることを示す — 影響: `test/tenant-isolation.test.ts`
+- 取消ルートを `buildCancelBatch`（版を +1 する文が最後）へ載せ替えた — 理由: P5 の並び（1 文目で版を +1 し、2 文目以降は `version = 送られた版 + 1` を見る）は、相手が先に 1 度保存したあとの古い版で送ると条件が偶然一致し、**409 を返しながら枠のロックだけ消える**（実測で `locksOf` が 0 件になった）。409 が二重予約を作る形なので直した — 影響: `POST /api/staff/reservations/:id/cancel`。監査の `target_type` が `reservations` → `reservation`（`booking.ts` と同じ語）になる
+- 取り消し済み・ご来店なし・完了のご予約は、版が合っていてもルートの入口で 409 にする — 理由: 版のガードだけでは「同じ版のまま理由を上書きする 2 度目の取消」を止められず、`buildCancelBatch` に状態の条件は無い（P5 の「取り消した予約をもう一度取り消しても状態が上書きされない」を守る）。バッチへ入る前に断るので監査にも 1 行も残らない — 影響: `POST /api/staff/reservations/:id/cancel`
+- `ReservationList.nextCursor` は常に null を返す — 理由: 並びが `starts_at, c.name, r.id` の 3 段なのでカーソルは 3 値の組になる。読み足しを使う画面がこのフェーズに無いので、動かない `cursor` を返さずに黙って null にする（嘘のカーソルを配らない） — 影響: `GET /api/staff/reservations`
+- 緩和候補へ渡すのは再送できる欄だけにする（`crossStore` / `limit` / `cursor` を混ぜない） — 理由: 契約の `crossStore` は `z.literal(false)` なので、案の `query` に混ぜるとクエリ文字列の `"false"` で再検索が 400 になる — 影響: `relaxableQuery`
+- 変更の枠の当て直しは `evaluateSlot` で「動かない事実」だけを断り、埋まりの判定はバッチの 1 文目に任せた — 理由: 確定（P3）と同じ形にして、画面と確定で理由が食い違う道を作らない — 影響: `PATCH /api/staff/reservations/:reservationId`
+

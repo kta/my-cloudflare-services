@@ -1,7 +1,7 @@
 # 009-change-and-cancel: 予約の検索・変更・取消
 
 - サービス: `glasses_management`
-- ステータス: Draft
+- ステータス: Approved
 
 ## 1. WHAT / WHY
 

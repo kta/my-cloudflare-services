@@ -480,8 +480,13 @@ test('「ご来店を受け付ける」を押すと盤面へ戻り、その行�
     staffId: SATO,
   })
 
-  // まだお着きでないご予約は盤面に載らない。受け付ける入口は台帳の予約リストである。
-  await openCheckin(page, '14:30', 'upcoming')
+  /*
+   * まだお着きでないご予約は盤面に載らない。受け付ける入口は台帳の予約リストである。
+   * **絞り込みは「すべて」で開く。**「これから」は台帳がサーバの**実時計**で数えるので、
+   * 14:30 を回ってからこの e2e を走らせると 0 件になって行が見つからない
+   * （上の `clearBoard` が今日のご予約を空にしてあるので、「すべて」でも 1 行しか出ない）。
+   */
+  await openCheckin(page, '14:30')
   await page.getByRole('button', { name: 'ご来店を受け付ける', exact: true }).click()
 
   await expect(board(page)).toBeVisible()
