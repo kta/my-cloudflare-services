@@ -1,5 +1,6 @@
 import type {
   LocalDate,
+  RecordingSummary,
   ReservationDetail,
   ReservationSource,
   ReservationSummary,
@@ -9,6 +10,7 @@ import { cn, focusRing, TextInput } from '@app/ui'
 import type { ReactNode } from 'react'
 import { visitLabel } from '../../worker/domain/customers'
 import { jstClock } from '../ledger/metrics'
+import { hasPlayableRecording, RecordingPlayer } from '../recording/RecordingPlayer'
 
 /*
  * 予約を探す・1 件を確かめる（承認済みモック
@@ -32,7 +34,6 @@ import { jstClock } from '../ledger/metrics'
  *   min-height 112px・padding 14px 16px・件数は等幅 22px/700・案の文 15px。
  *
  * この面が描かないもの:
- * - 受付の録音（「録音を聞く 03:12」）… `010-recording`（P7）が足す。
  * - 「丸の内店・新宿店のご予約も含める」… 別店舗のご予約は見せない決め（Q-04 の
  *   いまの前提）。押せない導線を置かない。
  */
@@ -125,6 +126,11 @@ export type ReservationSearchProps = {
   equipmentNames: readonly string[]
   /** お客様のお電話番号（数字だけ）。分からないときは null。 */
   customerPhone: string | null
+  /**
+   * この受付の録音。**器が渡したときだけ**「受付のときの録音」の行が出る（AC-REC-09 の
+   * 3 か所目）。`ReservationDetail` の契約に録音の欄がまだ無いので器から注ぐ。
+   */
+  recording?: RecordingSummary | null
   onRelax: (relaxation: SearchRelaxation) => void
   onChangeDateTime: () => void
   onChangeSlot: () => void
@@ -150,6 +156,7 @@ export function ReservationSearch({
   staffName,
   equipmentNames,
   customerPhone,
+  recording = null,
   onRelax,
   onChangeDateTime,
   onChangeSlot,
@@ -299,6 +306,7 @@ export function ReservationSearch({
         ) : (
           <Detail
             detail={detail}
+            recording={recording}
             staffName={staffName}
             equipmentNames={equipmentNames}
             customerPhone={customerPhone}
@@ -489,6 +497,7 @@ function Fact({ term, children }: { term: string; children: ReactNode }) {
 
 function Detail({
   detail,
+  recording,
   staffName,
   equipmentNames,
   customerPhone,
@@ -497,6 +506,7 @@ function Detail({
   onCancelReservation,
 }: {
   detail: ReservationDetail
+  recording: RecordingSummary | null
   staffName: string | null
   equipmentNames: readonly string[]
   customerPhone: string | null
@@ -544,6 +554,16 @@ function Detail({
             )}
           </span>
         </Fact>
+        {/*
+         * 「受付のときの録音」（CHANGE-SEARCH の 4 行目）。**聞ける録音があるときだけ行ごと出す** ——
+         * 無効の行を残すと「まだ読めていない」のか「もう無い」のかが手元から見分けられない
+         * （AC-REC-07）。実測は白い `.btn`「録音を聞く　03:12」（時間は等幅）。
+         */}
+        {hasPlayableRecording(recording) && (
+          <Fact term="受付のときの録音">
+            <RecordingPlayer recording={recording} placement="row" />
+          </Fact>
+        )}
       </dl>
 
       {detail.noteInternal !== '' && (

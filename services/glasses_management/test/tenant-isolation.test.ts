@@ -1440,3 +1440,246 @@ describe('予約の検索・変更・取消は組織をまたがない', () => {
     expect(found.body.items.map((item) => item.id)).not.toContain(there)
   })
 })
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * 受付の録音（P7）
+ *
+ * 録音はお客様の声そのものである。組織で漏れると取り返しが付かないので、
+ * 「読めない」だけでなく **存在の有無すら漏れない**（404）ところまで潰す。
+ * 権限の有無ではなく組織で落ちることを見たいので、どちらのテナントにも
+ * `recording.read` と `recording.manage` を配ったうえで確かめる。
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+/** 録音を持てるテナント。再生も保全もできる権限を最初から配る。 */
+async function recordingTenant(name = 'EYEX 銀座店') {
+  const org = orgId()
+  const token = await tokenFor(org)
+  const storeId = await insertStore(org, name)
+  await SELF.fetch(`${BASE}/api/internal/store-memberships/sync`, {
+    method: 'POST',
+    headers: INTERNAL_HEADERS,
+    body: JSON.stringify({
+      id: crypto.randomUUID(),
+      organizationId: org,
+      storeId,
+      userId: `dev:${org}`,
+      permissions: ['recording.read', 'recording.manage'],
+      createdAt: NOW,
+    }),
+  })
+  return { org, token, storeId }
+}
+
+/** 保管済みの録音 1 本。行と保管庫の実体を直に置く（開始の API は別のテストが見る）。 */
+async function seedRecording(
+  tenant: { org: string; storeId: string },
+  input: { code: string; retainUntil?: string },
+): Promise<{ id: string; key: string }> {
+  const id = crypto.randomUUID()
+  const sessionId = crypto.randomUUID()
+  const key = `recordings/${tenant.org}/${tenant.storeId}/2026/08/${id}.m4a`
+  await env.DB.prepare(
+    'INSERT INTO reception_sessions (id, organization_id, store_id, reservation_id, terminal_id, actor_id, started_at, ended_at, outcome, draft_json, created_at) VALUES (?,?,?,NULL,NULL,NULL,?,NULL,?,NULL,?)',
+  )
+    .bind(sessionId, tenant.org, tenant.storeId, NOW, 'discarded', NOW)
+    .run()
+  await env.DB.prepare(
+    'INSERT INTO recordings (id, organization_id, store_id, code, reception_session_id, reservation_id, r2_key, content_type, duration_seconds, bytes, state, retain_until, legal_hold, upload_attempts, created_at, updated_at, deleted_at) ' +
+      "VALUES (?,?,?,?,?,NULL,?,'audio/mp4',192,4,'stored',?,'0',0,?,?,NULL)",
+  )
+    .bind(
+      id,
+      tenant.org,
+      tenant.storeId,
+      input.code,
+      sessionId,
+      key,
+      input.retainUntil ?? '2026-09-30T00:00:00.000Z',
+      NOW,
+      NOW,
+    )
+    .run()
+  await env.RECORDINGS.put(key, new Uint8Array([1, 2, 3, 4]))
+  return { id, key }
+}
+
+type RecordingListBody = { items: { id: string; code: string }[]; total: number }
+
+async function listRecordings(token: string, storeId: string) {
+  const res = await SELF.fetch(`${BASE}/api/staff/recordings?storeId=${storeId}`, {
+    headers: authed(token),
+  })
+  return { status: res.status, body: (await res.json()) as never as RecordingListBody }
+}
+
+describe('録音は組織をまたがない', () => {
+  it('3 テナントが同時に録音を持っても、各自の録音しか一覧に出ない', async () => {
+    const [a, b, c] = [
+      await recordingTenant('A 店'),
+      await recordingTenant('B 店'),
+      await recordingTenant('C 店'),
+    ]
+    await seedRecording(a, { code: 'EY-R-0001' })
+    await seedRecording(a, { code: 'EY-R-0002' })
+    await seedRecording(b, { code: 'EY-R-0001' })
+    await seedRecording(c, { code: 'EY-R-0001' })
+
+    const [ra, rb, rc] = await Promise.all([
+      listRecordings(a.token, a.storeId),
+      listRecordings(b.token, b.storeId),
+      listRecordings(c.token, c.storeId),
+    ])
+    // 録音番号は組織で通しなので、3 社が同じ `EY-R-0001` を持てる。
+    expect(ra.body.total).toBe(2)
+    expect(rb.body.total).toBe(1)
+    expect(rc.body.total).toBe(1)
+  })
+
+  it('他テナントの録音 id を直接指しても 404 で、存在の有無すら漏れない', async () => {
+    const [mine, theirs] = [await recordingTenant(), await recordingTenant('B 店')]
+    const target = await seedRecording(theirs, { code: 'EY-R-0001' })
+
+    const call = callAs(mine.token)
+    for (const [method, path] of [
+      ['POST', `/api/staff/recordings/${target.id}/playback`],
+      ['POST', `/api/staff/recordings/${target.id}/retry`],
+      ['PATCH', `/api/staff/recordings/${target.id}`],
+    ] as const) {
+      const denied = await call(method, path, method === 'PATCH' ? { state: 'failed' } : undefined)
+      expect(denied.status).toBe(404)
+      expect(denied.body).toMatchObject({ error: 'not_found' })
+    }
+  })
+
+  it('他テナントで発行した再生チケットは、こちらの stream では通らない', async () => {
+    const [mine, theirs] = [await recordingTenant(), await recordingTenant('B 店')]
+    const target = await seedRecording(theirs, { code: 'EY-R-0001' })
+    const issued = await callAs(theirs.token)('POST', `/api/staff/recordings/${target.id}/playback`)
+    expect(issued.status).toBe(200)
+    const token = (issued.body as never as { token: string }).token
+
+    // チケットは `play:<orgId>:<token>` に置く。org が違えば鍵そのものが見つからない。
+    const stolen = await SELF.fetch(
+      `${BASE}/api/staff/recordings/${target.id}/stream?token=${token}`,
+      { headers: authed(mine.token) },
+    )
+    expect([401, 404]).toContain(stolen.status)
+
+    const own = await SELF.fetch(
+      `${BASE}/api/staff/recordings/${target.id}/stream?token=${token}`,
+      { headers: authed(theirs.token) },
+    )
+    expect(own.status).toBe(200)
+  })
+
+  it('他テナントの録音に保全を立てられない', async () => {
+    const [mine, theirs] = [await recordingTenant(), await recordingTenant('B 店')]
+    const target = await seedRecording(theirs, { code: 'EY-R-0001' })
+
+    const denied = await callAs(mine.token)('POST', `/api/staff/recordings/${target.id}/hold`, {
+      legalHold: true,
+      reason: '他社の録音を止めたい',
+    })
+    expect(denied.status).toBe(404)
+    const row = await env.DB.prepare('SELECT legal_hold AS legalHold FROM recordings WHERE id = ?')
+      .bind(target.id)
+      .first<{ legalHold: string }>()
+    expect(row?.legalHold).toBe('0')
+  })
+
+  it('他テナントの録音を削除できない', async () => {
+    const [mine, theirs] = [await recordingTenant(), await recordingTenant('B 店')]
+    const target = await seedRecording(theirs, {
+      code: 'EY-R-0001',
+      retainUntil: '2020-01-01T00:00:00.000Z',
+    })
+
+    const denied = await callAs(mine.token)('DELETE', `/api/staff/recordings/${target.id}`)
+    expect(denied.status).toBe(404)
+    // 実体も行も動いていない（期限は過ぎているので、組織で落ちた証拠になる）。
+    expect(await env.RECORDINGS.head(target.key)).not.toBeNull()
+    const row = await env.DB.prepare('SELECT state FROM recordings WHERE id = ?')
+      .bind(target.id)
+      .first<{ state: string }>()
+    expect(row?.state).toBe('stored')
+  })
+
+  it('クエリに他テナントの organizationId を混ぜても自分の録音しか返らない', async () => {
+    const [mine, theirs] = [await recordingTenant(), await recordingTenant('B 店')]
+    const theirRecording = await seedRecording(theirs, { code: 'EY-R-0001' })
+    const myRecording = await seedRecording(mine, { code: 'EY-R-0001' })
+
+    // 契約は `z.strictObject` なので、知らないキーはそもそも通らない（400）。
+    const spoofed = new URLSearchParams({
+      storeId: mine.storeId,
+      organizationId: theirs.org,
+    })
+    const rejected = await callAs(mine.token)('GET', `/api/staff/recordings?${spoofed.toString()}`)
+    expect(rejected.status).toBe(400)
+
+    const found = await listRecordings(mine.token, mine.storeId)
+    expect(found.body.items.map((item) => item.id)).toEqual([myRecording.id])
+    expect(found.body.items.map((item) => item.id)).not.toContain(theirRecording.id)
+  })
+
+  it('権限外の店舗の録音は、同じ組織でも聞けず一覧にも出ない', async () => {
+    // Q-03 のいまの前提。`recording.read` は担当している店舗にだけ効く。
+    const mine = await recordingTenant()
+    const another = await insertStore(mine.org, 'EYEX 丸の内店')
+    const outside = await seedRecording({ org: mine.org, storeId: another }, { code: 'EY-R-0002' })
+    const here = await seedRecording(mine, { code: 'EY-R-0001' })
+
+    const denied = await callAs(mine.token)('POST', `/api/staff/recordings/${outside.id}/playback`)
+    expect(denied.status).toBe(404)
+
+    const found = await listRecordings(mine.token, mine.storeId)
+    expect(found.body.items.map((item) => item.id)).toEqual([here.id])
+  })
+
+  it('保守の掃除は組織をまたいで他テナントの録音を消さない', async () => {
+    const [mine, theirs] = [await recordingTenant(), await recordingTenant('B 店')]
+    const expired = await seedRecording(mine, {
+      code: 'EY-R-0001',
+      retainUntil: '2026-08-01T00:00:00.000Z',
+    })
+    const alsoExpired = await seedRecording(theirs, {
+      code: 'EY-R-0001',
+      retainUntil: '2026-08-01T00:00:00.000Z',
+    })
+
+    // 掃除は組織を指定せずに走る 1 本だが、消すのは行が指すキーだけである。
+    // 両方が期限切れなら両方が消えるのが正しく、**片方だけを消す条件を持たない**。
+    // ここで見たいのは「A の掃除が B の実体を巻き込まない」なので、B は保全で残す。
+    await callAs(theirs.token)('POST', `/api/staff/recordings/${alsoExpired.id}/hold`, {
+      legalHold: true,
+      reason: '照会に備えるため',
+    })
+    const res = await SELF.fetch(`${BASE}/api/internal/maintenance/recordings/purge`, {
+      method: 'POST',
+      headers: INTERNAL_HEADERS,
+      body: JSON.stringify({ now: '2026-08-27T02:08:00.000Z', limit: 500 }),
+    })
+    expect(res.status).toBe(200)
+
+    expect(await env.RECORDINGS.head(expired.key)).toBeNull()
+    expect(await env.RECORDINGS.head(alsoExpired.key)).not.toBeNull()
+  })
+
+  it('alerts も組織で絞られ、他テナントのお知らせが混ざらない', async () => {
+    const [mine, theirs] = [await recordingTenant(), await recordingTenant('B 店')]
+    const seedAlert = async (tenant: { org: string; storeId: string }, title: string) => {
+      await env.DB.prepare(
+        "INSERT INTO alerts (id, organization_id, store_id, code, severity, audience, title, body, target_type, target_id, occurred_at, read_at, resolved_at, resolved_by, created_at) VALUES (?,?,?,'recording.upload_failed','action','store',?,NULL,NULL,NULL,?,NULL,NULL,NULL,?)",
+      )
+        .bind(crypto.randomUUID(), tenant.org, tenant.storeId, title, NOW, NOW)
+        .run()
+    }
+    await seedAlert(mine, 'A のお知らせ')
+    await seedAlert(theirs, 'B のお知らせ')
+
+    const listed = await callAs(mine.token)('GET', `/api/staff/alerts?storeId=${mine.storeId}`)
+    expect(listed.status).toBe(200)
+    const items = (listed.body as never as { items: { title: string }[] }).items
+    expect(items.map((item) => item.title)).toEqual(['A のお知らせ'])
+  })
+})

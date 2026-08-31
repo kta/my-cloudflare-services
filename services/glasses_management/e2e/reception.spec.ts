@@ -337,6 +337,38 @@ async function openLedger(page: Page): Promise<void> {
   await expect(page.getByRole('grid', { name: '予約台帳' })).toBeVisible()
 }
 
+/**
+ * 台帳の応答の `serverNow` を**その日の開店前**へ据える。
+ *
+ * 「これから」の絞り込みは応答の `serverNow` だけを読む（`filterLedgerRows`）ので、
+ * 実時刻がご予約の時刻を過ぎた時間帯に走らせると、この日のために作ったご予約が
+ * 「これから」から落ちて一覧そのものが消える —— 夕方に回した回だけ赤くなる、
+ * 時計まかせの試験になっていた。開店前に据えれば、その日のご予約は全部が
+ * 「これから」なので、札の件数も `counts.all` と等しくなる（嘘の数字を置かない）。
+ * 端末の時計は「最初にどの日を尋ねるか」しか読まないので触らない。
+ */
+async function pinLedgerToBeforeOpening(page: Page): Promise<void> {
+  const beforeOpening = atJst(TODAY, '08:00')
+  await page.route(
+    (url) => url.pathname === '/api/staff/ledger',
+    async (route) => {
+      const response = await route.fetch()
+      const body = (await response.json()) as {
+        serverNow: string
+        counts: { all: number; upcoming: number; pendingReview: number }
+      }
+      await route.fulfill({
+        response,
+        json: {
+          ...body,
+          serverNow: beforeOpening,
+          counts: { ...body.counts, upcoming: body.counts.all },
+        },
+      })
+    },
+  )
+}
+
 async function openHistory(page: Page): Promise<void> {
   await startWork(page)
   await destination(page, '受付履歴').click()
@@ -531,6 +563,7 @@ test('「お待ちいただく」を押すと盤面に行が残り、受け付�
     staffId: SATO,
   })
 
+  await pinLedgerToBeforeOpening(page)
   await openCheckin(page, '15:30', 'upcoming')
   await page.getByRole('button', { name: 'お待ちいただく' }).click()
 
@@ -1049,6 +1082,7 @@ test('台帳リストの行にも「ご来店」の入口があり、来店受�
     staffId: SATO,
   })
 
+  await pinLedgerToBeforeOpening(page)
   await openLedger(page)
   await page
     .getByRole('group', { name: '表示のかたち' })

@@ -33,7 +33,16 @@ import {
   tokenFor,
 } from './helpers'
 
-type ActorName = 'none' | 'staff' | 'admin' | 'manager' | 'clerk' | 'expired' | 'wrong-secret'
+type ActorName =
+  | 'none'
+  | 'staff'
+  | 'admin'
+  | 'manager'
+  | 'clerk'
+  | 'reader'
+  | 'keeper'
+  | 'expired'
+  | 'wrong-secret'
 
 const ORG = orgId()
 const NOW = '2026-08-27T02:08:00.000Z'
@@ -42,6 +51,8 @@ const tokens: Record<Exclude<ActorName, 'none'>, string> = {
   admin: '',
   manager: '',
   clerk: '',
+  reader: '',
+  keeper: '',
   expired: '',
   'wrong-secret': '',
 }
@@ -78,6 +89,18 @@ const fixture = {
   visitReservationId: '',
   // 取消は 1 件につき 1 度しか通らないので、表の主体ぶん（5 種）を分けて持つ。
   cancellableReservationIds: [] as string[],
+  // P7 の 11 ルートが 200 で返る足場。状態を進める 3 本（本体・状態更新・再送）は
+  // 1 行につき 1 度しか通らないので、表が叩く回数ぶん（主体 7 種）を分けて持つ。
+  recordingSessionId: '',
+  startableSessionId: '',
+  contentRecordingIds: [] as string[],
+  patchRecordingIds: [] as string[],
+  retryRecordingIds: [] as string[],
+  playbackRecordingId: '',
+  streamRecordingId: '',
+  streamTicket: '',
+  holdRecordingId: '',
+  deletableRecordingId: '',
 }
 
 /** dev グラントが載せる `sub`。membership の `userId` はこれに合わせる。 */
@@ -109,6 +132,16 @@ beforeAll(async () => {
   )
   tokens.clerk = await signAccessToken(
     { sub: subOf(ORG, ':clerk'), org: ORG, email: 'clerk@example.test', role: 'staff' },
+    JWT_SECRET,
+  )
+  // 録音は閲覧（再生・一覧）と保全（保全・削除）で権限が分かれる（Q-03）。
+  // 2 つを 1 人に持たせると「読めるが消せない」が表から消えるので、別々の人にする。
+  tokens.reader = await signAccessToken(
+    { sub: subOf(ORG, ':reader'), org: ORG, email: 'reader@example.test', role: 'staff' },
+    JWT_SECRET,
+  )
+  tokens.keeper = await signAccessToken(
+    { sub: subOf(ORG, ':keeper'), org: ORG, email: 'keeper@example.test', role: 'staff' },
     JWT_SECRET,
   )
   // 期限切れは固定の過去時刻から作る（`now` を引数で注入するので実時刻に依存しない）。
@@ -145,6 +178,8 @@ beforeAll(async () => {
     'settings.manage',
   ])
   await syncMembership(ORG, fixture.storeId, subOf(ORG, ':clerk'), ['settings.read'])
+  await syncMembership(ORG, fixture.storeId, subOf(ORG, ':reader'), ['recording.read'])
+  await syncMembership(ORG, fixture.storeId, subOf(ORG, ':keeper'), ['recording.manage'])
 
   fixture.staffId = crypto.randomUUID()
   await env.DB.prepare(
@@ -337,6 +372,74 @@ beforeAll(async () => {
       jstAt(LEDGER_DATE, '15:02'),
     )
     .run()
+
+  // P7 の足場。録音の行と保管庫の実体を直に置く（開始の API は表そのものが叩くので、
+  // 足場づくりに使うと行の順序で表の期待値が動く）。
+  fixture.recordingSessionId = crypto.randomUUID()
+  await env.DB.prepare(
+    'INSERT INTO reception_sessions (id, organization_id, store_id, reservation_id, terminal_id, actor_id, started_at, ended_at, outcome, draft_json, created_at) VALUES (?,?,?,NULL,NULL,NULL,?,NULL,NULL,NULL,?)',
+  )
+    .bind(fixture.recordingSessionId, ORG, fixture.storeId, NOW, NOW)
+    .run()
+
+  fixture.startableSessionId = crypto.randomUUID()
+  await env.DB.prepare(
+    'INSERT INTO reception_sessions (id, organization_id, store_id, reservation_id, terminal_id, actor_id, started_at, ended_at, outcome, draft_json, created_at) VALUES (?,?,?,NULL,NULL,NULL,?,NULL,NULL,NULL,?)',
+  )
+    .bind(fixture.startableSessionId, ORG, fixture.storeId, NOW, NOW)
+    .run()
+
+  let recordingSeq = 0
+  const seedRecording = async (state: string, retainUntil: string | null): Promise<string> => {
+    const id = crypto.randomUUID()
+    recordingSeq += 1
+    const key = `recordings/${ORG}/${fixture.storeId}/2026/08/${id}.m4a`
+    await env.DB.prepare(
+      'INSERT INTO recordings (id, organization_id, store_id, code, reception_session_id, reservation_id, r2_key, content_type, duration_seconds, bytes, state, retain_until, legal_hold, upload_attempts, created_at, updated_at, deleted_at) ' +
+        "VALUES (?,?,?,?,?,NULL,?,'audio/mp4',192,4,?,?,'0',0,?,?,NULL)",
+    )
+      .bind(
+        id,
+        ORG,
+        fixture.storeId,
+        `EY-R-${String(9000 + recordingSeq)}`,
+        fixture.recordingSessionId,
+        key,
+        state,
+        retainUntil,
+        NOW,
+        NOW,
+      )
+      .run()
+    await env.RECORDINGS.put(key, new Uint8Array([1, 2, 3, 4]))
+    return id
+  }
+
+  // 表は主体 7 種ぶん同じ行を叩く。状態が 1 度しか進まない 3 本は 1 主体 1 行にする。
+  for (const _ of [0, 1, 2, 3, 4, 5, 6]) {
+    fixture.contentRecordingIds.push(await seedRecording('recording', null))
+    fixture.patchRecordingIds.push(await seedRecording('recording', null))
+    fixture.retryRecordingIds.push(await seedRecording('failed', null))
+  }
+  fixture.playbackRecordingId = await seedRecording('stored', '2026-09-30T00:00:00.000Z')
+  fixture.streamRecordingId = await seedRecording('stored', '2026-09-30T00:00:00.000Z')
+  fixture.holdRecordingId = await seedRecording('stored', '2026-09-30T00:00:00.000Z')
+  // 消せるのは最低保持期限を過ぎたものだけ。表が見たいのは「権限で落ちない」ことなので、
+  // 409 `recording_retained` に化けないよう期限を過去へ置く。
+  fixture.deletableRecordingId = await seedRecording('stored', '2020-01-01T00:00:00.000Z')
+
+  // ストリームは Authorization の**上乗せ**でチケットを要求する。表で見たいのは
+  // 権限のほうなので、チケットは先に置いておく（無いと `recording.read` を持つ人まで 401）。
+  fixture.streamTicket = `${crypto.randomUUID()}${crypto.randomUUID()}`.replace(/-/g, '')
+  await env.SHORT_LIVED.put(
+    `play:${ORG}:${fixture.streamTicket}`,
+    JSON.stringify({
+      recordingId: fixture.streamRecordingId,
+      storeId: fixture.storeId,
+      staffId: null,
+    }),
+    { expirationTtl: 900 },
+  )
 })
 
 /** 取消の表が 1 行ずつ食べるご予約。使い切ったら「無いご予約」を指す。 */
@@ -347,6 +450,11 @@ function nextCancellableReservation(): string {
 /** やめるの表が 1 行ずつ食べる受付。使い切ったら「無い受付」を指す（401 の主体も 1 つ食べる）。 */
 function nextClosableSession(): string {
   return fixture.closableSessionIds.shift() ?? crypto.randomUUID()
+}
+
+/** 録音の表が 1 行ずつ食べる録音。使い切ったら「無い録音」を指す。 */
+function nextRecording(pool: string[]): string {
+  return pool.shift() ?? crypto.randomUUID()
 }
 
 function headersFor(actor: ActorName): HeadersInit {
@@ -496,6 +604,79 @@ const MERGE = {
   admin: 403,
   manager: 200,
   clerk: 403,
+  expired: 401,
+  'wrong-secret': 401,
+} as const
+
+/**
+ * 録音の受付そのもの（開始・本体・状態更新・再送）は**権限を要求しない**。
+ * お電話を取った人がそのまま録り始める操作なので、`store_memberships` を見ない
+ * （`04-api.md` §2.2 が権限を挙げているのは一覧・再生・保全・削除の 4 つだけ）。
+ */
+const RECORDING_OPEN = {
+  none: 401,
+  staff: 200,
+  admin: 200,
+  manager: 200,
+  clerk: 200,
+  reader: 200,
+  keeper: 200,
+  expired: 401,
+  'wrong-secret': 401,
+} as const
+
+/**
+ * 一覧・再生・ストリームは `recording.read`（Q-03 のいまの前提でサーバが強制する）。
+ * `recording.manage` しか持たない人（`keeper`）が 403 になることまで見る —
+ * 2 つを 1 つの権限に畳むと「消せる人は何でも聞ける」になる。
+ */
+const RECORDING_READ = {
+  none: 401,
+  staff: 403,
+  admin: 403,
+  manager: 403,
+  clerk: 403,
+  reader: 200,
+  keeper: 403,
+  expired: 401,
+  'wrong-secret': 401,
+} as const
+
+/** 保全と削除は `recording.manage`。聞けるだけの人（`reader`）は 403。 */
+const RECORDING_MANAGE = {
+  none: 401,
+  staff: 403,
+  admin: 403,
+  manager: 403,
+  clerk: 403,
+  reader: 403,
+  keeper: 200,
+  expired: 401,
+  'wrong-secret': 401,
+} as const
+
+/** お知らせは店舗の誰でも読める（ALERTS は受付の面で、店長に絞らない）。 */
+const ALERT_READ = {
+  none: 401,
+  staff: 200,
+  admin: 200,
+  manager: 200,
+  clerk: 200,
+  reader: 200,
+  keeper: 200,
+  expired: 401,
+  'wrong-secret': 401,
+} as const
+
+/** 保守は共有鍵の経路。テナントのトークンは、どれだけ権限を持っていても越えられない。 */
+const MAINTENANCE = {
+  none: 401,
+  staff: 401,
+  admin: 401,
+  manager: 401,
+  clerk: 401,
+  reader: 401,
+  keeper: 401,
   expired: 401,
   'wrong-secret': 401,
 } as const
@@ -1041,6 +1222,102 @@ const TABLE: Row[] = [
     path: () => `/api/staff/reservations/${fixture.reservationId}/history`,
     expected: BOOKING,
   },
+
+  /* --- 受付の録音（P7） --- */
+  {
+    name: '録音の開始は権限を要求しない（受付そのものの操作）',
+    method: 'POST',
+    path: () => '/api/staff/recordings',
+    body: () => ({
+      receptionSessionId: fixture.startableSessionId,
+      storeId: fixture.storeId,
+      startedAt: NOW,
+    }),
+    expected: RECORDING_OPEN,
+  },
+  {
+    name: '録音の本体は権限を要求しない',
+    method: 'PUT',
+    path: () => `/api/staff/recordings/${nextRecording(fixture.contentRecordingIds)}/content`,
+    // 生 body を受ける唯一のルート。表の既定（application/json）では 400 になる。
+    headers: () => ({ 'content-type': 'audio/mp4' }),
+    body: () => 'audio',
+    expected: RECORDING_OPEN,
+  },
+  {
+    name: '録音の状態更新は権限を要求しない',
+    method: 'PATCH',
+    path: () => `/api/staff/recordings/${nextRecording(fixture.patchRecordingIds)}`,
+    body: () => ({ state: 'failed' }),
+    expected: RECORDING_OPEN,
+  },
+  {
+    name: '録音の再送は権限を要求しない',
+    method: 'POST',
+    path: () => `/api/staff/recordings/${nextRecording(fixture.retryRecordingIds)}/retry`,
+    expected: RECORDING_OPEN,
+  },
+  {
+    name: '録音の一覧は recording.read を要求する',
+    method: 'GET',
+    path: () => `/api/staff/recordings?storeId=${fixture.storeId}`,
+    expected: RECORDING_READ,
+  },
+  {
+    name: '再生のチケットは recording.read を要求する',
+    method: 'POST',
+    path: () => `/api/staff/recordings/${fixture.playbackRecordingId}/playback`,
+    expected: RECORDING_READ,
+  },
+  {
+    name: '録音のストリームは recording.read を要求する（チケットは上乗せ）',
+    method: 'GET',
+    path: () =>
+      `/api/staff/recordings/${fixture.streamRecordingId}/stream?token=${fixture.streamTicket}`,
+    expected: RECORDING_READ,
+  },
+  {
+    name: '録音の保全は recording.manage を要求する',
+    method: 'POST',
+    path: () => `/api/staff/recordings/${fixture.holdRecordingId}/hold`,
+    body: () => ({ legalHold: true, reason: '照会に備えるため' }),
+    expected: RECORDING_MANAGE,
+  },
+  {
+    name: '録音の削除は recording.manage を要求する',
+    method: 'DELETE',
+    path: () => `/api/staff/recordings/${fixture.deletableRecordingId}`,
+    expected: RECORDING_MANAGE,
+  },
+  {
+    name: 'お知らせは店舗の誰でも読める',
+    method: 'GET',
+    path: () => `/api/staff/alerts?storeId=${fixture.storeId}`,
+    expected: ALERT_READ,
+  },
+  {
+    name: '録音の掃除はテナントのトークンでは越えられない（共有鍵の経路）',
+    method: 'POST',
+    path: () => '/api/internal/maintenance/recordings/purge',
+    body: () => ({}),
+    expected: MAINTENANCE,
+  },
+  {
+    name: '録音の未知パスも default-deny で塞がる',
+    method: 'GET',
+    path: () => '/api/staff/recordings/not-a-route',
+    expected: {
+      none: 401,
+      staff: 404,
+      admin: 404,
+      manager: 404,
+      clerk: 404,
+      reader: 404,
+      keeper: 404,
+      expired: 401,
+      'wrong-secret': 401,
+    },
+  },
   {
     name: '未知の顧客パスも既定の拒否に落ちる',
     method: 'GET',
@@ -1225,5 +1502,54 @@ describe('dev トークングラント', () => {
       body: JSON.stringify({ organizationId: '', role: 'staff' }),
     })
     expect(res.status).toBe(400)
+  })
+})
+
+describe('録音の権限は 401 と 403 を取り違えない', () => {
+  it('期限切れトークンは 403 ではなく 401 を返す（固定の過去時刻で作る）', async () => {
+    // 403 を返すと、画面は「権限が足りない」と読んで再ログインへ導かない。
+    const res = await SELF.fetch(`${BASE}/api/staff/recordings?storeId=${fixture.storeId}`, {
+      headers: headersFor('expired'),
+    })
+    expect(res.status).toBe(401)
+  })
+
+  it('テナントのトークンでは保守の経路に触れない', async () => {
+    const res = await SELF.fetch(`${BASE}/api/internal/maintenance/recordings/purge`, {
+      method: 'POST',
+      headers: headersFor('keeper'),
+      body: JSON.stringify({}),
+    })
+    expect(res.status).toBe(401)
+  })
+
+  it('違う共有鍵の保守呼び出しは 401', async () => {
+    const res = await SELF.fetch(`${BASE}/api/internal/maintenance/recordings/purge`, {
+      method: 'POST',
+      headers: { ...JSON_HEADERS, 'x-internal-key': 'not-the-key' },
+      body: JSON.stringify({}),
+    })
+    expect(res.status).toBe(401)
+  })
+
+  it('鍵なしの保守呼び出しは 401', async () => {
+    const res = await SELF.fetch(`${BASE}/api/internal/maintenance/recordings/purge`, {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({}),
+    })
+    expect(res.status).toBe(401)
+  })
+
+  it('録音の未知パスは、未認証なら 401 で経路の有無を漏らさず、認証済みで初めて 404 になる', async () => {
+    const anonymous = await SELF.fetch(`${BASE}/api/staff/recordings/not-a-route`, {
+      headers: headersFor('none'),
+    })
+    expect(anonymous.status).toBe(401)
+
+    const authenticated = await SELF.fetch(`${BASE}/api/staff/recordings/not-a-route`, {
+      headers: headersFor('reader'),
+    })
+    expect(authenticated.status).toBe(404)
   })
 })

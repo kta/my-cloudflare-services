@@ -172,6 +172,33 @@ function showChosen(overrides: Overrides = {}) {
   })
 }
 
+/*
+ * 「受付のときの録音」（CHANGE-SEARCH の 4 行目）。**聞ける録音があるときだけ行ごと出す**
+ * —— 入口は 1 件を選んだあとの 3 か所（予約詳細・予約検索・受付履歴）だけで、
+ * 一覧から一括で聞ける導線は作らない。
+ */
+describe('受付のときの録音', () => {
+  it('聞ける録音があるときだけ「録音を聞く　03:12」の行が出る', () => {
+    showChosen({ recording: { id: 'rec-1', state: 'stored', durationSeconds: 192 } })
+
+    expect(screen.getByText('受付のときの録音')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '録音を聞く 03:12' })).toBeInTheDocument()
+  })
+
+  it('録音が無いご予約では、行ごと出さない', () => {
+    showChosen()
+
+    expect(screen.queryByText('受付のときの録音')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /録音を聞く/ })).not.toBeInTheDocument()
+  })
+
+  it('送れないまま端末に残っている録音でも、聞く導線は出さない', () => {
+    showChosen({ recording: { id: 'rec-1', state: 'failed', durationSeconds: 192 } })
+
+    expect(screen.queryByText('受付のときの録音')).not.toBeInTheDocument()
+  })
+})
+
 /** 0 件の面（EX-EMPTY-SEARCH）。 */
 function showEmpty(overrides: Overrides = {}) {
   return show({

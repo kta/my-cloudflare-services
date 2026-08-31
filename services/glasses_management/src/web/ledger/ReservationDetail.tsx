@@ -1,7 +1,8 @@
-import type { ReservationDetail as ReservationDetailShape } from '@app/contracts'
+import type { RecordingSummary, ReservationDetail as ReservationDetailShape } from '@app/contracts'
 import { focusRing, focusRingOnPine } from '@app/ui'
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { SOURCE_LABELS } from '../../worker/domain/ledger'
+import { RecordingPlayer } from '../recording/RecordingPlayer'
 import { jstClock } from './metrics'
 
 /*
@@ -23,8 +24,12 @@ import { jstClock } from './metrics'
  *
  * この面が描かないもの（P2 の範囲）:
  * - お客様のお名前と来店回数（`customers` は 007-customer-records）
- * - 「録音を聞く」（`recordings` は 010-recording。押した先も、録音があるかを知る手段も無い）
  * - 「ご来店を受け付ける」「変更する」「取り消す」の行き先（008 / 009）。置くだけである
+ *
+ * 「● 録音を聞く　03:12」（LEDGER-DETAIL の頭の右）は `recording` を受けたときだけ出す。
+ * 保存に失敗した予約は台帳に載るが導線は出ない（AC-REC-07）ので、**無効化ではなく非表示**に
+ * するのは `RecordingPlayer` の側である。実測は `.listen` = min-height 40px / 左右 12px /
+ * 枠 1px --alert / 角 pill / 地 --alert-tint / 600 13px（触れるものの下限 44pt へ上げる）。
  */
 
 /** 矢印は詳細の左 40px にある。詳細そのものは帯より 40px 左から始まる。 */
@@ -56,6 +61,12 @@ export type ReservationDetailProps = {
   isOffline?: boolean
   /** ご来店を受け付けた時刻。分からないときは時刻を作らない（`visits` は 008）。 */
   checkedInAt?: string | null
+  /**
+   * この受付の録音。**器が渡したときだけ**「録音を聞く」が出る。応答から読まないのは、
+   * `ReservationDetail` の契約に録音の欄がまだ無いからで（`010-recording` の契約は
+   * `RecordingSummary` を別に持つ）、欄が生えたらここへ 1 行で繋ぎ替える。
+   */
+  recording?: RecordingSummary | null
   onCheckIn?: () => void
   onChange?: () => void
   onCancel?: () => void
@@ -87,6 +98,7 @@ export function ReservationDetail({
   anchor = { left: ARROW_LEFT_PX, top: 0 },
   isOffline = false,
   checkedInAt = null,
+  recording = null,
   onCheckIn,
   onChange,
   onCancel,
@@ -206,11 +218,14 @@ export function ReservationDetail({
                   {`${jstClock(detail.startsAt)}–${jstClock(detail.endsAt)}`}
                 </h2>
                 <span className="text-grid text-ink-muted">{`${detail.durationMinutes}分`}</span>
+                <span className="ml-auto">
+                  <RecordingPlayer recording={recording} placement="pill" />
+                </span>
                 <button
                   type="button"
                   onClick={onClose}
                   aria-label="詳細を閉じる"
-                  className={`ml-auto min-h-11 min-w-11 rounded-ctl border border-line-strong bg-surface text-body text-ink-muted ${focusRing}`}
+                  className={`min-h-11 min-w-11 rounded-ctl border border-line-strong bg-surface text-body text-ink-muted ${focusRing}`}
                 >
                   ✕
                 </button>

@@ -1,4 +1,7 @@
 import {
+  Alert,
+  AlertList,
+  AlertListQuery,
   AvailabilityQuery,
   type AvailabilityReason,
   AvailabilityResponse,
@@ -50,6 +53,18 @@ import {
   ReceptionSessionDraft,
   ReceptionSessionDraftPatch,
   ReceptionSessionStart,
+  Recording,
+  RecordingContentType,
+  RecordingCreate,
+  RecordingHoldInput,
+  RecordingList,
+  RecordingListQuery,
+  RecordingPlaybackTicket,
+  RecordingPurgeRequest,
+  RecordingPurgeResult,
+  RecordingRetainedError,
+  type RecordingState,
+  RecordingStatePatch,
   ReservationCancelInput,
   ReservationChangeHistory,
   ReservationChangeInput,
@@ -105,6 +120,7 @@ import type {
   Fetcher,
   KVNamespace,
   R2Bucket,
+  ScheduledController,
 } from '@cloudflare/workers-types'
 import { zValidator } from '@hono/zod-validator'
 import { and, asc, eq, gte, inArray, lt, lte } from 'drizzle-orm'
@@ -176,7 +192,9 @@ import {
 } from './domain/customers'
 import { deleteHold, HOLD_RENEW_MAX, listHoldOccupancies, putHold } from './domain/holds'
 import { buildLedgerView } from './domain/ledger'
+import { issueTicket, verifyTicket } from './domain/playback'
 import { buildHistoryList, type ReceptionHistoryRow } from './domain/reception-history'
+import { nextRecordingCode, nextState, r2KeyFor, uploadFailedAlert } from './domain/recording'
 import { buildCancelBatch, buildChangeBatch } from './domain/reservation-change'
 import {
   type RelaxationCounts,
@@ -185,6 +203,7 @@ import {
   relaxationsFor,
   resolveSearch,
 } from './domain/reservation-search'
+import { canDelete, isStaleUpload, retainUntilFor, staleUploadBefore } from './domain/retention'
 import {
   type ImpactWebSlot,
   impactOfBusinessHours,
@@ -2179,6 +2198,420 @@ async function conflictingVersion(env: Bindings, org: string, reservationId: str
     savedAt: detail.updatedAt,
     savedBy,
   }
+}
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * 受付の録音（P7）が共有する道具
+ *
+ * 芯は **実体を出さない**ことである。録音の本体は非公開の R2（`RECORDINGS`）にあり、
+ * D1 が持つのは状態だけで、応答には `r2Key` もダウンロード URL も載せない。行を
+ * そのまま `c.json` しないよう、契約 `Recording` は `strictObject` にしてある
+ * （剥がし忘れは 200 で外へ出るが、混ぜたまま渡せば 500 で落ちる）。
+ *
+ * もう 1 つの芯は **消しすぎない**ことである。削除の可否は経路ごとに書かず、
+ * 通常の削除も保守の掃除も `canDelete()` の 1 か所を通す。
+ * ─────────────────────────────────────────────────────────────────────────── */
+
+/** 1 録音の上限。100MB は約 7 時間ぶんで、最長 6 分の受付録音はここに届かない。 */
+const RECORDING_MAX_BYTES = 104_857_600
+/** 採番の打ち直し（`walk_ins.ticket_no` と同じ作法）。衝突は失敗に数えない。 */
+const RECORDING_CODE_ATTEMPTS = 5
+/** 3 回続けて失敗したら「対応が必要」のお知らせに上げる（`04-api.md` §3.9）。 */
+const RECORDING_ALERT_ATTEMPTS = 3
+/**
+ * 数える失敗の上限。契約の `Recording.uploadAttempts` が 0..99 なので、ここで頭打ちに
+ * しないと 5 分ごとの自動再送が 8 時間あまりで 100 に届き、応答を組み立てる
+ * `Recording.parse` が落ちる。**壊れるのは状態更新だけではない** — 桁のあふれた行が
+ * 1 本混ざるだけで `GET /api/staff/recordings` が組織まるごと 500 になる。
+ * 3 回でお知らせは既に立っているので、そこから先の数に業務上の意味は無い。
+ */
+const RECORDING_MAX_ATTEMPTS = 99
+/** 録音の長さの上限（秒）。6 時間。契約の `Recording.durationSeconds` と同じ境界。 */
+const RECORDING_MAX_SECONDS = 21_600
+
+/** 一覧・詳細が同じ形で読む列。`r2_key` は**応答を組み立てる側へ渡さない**別扱いにする。 */
+const RECORDING_COLUMNS =
+  'id, store_id AS storeId, code, reception_session_id AS receptionSessionId, ' +
+  'reservation_id AS reservationId, r2_key AS r2Key, content_type AS contentType, ' +
+  'duration_seconds AS durationSeconds, bytes, state, retain_until AS retainUntil, ' +
+  'legal_hold AS legalHold, upload_attempts AS uploadAttempts, created_at AS createdAt'
+
+type RecordingRecord = {
+  id: string
+  storeId: string
+  code: string
+  receptionSessionId: string
+  reservationId: string | null
+  r2Key: string
+  contentType: string
+  durationSeconds: number | null
+  bytes: number | null
+  state: string
+  retainUntil: string | null
+  legalHold: string
+  uploadAttempts: number
+  createdAt: string
+}
+
+/**
+ * 行 → 契約の形。**`r2Key` と `storeId` を落とすのはここ 1 か所だけ**にする。
+ * 経路ごとに手で組み立てると、1 つ足し忘れた経路から保管庫の鍵が漏れる。
+ */
+function toRecording(row: RecordingRecord) {
+  return {
+    id: row.id,
+    code: row.code,
+    receptionSessionId: row.receptionSessionId,
+    reservationId: row.reservationId,
+    state: row.state as RecordingState,
+    contentType: row.contentType,
+    durationSeconds: row.durationSeconds,
+    bytes: row.bytes,
+    retainUntil: row.retainUntil,
+    legalHold: isOn(row.legalHold),
+    uploadAttempts: row.uploadAttempts,
+    createdAt: row.createdAt,
+  }
+}
+
+/** 自分の組織の録音だけを引く。他テナントの id は「無い」として扱う（404）。 */
+async function findRecording(
+  db: D1Database,
+  org: string,
+  recordingId: string,
+): Promise<RecordingRecord | null> {
+  return await db
+    .prepare(`SELECT ${RECORDING_COLUMNS} FROM recordings WHERE organization_id = ? AND id = ?`)
+    .bind(org, recordingId)
+    .first<RecordingRecord>()
+}
+
+/**
+ * その人が `perm` を持っている店舗の id。
+ *
+ * `requireStorePermission()` は「組織のどこかで持っているか」までしか見ないので、
+ * 録音のように**店舗ごとに閉じたい**ものはここで店舗まで絞る（Q-03）。
+ * 担当していない店舗の録音は、読めないだけでなく**一覧にも出ない**（AC-REC-14）。
+ */
+async function permittedStores(
+  db: Db,
+  org: string,
+  sub: string,
+  perm: StorePermission,
+): Promise<string[]> {
+  const rows = await db
+    .select({ storeId: storeMemberships.storeId, permissions: storeMemberships.permissions })
+    .from(storeMemberships)
+    .where(and(eq(storeMemberships.organizationId, org), eq(storeMemberships.userId, sub)))
+  return rows.filter((row) => allows(row.permissions, perm)).map((row) => row.storeId)
+}
+
+/**
+ * 権限のある店舗の録音か。**外れたら 403 ではなく 404** にする —
+ * 「権限が無い」と答えた時点で、その id の録音が在ることを教えてしまう。
+ */
+async function readableRecording(
+  c: Context<Env>,
+  perm: StorePermission,
+): Promise<RecordingRecord | null> {
+  const { org, sub } = c.get('auth')
+  const row = await findRecording(c.env.DB, org, c.req.param('recordingId') ?? '')
+  if (row === null) return null
+  const stores = await permittedStores(drizzle(c.env.DB), org, sub, perm)
+  return stores.includes(row.storeId) ? row : null
+}
+
+/**
+ * 録音の監査 1 行。`auditRow()` と分けてあるのは `actor_type` が動くからである —
+ * 保管の完了と 24 時間放置の打ち切りは**人が押した操作ではない**ので `system` で残す。
+ * 端末欄は P10 まで NULL（`013-terminals-and-audit`）。
+ */
+function recordingAudit(
+  db: D1Database,
+  input: {
+    organizationId: string
+    storeId: string
+    actorType: 'staff' | 'system'
+    actorId: string | null
+    action: string
+    recordingId: string
+    after: unknown
+    correlationId: string
+    occurredAt: string
+  },
+): Statement {
+  return db
+    .prepare(
+      'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
+        "VALUES (?,?,?,?,?,NULL,?,'recording',?,NULL,?,?,?)",
+    )
+    .bind(
+      crypto.randomUUID(),
+      input.organizationId,
+      input.storeId,
+      input.actorType,
+      input.actorId,
+      input.action,
+      input.recordingId,
+      JSON.stringify(input.after),
+      input.correlationId,
+      input.occurredAt,
+    )
+}
+
+/**
+ * その受付に結び付いたご予約とお客様のお名前。
+ *
+ * **「成立している」は `reservation_id` が入っているだけでは足りない** —
+ * 取り消したご予約の録音まで 30 日残すと、破棄受付より長く声を持ち続けることになる
+ * （`04-api.md` §3.9 の「`cancelled` / `no_show` 以外」）。
+ */
+async function readSessionLink(
+  db: D1Database,
+  org: string,
+  receptionSessionId: string,
+): Promise<{ reservationId: string | null; hasReservation: boolean; customerName: string | null }> {
+  const row = await db
+    .prepare(
+      'SELECT r.id AS reservationId, r.status AS status, c.name AS customerName ' +
+        'FROM reception_sessions s ' +
+        'LEFT JOIN reservations r ON r.organization_id = s.organization_id AND r.id = s.reservation_id ' +
+        'LEFT JOIN customers c ON c.organization_id = r.organization_id AND c.id = r.customer_id ' +
+        'WHERE s.organization_id = ? AND s.id = ?',
+    )
+    .bind(org, receptionSessionId)
+    .first<{ reservationId: string | null; status: string | null; customerName: string | null }>()
+  const reservationId = row?.reservationId ?? null
+  const status = row?.status ?? null
+  return {
+    reservationId,
+    hasReservation: reservationId !== null && status !== 'cancelled' && status !== 'no_show',
+    customerName: row?.customerName ?? null,
+  }
+}
+
+/**
+ * 「録音の保存に3回失敗しました」を 1 件立てる。
+ *
+ * **同じ原因で連打しない。**同じ `code` + `target_id` の未解決行があれば作らない
+ * （4 回目・5 回目の失敗でお知らせが増えると、対応の 1 件が数に埋もれる）。
+ * 端末名は `terminals` 表ができる P10 まで `null` で、そのぶん本文の一句が落ちる。
+ */
+async function raiseUploadFailedAlert(
+  db: D1Database,
+  input: {
+    organizationId: string
+    storeId: string
+    recordingId: string
+    code: string
+    customerName: string | null
+    hasReservation: boolean
+    occurredAt: string
+  },
+): Promise<void> {
+  const existing = await db
+    .prepare(
+      "SELECT id FROM alerts WHERE organization_id = ? AND code = 'recording.upload_failed' " +
+        'AND target_id = ? AND resolved_at IS NULL LIMIT 1',
+    )
+    .bind(input.organizationId, input.recordingId)
+    .first<{ id: string }>()
+  if (existing !== null) return
+  const alert = uploadFailedAlert({
+    code: input.code,
+    customerName: input.customerName,
+    hasReservation: input.hasReservation,
+    terminalName: null,
+  })
+  await db
+    .prepare(
+      'INSERT INTO alerts (id, organization_id, store_id, code, severity, audience, title, body, target_type, target_id, occurred_at, read_at, resolved_at, resolved_by, created_at) ' +
+        "VALUES (?,?,?,?,?,'store',?,?,'recording',?,?,NULL,NULL,NULL,?)",
+    )
+    .bind(
+      crypto.randomUUID(),
+      input.organizationId,
+      input.storeId,
+      alert.code,
+      alert.severity,
+      alert.title,
+      alert.body,
+      input.recordingId,
+      input.occurredAt,
+      input.occurredAt,
+    )
+    .run()
+}
+
+/** 一覧の続き。並べ方に結び付いた不透明な値（`(時刻, id)` の複合カーソル）。 */
+const encodePageCursor = (at: string, id: string): string => btoa(`${at}|${id}`)
+
+/** 読めないカーソルは「無い」として先頭から返す（行き止まりにしない）。 */
+function decodePageCursor(cursor: string | undefined): { at: string; id: string } | null {
+  if (cursor === undefined) return null
+  try {
+    const [at, id] = atob(cursor).split('|')
+    return at === undefined || id === undefined ? null : { at, id }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 保持期限を過ぎた録音の実体を消し、24 時間動かない録音を `failed` に落とす。
+ *
+ * **プレフィクス走査で R2 を消さない。**同じバケットには手書きメモ（`notes/`）が
+ * 入っているので、走査で消すとお客様の筆跡まで道連れになる。消すのは
+ * `recordings.r2_key` が指すキーだけである。
+ *
+ * 消せなかったものは `failed` に数え、**行はそのまま残して次の実行で再び対象にする**
+ * （行だけ `deleted` にすると、実体が残ったまま二度と拾われない）。
+ *
+ * `now` はテストが境界を確かめるための注入口で、Cron からは実時刻が渡る。
+ */
+async function purgeRecordings(
+  env: Bindings,
+  input: { now: Date; limit: number },
+): Promise<{ examined: number; deleted: number; skippedHeld: number; failed: number }> {
+  const nowIso = input.now.toISOString()
+  const staleBefore = staleUploadBefore(input.now)
+  const correlationId = crypto.randomUUID()
+  let examined = 0
+  let deleted = 0
+  let skippedHeld = 0
+  let failed = 0
+
+  // ① 保持期限を過ぎた保管済み。ISO 文字列同士は辞書順が時系列と一致するので、
+  // 絞り込みは文字列比較でよい。
+  // **組織を指定しないので `recordings_org_state_retain_idx`（先頭が organization_id）は
+  // 効かない。** 掃除は全組織を 1 度に見る 1 本なので、これは走査でよい（`limit` で 1 回の
+  // 仕事量を切る）。組織ごとに回すと、組織が増えたぶんだけ Cron の中の往復が増える。
+  const expired = await env.DB.prepare(
+    `SELECT ${RECORDING_COLUMNS}, organization_id AS organizationId FROM recordings ` +
+      "WHERE state = 'stored' AND retain_until IS NOT NULL AND retain_until < ? " +
+      'ORDER BY retain_until ASC LIMIT ?',
+  )
+    .bind(nowIso, input.limit)
+    .all<RecordingRecord & { organizationId: string }>()
+
+  for (const row of expired.results) {
+    examined += 1
+    // ② 保全は期限より強い。触らずに数える（正常な残り方であって失敗ではない）。
+    if (isOn(row.legalHold)) {
+      skippedHeld += 1
+      continue
+    }
+    const verdict = canDelete({
+      state: row.state as RecordingState,
+      retainUntil: row.retainUntil,
+      legalHold: false,
+      now: input.now,
+    })
+    if (!verdict.ok) {
+      skippedHeld += 1
+      continue
+    }
+    try {
+      await env.RECORDINGS.delete(row.r2Key)
+      await env.DB.batch([
+        env.DB.prepare(
+          "UPDATE recordings SET state = 'deleted', deleted_at = ?, updated_at = ? WHERE organization_id = ? AND id = ?",
+        ).bind(nowIso, nowIso, row.organizationId, row.id),
+        recordingAudit(env.DB, {
+          organizationId: row.organizationId,
+          storeId: row.storeId,
+          actorType: 'system',
+          actorId: null,
+          action: 'recording.deleted',
+          recordingId: row.id,
+          after: { reason: 'retention', retainUntil: row.retainUntil },
+          correlationId,
+          occurredAt: nowIso,
+        }),
+      ])
+      deleted += 1
+    } catch (err) {
+      // 行は残す。次の実行で同じ条件に当たり、もう一度拾われる。
+      console.error('recording purge failed', row.id, err)
+      failed += 1
+    }
+  }
+
+  // ③ 24 時間動かない録音。端末はもう戻ってこないので `failed` に落として
+  // 「対応が必要」に上げる（警告を出し続けないため。AC-REC-20）。
+  //
+  // **一度お知らせを立てた録音は候補から外す。**`failed` の行は 24 時間の物差しから
+  // 二度と外れないので、外さないと打ち切り済みの古い行が毎晩 `limit` を食い尽くし、
+  // 新しく動かなくなった録音にいつまでも順番が回らない（同じお知らせが、対応を
+  // 済ませたそばから毎晩立ち直りもする）。
+  const stale = await env.DB.prepare(
+    `SELECT ${RECORDING_COLUMNS}, organization_id AS organizationId FROM recordings r ` +
+      "WHERE r.state IN ('recording','uploading','failed') AND r.created_at < ? " +
+      'AND NOT EXISTS (SELECT 1 FROM alerts a WHERE a.organization_id = r.organization_id ' +
+      "AND a.code = 'recording.upload_failed' AND a.target_id = r.id) " +
+      'ORDER BY r.created_at ASC LIMIT ?',
+  )
+    .bind(staleBefore, input.limit)
+    .all<RecordingRecord & { organizationId: string }>()
+
+  for (const row of stale.results) {
+    // 境界を持っているのは `isStaleUpload()` のほうである（SQL の `staleBefore` は
+    // 同じ境界を D1 側へ写して `limit` を意味のある数にするためだけの絞り込み）。
+    // ここを外すと、猶予を変えたときに SQL だけが先に動く。
+    if (
+      !isStaleUpload({
+        state: row.state as RecordingState,
+        createdAt: row.createdAt,
+        now: input.now,
+      })
+    ) {
+      continue
+    }
+    examined += 1
+    // 本体を R2 へ書いたあとで D1 の書き込みが落ちると、`stored` にならないまま実体が
+    // 残る。掃除の①は `state='stored'` しか引かないので、この実体は二度と拾われず、
+    // **保持期限を持たない声**が保管庫に居座る。打ち切りは端末の控えを捨てる合図
+    // （AC-REC-20）でもあるので、サーバ側の書きかけもここで一緒に捨てる。
+    // 保全が立っている行だけは触らない（保全は期限より強い）。
+    if (!isOn(row.legalHold)) {
+      try {
+        await env.RECORDINGS.delete(row.r2Key)
+      } catch (err) {
+        // 消せなくても打ち切りは続ける。次の実行で同じ鍵をもう一度消しに行く。
+        console.error('recording stale object delete failed', row.id, err)
+      }
+    }
+    const link = await readSessionLink(env.DB, row.organizationId, row.receptionSessionId)
+    if (row.state !== 'failed') {
+      await env.DB.batch([
+        env.DB.prepare(
+          "UPDATE recordings SET state = 'failed', updated_at = ? WHERE organization_id = ? AND id = ?",
+        ).bind(nowIso, row.organizationId, row.id),
+        recordingAudit(env.DB, {
+          organizationId: row.organizationId,
+          storeId: row.storeId,
+          actorType: 'system',
+          actorId: null,
+          action: 'recording.failed',
+          recordingId: row.id,
+          after: { reason: 'stale_upload', createdAt: row.createdAt },
+          correlationId,
+          occurredAt: nowIso,
+        }),
+      ])
+    }
+    await raiseUploadFailedAlert(env.DB, {
+      organizationId: row.organizationId,
+      storeId: row.storeId,
+      recordingId: row.id,
+      code: row.code,
+      customerName: link.customerName,
+      hasReservation: link.hasReservation,
+      occurredAt: nowIso,
+    })
+  }
+
+  return { examined, deleted, skippedHeld, failed }
 }
 
 const routes = app
@@ -6027,7 +6460,742 @@ const routes = app
     )
   })
 
+  /* --- 受付の録音（P7） -------------------------------------------------- */
+
+  /**
+   * 録音を 1 本立てる（BOOK-01-DATETIME の `.rec`「録音中 01:08」）。
+   *
+   * **1 受付 = 1 録音。**工程を戻しても画面を作り直しても、同じ受付セッションには
+   * 既にある行をそのまま返す（AC-REC-02）。切って繋ぐと、あとで聞き直すときに
+   * 「どちらが本物か」を人が判断することになる。
+   *
+   * 権限は要求しない。お電話を取った人がそのまま録り始める操作である（`04-api.md` §2.2 が
+   * 権限を挙げているのは一覧・再生・保全・削除の 4 つだけ）。
+   */
+  .post('/api/staff/recordings', zValidator('json', RecordingCreate), async (c) => {
+    const db = drizzle(c.env.DB)
+    const { org, sub } = c.get('auth')
+    const input = c.req.valid('json')
+    if (!(await findStore(db, org, input.storeId))) return c.json({ error: 'not_found' }, 404)
+    // 受付は org **と店舗**で引く。店舗を落とすと、他店の受付に録音をぶら下げられる。
+    const session = (
+      await db
+        .select({ id: receptionSessions.id })
+        .from(receptionSessions)
+        .where(
+          and(
+            eq(receptionSessions.organizationId, org),
+            eq(receptionSessions.id, input.receptionSessionId),
+            eq(receptionSessions.storeId, input.storeId),
+          ),
+        )
+    )[0]
+    if (session === undefined) return c.json({ error: 'not_found' }, 404)
+
+    const existing = await c.env.DB.prepare(
+      `SELECT ${RECORDING_COLUMNS} FROM recordings WHERE organization_id = ? AND reception_session_id = ? ORDER BY created_at ASC LIMIT 1`,
+    )
+      .bind(org, input.receptionSessionId)
+      .first<RecordingRecord>()
+    if (existing !== null) return c.json(Recording.parse(toRecording(existing)))
+
+    const id = crypto.randomUUID()
+    const actorId = await actorStaffId(db, org, input.storeId, sub)
+    const correlationId = crypto.randomUUID()
+    // 鍵は `id` から決まる。端末から受けないので、再送が保管庫に二重に置かれない。
+    const r2Key = r2KeyFor({
+      organizationId: org,
+      storeId: input.storeId,
+      id,
+      contentType: input.contentType,
+      createdAt: input.startedAt,
+    })
+
+    for (let attempt = 1; attempt <= RECORDING_CODE_ATTEMPTS; attempt += 1) {
+      // 桁が伸びた組織（`EY-R-10000`）でも最後の 1 本を引けるよう、長さを先に見る。
+      const previous = await c.env.DB.prepare(
+        'SELECT code FROM recordings WHERE organization_id = ? ORDER BY length(code) DESC, code DESC LIMIT 1',
+      )
+        .bind(org)
+        .first<{ code: string }>()
+      const code = nextRecordingCode(previous?.code ?? null)
+      const row: RecordingRecord = {
+        id,
+        storeId: input.storeId,
+        code,
+        receptionSessionId: input.receptionSessionId,
+        reservationId: null,
+        r2Key,
+        contentType: input.contentType,
+        durationSeconds: null,
+        bytes: null,
+        state: 'recording',
+        retainUntil: null,
+        legalHold: '0',
+        uploadAttempts: 0,
+        createdAt: input.startedAt,
+      }
+      try {
+        await c.env.DB.batch([
+          c.env.DB.prepare(
+            'INSERT INTO recordings (id, organization_id, store_id, code, reception_session_id, reservation_id, r2_key, content_type, duration_seconds, bytes, state, retain_until, legal_hold, upload_attempts, created_at, updated_at, deleted_at) ' +
+              "VALUES (?,?,?,?,?,NULL,?,?,NULL,NULL,'recording',NULL,'0',0,?,?,NULL)",
+          ).bind(
+            id,
+            org,
+            input.storeId,
+            code,
+            input.receptionSessionId,
+            r2Key,
+            input.contentType,
+            input.startedAt,
+            input.startedAt,
+          ),
+          recordingAudit(c.env.DB, {
+            organizationId: org,
+            storeId: input.storeId,
+            actorType: 'staff',
+            actorId,
+            action: 'recording.started',
+            recordingId: id,
+            after: { code, receptionSessionId: input.receptionSessionId },
+            correlationId,
+            occurredAt: input.startedAt,
+          }),
+        ])
+      } catch (err) {
+        // 録音番号がぶつかった。+1 して採り直す（採番の衝突は失敗に数えない）。
+        if (constraintTable(err) === 'recordings') continue
+        throw err
+      }
+      return c.json(Recording.parse(toRecording(row)))
+    }
+    // 5 回打ち直しても採れなかった。500 にせず人を呼ぶ（`04-api.md` §5）。
+    return c.json({ error: 'code_exhausted' }, 409)
+  })
+
+  /**
+   * 録音の本体（**生 body を受ける唯一のルート**）。Worker が R2 へ書く。
+   *
+   * `deleted` 以外のどの状態からでも受ける。同じ録音は必ず同じキーへ上書きされるので、
+   * 送り直しが保管庫に 2 つ目を作らない（`r2_key` が第 2 の冪等キーである）。
+   *
+   * 100MB を越えたら 413 で断り、**その 1 回を送信の失敗として数える**
+   * （3 回でお知らせに上がる対象になる。`features/010-recording` の「決めたこと」）。
+   * 長さは宣言（`Content-Length`）で先に見て、宣言が無い / 食い違うときに実バイト数で見る。
+   */
+  .put('/api/staff/recordings/:recordingId/content', async (c) => {
+    const db = drizzle(c.env.DB)
+    const { org, sub } = c.get('auth')
+    const recordingId = c.req.param('recordingId')
+    const row = await findRecording(c.env.DB, org, recordingId)
+    if (row === null) return c.json({ error: 'not_found' }, 404)
+    if (row.state === 'deleted') return c.json({ error: 'invalid_transition' }, 409)
+
+    // `audio/mp4; codecs=...` で届くので、媒体の型だけを見る。
+    const declaredType = (c.req.header('content-type') ?? '').split(';')[0]?.trim() ?? ''
+    const contentType = RecordingContentType.safeParse(declaredType)
+    if (!contentType.success) return c.json(contentType, 400)
+
+    const nowIso = new Date().toISOString()
+    /** 413 の 1 回を失敗として数える。3 回目でお知らせに上がる。 */
+    const countFailure = async (): Promise<Response> => {
+      const attempts = Math.min(row.uploadAttempts + 1, RECORDING_MAX_ATTEMPTS)
+      // **保管済みの録音は `failed` へ落とさない。**落とすと保持期限の掃除
+      // （`state='stored'` を引く）が二度と拾わず、実体だけが期限を過ぎても
+      // 保管庫に残り続ける。既に音は保管庫にあるので、失われたものは何も無い
+      // （数だけ増やして、状態はそのままにする）。
+      const landed = nextState(row.state as RecordingState, 'failed')
+      await c.env.DB.prepare(
+        'UPDATE recordings SET state = ?, upload_attempts = ?, updated_at = ? WHERE organization_id = ? AND id = ?',
+      )
+        .bind(landed.ok ? landed.state : row.state, attempts, nowIso, org, recordingId)
+        .run()
+      if (landed.ok && attempts >= RECORDING_ALERT_ATTEMPTS) {
+        const link = await readSessionLink(c.env.DB, org, row.receptionSessionId)
+        await raiseUploadFailedAlert(c.env.DB, {
+          organizationId: org,
+          storeId: row.storeId,
+          recordingId,
+          code: row.code,
+          customerName: link.customerName,
+          hasReservation: link.hasReservation,
+          occurredAt: nowIso,
+        })
+      }
+      return c.json({ error: 'payload_too_large' }, 413)
+    }
+
+    const declaredLength = Number(c.req.header('content-length') ?? Number.NaN)
+    if (Number.isFinite(declaredLength) && declaredLength > RECORDING_MAX_BYTES) {
+      return await countFailure()
+    }
+    const body = await c.req.arrayBuffer()
+    if (body.byteLength > RECORDING_MAX_BYTES) return await countFailure()
+
+    // 長さは端末が測る（サーバは音声を復号しない）。**受け直さずに書かない** —
+    // 打ち間違えた値をそのまま入れると、応答を組み立てる `Recording.parse` が落ちて
+    // 保管そのものが 500 に見える（音声は既に保管庫へ入っているのに）。
+    const declaredDuration = c.req.query('durationSeconds')
+    const parsedDuration = declaredDuration === undefined ? null : Number(declaredDuration)
+    if (
+      parsedDuration !== null &&
+      (!Number.isInteger(parsedDuration) ||
+        parsedDuration < 0 ||
+        parsedDuration > RECORDING_MAX_SECONDS)
+    ) {
+      return c.json(rejected(['録音の長さが受け取れませんでした。送り直してください。']), 400)
+    }
+    const durationSeconds = parsedDuration ?? row.durationSeconds
+
+    // 保持期限は**保管した時刻**から決まる（録り始めではない）。成立予約は 30 日、
+    // 破棄受付は 24 時間で、取り消したご予約は成立していないほうへ落ちる。
+    //
+    // **一度決まった期限は動かさない。**送り直しのたびに引き直すと、5 分ごとの再送を
+    // 続けるだけで期限が前へ逃げ続け、削除が永久に 409 `recording_retained` で拒まれる
+    // （`PATCH` 側は最初からこの決めを持っている。両方の経路に同じ決めを置く）。
+    // ご予約との結び付きだけは引き直す — 受付の途中で成立した予約が行から落ちない。
+    const link = await readSessionLink(c.env.DB, org, row.receptionSessionId)
+    const retainUntil =
+      row.retainUntil ??
+      retainUntilFor({
+        hasReservation: link.hasReservation,
+        storedAt: new Date(nowIso),
+      }).toISOString()
+
+    await c.env.RECORDINGS.put(row.r2Key, body, {
+      httpMetadata: { contentType: contentType.data },
+    })
+    const actorId = await actorStaffId(db, org, row.storeId, sub)
+    await c.env.DB.batch([
+      c.env.DB.prepare(
+        "UPDATE recordings SET state = 'stored', content_type = ?, duration_seconds = ?, bytes = ?, " +
+          'reservation_id = ?, retain_until = ?, updated_at = ? WHERE organization_id = ? AND id = ?',
+      ).bind(
+        contentType.data,
+        durationSeconds,
+        body.byteLength,
+        link.reservationId,
+        retainUntil,
+        nowIso,
+        org,
+        recordingId,
+      ),
+      // 保管の完了は人が押した操作ではない（端末が送り終えた結果）ので `system`。
+      recordingAudit(c.env.DB, {
+        organizationId: org,
+        storeId: row.storeId,
+        actorType: 'system',
+        actorId,
+        action: 'recording.stored',
+        recordingId,
+        after: { bytes: body.byteLength, durationSeconds, retainUntil },
+        correlationId: crypto.randomUUID(),
+        occurredAt: nowIso,
+      }),
+    ])
+
+    return c.json(
+      Recording.parse(
+        toRecording({
+          ...row,
+          state: 'stored',
+          contentType: contentType.data,
+          durationSeconds,
+          bytes: body.byteLength,
+          reservationId: link.reservationId,
+          retainUntil,
+        }),
+      ),
+    )
+  })
+
+  /**
+   * 録音の状態更新（端末が送信の成否を知らせる）。許されない遷移は
+   * 409 `invalid_transition` で、**例外にしない**（500 にすると端末が理由を読めない）。
+   *
+   * `failed` へ落とすたびに試行回数を 1 増やし、**3 に達したらお知らせを 1 件立てる**。
+   */
+  .patch(
+    '/api/staff/recordings/:recordingId',
+    zValidator('json', RecordingStatePatch),
+    async (c) => {
+      const org = c.get('auth').org
+      const recordingId = c.req.param('recordingId')
+      const row = await findRecording(c.env.DB, org, recordingId)
+      if (row === null) return c.json({ error: 'not_found' }, 404)
+      const input = c.req.valid('json')
+      const moved = nextState(row.state as RecordingState, input.state)
+      if (!moved.ok) return c.json({ error: 'invalid_transition' }, 409)
+
+      const nowIso = new Date().toISOString()
+      const attempts =
+        input.state === 'failed'
+          ? Math.min(row.uploadAttempts + 1, RECORDING_MAX_ATTEMPTS)
+          : row.uploadAttempts
+      const durationSeconds = input.durationSeconds ?? row.durationSeconds
+      const bytes = input.bytes ?? row.bytes
+
+      // **`stored` に着いた瞬間に最低保持期限が決まる**（成立予約は 30 日、破棄受付は
+      // 24 時間）。本体を受けた経路（`PUT .../content`）だけで書いていると、端末が
+      // 「送り終えた」とだけ知らせてきた行が `retain_until` を持たないまま `stored` になり、
+      // 掃除の絞り込み（`retain_until IS NOT NULL`）から外れて永久に残る。
+      // 既に決まっている期限は動かさない（送り直しで期限が伸びると保持が青天井になる）。
+      const link =
+        moved.state === 'stored' && row.retainUntil === null
+          ? await readSessionLink(c.env.DB, org, row.receptionSessionId)
+          : null
+      const reservationId = link === null ? row.reservationId : link.reservationId
+      const retainUntil =
+        link === null
+          ? row.retainUntil
+          : retainUntilFor({
+              hasReservation: link.hasReservation,
+              storedAt: new Date(nowIso),
+            }).toISOString()
+
+      const statements: Statement[] = [
+        c.env.DB.prepare(
+          'UPDATE recordings SET state = ?, duration_seconds = ?, bytes = ?, upload_attempts = ?, ' +
+            'reservation_id = ?, retain_until = ?, updated_at = ? WHERE organization_id = ? AND id = ?',
+        ).bind(
+          moved.state,
+          durationSeconds,
+          bytes,
+          attempts,
+          reservationId,
+          retainUntil,
+          nowIso,
+          org,
+          recordingId,
+        ),
+      ]
+      // 残す `action` は 7 つだけ。`uploading` は途中経過なので監査に積まない
+      // （積むと 5 分ごとの再送で監査が音声より速く育つ）。
+      if (moved.state === 'failed' || moved.state === 'stored') {
+        statements.push(
+          recordingAudit(c.env.DB, {
+            organizationId: org,
+            storeId: row.storeId,
+            actorType: 'system',
+            actorId: null,
+            action: moved.state === 'failed' ? 'recording.failed' : 'recording.stored',
+            recordingId,
+            after: { attempts, failureReason: input.failureReason ?? null },
+            correlationId: crypto.randomUUID(),
+            occurredAt: nowIso,
+          }),
+        )
+      }
+      await c.env.DB.batch(statements)
+
+      if (moved.state === 'failed' && attempts >= RECORDING_ALERT_ATTEMPTS) {
+        const link = await readSessionLink(c.env.DB, org, row.receptionSessionId)
+        await raiseUploadFailedAlert(c.env.DB, {
+          organizationId: org,
+          storeId: row.storeId,
+          recordingId,
+          code: row.code,
+          customerName: link.customerName,
+          hasReservation: link.hasReservation,
+          occurredAt: nowIso,
+        })
+      }
+
+      return c.json(
+        Recording.parse(
+          toRecording({
+            ...row,
+            state: moved.state,
+            durationSeconds,
+            bytes,
+            uploadAttempts: attempts,
+            reservationId,
+            retainUntil,
+          }),
+        ),
+      )
+    },
+  )
+
+  /**
+   * 送り直し（EX-UPLOAD-FAILED / ALERTS の「もう一度送る」）。
+   *
+   * **サーバは音声を持っていない。**実体は端末の IndexedDB にあるので、ここでできるのは
+   * `failed` → `uploading` へ戻すことだけで、本体は端末が改めて送る。
+   * サーバ側からの再送経路は作らない（`features/010-recording` の「却下した代替案」）。
+   */
+  .post('/api/staff/recordings/:recordingId/retry', async (c) => {
+    const org = c.get('auth').org
+    const recordingId = c.req.param('recordingId')
+    const row = await findRecording(c.env.DB, org, recordingId)
+    if (row === null) return c.json({ error: 'not_found' }, 404)
+    // **戻せるのは `failed` からだけ**にする。`nextState()` は `recording → uploading` も
+    // 許すが、それは端末が録り終えて送り始める辺であって「もう一度送る」ではない。
+    // まだ録っている録音をここで `uploading` にすると、送り終える前にサーバが送信中を名乗る。
+    if (row.state !== 'failed' || !nextState(row.state, 'uploading').ok) {
+      return c.json({ error: 'invalid_transition' }, 409)
+    }
+
+    const nowIso = new Date().toISOString()
+    await c.env.DB.prepare(
+      "UPDATE recordings SET state = 'uploading', updated_at = ? WHERE organization_id = ? AND id = ?",
+    )
+      .bind(nowIso, org, recordingId)
+      .run()
+    return c.json(Recording.parse(toRecording({ ...row, state: 'uploading' })))
+  })
+
+  /**
+   * 録音の一覧（ALERTS の失敗一覧）。**`OFFSET` を書かない** —
+   * 続きは `(created_at, id)` の複合カーソルで取り、`total` は同じ条件の `COUNT(*)` で数える。
+   *
+   * 担当していない店舗の録音は**一覧にも出さない**（AC-REC-14）。`recording.read` を
+   * 持っている店舗の id で絞り込むので、他店の録音があるという標識も残らない。
+   */
+  .get(
+    '/api/staff/recordings',
+    requireStorePermission('recording.read'),
+    zValidator('query', RecordingListQuery),
+    async (c) => {
+      const { org, sub } = c.get('auth')
+      const query = c.req.valid('query')
+      const allowed = await permittedStores(drizzle(c.env.DB), org, sub, 'recording.read')
+      const scope =
+        query.storeId === undefined ? allowed : allowed.filter((id) => id === query.storeId)
+      if (scope.length === 0) {
+        return c.json(RecordingList.parse({ items: [], nextCursor: null, total: 0 }))
+      }
+
+      const clauses = [`store_id IN (${scope.map(() => '?').join(',')})`]
+      const params: unknown[] = [org, ...scope]
+      if (query.state.length > 0) {
+        clauses.push(`state IN (${query.state.map(() => '?').join(',')})`)
+        params.push(...query.state)
+      }
+      if (query.from !== undefined) {
+        clauses.push('created_at >= ?')
+        params.push(toInstant(query.from, 0))
+      }
+      if (query.to !== undefined) {
+        clauses.push('created_at < ?')
+        params.push(toInstant(query.to, MINUTES_PER_DAY))
+      }
+      const where = `organization_id = ? AND ${clauses.join(' AND ')}`
+
+      const cursor = decodePageCursor(query.cursor)
+      const page = cursor === null ? '' : ' AND (created_at > ? OR (created_at = ? AND id > ?))'
+      const pageParams = cursor === null ? [] : [cursor.at, cursor.at, cursor.id]
+
+      const read = await c.env.DB.batch([
+        c.env.DB.prepare(`SELECT COUNT(*) AS total FROM recordings WHERE ${where}`).bind(...params),
+        c.env.DB.prepare(
+          `SELECT ${RECORDING_COLUMNS} FROM recordings WHERE ${where}${page} ORDER BY created_at ASC, id ASC LIMIT ?`,
+        ).bind(...params, ...pageParams, query.limit + 1),
+      ])
+
+      const found = (read[1]?.results ?? []) as RecordingRecord[]
+      const items = found.slice(0, query.limit)
+      const last = items[items.length - 1]
+      return c.json(
+        RecordingList.parse({
+          items: items.map(toRecording),
+          // 続きがあるときだけ載せる。**最後のページで空でないカーソルを返さない。**
+          nextCursor:
+            found.length > query.limit && last !== undefined
+              ? encodePageCursor(last.createdAt, last.id)
+              : null,
+          total: ((read[0]?.results ?? []) as { total: number }[])[0]?.total ?? 0,
+        }),
+      )
+    },
+  )
+
+  /**
+   * 再生の 1 段目（LEDGER-DETAIL「● 録音を聞く　03:12」）。**チケットを 1 枚出すだけ**で、
+   * 音声もダウンロード URL も返さない。
+   *
+   * **監査を先に書き、書けなければチケットを出さない。**再生を best-effort にすると、
+   * 誰が聞いたか分からない再生が生まれ、要配慮情報の持ち出しと区別が付かなくなる。
+   * 保管済み（`stored`）以外は 404 にする — 消したあとの録音に対して
+   * 「もう無い」と「聞けない」を言い分ける画面を作らない。
+   */
+  .post(
+    '/api/staff/recordings/:recordingId/playback',
+    requireStorePermission('recording.read'),
+    async (c) => {
+      const db = drizzle(c.env.DB)
+      const { org, sub } = c.get('auth')
+      const row = await readableRecording(c, 'recording.read')
+      if (row === null || row.state !== 'stored') return c.json({ error: 'not_found' }, 404)
+
+      const now = new Date()
+      const nowIso = now.toISOString()
+      const actorId = await actorStaffId(db, org, row.storeId, sub)
+      await c.env.DB.batch([
+        recordingAudit(c.env.DB, {
+          organizationId: org,
+          storeId: row.storeId,
+          actorType: 'staff',
+          actorId,
+          action: 'recording.played',
+          recordingId: row.id,
+          after: { code: row.code },
+          correlationId: crypto.randomUUID(),
+          occurredAt: nowIso,
+        }),
+      ])
+
+      const ticket = await issueTicket(c.env.SHORT_LIVED, {
+        organizationId: org,
+        recordingId: row.id,
+        storeId: row.storeId,
+        staffId: actorId,
+        now,
+      })
+      return c.json(
+        RecordingPlaybackTicket.parse({
+          token: ticket.token,
+          expiresAt: ticket.expiresAt,
+          durationSeconds: row.durationSeconds,
+        }),
+      )
+    },
+  )
+
+  /**
+   * 再生の 2 段目。R2 から読んで `audio/*` をそのまま返す。
+   *
+   * **このルートだけは応答が JSON ではないので、契約 `parse` の対象外にする**
+   * （`04-api.md` §3.9 の唯一の例外）。契約を通すと音声が JSON へ包まれ、
+   * `<audio>` が読めない形になる。
+   *
+   * チケットは `Authorization` の**代わりではなく上乗せ**である。ヘッダーだけで開けると
+   * 業務トークンを持つ人が id の総当たりで他店舗の録音まで聞ける。
+   */
+  .get(
+    '/api/staff/recordings/:recordingId/stream',
+    requireStorePermission('recording.read'),
+    async (c) => {
+      const org = c.get('auth').org
+      const row = await readableRecording(c, 'recording.read')
+      if (row === null || row.state !== 'stored') return c.json({ error: 'not_found' }, 404)
+      const ok = await verifyTicket(c.env.SHORT_LIVED, {
+        organizationId: org,
+        recordingId: row.id,
+        token: c.req.query('token'),
+      })
+      if (!ok) return c.json({ error: 'unauthorized' }, 401)
+
+      // `bytes=4-7` の 1 区間だけを見る（複数区間の要求は `<audio>` が出さない）。
+      const requested = /^bytes=(\d+)-(\d*)$/.exec(c.req.header('range') ?? '')
+      const offset = requested === null ? null : Number(requested[1])
+      const end = requested === null || requested[2] === '' ? null : Number(requested[2])
+      const object = await c.env.RECORDINGS.get(
+        row.r2Key,
+        offset === null
+          ? undefined
+          : { range: end === null ? { offset } : { offset, length: end - offset + 1 } },
+      )
+      if (object === null) return c.json({ error: 'not_found' }, 404)
+
+      const body = await object.arrayBuffer()
+      const headers: Record<string, string> = {
+        'content-type': row.contentType,
+        'cache-control': 'no-store',
+        'accept-ranges': 'bytes',
+      }
+      if (offset === null) return c.body(body, 200, headers)
+      // R2 は要求より短い範囲を返すので、ヘッダーの終端も実体で頭打ちにする。
+      // `bytes 4-999/12` と答えると HTTP として不正で、`<audio>` の頭出しが壊れる。
+      const last = Math.min(end ?? object.size - 1, object.size - 1)
+      headers['content-range'] = `bytes ${offset}-${last}/${object.size}`
+      return c.body(body, 206, headers)
+    },
+  )
+
+  /**
+   * 保全の指定と解除（MODE-PERSONAL「録音の保全にはご本人の確認が必要です」）。
+   * **保全は最低保持期限より強い。**立っているあいだは期限を何年過ぎても消えない。
+   *
+   * 理由を必須にしてあるのは、外してよいのかを後から誰も判断できなくなるからである。
+   */
+  .post(
+    '/api/staff/recordings/:recordingId/hold',
+    requireStorePermission('recording.manage'),
+    zValidator('json', RecordingHoldInput),
+    async (c) => {
+      const db = drizzle(c.env.DB)
+      const { org, sub } = c.get('auth')
+      const row = await readableRecording(c, 'recording.manage')
+      if (row === null) return c.json({ error: 'not_found' }, 404)
+      const input = c.req.valid('json')
+      const nowIso = new Date().toISOString()
+      const actorId = await actorStaffId(db, org, row.storeId, sub)
+
+      await c.env.DB.batch([
+        c.env.DB.prepare(
+          'UPDATE recordings SET legal_hold = ?, updated_at = ? WHERE organization_id = ? AND id = ?',
+        ).bind(flag(input.legalHold), nowIso, org, row.id),
+        recordingAudit(c.env.DB, {
+          organizationId: org,
+          storeId: row.storeId,
+          actorType: 'staff',
+          actorId,
+          action: input.legalHold ? 'recording.hold_set' : 'recording.hold_cleared',
+          recordingId: row.id,
+          after: { legalHold: input.legalHold, reason: input.reason },
+          correlationId: crypto.randomUUID(),
+          occurredAt: nowIso,
+        }),
+      ])
+      return c.json(Recording.parse(toRecording({ ...row, legalHold: flag(input.legalHold) })))
+    },
+  )
+
+  /**
+   * 手で消す（HISTORY-LIST / LEDGER-DETAIL）。**最低保持期限より前の削除は拒む** —
+   * 通常の削除も保守の掃除も `canDelete()` の 1 か所を通すので、片方だけが素通りしない。
+   *
+   * 拒むときは「いつから消せるか」を返す。返さないと画面は「もう一度あとで」としか言えない。
+   * **行は消さない。**実体だけを消して `state='deleted'` を書く（いつ消したかが要る）。
+   */
+  .delete(
+    '/api/staff/recordings/:recordingId',
+    requireStorePermission('recording.manage'),
+    async (c) => {
+      const db = drizzle(c.env.DB)
+      const { org, sub } = c.get('auth')
+      const row = await readableRecording(c, 'recording.manage')
+      if (row === null) return c.json({ error: 'not_found' }, 404)
+      // まだ保管庫に入っていない録音には消す実体が無い。期限も決まっていないので、
+      // `recording_retained`（いつから消せるか）を返しようがない。
+      if (row.retainUntil === null) return c.json({ error: 'invalid_transition' }, 409)
+
+      const now = new Date()
+      const verdict = canDelete({
+        state: row.state as RecordingState,
+        retainUntil: row.retainUntil,
+        legalHold: isOn(row.legalHold),
+        now,
+      })
+      if (!verdict.ok) {
+        return c.json(
+          RecordingRetainedError.parse({
+            error: 'recording_retained',
+            retainUntil: row.retainUntil,
+            legalHold: isOn(row.legalHold),
+          }),
+          409,
+        )
+      }
+
+      const nowIso = now.toISOString()
+      const actorId = await actorStaffId(db, org, row.storeId, sub)
+      await c.env.RECORDINGS.delete(row.r2Key)
+      await c.env.DB.batch([
+        c.env.DB.prepare(
+          "UPDATE recordings SET state = 'deleted', deleted_at = ?, updated_at = ? WHERE organization_id = ? AND id = ?",
+        ).bind(nowIso, nowIso, org, row.id),
+        recordingAudit(c.env.DB, {
+          organizationId: org,
+          storeId: row.storeId,
+          actorType: 'staff',
+          actorId,
+          action: 'recording.deleted',
+          recordingId: row.id,
+          after: { reason: 'manual', retainUntil: row.retainUntil },
+          correlationId: crypto.randomUUID(),
+          occurredAt: nowIso,
+        }),
+      ])
+      return c.json(DeletedResult.parse({ id: row.id, deleted: true }))
+    },
+  )
+
+  /**
+   * お知らせの一覧（ALERTS ／ サイドバーの「お知らせ 3」）。
+   *
+   * P7 が返すのは `{ items, nextCursor, total }` までで、4 分類のタブと `counts` は
+   * P10（`013-terminals-and-audit`）が足す。既定を `audience='store'` にするのは、
+   * 運用のアラート（notifier の失敗など）を業務のお知らせに混ぜると
+   * 「対応が必要」の意味が薄まるからである。
+   */
+  .get('/api/staff/alerts', zValidator('query', AlertListQuery), async (c) => {
+    const org = c.get('auth').org
+    const query = c.req.valid('query')
+    const clauses = ['audience = ?']
+    const params: unknown[] = [org, query.audience]
+    if (query.storeId !== undefined) {
+      clauses.push('store_id = ?')
+      params.push(query.storeId)
+    }
+    const where = `organization_id = ? AND ${clauses.join(' AND ')}`
+
+    // 新しい順。続きは `(occurred_at, id)` を降順にたどる。
+    const cursor = decodePageCursor(query.cursor)
+    const page = cursor === null ? '' : ' AND (occurred_at < ? OR (occurred_at = ? AND id < ?))'
+    const pageParams = cursor === null ? [] : [cursor.at, cursor.at, cursor.id]
+
+    const read = await c.env.DB.batch([
+      c.env.DB.prepare(`SELECT COUNT(*) AS total FROM alerts WHERE ${where}`).bind(...params),
+      c.env.DB.prepare(
+        'SELECT id, code, severity, audience, title, body, target_type AS targetType, ' +
+          'target_id AS targetId, occurred_at AS occurredAt, read_at AS readAt, ' +
+          `resolved_at AS resolvedAt, resolved_by AS resolvedBy FROM alerts WHERE ${where}${page} ` +
+          'ORDER BY occurred_at DESC, id DESC LIMIT ?',
+      ).bind(...params, ...pageParams, query.limit + 1),
+    ])
+
+    const found = (read[1]?.results ?? []) as { id: string; occurredAt: string }[]
+    const items = found.slice(0, query.limit)
+    const last = items[items.length - 1]
+    return c.json(
+      AlertList.parse({
+        items: Alert.array().parse(items),
+        nextCursor:
+          found.length > query.limit && last !== undefined
+            ? encodePageCursor(last.occurredAt, last.id)
+            : null,
+        total: ((read[0]?.results ?? []) as { total: number }[])[0]?.total ?? 0,
+      }),
+    )
+  })
+
+  /**
+   * 保守の掃除（日次 Cron と、運用者が手で叩く経路の 2 つから呼ばれる）。
+   * 共有鍵で守られていて、テナントのトークンでは越えられない。
+   */
+  .post(
+    '/api/internal/maintenance/recordings/purge',
+    zValidator('json', RecordingPurgeRequest),
+    async (c) => {
+      const input = c.req.valid('json')
+      const result = await purgeRecordings(c.env, {
+        now: input.now === undefined ? new Date() : new Date(input.now),
+        limit: input.limit,
+      })
+      return c.json(RecordingPurgeResult.parse(result))
+    },
+  )
+
 // web 側はこの型だけを（type-only で）読み、`hc<AppType>` のクライアントを作る。
 export type AppType = typeof routes
 
-export default app
+/**
+ * 日次の保守（`wrangler.jsonc` の `triggers.crons`）。**アカウント全体の Cron 枠 5 本の
+ * うち 1 本目**をこのサービスが使う（`04-api.md` §3.2）。
+ *
+ * **1 つが失敗しても後続を止めない。**いまは録音の掃除 1 本だが、P8 以降がこの中へ
+ * 処理を足していくので、try/catch で包む形を最初から作っておく（1 本目が投げたせいで
+ * 勤務の窓送りが止まる、という壊れ方を作らない）。
+ */
+async function scheduled(_controller: ScheduledController, env: Bindings): Promise<void> {
+  try {
+    await purgeRecordings(env, { now: new Date(), limit: 100 })
+  } catch (err) {
+    console.error('scheduled recordings purge failed', err)
+  }
+}
+
+export default { fetch: app.fetch, scheduled }

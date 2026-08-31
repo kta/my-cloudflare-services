@@ -1,7 +1,7 @@
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
-import { RecordingBadge } from './RecordingBadge'
+import { RecordingBadge } from '../recording/RecordingBadge'
 import { StepBar } from './StepBar'
 import type { BookingStepKey } from './steps'
 
@@ -29,7 +29,7 @@ function open(current: BookingStepKey, canProceed = true, onBack = vi.fn(), onNe
       }
       onBack={onBack}
       onNext={onNext}
-      recording={<RecordingBadge state="off" seconds={null} placement="bar" />}
+      recording={<RecordingBadge state="off" elapsedSeconds={null} placement="bar" />}
     />,
   )
   return { onBack, onNext }
