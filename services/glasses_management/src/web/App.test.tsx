@@ -83,7 +83,7 @@ describe('左サイドバー', () => {
       'トップ',
       '予約台帳',
       '来店受付',
-      '予約を検索',
+      '予約を探す',
       '受付履歴',
       '顧客台帳',
       '分析',
@@ -130,6 +130,15 @@ describe('トップ', () => {
     expect(screen.getByText('お電話・ご来店のお客様')).toBeInTheDocument()
     expect(screen.getByText('予約を変更する')).toBeInTheDocument()
     expect(screen.getByText('日時・内容の変更、取り消し')).toBeInTheDocument()
+  })
+
+  it('「予約を変更する」を押すと予約を探す面へ移る（押して何も起きないボタンを置かない）', async () => {
+    await startWork()
+    await waitFor(() => expect(screen.getByText('予約を変更する')).toBeInTheDocument())
+    await userEvent.click(screen.getByRole('button', { name: /予約を変更する/ }))
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: 'お客様を伺って探します' })).toBeInTheDocument(),
+    )
   })
 
   it('お店が届いていないときは、その理由と次の行動を出す', async () => {

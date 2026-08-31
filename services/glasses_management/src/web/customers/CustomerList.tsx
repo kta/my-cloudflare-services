@@ -89,6 +89,12 @@ export type CustomerListProps = {
   onCreate: () => void
   /** 検索語・並べ方・絞り込みが変わったとき。器がサーバ側の条件を合わせる。 */
   onConditions?: (conditions: CustomerListConditions) => void
+  /**
+   * 検索欄の初めの中身。予約を探す面の「顧客台帳で調べる」から来たとき、伺った
+   * お名前をそのまま欄に残す（AC-CHANGE-24）。**欄を空にして結果だけ絞らない** ——
+   * 何で絞られているのか読めない一覧になる。
+   */
+  initialQuery?: string
   /** 読み込みに失敗したときの「もう一度読み込む」。渡されないとボタンを出さない。 */
   onRetry?: () => void
 }
@@ -179,9 +185,10 @@ export function CustomerList({
   onStartBooking,
   onCreate,
   onConditions,
+  initialQuery = '',
   onRetry,
 }: CustomerListProps) {
-  const [query, setQuery] = useState('')
+  const [query, setQuery] = useState(initialQuery)
   const [sort, setSort] = useState<CustomerSort>('kana')
   const [visitRange, setVisitRange] = useState<VisitRangeKey | null>(null)
   const [filterOpen, setFilterOpen] = useState(false)

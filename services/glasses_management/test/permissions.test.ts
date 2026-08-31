@@ -309,7 +309,9 @@ beforeAll(async () => {
     source: 'walkin',
     staffId: null,
   })
-  for (const _ of [0, 1, 2, 3, 4]) {
+  // 取消は 1 件につき 1 度しか通らない。P5 の「ご来店がなかった」と P6 の「理由を選んで
+  // 取り消す」がそれぞれ主体 5 種ぶん食べるので、10 件を先に積んでおく。
+  for (const _ of [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]) {
     fixture.cancellableReservationIds.push(
       await insertReservation(ORG, {
         storeId: fixture.walkinStoreId,
@@ -382,6 +384,14 @@ async function currentCustomerVersion(): Promise<number> {
 async function currentWalkinVersion(): Promise<number> {
   const row = await env.DB.prepare('SELECT version FROM walk_ins WHERE id = ?')
     .bind(fixture.walkinId)
+    .first<{ version: number }>()
+  return row?.version ?? 1
+}
+
+/** ご予約の版。表の主体が順に変更するので、送る直前に読み直す。 */
+async function currentReservationVersion(): Promise<number> {
+  const row = await env.DB.prepare('SELECT version FROM reservations WHERE id = ?')
+    .bind(fixture.reservationId)
     .first<{ version: number }>()
   return row?.version ?? 1
 }
@@ -1000,6 +1010,37 @@ const TABLE: Row[] = [
     method: 'POST',
     path: () => `/api/staff/reservations/${nextCancellableReservation()}/cancel`,
     body: () => ({ version: 1, reason: 'no_show' }),
+    expected: BOOKING,
+  },
+  /* --- 予約の検索・変更・取消（P6。お電話を取った人がそのまま直す面なので店長限定にしない） --- */
+  {
+    name: 'ご予約の検索は店舗の誰でも読める',
+    method: 'GET',
+    path: () =>
+      `/api/staff/reservations?storeId=${fixture.ledgerStoreId}&from=${LEDGER_DATE}&to=${LEDGER_DATE}`,
+    expected: BOOKING,
+  },
+  {
+    name: 'ご予約の変更は店舗の誰でもできる',
+    method: 'PATCH',
+    path: () => `/api/staff/reservations/${fixture.reservationId}`,
+    body: async () => ({
+      version: await currentReservationVersion(),
+      noteInternal: 'お電話で日時のご相談',
+    }),
+    expected: BOOKING,
+  },
+  {
+    name: '理由を選んでの取り消しは店舗の誰でもできる',
+    method: 'POST',
+    path: () => `/api/staff/reservations/${nextCancellableReservation()}/cancel`,
+    body: () => ({ version: 1, reason: 'customer' }),
+    expected: BOOKING,
+  },
+  {
+    name: 'ご予約の経緯は店舗の誰でも読める',
+    method: 'GET',
+    path: () => `/api/staff/reservations/${fixture.reservationId}/history`,
     expected: BOOKING,
   },
   {

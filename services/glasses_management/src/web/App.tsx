@@ -3,6 +3,7 @@ import { auth, toJstDateString } from '@app/shared'
 import { Button, Field, focusRing, focusRingOnPine, Notice, TextInput } from '@app/ui'
 import { type FormEvent, type ReactNode, useCallback, useEffect, useState } from 'react'
 import { BookingScreen } from './booking/BookingScreen'
+import { ChangeScreen } from './change/ChangeScreen'
 import { client } from './client'
 import { CustomerScreen } from './customers/CustomerScreen'
 import { MyReservations } from './home/MyReservations'
@@ -105,6 +106,14 @@ function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
   const [walkinPanel, setWalkinPanel] = useState(false)
   // 受付履歴の絞り込み。「予約を開く」で台帳へ移っても、戻ったときに同じ条件へ戻す。
   const [historyQuery, setHistoryQuery] = useState<HistoryFilters | undefined>(undefined)
+  /*
+   * 予約を探す面の小見出し。行き先の名前（サイドバーの「予約を探す」）とは別の 2 段で、
+   * 面が進むと「予約の変更　EY-2608-0142」へ変わる（`design/05-screen-flow.md` §2.2）。
+   */
+  const [changeSubline, setChangeSubline] = useState('予約を変更する')
+  // 予約を探す面の「顧客台帳で調べる」から来たとき、入れたお名前を検索欄へ引き継ぐ
+  // （AC-CHANGE-24）。台帳をふつうに開いたときは空のまま。
+  const [customerQuery, setCustomerQuery] = useState('')
 
   const load = useCallback(async () => {
     const res = await client.api.staff.stores.$get()
@@ -129,6 +138,7 @@ function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
   }, [load])
 
   function navigate(key: string, reservationId: string | null = null, walkin = false) {
+    if (key !== 'customers') setCustomerQuery('')
     setCurrent(key)
     setOpenReservation(reservationId)
     setWalkinPanel(walkin)
@@ -173,7 +183,9 @@ function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
       storeSubline={
         current === 'home'
           ? '営業中　10:00–19:00'
-          : (DESTINATIONS.find((destination) => destination.key === current)?.label ?? '')
+          : current === 'search'
+            ? changeSubline
+            : (DESTINATIONS.find((destination) => destination.key === current)?.label ?? '')
       }
       current={current}
       onNavigate={(key) => navigate(key)}
@@ -204,6 +216,7 @@ function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
             onOpenReservation={(id) => navigate('ledger', id)}
             onOpenLedger={() => navigate('ledger')}
             onStartBooking={() => startBooking()}
+            onOpenSearch={() => navigate('search')}
           />
         ) : current === 'ledger' ? (
           store ? (
@@ -249,11 +262,34 @@ function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
           ) : (
             <p className="p-11 text-body text-ink-muted">読み込んでいます…</p>
           )
+        ) : current === 'search' ? (
+          /* 予約を探す・直す（CHANGE-SEARCH / CHANGE-DATETIME / CHANGE-DIFF /
+             CHANGE-CANCEL / CHANGE-DONE / EX-CONFLICT）。面の中の行き来は器が持ち、
+             URL を持たない。時刻は器が自分で起こす —— 仮の押さえの残りを 1 秒ずつ
+             進めるので、App の描画に縛らない。 */
+          store ? (
+            <ChangeScreen
+              storeId={store.id}
+              storeName={store.name}
+              onSubline={setChangeSubline}
+              onOpenCustomers={(name) => {
+                navigate('customers')
+                setCustomerQuery(name)
+              }}
+              onStartBooking={() => startBooking()}
+              onOpenLedger={() => navigate('ledger')}
+              onGoHome={() => navigate('home')}
+              onSessionExpired={onSignOut}
+            />
+          ) : (
+            <p className="p-11 text-body text-ink-muted">読み込んでいます…</p>
+          )
         ) : current === 'customers' ? (
           store ? (
             <CustomerScreen
               storeId={store.id}
               stores={stores}
+              initialQuery={customerQuery}
               onStartBooking={(customer) => startBooking(customer)}
               onSessionExpired={onSignOut}
             />
@@ -280,6 +316,7 @@ function Home({
   onOpenReservation,
   onOpenLedger,
   onStartBooking,
+  onOpenSearch,
 }: {
   stores: Store[] | null
   currentStoreId?: string
@@ -287,6 +324,8 @@ function Home({
   onOpenLedger: () => void
   /** 受付の 5 工程へ入る。マイクの許可はこの指の操作の中で求める（Safari の制約）。 */
   onStartBooking: () => void
+  /** 予約を探す・直す面（CHANGE-SEARCH）へ移る。 */
+  onOpenSearch: () => void
 }) {
   const others = stores?.filter((s) => s.id !== currentStoreId) ?? []
   return (
@@ -304,6 +343,7 @@ function Home({
           note="日時・内容の変更、取り消し"
           tone="walkin"
           glyph="✎"
+          onPress={onOpenSearch}
         />
         <section aria-label="ほかのお店" className="mt-2">
           {stores === null ? (

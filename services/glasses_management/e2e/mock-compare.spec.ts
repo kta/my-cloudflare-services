@@ -308,11 +308,17 @@ test.describe('承認済みモックとの突き合わせ', () => {
      * いま残っている差（2026-08-28）:
      *   - 下辺の日付の帯（2026年 8月 24〜30 とカレンダー）… まだ無い（台帳の P2 が持ち込む）
      *   - 上のバーの「お知らせ 3」… P10 で足す（いまは「業務を終える」を置いている）
-     * 店名は seed が入ったので「EYEX 銀座店」に揃い、実測は 3.1389%（2026-08-30 の再測）。
-     * 器（上のバー・サイドバー・主操作の 2 枚）は画素まで合っている。
-     * **この値は下げるだけ。上げてはいけない。**
+     *   - サイドバーの 3 行目が「予約を探す」（モックは「予約を検索」）… P6 の決めで
+     *     行き先の名前を面の名前と分けた（`009-change-and-cancel/spec.md`「決めたこと」／
+     *     `design/05-screen-flow.md` §2.2）。モックの画像は直さない既知差分である。
+     * 店名は seed が入ったので「EYEX 銀座店」に揃い、実測は 3.1512%
+     * （121,909 / 3,868,560。2026-08-31 の再測。P6 前は 3.1389% で、行き先の名前を
+     * 1 字入れ替えたぶんだけ 436 画素増えた）。器（上のバー・サイドバー・主操作の 2 枚）は
+     * それ以外の画素まで合っている。
+     * **この値は下げるだけ。上げてはいけない**（ここで 0.0314 → 0.0316 に上げたのは、
+     * 承認済みの語を入れ替えたという 1 度きりの理由に限る）。
      */
-    await expect(page).toHaveScreenshot('HOME.png', { scale: 'device', maxDiffPixelRatio: 0.0314 })
+    await expect(page).toHaveScreenshot('HOME.png', { scale: 'device', maxDiffPixelRatio: 0.0316 })
   })
 
   test('LEDGER-STAFF — 予約台帳・担当者別', async ({ page }) => {
@@ -1572,6 +1578,377 @@ test.describe('承認済みモックとの突き合わせ', () => {
     await expect(page).toHaveScreenshot('HISTORY-EMPTY.png', {
       scale: 'device',
       maxDiffPixelRatio: 0.0796,
+    })
+  })
+
+  /* --- 予約の検索・変更・取消（009-change-and-cancel） --------------------- */
+
+  /**
+   * 予約を探す面を 2026年8月27日（木）11:08 の姿で開く。seed の 田中 花子 様（4回目）が
+   * この面のモックの主役で、端末の時計を据えないと「これから」の窓（＝端末の暦日から）に
+   * 8月27日 が入らない。
+   */
+  async function openChangeSearch(page: Page): Promise<void> {
+    await pinTo1108(page)
+    await startWork(page)
+    await page
+      .getByRole('navigation', { name: '画面の切り替え' })
+      .getByRole('button', { name: '予約を探す', exact: true })
+      .click()
+    await expect(page.getByRole('heading', { name: 'お客様を伺って探します' })).toBeVisible()
+  }
+
+  /** 田中 花子 様の 1 件を選んで右の詳細を出す。 */
+  async function openHanako(page: Page): Promise<void> {
+    await openChangeSearch(page)
+    await page.getByLabel('お名前').fill('田中')
+    await page.getByRole('button', { name: /田中 花子 様/ }).click()
+    await expect(page.getByRole('region', { name: 'ご予約の中身' })).toBeVisible()
+  }
+
+  /**
+   * 押さえを返してから面を離れる。**必ず呼ぶ** —— 仮の押さえは KV に 420 秒残り、
+   * 業務の e2e（`change.spec.ts` の「13:00　受付できます」）が数える枠を 1 つ減らす。
+   * ページを閉じるだけでは React の後始末が走らないので、画面の戻り道を踏んで返す。
+   */
+  async function releaseHold(page: Page): Promise<void> {
+    await page.getByRole('button', { name: '前へ戻る' }).click()
+    await expect(page.getByRole('heading', { name: 'お客様を伺って探します' })).toBeVisible()
+  }
+
+  /*
+   * **撮り損ねたときも押さえを返す。**画素が 1 つでも合わないと `toHaveScreenshot` が
+   * そこで止まり、上の `releaseHold` へ辿り着かない。返しそこねた押さえは KV に 420 秒
+   * 残り、このあとの面と業務の e2e（台帳・来店受付）が数える枠を 1 つ減らして、
+   * **1 本の失敗が無関係な 6 本を道連れにする。**戻り道はどれも押せなければ何もしない。
+   */
+  test.afterEach(async ({ page }) => {
+    for (const name of ['やめて台帳に戻る', '戻って直す', '前へ戻る']) {
+      const way = page.getByRole('button', { name, exact: true })
+      if ((await way.count()) === 0) continue
+      await way
+        .first()
+        .click()
+        .catch(() => undefined)
+    }
+  })
+
+  test('CHANGE-SEARCH — 予約を探す（一覧と 1 件の中身）', async ({ page }) => {
+    await openHanako(page)
+    /*
+     * いま残っている差（実測を入れる）:
+     *   - **予約番号の欄がある**（モックの CHANGE-SEARCH はお名前とお電話番号の 2 つしか
+     *     描いていない）。3 つの欄は spec の要求（AC-CHANGE-01）で、同じ器を描いた
+     *     EX-EMPTY-SEARCH のモックには 3 つとも載っている。この 1 欄ぶん（約 155px）
+     *     絞り込みの札と結果の一覧が下へずれる。
+     *   - 結果が 1 行（モックは「結果 4件」）。seed の 田中 花子 様の「これから」の
+     *     ご予約は 8月27日 の 1 件だけで、自前で足しても `reservations.customer_id` が
+     *     NULL になるのでお名前では引けない。
+     *   - ご用件・場所・注意ごとの中身が seed のもの（モックは別の文面）。
+     *   - 予約番号の等幅の見た目。モックは非改行ハイフン（U+2011）で、等幅書体に
+     *     その字が無いぶん細く出る。実装は半角ハイフン（U+002D）と決めてあるので
+     *     ハイフンが 1 文字ぶんの幅で出る（P6 の TODO の指示どおり）。
+     *   - 右下の「録音を聞く 03:12」を出さない … P7（`010-recording`）。この 1 行ぶん
+     *     注意ごとのカードが上に詰まる。
+     *   - 「丸の内店・新宿店のご予約も含める」を出さない … 別店舗のご予約は見せない
+     *     決め（Q-04 のいまの前提）。押せない導線を置かない。
+     *   - サイドバーの行き先が 1 つ多い（P0 が「トップ」を柱の中に置いた）。柱だけで
+     *     差の 36%。P0 の器を書き換えないかぎりここは縮まない。
+     *   - 上のバー右が「業務を終える」（モックは「お知らせ 3」… P10）。
+     * 実測 258,056 / 3,868,560 ＝ 6.6706%。**この値は下げるだけ。上げてはいけない。**
+     */
+    await expect(page).toHaveScreenshot('CHANGE-SEARCH.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.0668,
+    })
+  })
+
+  test('EX-EMPTY-SEARCH — 条件に合うご予約が無い', async ({ page }) => {
+    /*
+     * この 1 面だけ端末の時計を**前日**（8月26日）に据える。案（「条件をひとつ外すと
+     * 見つかります」）が出るのは期間を絞ったときだけで、その絞りは「今日」の札しか
+     * 立てられない —— 8月27日 のままだと 田中 花子 様のご予約が「今日」に入ってしまい、
+     * 0 件にならない。
+     */
+    await page.clock.setFixedTime(new Date('2026-08-26T02:08:00.000Z'))
+    await startWork(page)
+    await page
+      .getByRole('navigation', { name: '画面の切り替え' })
+      .getByRole('button', { name: '予約を探す', exact: true })
+      .click()
+    await page.getByLabel('お名前').fill('田中')
+    await page.getByRole('button', { name: '今日', exact: true }).click()
+    await expect(page.getByText('結果 0件')).toBeVisible()
+    /*
+     * いま残っている差（実測を入れる）:
+     *   - 案が 1 件（モックは 3 件）。出どころの絞り込み「Web予約だけ」を画面から
+     *     立てる操作が無く（`ReservationSearch` の札は案からしか立たない）、取消済みを
+     *     足しても 0 件のままなので、1 件以上になる案は期間だけである。
+     *   - 「丸の内店・新宿店のご予約も含める」を出さない（Q-04 のいまの前提）。
+     *   - サイドバーの行き先が 1 つ多い（P0 が「トップ」を柱の中に置いた）。
+     *   - 上のバー右が「業務を終える」（モックは「お知らせ 3」… P10）。
+     *   - 絞り込みの札が これから／今日／取消済み の 3 つ（モックは「8/27〜8/31」
+     *     「Web予約だけ」「取消済みも」の 3 つで、期間と出どころを札で持っている）。
+     *   - サイドバーの行き先が 1 つ多い（柱だけで差の 49%）。
+     * 実測 232,644 / 3,868,560 ＝ 6.0137%。**この値は下げるだけ。上げてはいけない。**
+     */
+    await expect(page).toHaveScreenshot('EX-EMPTY-SEARCH.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.0602,
+    })
+  })
+
+  test('CHANGE-DATETIME — 日時を選び直す', async ({ page }) => {
+    await openHanako(page)
+    /*
+     * 仮の押さえの期限だけを据える。押さえは KV の TTL なのでサーバの**実時計**から
+     * 返り、「仮の押さえ　11:15 まで」の数字が撮るたびに動いて画素が数十ぶれる
+     * （端末の時計は 11:08 に据えてあるが、そちらは押さえの期限を決めていない）。
+     * 据える先は 11:08 の 420 秒あと ＝ この面が読む残り時間（あと7分）と辻褄が合う。
+     */
+    await page.route(
+      (url) => url.pathname === '/api/staff/holds',
+      async (route) => {
+        if (route.request().method() !== 'POST') {
+          await route.fallback()
+          return
+        }
+        const response = await route.fetch()
+        const taken = (await response.json()) as Record<string, unknown>
+        await route.fulfill({
+          response,
+          json: { ...taken, expiresAt: '2026-08-27T02:15:00.000Z' },
+        })
+      },
+    )
+    await page.getByRole('button', { name: '日時を変える' }).click()
+    await expect(page.getByRole('group', { name: 'お時間' })).toBeVisible()
+    // seed の 8月27日 で 60 分が取れるのは 13:00 から。モックは 14:00 を選んだ姿である。
+    await page.getByRole('button', { name: '13:00　受付できます' }).click()
+    await expect(page.getByText('仮の押さえ')).toBeVisible()
+    /*
+     * いま残っている差（実測を入れる）:
+     *   - 選んだ時刻が 13:00（モックは 14:00）。seed の 8月27日 では 14:00 が
+     *     佐藤 美咲 の先約で満席である。
+     *   - 時刻の札が 5 列 × 2 段（モックは 1 段）。サーバは営業時間ぶんの格子を
+     *     18 枠返すので、**札は 8 枚で止めて残りを格子の空き 2 枠の「ほかの時刻も見る」
+     *     に畳んでいる**（引き算の規準「選択の札は 8 つまで」）。全部並べると
+     *     「…を確保します。」の 1 文と仮の押さえの残り時間が 810pt の外へ出る。
+     *   - 仮の押さえの残り時間を出す（モックはこの面に押さえを描いていない。
+     *     モックの同じ場所には受付の録音が居る）。
+     *   - 工程 1 の札に ✓ が付く（モックは色だけ。`booking/StepBar.tsx` と同じく
+     *     「色だけで状態を伝えない」に合わせた）。
+     *   - 「4回目」の札を左に出さない（この面が受け取る `ChangeTarget` に来店回数が
+     *     載っていない）。ご用件と場所の中身は seed のもの。
+     *   - 受付の録音（`.rec`）を出さない … P7（`010-recording`）。
+     *   - 工程バーがサイドバーの右から始まる（モックは柱の下まで届く帯）。器は P0 の
+     *     `AppShell` が持っていて、この面から動かせない。
+     *   - 上のバー右が「業務を終える」（モックは「お知らせ 3」… P10）。
+     * 実測 296,512 / 3,868,560 ＝ 7.6647%（前の回 312,600 ＝ 8.0805% から、札を
+     * 8 枚に絞ったぶん縮んだ）。**この値は下げるだけ。上げてはいけない。**
+     * 閾値は実測の 4 桁切り上げ（＋206 画素）にしてある。**5 桁まで詰めない** ——
+     * 書体の描き分けで数十画素は揺れ、閾値を割った 1 本が上の押さえを返さないまま
+     * 止まると、あとの面と業務の e2e が道連れになる（上の `test.afterEach` を参照）。
+     */
+    await expect(page).toHaveScreenshot('CHANGE-DATETIME.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.0767,
+    })
+    await releaseHold(page)
+  })
+
+  test('CHANGE-DIFF — 変更前と変更後', async ({ page }) => {
+    await openHanako(page)
+    await page.getByRole('button', { name: '日時を変える' }).click()
+    await page.getByRole('button', { name: '13:00　受付できます' }).click()
+    await page.getByRole('button', { name: '変更内容を確認する' }).click()
+    await expect(page.getByRole('table', { name: '変更前と変更後' })).toBeVisible()
+    /*
+     * いま残っている差（実測を入れる）:
+     *   - 変更後が 13:00–14:00（モックは 14:00–15:00）。上と同じ理由。
+     *   - 「場所」の行が変わらない（モックは場所も動く面）。この面から動かせるのは
+     *     日時だけで、担当・場所は BOOK-03-SLOT-STAFF の再利用であり入口がまだ無い。
+     *   - お客様へ読み上げる文が確定前の形（モックの「変更いたしました」「でございます」は
+     *     採らない。`domain/reservation-change.ts` の `sayOnConfirm`）。
+     *   - メールの 1 行が「お電話でのご予約のため、メールは送りません。」（契約に
+     *     変更・取消の通知の型が無い）。
+     *   - 受付の録音（`.rec-float`）を出さない … P7（`010-recording`）。
+     *   - 上のバー右が「業務を終える」（モックは「お知らせ 3」… P10）。
+     *   - ご用件が 2 行に折り返す（seed の 田中 花子 様は目的が 2 つ）。
+     *   - 読み上げカードが 6 行（モックは 4 行）。確定前の言い方のぶん文が長い。
+     *   - サイドバーの行き先が 1 つ多い（柱だけで差の 29%）。
+     * 実測 275,956 / 3,868,560 ＝ 7.1333%。**この値は下げるだけ。上げてはいけない。**
+     */
+    await expect(page).toHaveScreenshot('CHANGE-DIFF.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.0714,
+    })
+    await page.getByRole('button', { name: '戻って直す' }).click()
+    await releaseHold(page)
+  })
+
+  test('EX-CONFLICT — 同じご予約をほかの端末でも直していた', async ({ page }) => {
+    await openHanako(page)
+    await page.getByRole('button', { name: '日時を変える' }).click()
+    await page.getByRole('button', { name: '13:00　受付できます' }).click()
+    await page.getByRole('button', { name: '変更内容を確認する' }).click()
+    /*
+     * 版の競合は**応答だけを差し替えて**作る。実際に版を進めるには seed のご予約を
+     * 書き換えるしかなく、この project は seed のままの盤面で撮る決めだからである
+     * （`stubBoard` と同じ手）。競合そのもののふるまい（何も書き換わらないこと）は
+     * `change.spec.ts` の AC-CHANGE-19 / AC-CHANGE-27 が実データで見ている。
+     */
+    await page.route(
+      (url) => /\/api\/staff\/reservations\/[0-9a-f-]+$/.test(url.pathname),
+      async (route) => {
+        if (route.request().method() !== 'PATCH') {
+          await route.fallback()
+          return
+        }
+        await route.fulfill({
+          status: 409,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            error: 'version_conflict',
+            current: {
+              version: 2,
+              startsAt: '2026-08-27T05:00:00.000Z',
+              endsAt: '2026-08-27T06:00:00.000Z',
+              staffName: '佐藤 美咲',
+              savedAt: '2026-08-27T02:06:00.000Z',
+              savedBy: '中村 彩',
+            },
+          }),
+        })
+      },
+    )
+    await page.getByRole('button', { name: '変更を確定する' }).click()
+    await expect(
+      page.getByRole('heading', { name: '同じご予約を、ほかの端末でも直していました' }),
+    ).toBeVisible()
+    await expect(page.getByRole('region', { name: 'あなたが直した内容' })).toBeVisible()
+    /*
+     * いま残っている差（実測を入れる）:
+     *   - 自分の内容が 13:00–14:00（モックは 8月28日（金）10:30–11:30）。seed の
+     *     8月27日 で 60 分が取れるのは 13:00 からで、日をまたいで選び直してはいない。
+     *   - 担当と場所が動かない（この面から動かせるのは日時だけ。担当・場所は
+     *     BOOK-03-SLOT-STAFF の再利用で、その入口がまだ無い）。
+     *   - 端末の名前が「ほかの端末」「この端末」（モックは「受付iPad」「レジ横iPad」）。
+     *     端末の登録簿がこの製品に無く、409 の応答も保存した人の名前しか載せない。
+     *   - サイドバーの選択が「予約を探す」（モックは「予約台帳」… §8 既知差分 #8）。
+     *   - サイドバーの行き先が 1 つ多い（P0 が「トップ」を柱の中に置いた）。
+     *   - 上のバー右が「業務を終える」（モックは「お知らせ 3」… P10）。
+     *   - 上のバーの小見出しにお客様のお名前が付かない（モックは「予約の変更
+     *     EY-2608-0142　田中 花子 様」）。器の小見出しは面の名前と予約番号だけを持つ。
+     * 実測 297,275 / 3,868,560 ＝ 7.6844%。**この値は下げるだけ。上げてはいけない。**
+     *
+     * 前の回の 7.2536% は**別の面**（事実と戻り道だけの簡素版 `VersionConflictPane`）を
+     * 撮った値である。器が `ConflictPanel` を載せた回に測り直す、と前の回のコメントが
+     * 決めていたので、その基準線を引き直した（緩めたのではなく、対象が入れ替わった）。
+     */
+    await expect(page).toHaveScreenshot('EX-CONFLICT.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.0769,
+    })
+    await page.getByRole('button', { name: 'やめて台帳に戻る' }).click()
+  })
+
+  test('CHANGE-CANCEL — この予約を取り消します', async ({ page }) => {
+    await openHanako(page)
+    await page.getByRole('button', { name: '取り消す' }).click()
+    await expect(page.getByRole('heading', { name: 'この予約を取り消します' })).toBeVisible()
+    /*
+     * この面は**何も書かない**（理由を選ぶまで送らない）ので、seed の盤面に触れずに撮れる。
+     * いま残っている差（実測を入れる）:
+     *   - 理由がどれも選ばれていない（モックは「お客様のご都合＝選択中」）。既定で 1 つ
+     *     選んでおくと、店舗都合の取消が押し間違いでお客様都合として分析に残る。
+     *   - 「ご用件」が 2 つ（モックは「メガネを新しく作る」の 1 つ）。seed の 田中 花子 様の
+     *     ご予約は「メガネを新しく作る・視力測定だけ」で、下の補足はお客様向けの言い方。
+     *   - サイドバーの行き先が 1 つ多い（P0 が「トップ」を柱の中に置いた）。
+     *   - 上のバー右が「業務を終える」（モックは「お知らせ 3」… P10）。
+     *   - 「取り消す」が押せない（理由が未選択のあいだは `disabled`。モックは
+     *     理由が 1 つ選ばれた姿を描いている）。
+     *   - サイドバーの行き先が 1 つ多い（柱だけで差の 41%）。
+     * 実測 229,195 / 3,868,560 ＝ 5.9246%。**この値は下げるだけ。上げてはいけない。**
+     */
+    await expect(page).toHaveScreenshot('CHANGE-CANCEL.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.0593,
+    })
+    await page.getByRole('button', { name: '取り消さずに戻る' }).click()
+  })
+
+  test('CHANGE-DONE — ご予約の変更を承りました', async ({ page }) => {
+    await openHanako(page)
+    await page.getByRole('button', { name: '日時を変える' }).click()
+    await page.getByRole('button', { name: '13:00　受付できます' }).click()
+    await page.getByRole('button', { name: '変更内容を確認する' }).click()
+    /*
+     * 確定の応答だけを差し替えて撮る。**seed の 8月27日 のご予約を実際に動かさない**
+     * （この project はそのままの盤面で撮る決めで、あとから走る台帳・来店受付の e2e が
+     * 同じ 12 件を数えている）。承ったあとのふるまいそのものは `change.spec.ts` の
+     * AC-CHANGE-15 が自前のご予約で見ている。
+     */
+    await page.route(
+      (url) => /\/api\/staff\/reservations\/[0-9a-f-]+$/.test(url.pathname),
+      async (route) => {
+        if (route.request().method() !== 'PATCH') {
+          await route.fallback()
+          return
+        }
+        const original = await route.fetch({ method: 'GET', postData: undefined })
+        const detail = (await original.json()) as Record<string, unknown>
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ...detail,
+            startsAt: '2026-08-27T04:00:00.000Z',
+            endsAt: '2026-08-27T05:00:00.000Z',
+            version: 2,
+          }),
+        })
+      },
+    )
+    await page.route(
+      (url) => /\/api\/staff\/reservations\/[0-9a-f-]+\/history$/.test(url.pathname),
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify([
+            {
+              occurredAt: '2026-08-27T02:12:00.000Z',
+              what: 'ご来店時刻を 11:00 から 13:00 へ',
+              actorName: '中村 彩',
+            },
+          ]),
+        })
+      },
+    )
+    await page.getByRole('button', { name: '変更を確定する' }).click()
+    await expect(page.getByRole('heading', { name: 'ご予約の変更を承りました' })).toBeVisible()
+    /*
+     * いま残っている差（実測を入れる）:
+     *   - 変更後が 13:00–14:00（モックは 14:00–15:00）。seed の 8月27日 では 14:00 が
+     *     佐藤 美咲 の先約で満席である。
+     *   - 「お客様にお伝えすること」の 2 行目が「「遠近は初めてです」」（モックは
+     *     「いまお使いのメガネをお持ちください。」）。この行はご予約の `noteCustomer` を
+     *     そのまま出すので、seed の中身が出る。
+     *   - メールの 1 行が「お客様へのご連絡は、お電話でお願いします。」（`NotificationJob`
+     *     に変更・取消の型が無く、型を足すのは別サービスの契約変更＝人間の承認事項）。
+     *   - 端末の名前が「この端末」（モックは「レジ横iPad」）。端末の登録簿がこの製品に無い。
+     *   - サイドバーの行き先が 1 つ多い（P0 が「トップ」を柱の中に置いた）。
+     *   - 上のバー右が「業務を終える」（モックは「お知らせ 3」… P10）。
+     *   - お客様へお伝えする 1 行目が「8月27日（木）13:00 のご来店に…」（モックは
+     *     「本日 午後2時のご来店に…」）。日付の言い方はこの面が組み立てる。
+     *   - サイドバーの行き先が 1 つ多い（柱だけで差の 57%。この面はいちばん白いので、
+     *     残った差のうち柱の占める割合がいちばん大きい）。
+     * 実測 191,316 / 3,868,560 ＝ 4.9454%。**この値は下げるだけ。上げてはいけない。**
+     */
+    await expect(page).toHaveScreenshot('CHANGE-DONE.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.0495,
     })
   })
 })

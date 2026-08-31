@@ -41,7 +41,7 @@ idempotency ID を検証するためだけに使う。production Worker にテ�
 
 ## 現在の基準線
 
-Approved かつ UC/AC を持つ spec は次の 7 本である。`admin` の service spec と
+Approved かつ UC/AC を持つ spec は次の 8 本である。`admin` の service spec と
 infrastructure-only の文書には UC/AC がないため、分母には入らない（機械的な免除ではなく、
 そもそも product behavior を定義していない）。新しい production behavior は Approved spec
 に UC/AC を付け、この表と E2E mapping を同じ変更で追加する。
@@ -53,7 +53,8 @@ P1（`004-store-settings`）はこの表の 36 行が、P2（`005-availability-a
 続く 33 行（UC-LEDGER-01..11 / AC-LEDGER-01..22）が、P3（`006-booking-flow`）はさらに続く
 37 行（UC-BOOK-01..15 / AC-BOOK-01..22）が、P4（`007-customer-records`）はさらに続く
 40 行（UC-CUST-01..14 / AC-CUST-01..26）が、P5（`008-reception-and-walkin`）はさらに続く
-45 行（UC-RECEP-01..16 / AC-RECEP-01..29）がそろった時点で Approved にした。
+45 行（UC-RECEP-01..16 / AC-RECEP-01..29）が、P6（`009-change-and-cancel`）はさらに続く
+37 行（UC-CHANGE-01..10 / AC-CHANGE-01..27）がそろった時点で Approved にした。
 
 `007-customer-records` の 26 本のうち、新しいお客様の登録・おまとめ・手書き・候補の吹き出しに
 属するものは**画面ではなく HTTP のふるまいで固定してある**。部品（`src/web/customers/`）は
@@ -66,6 +67,17 @@ P1（`004-store-settings`）はこの表の 36 行が、P2（`005-availability-a
 予約を「ご来店がなかった」として残す口・台帳リストの行の「ご来店」の行き先は**まだ器に
 載っていない**ので、その AC は HTTP のふるまいで固定してある。どの入口が足りないかは
 `services/glasses_management/e2e/reception.spec.ts` の先頭と各 test のコメントに書いてある。
+
+`009-change-and-cancel` の 37 本（UC-CHANGE-01..10 / AC-CHANGE-01..27）も同じ扱いで、
+**1 ID = 1 test**（相乗りなし）で並べてある。取り消しの面（CHANGE-CANCEL）・完了の面
+（CHANGE-DONE）・競合の解消の面（EX-CONFLICT の 4 つの出口）・「担当・場所を変える」の
+入口は、部品（`src/web/change/ChangeCancel.tsx` / `ChangeDone.tsx` / `ConflictPanel.tsx`）が
+出荷済みでありながら器（`ChangeScreen` / `App`）がまだ読み込んでおらず、ブラウザから
+開けない。その AC は HTTP のふるまいで固定してある。どの入口が足りないかは
+`services/glasses_management/e2e/change.spec.ts` の先頭と各 test のコメントに書いてある。
+承認済みモックとの突き合わせも同じ理由で 5 面（CHANGE-SEARCH / EX-EMPTY-SEARCH /
+CHANGE-DATETIME / CHANGE-DIFF / EX-CONFLICT）だけを実測し、CHANGE-CANCEL と CHANGE-DONE の
+2 面は `test.skip` で置いてある（`e2e/mock-compare.spec.ts`）。
 
 | Spec ID | Playwright scenario |
 |---|---|
@@ -272,6 +284,43 @@ P1（`004-store-settings`）はこの表の 36 行が、P2（`005-availability-a
 | AC-RECEP-27 | `services/glasses_management/e2e/reception.spec.ts` — ご来店中が 0 名のときは、見出し 1 行と理由 1 行と次の一手だけが残る |
 | AC-RECEP-28 | `services/glasses_management/e2e/reception.spec.ts` — 受付履歴は新しい順に 20 件まで出て、残りは 1 行にまとまり、押すと読み足される |
 | AC-RECEP-29 | `services/glasses_management/e2e/reception.spec.ts` — 担当を決めずに受け付ける 2 人目も同じ枠に載り、上限の 3 件目までは受け付けられる |
+| UC-CHANGE-01 | `services/glasses_management/e2e/change.spec.ts` — お名前・かな・お電話番号・予約番号のどれからでも同じ 1 件にたどり着ける |
+| AC-CHANGE-01 | `services/glasses_management/e2e/change.spec.ts` — 「お名前」に 田中 と入れると、8/27（木）11:00 の 田中 花子 様 の行が並ぶ |
+| AC-CHANGE-02 | `services/glasses_management/e2e/change.spec.ts` — 「お名前」に かな で入れても、漢字で登録されたご予約が結果に出る |
+| AC-CHANGE-03 | `services/glasses_management/e2e/change.spec.ts` — 「お電話番号」に下 4 桁 5678 だけを入れても、田中 花子 様のご予約が出る |
+| AC-CHANGE-04 | `services/glasses_management/e2e/change.spec.ts` — 「予約番号」を入れると結果は 1 件になり、右の詳細に番号と出どころが出る |
+| AC-CHANGE-05 | `services/glasses_management/e2e/change.spec.ts` — 検索は選択中の店舗に固定され、ほかの店舗のご予約は結果に出ない |
+| AC-CHANGE-06 | `services/glasses_management/e2e/change.spec.ts` — 絞り込みの「今日」を押すと、その日でないご予約が結果から消える |
+| AC-CHANGE-07 | `services/glasses_management/e2e/change.spec.ts` — 絞り込みの「取消済み」を押すと、取り消されたご予約が結果に加わる |
+| AC-CHANGE-08 | `services/glasses_management/e2e/change.spec.ts` — 行を押すと一覧は左に残ったまま、右に日時・担当と場所・確認の 1 行が出る |
+| UC-CHANGE-02 | `services/glasses_management/e2e/change.spec.ts` — 0 件でも入れた条件は消えず、条件を 1 つ外す案とほかの探し方が出る |
+| AC-CHANGE-09 | `services/glasses_management/e2e/change.spec.ts` — 0 件のときは「入力した条件はそのまま残しています。」と件数つきの案が出る |
+| AC-CHANGE-10 | `services/glasses_management/e2e/change.spec.ts` — 案を押すと外した条件だけが外れ、ほかの条件は残ったままになる |
+| AC-CHANGE-22 | `services/glasses_management/e2e/change.spec.ts` — 0 件は読み上げに届き、案は件数を含む名前の押せる操作として読まれる |
+| AC-CHANGE-24 | `services/glasses_management/e2e/change.spec.ts` — 0 件から「顧客台帳で調べる」を押すと顧客台帳が開く |
+| UC-CHANGE-03 | `services/glasses_management/e2e/change.spec.ts` — いまのご予約を左に置いたまま、所要が収まる時刻だけから選び直せる |
+| AC-CHANGE-11 | `services/glasses_management/e2e/change.spec.ts` — 候補には受けられるかどうかが文字で添い、満席の時刻は押せない |
+| AC-CHANGE-25 | `services/glasses_management/e2e/change.spec.ts` — 候補の先頭は「いまのまま」で、いまのご予約自身の時刻が残る |
+| AC-CHANGE-12 | `services/glasses_management/e2e/change.spec.ts` — 同じ担当の枠を先に持たれていると満席になり、元のご予約は動かない |
+| UC-CHANGE-09 | `services/glasses_management/e2e/change.spec.ts` — 変更先の枠を先に押さえてから元の予約を切り替える |
+| UC-CHANGE-04 | `services/glasses_management/e2e/change.spec.ts` — 変更前と変更後を項目ごとに 4 行で並べる |
+| AC-CHANGE-13 | `services/glasses_management/e2e/change.spec.ts` — 差分は「変わる行だけ色を付けています」と出て、変わらない行に札が付かない |
+| AC-CHANGE-14 | `services/glasses_management/e2e/change.spec.ts` — 「戻って直す」で戻ったあと開き直すと、日時は元のままで変更が残っていない |
+| AC-CHANGE-15 | `services/glasses_management/e2e/change.spec.ts` — 「変更を確定する」を押すと承った旨が出て、予約番号は変わらない |
+| UC-CHANGE-05 | `services/glasses_management/e2e/change.spec.ts` — 変更を確定すると、読み上げる文と変更後の姿を 1 画面で確かめて終えられる |
+| UC-CHANGE-06 | `services/glasses_management/e2e/change.spec.ts` — 日時を保ったまま担当と場所だけを置き直せる |
+| UC-CHANGE-07 | `services/glasses_management/e2e/change.spec.ts` — 理由を選んで取り消すと、その枠がほかのお客様に案内できる状態へ戻る |
+| AC-CHANGE-16 | `services/glasses_management/e2e/change.spec.ts` — 理由を 1 つも選ばずに取り消しを送っても、ご予約はそのまま残る |
+| AC-CHANGE-17 | `services/glasses_management/e2e/change.spec.ts` — 取り消したあと、その時刻はほかのご予約の候補として受付できますに戻る |
+| AC-CHANGE-21 | `services/glasses_management/e2e/change.spec.ts` — 取り消しは押した 1 回では起きず、ご予約はそのまま残る |
+| UC-CHANGE-08 | `services/glasses_management/e2e/change.spec.ts` — ほかの端末が先に保存していると、選ぶまでどちらの内容も書き換わらない |
+| AC-CHANGE-19 | `services/glasses_management/e2e/change.spec.ts` — 確定を押すと相手の内容と自分の内容が並び、どちらもまだ保存されていない |
+| AC-CHANGE-20 | `services/glasses_management/e2e/change.spec.ts` — 「あなたの内容で上書きする」は、送る前に空きを当て直してから保存される |
+| AC-CHANGE-23 | `services/glasses_management/e2e/change.spec.ts` — 相手の内容を残すと、ご予約は相手の内容のままで自分の入力は捨てられる |
+| AC-CHANGE-26 | `services/glasses_management/e2e/change.spec.ts` — 確定の瞬間に枠が埋まっていると変更されず、BOOK-CONFLICT と同じ形になる |
+| AC-CHANGE-27 | `services/glasses_management/e2e/change.spec.ts` — 古い版のまま送ると 409 になり、日時も担当も枠も監査も 1 行も書き換わらない |
+| UC-CHANGE-10 | `services/glasses_management/e2e/change.spec.ts` — 変更と取消は、実行した日時と変更前後が 1 件ずつたどれる形で残る |
+| AC-CHANGE-18 | `services/glasses_management/e2e/change.spec.ts` — 変更したご予約の「そのあとの変更」に、変更前後が 1 行で並ぶ |
 
 validator 自体は `scripts/check-e2e-traceability.test.mjs` で unit test する。通常の実行は次の
 とおり。

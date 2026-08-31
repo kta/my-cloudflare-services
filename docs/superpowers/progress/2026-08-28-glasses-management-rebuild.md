@@ -10,7 +10,7 @@
 | P3 予約受付 | `006-booking-flow` | **完了（Approved）** | 下記 |
 | P4 顧客台帳 | `007-customer-records` | **完了（Approved）** | 下記 |
 | P5 来店受付とウォークイン | `008-reception-and-walkin` | **完了（Approved）** | 下記 |
-| P6 変更と取消 | `009-change-and-cancel` | 未着手 | — |
+| P6 変更と取消 | `009-change-and-cancel` | **完了（Approved）** | 下記 |
 | P7 受付の録音 | `010-recording` | 未着手 | — |
 | P8 お客様向けWeb予約 | `011-web-booking` | 未着手 | — |
 | P9 分析 | `012-analytics` | 未着手 | — |
@@ -258,3 +258,33 @@ pnpm --filter @app/glasses_management e2e → 162 passed
 ```
 
 モック突き合わせは **36 面**。
+
+
+## P6（2026-08-31）
+
+作ったもの:
+
+- `domain/reservation-search.ts` — 氏名・かな・電話番号・予約番号での検索と、0 件のときの緩和候補
+- `domain/reservation-change.ts` — 変更の差分（何がどう変わるか）と版の競合の判定
+- `domain/availability.ts` に **「自分を除く」引数**を足した（自分の予約が自分の変更を邪魔しない）
+- ルート 4 本。**変更先の枠を確保してから元の予約を切り替える**（元を先に空けない）。
+  **409 は 1 行も書き換えない**ことを実 D1 で確かめた
+- 画面 7 面（検索 / 0 件 / 日時 / 差分 / 取消 / 完了 / 別の端末との競合）
+- 別の端末でも同じ予約を直していたときは両方の内容を並べ、選ぶまでどちらも書き換えない
+
+レビュー: subagent で **2 巡**（Opus。① backend / frontend ② 受入基準 37 本の 1 本ずつの充足確認と
+敵対的な粗探し）。
+
+確かめたこと:
+
+```
+（.dev.vars を退避した CI 相当の状態で）
+bash scripts/check-agent-compat.sh   → ok
+pnpm exec biome check .              → 緑
+pnpm run deps:check                  → 緑
+pnpm -r --if-present typecheck       → 緑
+pnpm run test                        → 緑（2,608 テスト + traceability）
+pnpm --filter @app/glasses_management e2e → 206 passed
+```
+
+モック突き合わせは **44 面**。
