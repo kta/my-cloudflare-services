@@ -59,6 +59,11 @@ export type CustomerScreenProps = {
   storeId: string
   /** 店舗名の解決（手書きメモの「記入した店舗」）。 */
   stores: readonly Store[] | null
+  /**
+   * 一覧の検索欄の初めの中身。予約を探す面の「顧客台帳で調べる」から来たとき、
+   * 伺ったお名前をそのまま引き継ぐ（AC-CHANGE-24）。台帳をふつうに開いたときは空。
+   */
+  initialQuery?: string
   /** 予約の 5 工程へ移る（AC-CUST-26 の入口）。工程 4 のお名前・ふりがな・お電話番号を
    *  これで埋める（AC-CUST-12・AC-CUST-26）。 */
   onStartBooking: (customer: {
@@ -163,11 +168,12 @@ export function CustomerScreen({
   storeId,
   stores,
   onStartBooking,
+  initialQuery = '',
   onSessionExpired,
 }: CustomerScreenProps) {
   const [pane, setPane] = useState<'list' | 'detail' | 'new' | 'merge' | 'handwrite'>('list')
   const [conditions, setConditions] = useState<CustomerListConditions>({
-    query: '',
+    query: initialQuery,
     sort: 'kana',
     visitRange: null,
   })
@@ -455,6 +461,7 @@ export function CustomerScreen({
           <CustomerList
             items={items}
             phase={listPhase}
+            initialQuery={initialQuery}
             summary={detail}
             summaryPhase={
               detailPhase === 'ready' ? 'ready' : detailPhase === 'loading' ? 'loading' : 'error'

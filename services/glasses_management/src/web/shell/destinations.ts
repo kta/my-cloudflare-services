@@ -19,7 +19,10 @@ export const HOME_DESTINATION: Destination = { key: 'home', label: 'トップ', 
 export const DESTINATIONS: readonly Destination[] = [
   { key: 'ledger', label: '予約台帳', icon: 'ledger' },
   { key: 'reception', label: '来店受付', icon: 'reception' },
-  { key: 'search', label: '予約を検索', icon: 'search' },
+  // 行き先の名前は「予約を探す」。面の名前（上のバーの「予約を変更する」）とは
+  // 別の 2 段として持つ（`design/05-screen-flow.md` §2.2）。モックの
+  // 「予約を検索」は §8 の既知差分で、モックの画像は直さない。
+  { key: 'search', label: '予約を探す', icon: 'search' },
   { key: 'history', label: '受付履歴', icon: 'history' },
   { key: 'customers', label: '顧客台帳', icon: 'customer' },
   { key: 'analytics', label: '分析', icon: 'analytics', group: 'operations' },

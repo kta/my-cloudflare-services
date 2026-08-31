@@ -51,7 +51,11 @@ import {
   ReceptionSessionDraftPatch,
   ReceptionSessionStart,
   ReservationCancelInput,
+  ReservationChangeHistory,
+  ReservationChangeInput,
   ReservationDetail,
+  ReservationList,
+  ReservationSearchQuery,
   ReservationStatus,
   type SettingsImpactItem,
   SettingsImpactReport,
@@ -132,10 +136,12 @@ import {
   stores,
   visitPurposes,
 } from './db/schema'
+import { slotLockRequests } from './db/slot-locks'
 import {
   type AvailabilityInput,
   computeAvailability,
   evaluateSlot,
+  expandToSlotStarts,
   type HoldOccupancy,
 } from './domain/availability'
 import {
@@ -171,6 +177,14 @@ import {
 import { deleteHold, HOLD_RENEW_MAX, listHoldOccupancies, putHold } from './domain/holds'
 import { buildLedgerView } from './domain/ledger'
 import { buildHistoryList, type ReceptionHistoryRow } from './domain/reception-history'
+import { buildCancelBatch, buildChangeBatch } from './domain/reservation-change'
+import {
+  type RelaxationCounts,
+  type ReservationSearchInput,
+  type ReservationSearchQueryLike,
+  relaxationsFor,
+  resolveSearch,
+} from './domain/reservation-search'
 import {
   type ImpactWebSlot,
   impactOfBusinessHours,
@@ -1554,6 +1568,8 @@ function bookingBoard(input: {
   receptionSessionId: string | null
   holds: readonly HoldOccupancy[]
   preferredStartsAt: string
+  /** 変更のとき、いま入っているご予約自身を塞がりに数えない（AC-CHANGE-25）。 */
+  excludeReservationId?: string | null
 }): AvailabilityInput {
   return {
     date: input.date,
@@ -1575,6 +1591,8 @@ function bookingBoard(input: {
     // 空の配列は「設備を絞らない」であって「どの設備も使えない」ではない。
     equipmentIds: input.equipmentIds.length > 0 ? input.equipmentIds : undefined,
     excludeReceptionSessionId: input.receptionSessionId,
+    // 自分の予約が自分の変更を邪魔しない。確定のときは undefined のままである。
+    excludeReservationId: input.excludeReservationId ?? null,
     preferredStartsAt: input.preferredStartsAt,
   }
 }
@@ -1826,6 +1844,7 @@ type HistoryEntryRecord = {
 /** 「そのあとの変更」1 行の材料（`audit_events` × `staff`）。 */
 type AuditChangeRecord = {
   action: string
+  beforeJson: string | null
   afterJson: string | null
   occurredAt: string
   actorName: string | null
@@ -1849,11 +1868,43 @@ const STAGE_CHANGE_LABELS: Readonly<Record<string, string>> = {
   left: 'ご退店になりました',
 }
 
+/** JST の壁時計（`11:00`）。経緯の 1 行は時刻だけを読み上げる。 */
+const jstClock = (iso: string): string =>
+  new Date(Date.parse(iso) + 9 * 60 * MS_PER_MINUTE).toISOString().slice(11, 16)
+
+/** 取り消しの理由 → 経緯の 1 行。`no_show` だけ言い方が変わる。 */
+const CANCEL_CHANGE_LABELS: Readonly<Record<string, string>> = {
+  no_show: 'ご来店がありませんでした',
+  customer: 'ご予約を取り消しました（お客様のご都合）',
+  store: 'ご予約を取り消しました（店舗の都合）',
+  duplicate: 'ご予約を取り消しました（予約の重複）',
+}
+
 /**
  * 監査 1 行 → 「そのあとの変更」の文。**知らない `action` は出さない**（null）。
  * 出すと、まだ画面の無い操作の綴りがそのままお客様対応の場に出る。
+ *
+ * 変更（`reservation.rescheduled`）だけは前後の値を読んで 1 行にする
+ * （AC-CHANGE-18「ご来店時刻を 11:00 から 14:00 へ」）。日時が動いていない変更は
+ * 担当・場所・ご用件の置き直しなので、時刻を語らない 1 文にまとめる。
  */
-function changeLabel(action: string, afterJson: string | null): string | null {
+function changeLabel(
+  action: string,
+  afterJson: string | null,
+  beforeJson: string | null = null,
+): string | null {
+  if (action === 'reservation.rescheduled') {
+    const before = beforeJson === null ? null : (JSON.parse(beforeJson) as { startsAt?: string })
+    const after = afterJson === null ? null : (JSON.parse(afterJson) as { startsAt?: string })
+    if (before?.startsAt === undefined || after?.startsAt === undefined) return null
+    return before.startsAt === after.startsAt
+      ? 'ご予約の内容を直しました'
+      : `ご来店時刻を ${jstClock(before.startsAt)} から ${jstClock(after.startsAt)} へ`
+  }
+  if (action === 'reservation.cancelled') {
+    const after = afterJson === null ? null : (JSON.parse(afterJson) as { reason?: string })
+    return after?.reason === undefined ? null : (CANCEL_CHANGE_LABELS[after.reason] ?? null)
+  }
   if (action !== 'visit.stage.changed') return RECEPTION_CHANGE_LABELS[action] ?? null
   const after = afterJson === null ? null : (JSON.parse(afterJson) as { stage?: string })
   return after?.stage === undefined ? null : (STAGE_CHANGE_LABELS[after.stage] ?? null)
@@ -1906,6 +1957,228 @@ async function reservationDetailOf(env: Bindings, org: string, reservationId: st
     cancelledAt: reservation.cancelledAt,
     cancelReason: reservation.cancelReason,
   })
+}
+
+/* --- 予約を探す・直す（P6） ------------------------------------------------ */
+
+/**
+ * 検索の外側の輪。**`reservations` を先に絞ってからお客様を引く。**
+ * 逆にすると、お名前の部分一致が顧客表の全走査になってから予約へ広がる。
+ */
+const RESERVATION_SEARCH_FROM =
+  'FROM reservations r LEFT JOIN customers c ON c.organization_id = r.organization_id AND c.id = r.customer_id'
+
+/** 直せるご予約の状態。取り消した・ご来店がなかった・終わったご予約は直せない。 */
+const CHANGEABLE_STATUS: ReadonlySet<string> = new Set(['confirmed', 'arrived', 'serving'])
+
+/** お客様が Web の控えから読み上げるご予約番号の頭。 */
+const WEB_CODE_HEAD = 'EY-W-'
+
+/**
+ * 契約のクエリ → 検索ドメインの入力。
+ *
+ * **組織と店舗はここでしか付かない。**呼び出し側がこの 2 つを外せる形にしないために、
+ * 引数で受けて必ず入れる（`resolveSearch` も先頭 2 条件に据える）。
+ * `EY-W-` のご予約番号は `web_bookings` を引かない — その表は P8 が作る。いまの番号は
+ * `webBookingCodeOf` が業務側の番号から機械的に作っているので、同じ規則の逆を引く
+ * （採番の系統を 2 つ持たない）。
+ *
+ * **番号を業務側へ直すだけでは足りない。**`EY-W-2608-0142` は Web のご予約にしか無い
+ * 番号で、同じ連番の `EY-2608-0142` がお電話のご予約なら、その番号はどこにも存在しない。
+ * 直しただけだとそのお電話のご予約が 1 件当たり、受付が別のお客様のご予約を開く。
+ * だから出どころも Web に絞る。「お電話でのご予約だけ」と重なったときは空の並びになり、
+ * `resolveSearch` がどの行にも当たらない条件を組み立てる（0 件で返り、
+ * 「「お電話でのご予約だけ」を外す」が緩和候補に出る）。
+ */
+function reservationSearchInput(
+  org: string,
+  storeId: string,
+  query: ReservationSearchQuery,
+): ReservationSearchInput {
+  const asked = query.source.length > 0 ? query.source : undefined
+  const source =
+    query.code?.startsWith(WEB_CODE_HEAD) === true
+      ? (asked ?? ['web']).filter((word) => word === 'web')
+      : asked
+  return {
+    organizationId: org,
+    storeId,
+    name: query.name,
+    kana: query.kana,
+    phone: query.phone,
+    code: query.code?.replace(WEB_CODE_HEAD, 'EY-'),
+    from: query.from,
+    to: query.to,
+    source,
+    status: query.status.length > 0 ? query.status : undefined,
+    staffId: query.staffId,
+    includeCancelled: query.includeCancelled,
+  }
+}
+
+/**
+ * 緩和候補へ渡す条件。**そのまま再送できる欄だけ**を載せる。
+ * `crossStore` / `limit` / `cursor` を混ぜると、案を押した再検索が
+ * `?crossStore=false`（文字列）で 400 になる（契約は `z.literal(false)`）。
+ */
+function relaxableQuery(query: ReservationSearchQuery): ReservationSearchQueryLike {
+  return {
+    storeId: query.storeId,
+    name: query.name,
+    kana: query.kana,
+    phone: query.phone,
+    code: query.code,
+    from: query.from,
+    to: query.to,
+    status: query.status.length > 0 ? query.status : undefined,
+    source: query.source.length > 0 ? query.source : undefined,
+    staffId: query.staffId,
+    includeCancelled: query.includeCancelled,
+  }
+}
+
+/** 条件を 1 本の `WHERE` に畳む。1 条件が複数の比較を持つので必ず括る。 */
+const whereOf = (conditions: readonly { sql: string }[]): string =>
+  conditions.map((condition) => `(${condition.sql})`).join(' AND ')
+
+/** 条件に当たる件数。緩和候補の「5件」も画面の「結果 4件」もこの 1 か所で数える。 */
+async function countReservations(
+  db: D1Database,
+  org: string,
+  storeId: string,
+  query: ReservationSearchQuery,
+): Promise<number> {
+  const resolved = resolveSearch(reservationSearchInput(org, storeId, query))
+  const row = await db
+    .prepare(`SELECT COUNT(*) AS n ${RESERVATION_SEARCH_FROM} WHERE ${whereOf(resolved.where)}`)
+    .bind(...resolved.params)
+    .first<{ n: number }>()
+  return row?.n ?? 0
+}
+
+/**
+ * 0 件のときだけ付ける条件を 1 つ緩めた候補。
+ *
+ * 案ごとに `relaxationsFor` を 1 回ずつ空撃ちして**緩めたクエリそのもの**を受け取り、
+ * その件数を数え直してからもう 1 度呼ぶ。期間を広げる幅の規則をドメインに 1 つだけ置き、
+ * ルートが同じ計算を複製しないので、**案に出した件数と押したあとの件数が食い違わない**。
+ */
+async function relaxationsWithCounts(
+  db: D1Database,
+  org: string,
+  storeId: string,
+  query: ReservationSearchQuery,
+) {
+  const wire = relaxableQuery(query)
+  const counts: RelaxationCounts = { total: 0 }
+  for (const kind of ['period', 'source', 'cancelled'] as const) {
+    const probe = relaxationsFor(wire, { total: 0, [kind]: 1 })[0]
+    if (probe === undefined) continue
+    const relaxed = ReservationSearchQuery.safeParse(probe.query)
+    if (!relaxed.success) continue
+    counts[kind] = await countReservations(db, org, storeId, relaxed.data)
+  }
+  return relaxationsFor(wire, counts)
+}
+
+/** 一覧の 1 行のご用件（`name_short` を「・」で連ねる）。台帳の帯と同じ言葉である。 */
+async function purposeLabelsOf(
+  db: D1Database,
+  org: string,
+  reservationIds: readonly string[],
+): Promise<Map<string, string>> {
+  const labels = new Map<string, string>()
+  if (reservationIds.length === 0) return labels
+  const found = await db
+    .prepare(
+      'SELECT rp.reservation_id AS reservationId, p.name_short AS nameShort FROM reservation_purposes rp ' +
+        'JOIN visit_purposes p ON p.organization_id = rp.organization_id AND p.id = rp.purpose_id ' +
+        `WHERE rp.organization_id = ? AND rp.reservation_id IN (${reservationIds.map(() => '?').join(',')}) ` +
+        'ORDER BY rp.reservation_id, rp.sort_order',
+    )
+    .bind(org, ...reservationIds)
+    .all<{ reservationId: string; nameShort: string }>()
+  for (const row of found.results) {
+    const seen = labels.get(row.reservationId)
+    labels.set(row.reservationId, seen === undefined ? row.nameShort : `${seen}・${row.nameShort}`)
+  }
+  return labels
+}
+
+/** 一覧の 1 行の担当。決まっていない行は null のまま返す（画面が「担当が未定」と描く）。 */
+async function staffNamesOf(
+  db: D1Database,
+  org: string,
+  reservationIds: readonly string[],
+): Promise<Map<string, string>> {
+  const names = new Map<string, string>()
+  if (reservationIds.length === 0) return names
+  const found = await db
+    .prepare(
+      'SELECT ra.reservation_id AS reservationId, s.display_name AS displayName FROM reservation_assignments ra ' +
+        'JOIN staff s ON s.organization_id = ra.organization_id AND s.id = ra.target_id ' +
+        `WHERE ra.organization_id = ? AND ra.kind = 'staff' AND ra.reservation_id IN (${reservationIds.map(() => '?').join(',')})`,
+    )
+    .bind(org, ...reservationIds)
+    .all<{ reservationId: string; displayName: string }>()
+  for (const row of found.results) names.set(row.reservationId, row.displayName)
+  return names
+}
+
+/**
+ * 版が合わなかったときに載せる**相手の内容**（EX-CONFLICT の左側）。
+ *
+ * 1 行も書けていないので、ここで読み直して差し支えない。載せるのは画面が
+ * 「相手の内容を残す」を描くのに要るものだけで、これが無いと 409 のたびに
+ * 画面がご予約 1 件を取り直す往復を足すことになる。
+ */
+async function conflictingVersion(env: Bindings, org: string, reservationId: string) {
+  const detail = await reservationDetailOf(env, org, reservationId)
+  if (detail === null) return null
+  const staffId = detail.assignments.find((band) => band.kind === 'staff')?.targetId ?? null
+  const equipmentIds = detail.assignments.flatMap((band) =>
+    band.kind === 'equipment' && band.targetId !== null ? [band.targetId] : [],
+  )
+  const staffName =
+    staffId === null
+      ? null
+      : ((
+          await env.DB.prepare(
+            'SELECT display_name AS displayName FROM staff WHERE organization_id = ? AND id = ?',
+          )
+            .bind(org, staffId)
+            .first<{ displayName: string }>()
+        )?.displayName ?? null)
+  const equipmentNames =
+    equipmentIds.length === 0
+      ? []
+      : (
+          await env.DB.prepare(
+            `SELECT name FROM equipment WHERE organization_id = ? AND id IN (${equipmentIds.map(() => '?').join(',')})`,
+          )
+            .bind(org, ...equipmentIds)
+            .all<{ name: string }>()
+        ).results.map((row) => row.name)
+  // 「受付iPad の 中村 彩 が 11:06 に保存しました。」の人。共有端末では null になる。
+  const savedBy =
+    (
+      await env.DB.prepare(
+        'SELECT s.display_name AS displayName FROM audit_events a ' +
+          'LEFT JOIN staff s ON s.organization_id = a.organization_id AND s.id = a.actor_id ' +
+          'WHERE a.organization_id = ? AND a.target_id = ? ORDER BY a.occurred_at DESC, a.id DESC LIMIT 1',
+      )
+        .bind(org, reservationId)
+        .first<{ displayName: string | null }>()
+    )?.displayName ?? null
+  return {
+    version: detail.version,
+    startsAt: detail.startsAt,
+    endsAt: detail.endsAt,
+    staffName,
+    equipmentNames,
+    savedAt: detail.updatedAt,
+    savedBy,
+  }
 }
 
 const routes = app
@@ -3309,6 +3582,308 @@ const routes = app
     return c.json(detail)
   })
 
+  /* --- 予約を探す・直す（P6） --------------------------------------------- */
+
+  /**
+   * ご予約を探す（CHANGE-SEARCH「結果 4件」／EX-EMPTY-SEARCH）。
+   *
+   * **選択中店舗に固定する**（Q-04 のいまの前提）。店舗を選ぶ前の問い合わせは組織まるごとの
+   * 走査になるうえ、他店舗のご予約を誤って触る道を開ける。断って画面に店舗を選ばせる。
+   *
+   * 条件を 1 つ緩めた候補は **0 件のときだけ**添える。1 件以上あるのに候補が並ぶと、
+   * いま見えている一覧が信用できなくなる（`ReservationList` の refine が同じことを言う）。
+   */
+  .get('/api/staff/reservations', zValidator('query', ReservationSearchQuery), async (c) => {
+    const db = drizzle(c.env.DB)
+    const org = c.get('auth').org
+    const query = c.req.valid('query')
+    const storeId = query.storeId
+    if (storeId === undefined) {
+      return c.json(rejected(['店舗を選んでからお探しください。']), 400)
+    }
+    // 全クエリを JWT の `org` で絞る。他テナントの店舗 id は「無い」として 404。
+    const store = await findStore(db, org, storeId)
+    if (!store) return c.json({ error: 'not_found' }, 404)
+
+    const resolved = resolveSearch(reservationSearchInput(org, storeId, query))
+    const where = whereOf(resolved.where)
+    const found = await c.env.DB.prepare(
+      'SELECT r.id AS id, r.code AS code, r.starts_at AS startsAt, ' +
+        'r.duration_minutes AS durationMinutes, r.status AS status, r.source AS source, ' +
+        `c.name AS customerName, c.visit_count AS visitCount ${RESERVATION_SEARCH_FROM} ` +
+        `WHERE ${where} ORDER BY ${resolved.orderBy} LIMIT ?`,
+    )
+      .bind(...resolved.params, query.limit)
+      .all<{
+        id: string
+        code: string
+        startsAt: string
+        durationMinutes: number
+        status: string
+        source: string
+        customerName: string | null
+        visitCount: number | null
+      }>()
+
+    const ids = found.results.map((row) => row.id)
+    const [labels, staffNames] = await Promise.all([
+      purposeLabelsOf(c.env.DB, org, ids),
+      staffNamesOf(c.env.DB, org, ids),
+    ])
+    const total = await countReservations(c.env.DB, org, storeId, query)
+    return c.json(
+      ReservationList.parse({
+        items: found.results.map((row) => ({
+          id: row.id,
+          code: row.code,
+          startsAt: row.startsAt,
+          durationMinutes: row.durationMinutes,
+          status: row.status,
+          source: row.source,
+          customerName: row.customerName,
+          visitCount: row.visitCount,
+          purposeLabel: labels.get(row.id) ?? '',
+          staffName: staffNames.get(row.id) ?? null,
+        })),
+        // 読み足しはまだ持たない（`limit` の既定 50 で 1 画面に収まる面である）。
+        nextCursor: null,
+        total,
+        relaxations: total === 0 ? await relaxationsWithCounts(c.env.DB, org, storeId, query) : [],
+      }),
+    )
+  })
+
+  /**
+   * ご予約を変更する（CHANGE-DIFF「変更を確定する」）。
+   *
+   * **変更先の枠を確保してから元の予約を切り替える。**バッチの 1 文目が新しい占有行の
+   * 条件付き INSERT で、古い枠の DELETE はそのあと・版を +1 する UPDATE はいちばん最後
+   * である（`domain/reservation-change.ts`）。元を先に空ける形だと、空けた瞬間に別の端末へ
+   * 枠を取られたときに戻せない。
+   *
+   * 断るのは 2 通り。**枠が取れなかった**（1 文目が 0 行）＝ 409 `slot_taken`、
+   * **版が合わなかった**（最後の文が 0 行）＝ 409 `version_conflict` で、どちらの場合も
+   * 版のガードが全文に配ってあるので **D1 には 1 行も書かれていない**（AC-CHANGE-27）。
+   *
+   * `Idempotency-Key` は受け取らない。二重適用を止めるのは `version` の楽観ロックだけで、
+   * 冪等キーを重ねると「版が合わないので 409」と「同じ鍵なので 200 を焼き直す」が
+   * 同じ要求に同時に当たる（`04-api.md` §6.1）。
+   */
+  .patch(
+    '/api/staff/reservations/:reservationId',
+    zValidator('json', ReservationChangeInput),
+    async (c) => {
+      const db = drizzle(c.env.DB)
+      const { org, sub } = c.get('auth')
+      const reservationId = c.req.param('reservationId')
+      const input = c.req.valid('json')
+
+      const found = await readReservationDetail(db, { organizationId: org, reservationId })
+      if (found === null) return c.json({ error: 'not_found' }, 404)
+      const { reservation, purposes: purposesBefore, assignments } = found
+      // 取り消した・ご来店がなかった・終わったご予約は直せない。枠はもう返してあるので、
+      // 版だけ進めると台帳と空き枠の見え方が食い違う。
+      if (!CHANGEABLE_STATUS.has(reservation.status)) {
+        return c.json({ error: 'invalid_transition' }, 409)
+      }
+      const store = await findStore(db, org, reservation.storeId)
+      if (!store) return c.json({ error: 'not_found' }, 404)
+
+      // 欄が無い＝そのまま。いまの姿を土台に、送られてきた欄だけを置き換える。
+      const staffBefore = assignments.find((band) => band.kind === 'staff')?.targetId ?? null
+      const equipmentBefore = assignments.flatMap((band) =>
+        band.kind === 'equipment' && band.targetId !== null ? [band.targetId] : [],
+      )
+      const purposeIdsBefore = purposesBefore.map((line) => line.purposeId)
+      const startsAt = input.startsAt ?? reservation.startsAt
+      const staffId = input.staffId === undefined ? staffBefore : input.staffId
+      const equipmentIds = input.equipmentIds ?? equipmentBefore
+      const purposeIds = input.purposeIds ?? purposeIdsBefore
+
+      const now = new Date()
+      const date = toJstDateString(startsAt)
+      const rows = await readAvailabilityDay(db, {
+        organizationId: org,
+        storeId: reservation.storeId,
+        date,
+        purposeIds,
+      })
+      const slotRules = rows.slotRules
+      if (slotRules === null) return c.json({ error: 'not_found' }, 404)
+      // 受けられないご用件（無い id・止めた目的・他店舗のもの）が混ざったら直さない。
+      if (rows.missingPurposes > 0) return c.json({ error: 'purpose_unavailable' }, 409)
+
+      /*
+       * ご用件の所要は**予約した時点の写し**である（`03-data-model.md` §7.2）。
+       * ご用件を入れ替えないときに `visit_purposes` を読み直すと、設定でご用件の所要を
+       * 直したあとに日時だけを動かしただけで、そのご予約の凍結した所要が黙って
+       * いまの値へ書き換わる（差分表は「ご用件は変わりません」と言ったままである）。
+       * だから**入れ替えたときだけ**台帳を読み、そうでなければ今の行をそのまま積み直す。
+       */
+      const lines =
+        input.purposeIds === undefined
+          ? purposesBefore.map((line) => ({
+              id: line.purposeId,
+              durationMinutes: line.durationMinutes,
+            }))
+          : await readPurposeLines(db, org, purposeIds)
+      // ご用件を入れ替えたときだけ所要を数え直す（日時だけの変更で所要が動かない）。
+      const durationMinutes =
+        input.durationMinutes ??
+        (input.purposeIds === undefined
+          ? reservation.durationMinutes
+          : lines.reduce((total, line) => total + line.durationMinutes, 0))
+      const endsAt = new Date(Date.parse(startsAt) + durationMinutes * MS_PER_MINUTE).toISOString()
+
+      // 担当・設備は自分の組織・自分の店舗のものだけ。他テナントの id は「無い」として 404。
+      const staffMember =
+        staffId === null ? null : (rows.staff.find((m) => m.id === staffId) ?? null)
+      if (staffId !== null && staffMember === null) return c.json({ error: 'not_found' }, 404)
+      const units: { id: string; capacity: number }[] = []
+      for (const equipmentId of equipmentIds) {
+        const unit = rows.equipment.find((candidate) => candidate.id === equipmentId)
+        if (unit === undefined) return c.json({ error: 'not_found' }, 404)
+        units.push({ id: unit.id, capacity: unit.capacity })
+      }
+
+      const holds = await listHoldOccupancies(c.env.SHORT_LIVED, org, reservation.storeId, now)
+      const boardOf = (source: AvailabilityDayRows) =>
+        bookingBoard({
+          date,
+          now,
+          rows: source,
+          isSuspended: store.isActive !== '1',
+          durationMinutes,
+          staffId,
+          equipmentIds,
+          receptionSessionId: null,
+          holds,
+          preferredStartsAt: startsAt,
+          // いま入っているご予約自身が自分の変更を邪魔しない（AC-CHANGE-25）。
+          excludeReservationId: reservationId,
+        })
+      // 断るのは動かない事実だけ（定休・営業時間の外・技能や設備がそもそも無い）。
+      // 枠が埋まっているかどうかはバッチの 1 文目が決める。
+      const verdict = evaluateSlot(boardOf(rows), startsAt)
+      const blocked = verdict.reason === null ? undefined : BLOCKING_REASON[verdict.reason]
+      if (blocked !== undefined) return c.json({ error: blocked }, 409)
+
+      /*
+       * 古い枠と新しい枠は `created_at` で見分ける（⑤ の `created_at <> ?`）。
+       * **同じミリ秒に 2 度直すと見分けが付かない** — 相手の版で送り直した直後などに
+       * `now` が前回のバッチと同じ値になると、① が新しい枠を積んだあとで枠のガードが
+       * 「要求本数より多い」と読んで ②〜⑥ を丸ごと落とし、409 を返しながら占有行だけが
+       * 増える。ご予約の `updated_at` は前回のバッチの時刻そのものなので、必ず 1 ミリ秒
+       * 後ろへ置いて、どちらの枠がこのバッチのものかを 1 通りに決める。
+       */
+      const batchAt = new Date(
+        Math.max(now.getTime(), Date.parse(reservation.updatedAt) + 1),
+      ).toISOString()
+      const actorId = await actorStaffId(db, org, reservation.storeId, sub)
+      const statements = buildChangeBatch({
+        db: c.env.DB,
+        organizationId: org,
+        storeId: reservation.storeId,
+        reservationId,
+        version: input.version,
+        batchAt,
+        requests: slotLockRequests({
+          slotStarts: expandToSlotStarts({
+            startsAt,
+            endsAt,
+            slotMinutes: slotRules.slotMinutes,
+            cleanupMinutes: slotRules.cleanupMinutes,
+          }),
+          staff:
+            staffMember === null
+              ? null
+              : {
+                  id: staffMember.id,
+                  maxParallelReservations: staffMember.maxParallelReservations,
+                },
+          equipment: units,
+          maxParallel: slotRules.maxParallel,
+        }),
+        after: {
+          startsAt,
+          endsAt,
+          durationMinutes,
+          noteCustomer: input.noteCustomer ?? reservation.noteCustomer ?? '',
+          noteInternal: input.noteInternal ?? reservation.noteInternal ?? '',
+        },
+        purposes: lines.map((line, index) => ({
+          purposeId: line.id,
+          durationMinutes: line.durationMinutes,
+          sortOrder: index,
+        })),
+        assignments: [
+          { kind: 'staff', targetId: staffMember?.id ?? null },
+          ...units.map((unit) => ({ kind: 'equipment' as const, targetId: unit.id })),
+        ],
+        actorId,
+        correlationId: crypto.randomUUID(),
+        // 監査は追記専用。平文のお名前・お電話番号を入れない（`07-nfr.md` §6.6）。
+        audit: {
+          before: {
+            startsAt: reservation.startsAt,
+            endsAt: reservation.endsAt,
+            durationMinutes: reservation.durationMinutes,
+            staffId: staffBefore,
+            equipmentIds: equipmentBefore,
+            purposeIds: purposeIdsBefore,
+          },
+          after: {
+            startsAt,
+            endsAt,
+            durationMinutes,
+            staffId: staffMember?.id ?? null,
+            equipmentIds: units.map((unit) => unit.id),
+            purposeIds,
+          },
+        },
+      })
+      // 並びはドメインが決めてある。**アプリ側で並べ替えない。**
+      const results = await c.env.DB.batch(statements as [Statement, ...Statement[]])
+      const applied = (results[results.length - 1]?.meta.changes ?? 0) > 0
+      if (!applied) {
+        // 版か枠かを見分ける。何も書けていないので読み直して差し支えない。
+        const current = await c.env.DB.prepare(
+          'SELECT version FROM reservations WHERE organization_id = ? AND id = ?',
+        )
+          .bind(org, reservationId)
+          .first<{ version: number }>()
+        if ((current?.version ?? 0) !== input.version) {
+          return c.json(
+            {
+              error: 'version_conflict' as const,
+              current: await conflictingVersion(c.env, org, reservationId),
+            },
+            409,
+          )
+        }
+        // 代わりの時刻は**取られたあとの盤面**から採る（読んだあとに相手が確定している）。
+        const fresh = await readAvailabilityDay(db, {
+          organizationId: org,
+          storeId: reservation.storeId,
+          date,
+          purposeIds,
+        })
+        const answer = computeAvailability(boardOf(fresh))
+        return c.json(
+          {
+            error: 'slot_taken' as const,
+            alternatives: AvailabilitySlot.array().max(3).parse(answer.alternatives),
+          },
+          409,
+        )
+      }
+
+      const detail = await reservationDetailOf(c.env, org, reservationId)
+      if (detail === null) return c.json({ error: 'not_found' }, 404)
+      return c.json(detail)
+    },
+  )
+
   /**
    * ご予約を取り消す／ご来店がなかったとして残す（AC-RECEP-16）。
    *
@@ -3317,16 +3892,20 @@ const routes = app
    * この 1 か所だけで、画面から `status` を直に受けない — 受けると、来ていないお客様の
    * ご予約を「成立」に書き換えられる。
    *
-   * 当日の締めは 2 台の iPad が同時に流すので版で守る。0 行なら 409 `version_conflict` で、
-   * 取り消し済みの予約を別の理由で上書きできない。
+   * 当日の締めは 2 台の iPad が同時に流すので版で守る。**版を +1 する `UPDATE` は
+   * バッチの最後**で、枠の DELETE も監査も送られてきた版を見る（`buildCancelBatch`）。
+   * 版が合わなければ最後の 1 文が 0 行になり、そのとき D1 には 1 行も書かれていない
+   * （AC-CHANGE-27。ここを「1 文目で版を +1 して 2 文目以降はその次の版を見る」形にすると、
+   * 古い版で送った端末の枠だけが解けて **409 が二重予約を作る**）。
+   *
+   * 取り消し済み・ご来店なし・終わったご予約は、版が合っていても断る。版だけでは
+   * 「同じ版のまま理由を上書きする」2 度目の取消を止められない。
    *
    * 枠の占有はここで解く。**解かないと、お帰りになった方の 11:00 が翌朝まで埋まったまま**
    * になり、同時受付の上限がその日ぶん狭くなる。ウォークインの受付は `left` にして
    * 待ちの帯から外す（`walk_ins.status='waiting'` のまま残すと「いまお待ち N名」が
    * 減らず、盤面にも出続ける）。取り消した来店であることは `reservations.status` に
    * 残るので、受付履歴からは消えない。
-   *
-   * 取消の理由の言い直し・お客様への連絡・変更の記録は `009-change-and-cancel` が足す。
    */
   .post(
     '/api/staff/reservations/:reservationId/cancel',
@@ -3343,9 +3922,19 @@ const routes = app
         .first<{ storeId: string; status: string }>()
       if (found === null) return c.json({ error: 'not_found' }, 404)
 
+      // 版が合っていても、もう取り消したご予約は書き換えない（理由の上書きを作らない）。
+      if (!CHANGEABLE_STATUS.has(found.status)) {
+        return c.json(
+          {
+            error: 'version_conflict' as const,
+            current: await conflictingVersion(c.env, org, reservationId),
+          },
+          409,
+        )
+      }
+
       const now = new Date()
       const nowIso = now.toISOString()
-      const status = input.reason === 'no_show' ? 'no_show' : 'cancelled'
       const actorId = await actorStaffId(db, org, found.storeId, sub)
       const walkin = await c.env.DB.prepare(
         'SELECT id FROM walk_ins WHERE organization_id = ? AND reservation_id = ?',
@@ -3354,55 +3943,88 @@ const routes = app
         .first<{ id: string }>()
 
       /**
-       * 版の条件を 2 文目以降にも配る。**1 文目が 0 行でもバッチは止まらない**ので、
-       * 配らないと「409 を返しながら枠だけ解く」形になる。1 文目が版を +1 したあとなので、
-       * 条件は `version = <送られた版> + 1` である。
+       * ウォークインの帯も同じバッチで閉じる。版のガードは**送られてきた版**を見る
+       * （版を +1 する文は `buildCancelBatch` の最後にあるので、まだ進んでいない）。
        */
-      const applied =
+      const versionGuard =
         'EXISTS (SELECT 1 FROM reservations WHERE organization_id = ? AND id = ? AND version = ?)'
-      const guard = [org, reservationId, input.version + 1]
-      const statements: [Statement, ...Statement[]] = [
-        c.env.DB.prepare(
-          'UPDATE reservations SET status = ?, cancel_reason = ?, cancelled_at = ?, updated_at = ?, version = version + 1 ' +
-            "WHERE organization_id = ? AND id = ? AND version = ? AND status IN ('confirmed','arrived','serving')",
-        ).bind(status, input.reason, nowIso, nowIso, org, reservationId, input.version),
-        c.env.DB.prepare(
-          `DELETE FROM reservation_slot_locks WHERE organization_id = ? AND reservation_id = ? AND ${applied}`,
-        ).bind(org, reservationId, ...guard),
-      ]
-      if (walkin !== null) {
-        statements.push(
-          c.env.DB.prepare(
-            `UPDATE walk_ins SET status = 'left', left_at = ?, version = version + 1 WHERE organization_id = ? AND id = ? AND ${applied}`,
-          ).bind(nowIso, org, walkin.id, ...guard),
+      const walkinStatements: Statement[] =
+        walkin === null
+          ? []
+          : [
+              c.env.DB.prepare(
+                `UPDATE walk_ins SET status = 'left', left_at = ?, version = version + 1 WHERE organization_id = ? AND id = ? AND ${versionGuard}`,
+              ).bind(nowIso, org, walkin.id, org, reservationId, input.version),
+            ]
+      const statements = [
+        ...walkinStatements,
+        ...buildCancelBatch({
+          db: c.env.DB,
+          organizationId: org,
+          storeId: found.storeId,
+          reservationId,
+          version: input.version,
+          reason: input.reason,
+          now,
+          actorId,
+          correlationId: crypto.randomUUID(),
+          audit: { before: { status: found.status } },
+        }),
+      ] as [Statement, ...Statement[]]
+      const results = await c.env.DB.batch(statements)
+      // 最後の 1 文が版を +1 する `UPDATE`。0 行なら 1 行も書かれていない。
+      if ((results[results.length - 1]?.meta.changes ?? 0) === 0) {
+        return c.json(
+          {
+            error: 'version_conflict' as const,
+            current: await conflictingVersion(c.env, org, reservationId),
+          },
+          409,
         )
       }
-      // 監査にも版の条件を配る。配らないと、409 で断った取消が「取り消した」記録だけ残す。
-      statements.push(
-        c.env.DB.prepare(
-          'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
-            `SELECT ?, ?, ?, 'staff', ?, NULL, 'reservation.cancelled', 'reservations', ?, ?, ?, ?, ? WHERE ${applied}`,
-        ).bind(
-          crypto.randomUUID(),
-          org,
-          found.storeId,
-          actorId,
-          reservationId,
-          JSON.stringify({ status: found.status }),
-          JSON.stringify({ status, reason: input.reason }),
-          crypto.randomUUID(),
-          nowIso,
-          ...guard,
-        ),
-      )
-      const results = await c.env.DB.batch(statements)
-      if ((results[0]?.meta.changes ?? 0) === 0) return c.json({ error: 'version_conflict' }, 409)
 
       const detail = await reservationDetailOf(c.env, org, reservationId)
       if (detail === null) return c.json({ error: 'not_found' }, 404)
       return c.json(detail)
     },
   )
+
+  /**
+   * ご予約の経緯（HISTORY-LIST 右「そのあとの変更」）。
+   *
+   * `audit_events` を `target_id` で**古い順**に引く。**知らない `action` は出さない** —
+   * 出せば、まだ画面の無い操作の綴りがそのままお客様対応の場に出る。
+   */
+  .get('/api/staff/reservations/:reservationId/history', async (c) => {
+    const org = c.get('auth').org
+    const reservationId = c.req.param('reservationId')
+    const found = await c.env.DB.prepare(
+      'SELECT id FROM reservations WHERE organization_id = ? AND id = ?',
+    )
+      .bind(org, reservationId)
+      .first<{ id: string }>()
+    if (found === null) return c.json({ error: 'not_found' }, 404)
+
+    const rows = await c.env.DB.prepare(
+      'SELECT a.action, a.before_json AS beforeJson, a.after_json AS afterJson, ' +
+        'a.occurred_at AS occurredAt, s.display_name AS actorName FROM audit_events a ' +
+        'LEFT JOIN staff s ON s.organization_id = a.organization_id AND s.id = a.actor_id ' +
+        'WHERE a.organization_id = ? AND a.target_id = ? ORDER BY a.occurred_at, a.id',
+    )
+      .bind(org, reservationId)
+      .all<AuditChangeRecord>()
+    return c.json(
+      ReservationChangeHistory.array().parse(
+        rows.results
+          .map((row) => ({
+            occurredAt: row.occurredAt,
+            what: changeLabel(row.action, row.afterJson, row.beforeJson),
+            actorName: row.actorName,
+          }))
+          .filter((row) => row.what !== null),
+      ),
+    )
+  })
 
   /* --- 電話・店頭からの予約受付（P3） ------------------------------------ */
 
@@ -5367,7 +5989,7 @@ const routes = app
       targets.length === 0
         ? { results: [] as AuditChangeRecord[] }
         : await c.env.DB.prepare(
-            'SELECT a.action, a.after_json AS afterJson, a.occurred_at AS occurredAt, ' +
+            'SELECT a.action, a.before_json AS beforeJson, a.after_json AS afterJson, a.occurred_at AS occurredAt, ' +
               's.display_name AS actorName FROM audit_events a ' +
               'LEFT JOIN staff s ON s.organization_id = a.organization_id AND s.id = a.actor_id ' +
               `WHERE a.organization_id = ? AND a.target_id IN (${targets.map(() => '?').join(',')}) ` +
@@ -5396,7 +6018,7 @@ const routes = app
         changes: changes.results
           .map((row) => ({
             occurredAt: row.occurredAt,
-            what: changeLabel(row.action, row.afterJson),
+            what: changeLabel(row.action, row.afterJson, row.beforeJson),
             actorName: row.actorName,
           }))
           .filter((row) => row.what !== null),

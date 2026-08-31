@@ -2184,11 +2184,12 @@ export type ReceptionHistoryList = z.infer<typeof ReceptionHistoryList>
  * 「そのあとの変更」の 1 行（HISTORY-LIST 右「8/20 14:32　新しく受け付けました　中村 彩」）。
  * `audit_events` を `target_id` で引いて**古い順**に組み立てる。
  */
-const ReservationChangeHistory = z.strictObject({
+export const ReservationChangeHistory = z.strictObject({
   occurredAt: IsoDateTime,
   what: z.string().trim().min(1).max(120),
   actorName: z.string().trim().max(40).nullable().default(null),
 })
+export type ReservationChangeHistory = z.infer<typeof ReservationChangeHistory>
 
 /**
  * 受付 1 件の詳細（`GET /api/staff/reception-sessions/:sessionId`。値は `entryId`）。
@@ -2210,3 +2211,129 @@ export const ReceptionHistoryDetail = z.strictObject({
   recording: z.null().default(null),
 })
 export type ReceptionHistoryDetail = z.infer<typeof ReceptionHistoryDetail>
+
+/* ------------------------------------------------------------------------- *
+ * P6 予約の検索・変更・取消（`specs/glasses_management/features/009-change-and-cancel`）
+ *
+ * ここに足すのは**探す形**と**書き換える形**の 2 つだけである。ご予約 1 件の姿
+ * （`ReservationDetail`）・一覧の 1 行（`ReservationSummary`）・条件を緩めた候補
+ * （`SearchRelaxation`）・仮の押さえ（`HoldInput` / `Hold`）・取消の入力
+ * （`ReservationCancelInput`）・経緯の 1 行（`ReservationChangeHistory`）は
+ * P2〜P5 が既に持っているので、同じ形を二度作らない。
+ *
+ * 変更・取消は `Idempotency-Key` を受けない。二重適用を止めるのは `version` の
+ * 楽観ロックだけで、冪等キーを重ねると「版が合わないので 409」と「同じキーなので
+ * 200 を焼き直す」が同じ要求に同時に当たる（`04-api.md` §6.1）。
+ * ------------------------------------------------------------------------- */
+
+/* --- 検索 ----------------------------------------------------------------- */
+
+/**
+ * ご予約を探す（`GET /api/staff/reservations`。CHANGE-SEARCH / EX-EMPTY-SEARCH）。
+ *
+ * お名前・お電話番号・予約番号のどれか 1 つで届く（お客様が読み上げてくださるのは
+ * どれか 1 つである）。**`phone` は 4 桁ちょうどか 10 桁以上のどちらか**で、
+ * 途中まで打った 5〜9 桁は落とす — 下 4 桁は `customers.phone_last4` の完全一致、
+ * 全桁は `phone_normalized` の前方一致で、その中間はどちらの index にも乗らない。
+ * `code` は業務側と Web の 2 書式を受ける（お客様が読み上げるのは `EY-W-` のほう）。
+ *
+ * `crossStore` が `false` しか受けないのは Q-04 の**いまの前提**である。別店舗の
+ * ご予約は見せないと決めたので、押せない導線を画面にも契約にも置かない。
+ * 答えが「見せる」に決まったら `z.boolean()` へ戻す（そのときだけ true が通る）。
+ */
+export const ReservationSearchQuery = z.strictObject({
+  storeId: Uuid.optional(),
+  name: z.string().trim().max(40).optional(),
+  kana: z.string().trim().max(40).optional(),
+  // 4 桁ちょうど（下 4 桁）を先に見る。10〜20 文字はハイフン・全角を含む全桁である。
+  phone: z.union([PhoneSuffix, PhoneInput]).optional(),
+  code: z.union([ReservationCode, WebBookingCode]).optional(),
+  from: LocalDate.optional(),
+  to: LocalDate.optional(),
+  status: QueryWordList(ReservationStatus, 6),
+  source: QueryWordList(ReservationSource, 4),
+  staffId: Uuid.optional(),
+  includeCancelled: QueryFlag,
+  crossStore: z.literal(false).default(false),
+  limit: Limit,
+  cursor: Cursor.optional(),
+})
+export type ReservationSearchQuery = z.infer<typeof ReservationSearchQuery>
+
+/**
+ * 検索の応答（`04-api.md` §1.2 の `{ items, nextCursor, total }`）。
+ *
+ * `relaxations` は `ReceptionHistoryList` と同じ決めで **0 件のときだけ**添える。
+ * 1 件以上あるのに候補が並ぶと、いま見えている一覧が信用できなくなる。
+ * 0 件でも候補が 0 件のことはある（緩められる条件が無い／全部外しても 0 件）。
+ */
+export const ReservationList = z
+  .strictObject({
+    items: ReservationSummary.array().default([]),
+    nextCursor: Cursor.nullable().default(null),
+    total: CountInteger,
+    relaxations: SearchRelaxation.array().max(3).default([]),
+  })
+  .superRefine((value, ctx) => {
+    if (value.total !== 0 && value.relaxations.length > 0) {
+      ctx.addIssue({
+        code: 'custom',
+        message: '条件を緩める候補は 0 件のときだけ添える',
+        path: ['relaxations'],
+      })
+    }
+  })
+export type ReservationList = z.infer<typeof ReservationList>
+
+/* --- 変更 ----------------------------------------------------------------- */
+
+/** 変更として数える欄。`notify` と `version` は「変わったもの」に数えない。 */
+const CHANGE_FIELDS = [
+  'startsAt',
+  'durationMinutes',
+  'purposeIds',
+  'staffId',
+  'equipmentIds',
+  'noteCustomer',
+  'noteInternal',
+] as const
+
+/**
+ * ご予約を変更する（`PATCH /api/staff/reservations/:reservationId`。CHANGE-DIFF）。
+ *
+ * `version` だけが必須で、直す欄だけを送る。**欄が無い＝そのまま**で、
+ * `staffId: null` は「担当をあとで決めるへ戻す」である（`StaffReservationCreate` と
+ * 同じ分け方）。1 つも変更点が無い入力を落とすのは、通すと差分表が空のまま版だけが
+ * 進み、何も起きていない操作が監査に 1 行残るからである。
+ *
+ * `notify` の既定が false なのは、店内のご予約にメールを送らないため
+ * （CHANGE-DIFF「お電話でのご予約のため、メールは送りません。」）。
+ */
+export const ReservationChangeInput = z
+  .strictObject({
+    version: z.number().int().min(1),
+    startsAt: IsoDateTime.optional(),
+    durationMinutes: DurationMinutes.optional(),
+    purposeIds: Uuid.array().min(1).max(5).optional(),
+    staffId: Uuid.nullable().optional(),
+    equipmentIds: Uuid.array().max(5).optional(),
+    noteCustomer: z.string().refine(codePointsAtMost(500)).optional(),
+    noteInternal: z.string().refine(codePointsAtMost(500)).optional(),
+    notify: z.boolean().default(false),
+  })
+  .refine((value) => CHANGE_FIELDS.some((key) => value[key] !== undefined), {
+    message: '変更する欄を 1 つ以上送る',
+    path: ['version'],
+  })
+  // 変更は確定と同じ `reservation_purposes` / `reservation_assignments` /
+  // `reservation_slot_locks` を積み直すので、同じ id を 2 回受けるとその設備の空きが
+  // 1 予約で 2 つ減り、同じ目的で所要が倍になる（`StaffReservationCreate` と同じ理由）。
+  .refine((value) => value.purposeIds === undefined || noDuplicates(value.purposeIds), {
+    message: '同じ目的を 2 回選ばない',
+    path: ['purposeIds'],
+  })
+  .refine((value) => value.equipmentIds === undefined || noDuplicates(value.equipmentIds), {
+    message: '同じ設備を 2 回選ばない',
+    path: ['equipmentIds'],
+  })
+export type ReservationChangeInput = z.infer<typeof ReservationChangeInput>
