@@ -2584,3 +2584,342 @@ export const AlertList = z.strictObject({
   total: CountInteger,
 })
 export type AlertList = z.infer<typeof AlertList>
+
+/* ------------------------------------------------------------------------- *
+ * P8 お客様向け Web 予約（`specs/glasses_management/features/011-web-booking`）
+ *
+ * 公開面（`/api/public/**`）は**未認証**で、組織は `stores.slug` から解決する。
+ * body / query の `organizationId` を認可の根拠にしないので、この節のどのスキーマにも
+ * `organizationId` を置かない。
+ *
+ * お客様に見せる番号は 2 つある。**ご予約番号**（`WebBookingCode`。`EY-W-YYMM-NNNN`）は
+ * 画面とメールに出す控えで、**確認番号**（内部名 `managementCode`）は本人確認に使う。
+ * 確認番号の平文が現れるのは `PublicBookingResult` と `PublicReservationVerificationResult`
+ * だけで、照会の応答（`PublicReservationStatus`）には決して載せない。D1 が持つのは
+ * ハッシュだけである。
+ *
+ * 社内の事情（担当・設備・技能・店内名）はこの節のどのスキーマからも出ない。
+ * ご用件とお店の名前は必ず対客名（`visit_purposes.name_public` / `stores.name_public`）である。
+ * ------------------------------------------------------------------------- */
+
+/* --- 公開設定（SETTINGS-WEB） -------------------------------------------- */
+
+/** ご案内のページ（`eyex.jp/ginza`）。表に持たず `stores.slug` から組み立てる。 */
+const LandingPath = z.string().trim().min(1).max(60)
+
+/** お知らせ文。画面の「27文字／120文字まで」と同じ**符号位置**で数える。 */
+const WebBookingMessage = z.string().refine(codePointsAtMost(120)).default('')
+
+/** 受付を開始するのは何時間先からか。既定 2（目的の最長 60 分＋片付け 10 分）。 */
+const AcceptFromHours = z.number().int().min(0).max(168).default(2)
+
+/** 何日先まで受けるか。SETTINGS-WEB の「30日先まで」。 */
+const AcceptUntilDays = z.number().int().min(1).max(180)
+
+/**
+ * 変更・取消の締切（来店日の何日前か）。既定 1 = 前日 23:59:59.999 JST まで。
+ * 0 は「来店日の 23:59:59.999 JST まで変えられる」を意味する。
+ */
+const ChangeDeadlineDays = z.number().int().min(0).max(30).default(1)
+
+/** 公開する目的。0 件のまま公開できないが、それは 422 で返す判断であって 400 ではない。 */
+const PublishedPurposeIds = Uuid.array().max(20).refine(noDuplicates).default([])
+
+/** 受け付ける時間の前後が逆でないこと。文字列比較で見るので桁は揃っている前提。 */
+const opensBeforeCloses = (value: { opensAt: string; closesAt: string }): boolean =>
+  value.opensAt < value.closesAt
+
+/**
+ * SETTINGS-WEB の左（`GET /api/staff/web-booking-settings/:storeId`）。
+ * 行が無い店舗も「公開していません」として同じ形で読めるようにする。
+ */
+export const WebBookingSettings = z.strictObject({
+  storeId: Uuid,
+  isPublished: z.boolean(),
+  landingPath: LandingPath,
+  opensAt: LocalTime,
+  closesAt: LocalTime,
+  acceptFromHours: AcceptFromHours,
+  acceptUntilDays: AcceptUntilDays,
+  changeDeadlineDays: ChangeDeadlineDays,
+  // **既定は真**。「自動で確定する」を選ばせる UI は作らない（承認待ちの経路が二重になる）。
+  requiresApproval: z.boolean().default(true),
+  message: WebBookingMessage,
+  publishedPurposeIds: PublishedPurposeIds,
+  version: Version,
+  updatedAt: IsoDateTime,
+})
+export type WebBookingSettings = z.infer<typeof WebBookingSettings>
+
+/**
+ * SETTINGS-WEB の「保存」（`PUT`）。`storeId` はパスで受けるのでここに置かない。
+ * `landingPath` / `updatedAt` はサーバが決めるので受け取らない（`strictObject` が弾く）。
+ */
+export const WebBookingSettingsInput = z
+  .strictObject({
+    isPublished: z.boolean(),
+    opensAt: LocalTime,
+    closesAt: LocalTime,
+    acceptFromHours: AcceptFromHours,
+    acceptUntilDays: AcceptUntilDays,
+    changeDeadlineDays: ChangeDeadlineDays,
+    requiresApproval: z.boolean().default(true),
+    message: WebBookingMessage,
+    publishedPurposeIds: PublishedPurposeIds,
+    version: Version,
+  })
+  .refine(opensBeforeCloses, { message: '受け付ける終了は開始より後にする', path: ['closesAt'] })
+export type WebBookingSettingsInput = z.infer<typeof WebBookingSettingsInput>
+
+/**
+ * SETTINGS-WEB の右「お客様の画面の見え方」（`GET .../preview`）。
+ * **保存を伴わない**ので、未保存の値をクエリで受け取れる。
+ */
+export const WebPreviewQuery = z.strictObject({
+  purposeIds: QueryIdList(20),
+  message: z.string().refine(codePointsAtMost(120)).optional(),
+})
+export type WebPreviewQuery = z.infer<typeof WebPreviewQuery>
+
+/**
+ * ご用件 1 件（WEB-02-PURPOSE と SETTINGS-WEB のプレビューが同じ形を読む）。**`name` は `visit_purposes.name_public`**。
+ * 店内名・技能・設備を持たないのは形そのもので、`strictObject` が混入を落とす。
+ */
+export const PublicStorePurpose = z.strictObject({
+  id: Uuid,
+  name: z.string().trim().min(1).max(40),
+  durationMinutes: DurationMinutes,
+})
+export type PublicStorePurpose = z.infer<typeof PublicStorePurpose>
+
+/** プレビューの中身。出るのは対客名だけで、店内名は 1 つも含まない。 */
+export const WebPreviewResult = z.strictObject({
+  storeName: z.string().trim().min(1).max(40),
+  purposes: PublicStorePurpose.array().default([]),
+  message: WebBookingMessage,
+})
+export type WebPreviewResult = z.infer<typeof WebPreviewResult>
+
+/**
+ * 確認待ちの Web 予約を確かめる（`POST /api/staff/web-bookings/:webBookingId/review`）。
+ * **却下には理由を必ず書かせる** — 理由の無い却下は、お客様へ何と伝えたかが後から分からない。
+ */
+export const WebBookingReviewInput = z
+  .strictObject({
+    decision: z.enum(['approve', 'reject']),
+    reason: z.string().trim().max(120).default(''),
+  })
+  .refine((value) => value.decision !== 'reject' || value.reason !== '', {
+    message: 'お受けできない理由を書く',
+    path: ['reason'],
+  })
+export type WebBookingReviewInput = z.infer<typeof WebBookingReviewInput>
+
+/* --- 公開面の読み取り（WEB-01〜WEB-03） ---------------------------------- */
+
+/**
+ * 店舗一覧（`GET /api/public/stores`）。WEB-01-STORE は 3 件を出す。
+ * **位置情報を受け取らない** — 並びは `stores.sort_order`（登録順）で、
+ * お客様の予約の手前に許可の関門を増やさない（`011-web-booking` の決め）。
+ */
+export const PublicStoreSearchQuery = z.strictObject({
+  limit: QueryInteger.pipe(z.number().int().min(1).max(10)).default(3),
+})
+export type PublicStoreSearchQuery = z.infer<typeof PublicStoreSearchQuery>
+
+/** 店舗 1 件。`name` は対客名（`stores.name_public`）で、店内名を返さない。 */
+export const PublicStoreSummary = z.strictObject({
+  slug: z
+    .string()
+    .min(2)
+    .max(40)
+    .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+  name: z.string().trim().min(1).max(40),
+  accessNote: z.string().trim().max(60).default(''),
+})
+export type PublicStoreSummary = z.infer<typeof PublicStoreSummary>
+
+/**
+ * 店舗の詳細（ヘッダーの店名・道順、完了画面の地図）。`isPublished` が偽の店舗は
+ * そもそも 404 になるので、この形が外へ出るのは公開中の店舗だけである。
+ */
+export const PublicStoreDetail = PublicStoreSummary.extend({
+  phone: z.string().trim().max(30).default(''),
+  address: z.string().trim().max(200).default(''),
+  message: WebBookingMessage,
+  isPublished: z.boolean(),
+})
+export type PublicStoreDetail = z.infer<typeof PublicStoreDetail>
+
+/**
+ * 週の空き（`GET /api/public/stores/:storeSlug/availability`）。
+ * **両端を含めて 7 日まで** — WEB-03-DATETIME の週は「8月27日 〜 9月2日」で、
+ * `from` と `to` の差は 6 日である。8 日ぶんを求めると 400 にする。
+ */
+export const PublicAvailabilityQuery = z
+  .strictObject({
+    purposeId: Uuid,
+    from: LocalDate,
+    to: LocalDate,
+  })
+  .refine(spanWithinDays(6), { message: '一度に見られるのは 7 日ぶんまで', path: ['to'] })
+export type PublicAvailabilityQuery = z.infer<typeof PublicAvailabilityQuery>
+
+/** 枠 1 つ。**空いているかどうかだけ**で、誰が・どの台がという内訳を持たない。 */
+const PublicAvailabilitySlot = z.strictObject({
+  startsAt: IsoDateTime,
+  isAvailable: z.boolean(),
+})
+
+/** 1 日ぶん。`isClosed` は定休日、`isFull` はその日が満（「満」の札）。 */
+const PublicAvailabilityDay = z.strictObject({
+  date: LocalDate,
+  isClosed: z.boolean(),
+  isFull: z.boolean(),
+  slots: PublicAvailabilitySlot.array().default([]),
+})
+
+/**
+ * 週の応答。担当・設備の内訳は**返さない**（社内の事情を外に出さない）。
+ * 押せない理由は「定休」「満」の 2 語だけで、`AvailabilityReason` の 12 値を出さない。
+ */
+export const PublicAvailabilityResponse = z.strictObject({
+  days: PublicAvailabilityDay.array().default([]),
+})
+export type PublicAvailabilityResponse = z.infer<typeof PublicAvailabilityResponse>
+
+/* --- 予約する・確かめる・変える・取り消す（WEB-04〜WEB-CANCEL） ---------- */
+
+/**
+ * 予約の送信（`POST /api/public/stores/:storeSlug/bookings`）。伺うのは 4 欄だけ。
+ * **`contactEmail` は必須** — 承認制である以上、連絡手段の無いお客様の予約は宙に浮く
+ * （`[要確認: Q-09 — いまの前提で進める]`。`design/09-open-questions.md`）。
+ */
+export const PublicBookingCreate = z.strictObject({
+  purposeId: Uuid,
+  startsAt: IsoDateTime,
+  contactName: z.string().trim().min(1).max(40),
+  // ふりがなだけは空でよい（お客様が自分で消せる）。
+  contactKana: z.string().trim().max(40).default(''),
+  contactPhone: PhoneInput,
+  contactEmail: z.string().trim().email().max(320),
+})
+export type PublicBookingCreate = z.infer<typeof PublicBookingCreate>
+
+/**
+ * 予約の控え（WEB-06-DONE）。**確認番号の平文が現れるのはここだけ**である。
+ * `emailed` に既定を持たせないのは、既定で真にすると確認メールが出なかった日にも
+ * 「確認のメールをお送りしました。」が出てしまうためである（AC-WEB-17）。
+ */
+export const PublicBookingResult = z
+  .strictObject({
+    code: WebBookingCode,
+    status: z.enum(['pending', 'confirmed']),
+    startsAt: IsoDateTime,
+    endsAt: IsoDateTime,
+    storeName: z.string().trim().min(1).max(40),
+    purposeName: z.string().trim().min(1).max(40),
+    contactName: z.string().trim().min(1).max(40),
+    managementCode: z.string().min(8).max(32),
+    emailed: z.boolean(),
+  })
+  .refine(startsBeforeEnds, { message: '終了は開始より後にする', path: ['endsAt'] })
+export type PublicBookingResult = z.infer<typeof PublicBookingResult>
+
+/**
+ * 本人確認（`POST /api/public/reservations/verify`）。ご予約番号だけでは通さない。
+ * **どちらが違うかを言わない**ので、電話とメールのどちらで確かめたかも応答に出さない。
+ */
+export const PublicReservationVerification = z
+  .strictObject({
+    code: WebBookingCode,
+    contactPhone: PhoneInput.optional(),
+    contactEmail: z.string().trim().email().max(320).optional(),
+  })
+  .refine((value) => value.contactPhone !== undefined || value.contactEmail !== undefined, {
+    message: 'お電話番号かメールアドレスのどちらかを入れる',
+    path: ['contactPhone'],
+  })
+export type PublicReservationVerification = z.infer<typeof PublicReservationVerification>
+
+/** 本人確認が通ったときの短命の鍵（KV `SHORT_LIVED` に TTL 900 秒）。 */
+export const PublicReservationVerificationResult = z.strictObject({
+  managementCode: z.string().min(8).max(32),
+  expiresAt: IsoDateTime,
+})
+export type PublicReservationVerificationResult = z.infer<
+  typeof PublicReservationVerificationResult
+>
+
+/**
+ * 照会の明細（WEB-CANCEL）。**確認番号を持たない** — 平文が返るのは予約を作った
+ * 1 回だけで、ここに載せると照会のたびに漏れる面が増える。
+ * `changeDeadlineAt` は設定から作る（画面に期限の文を固定で書かせない）。
+ */
+const publicReservationStatusShape = {
+  code: WebBookingCode,
+  status: z.enum(['pending', 'confirmed', 'cancelled']),
+  startsAt: IsoDateTime,
+  endsAt: IsoDateTime,
+  storeName: z.string().trim().min(1).max(40),
+  purposeName: z.string().trim().min(1).max(40),
+  durationMinutes: DurationMinutes,
+  contactName: z.string().trim().min(1).max(40),
+  changeDeadlineAt: IsoDateTime,
+}
+
+export const PublicReservationStatus = z
+  .strictObject(publicReservationStatusShape)
+  .refine(startsBeforeEnds, { message: '終了は開始より後にする', path: ['endsAt'] })
+export type PublicReservationStatus = z.infer<typeof PublicReservationStatus>
+
+/** 日時の変更（`PATCH /api/public/reservations/:code`）。 */
+export const PublicReservationChange = z.strictObject({ startsAt: IsoDateTime })
+export type PublicReservationChange = z.infer<typeof PublicReservationChange>
+
+/**
+ * 変更の結果。`previousStartsAt` を返すのは、「ご来店」が本当に移ったことを
+ * お客様の画面が元の時刻と並べて言えるようにするためである。
+ */
+export const PublicReservationChangeResult = z
+  .strictObject({ ...publicReservationStatusShape, previousStartsAt: IsoDateTime })
+  .refine(startsBeforeEnds, { message: '終了は開始より後にする', path: ['endsAt'] })
+export type PublicReservationChangeResult = z.infer<typeof PublicReservationChangeResult>
+
+/** 取消（`POST /api/public/reservations/:code/cancel`）。理由は任意。 */
+export const PublicReservationCancel = z.strictObject({
+  reason: z.string().trim().max(120).default(''),
+})
+export type PublicReservationCancel = z.infer<typeof PublicReservationCancel>
+
+/** 取消の結果。取り消したあとの画面は明細を出さないので、3 つで足りる。 */
+export const PublicReservationMutationResult = z.strictObject({
+  code: WebBookingCode,
+  status: z.literal('cancelled'),
+  cancelledAt: IsoDateTime,
+})
+export type PublicReservationMutationResult = z.infer<typeof PublicReservationMutationResult>
+
+/* --- 保守（確認待ちの自動取消） ------------------------------------------- */
+
+/**
+ * `POST /api/internal/maintenance/web-publications/apply`。
+ * `now` はテストが**受信日の 24:00 JST** の境界を確かめるための注入口で、
+ * 省くとサーバの時刻を使う（`RecordingPurgeRequest` と同じ作法）。
+ */
+export const WebPublicationApplyRequest = z.strictObject({
+  now: IsoDateTime.optional(),
+  limit: QueryInteger.pipe(z.number().int().min(1).max(500)).default(100),
+})
+export type WebPublicationApplyRequest = z.infer<typeof WebPublicationApplyRequest>
+
+/**
+ * 保守の結果。**自動で取り消した件数（`autoCancelled`）を他の数に混ぜない** —
+ * お客様の予約が消える唯一の自動処理なので、0 でないことが単独で読めるようにする。
+ */
+export const WebPublicationApplyResult = z.strictObject({
+  applied: CountInteger,
+  skipped: CountInteger,
+  autoCancelled: CountInteger,
+})
+export type WebPublicationApplyResult = z.infer<typeof WebPublicationApplyResult>

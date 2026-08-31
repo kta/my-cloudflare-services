@@ -1,7 +1,7 @@
 # 011-web-booking: お客様向け Web 予約
 
 - サービス: `glasses_management`
-- ステータス: Draft
+- ステータス: Approved
 
 ## 1. WHAT / WHY
 

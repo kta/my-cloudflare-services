@@ -101,6 +101,16 @@ const fixture = {
   streamTicket: '',
   holdRecordingId: '',
   deletableRecordingId: '',
+  // P8 の 11 ルートが 200 で返る足場。公開面は未認証で通るので、店舗 slug と
+  // 実在するご予約番号・確認番号を持っておかないと「通った」が見えない
+  // （401 `invalid_management_code` は未認証の 401 と見分けが付かない）。
+  webStoreId: '',
+  webStoreSlug: '',
+  webPurposeId: '',
+  webStartsAt: '',
+  webBookingCode: '',
+  webManagementCode: '',
+  reviewableWebBookingId: '',
 }
 
 /** dev グラントが載せる `sub`。membership の `userId` はこれに合わせる。 */
@@ -440,6 +450,59 @@ beforeAll(async () => {
     }),
     { expirationTtl: 900 },
   )
+
+  /* --- P8 お客様向け Web 予約 --- */
+  // 受付の窓（何時間先から・何日先まで）は実時刻を見るので、`LEDGER_DATE`（過去の 1 日）
+  // では 409 `store_closed` に化ける。この店舗だけは「きょうから 1 週間先」で組む。
+  fixture.webStoreId = await insertStore(ORG, 'EYEX Web受付店')
+  fixture.webStoreSlug = `web-${crypto.randomUUID().slice(0, 12)}`
+  await env.DB.prepare('UPDATE stores SET slug = ?, name_public = ?, sort_order = ? WHERE id = ?')
+    .bind(fixture.webStoreSlug, 'EYEX 銀座店', 900, fixture.webStoreId)
+    .run()
+  await insertBusinessHours(ORG, fixture.webStoreId, { closedWeekdays: [] })
+  await insertSlotRules(ORG, fixture.webStoreId)
+  fixture.webPurposeId = await insertVisitPurpose(ORG, fixture.webStoreId, {
+    nameInternal: 'メガネ新調',
+    nameShort: '新調',
+    durationMinutes: 30,
+  })
+  const webStaffId = await insertStaff(ORG, fixture.webStoreId, { displayName: '山本 遥' })
+  for (let day = 0; day <= 10; day += 1) {
+    await insertShift(ORG, fixture.webStoreId, webStaffId, { date: futureDate(day) })
+  }
+  await env.DB.prepare(
+    'INSERT INTO web_booking_settings (id, organization_id, store_id, is_published, opens_at, ' +
+      'closes_at, accept_from_hours, accept_until_days, change_deadline_days, requires_approval, ' +
+      "message, version, updated_at, created_at) VALUES (?,?,?,'1','10:30','18:00',2,30,1,'1',NULL,1,?,?)",
+  )
+    .bind(crypto.randomUUID(), ORG, fixture.webStoreId, NOW, NOW)
+    .run()
+  fixture.webStartsAt = jstAt(futureDate(7), '11:00')
+
+  // 承認の表が 1 度だけ通る「確認待ち」と、本人確認の表が使う番号 2 つ。
+  const created = await SELF.fetch(`${BASE}/api/public/stores/${fixture.webStoreSlug}/bookings`, {
+    method: 'POST',
+    headers: { ...JSON_HEADERS, 'idempotency-key': crypto.randomUUID() },
+    body: JSON.stringify({
+      purposeId: fixture.webPurposeId,
+      startsAt: jstAt(futureDate(8), '11:00'),
+      contactName: '山口 真央',
+      contactKana: 'やまぐち まお',
+      contactPhone: '080-2345-6789',
+      contactEmail: 'm.yamaguchi@example.jp',
+    }),
+  })
+  const receipt = (await created.json()) as { code: string; managementCode: string }
+  fixture.webBookingCode = receipt.code
+  fixture.webManagementCode = receipt.managementCode
+  fixture.reviewableWebBookingId =
+    (
+      await env.DB.prepare(
+        'SELECT id FROM web_bookings WHERE organization_id = ? AND public_code = ?',
+      )
+        .bind(ORG, receipt.code)
+        .first<{ id: string }>()
+    )?.id ?? crypto.randomUUID()
 })
 
 /** 取消の表が 1 行ずつ食べるご予約。使い切ったら「無いご予約」を指す。 */
@@ -680,6 +743,41 @@ const MAINTENANCE = {
   expired: 401,
   'wrong-secret': 401,
 } as const
+
+/**
+ * 公開面（`/api/public/**`）は**未認証で通る**。default-deny の例外に入っているので、
+ * トークンを付けても・期限が切れていても・別の secret で署名されていても答えが変わらない。
+ * 401 の行が 1 つも無いことがそのまま「未認証で通る」の証明になる。
+ */
+const PUBLIC = {
+  none: 200,
+  staff: 200,
+  admin: 200,
+  manager: 200,
+  clerk: 200,
+  expired: 200,
+  'wrong-secret': 200,
+} as const
+
+/** 公開面の未知パスは、未認証のまま 404 になる（401 に化けたら例外が効いていない）。 */
+const PUBLIC_MISSING = {
+  none: 404,
+  staff: 404,
+  admin: 404,
+  manager: 404,
+  clerk: 404,
+  expired: 404,
+  'wrong-secret': 404,
+} as const
+
+/** きょうから N 日先の JST 暦日。Web 予約の受付の窓は実時刻を見る。 */
+function futureDate(days: number): string {
+  const jst = new Date(Date.now() + 9 * 60 * 60 * 1000 + days * 86_400_000)
+  return jst.toISOString().slice(0, 10)
+}
+
+/** 公開面の予約は表の主体ぶん叩かれるので、同じ鍵・同じ本文で 1 件に畳む。 */
+const PERMISSION_WEB_BOOKING_KEY = crypto.randomUUID()
 
 /** 置いていない押さえ。どの主体が消しにきても 404 になる。 */
 const MISSING_HOLD_ID = crypto.randomUUID()
@@ -1297,6 +1395,94 @@ const TABLE: Row[] = [
     path: () => `/api/staff/alerts?storeId=${fixture.storeId}`,
     expected: ALERT_READ,
   },
+
+  /* --- お客様向け Web 予約（P8）--- */
+  {
+    name: 'Web予約の公開設定は店舗の誰でも読める',
+    method: 'GET',
+    path: () => `/api/staff/web-booking-settings/${fixture.storeId}`,
+    expected: READ,
+  },
+  {
+    name: 'Web予約の公開設定の保存は店長だけ',
+    method: 'PUT',
+    path: () => `/api/staff/web-booking-settings/${fixture.storeId}`,
+    body: () => ({
+      isPublished: false,
+      opensAt: '10:30',
+      closesAt: '18:00',
+      acceptFromHours: 2,
+      acceptUntilDays: 30,
+      changeDeadlineDays: 1,
+      requiresApproval: true,
+      message: '',
+      publishedPurposeIds: [],
+      version: 0,
+    }),
+    expected: WRITE,
+  },
+  {
+    name: 'お客様の画面の見え方は店舗の誰でも読める',
+    method: 'GET',
+    path: () => `/api/staff/web-booking-settings/${fixture.storeId}/preview`,
+    expected: READ,
+  },
+  {
+    name: '確認待ちの Web 予約を確かめられるのは店長だけ',
+    method: 'POST',
+    path: () => `/api/staff/web-bookings/${fixture.reviewableWebBookingId}/review`,
+    body: () => ({ decision: 'approve', reason: '' }),
+    expected: WRITE,
+  },
+  {
+    name: '公開の店舗一覧は未認証で通る',
+    method: 'GET',
+    path: () => '/api/public/stores',
+    expected: PUBLIC,
+  },
+  {
+    name: '公開のご用件は未認証で通る',
+    method: 'GET',
+    path: () => `/api/public/stores/${fixture.webStoreSlug}/purposes`,
+    expected: PUBLIC,
+  },
+  {
+    name: 'お客様の予約は未認証で通る',
+    method: 'POST',
+    path: () => `/api/public/stores/${fixture.webStoreSlug}/bookings`,
+    headers: () => ({ 'idempotency-key': PERMISSION_WEB_BOOKING_KEY }),
+    body: () => ({
+      purposeId: fixture.webPurposeId,
+      startsAt: fixture.webStartsAt,
+      contactName: '山口 真央',
+      contactKana: 'やまぐち まお',
+      contactPhone: '080-2345-6789',
+      contactEmail: 'm.yamaguchi@example.jp',
+    }),
+    expected: PUBLIC,
+  },
+  {
+    name: 'お客様の本人確認は未認証で通る',
+    method: 'POST',
+    path: () => '/api/public/reservations/verify',
+    headers: () => ({ 'x-management-code': fixture.webManagementCode }),
+    body: () => ({ code: fixture.webBookingCode, contactEmail: 'm.yamaguchi@example.jp' }),
+    expected: PUBLIC,
+  },
+  {
+    name: 'Web 予約の保守はテナントのトークンでは越えられない（共有鍵の経路）',
+    method: 'POST',
+    path: () => '/api/internal/maintenance/web-publications/apply',
+    body: () => ({}),
+    expected: MAINTENANCE,
+  },
+  {
+    name: '公開面の未知パスは未認証のまま 404（default-deny の例外が効いている）',
+    method: 'GET',
+    path: () => '/api/public/not-a-route',
+    expected: PUBLIC_MISSING,
+  },
+
   {
     name: '録音の掃除はテナントのトークンでは越えられない（共有鍵の経路）',
     method: 'POST',

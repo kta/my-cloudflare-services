@@ -66,7 +66,11 @@ export default defineConfig({
     {
       name: 'ipad',
       use: { ...devices['Desktop Chrome'], viewport: { width: 1194, height: 834 } },
-      testIgnore: [/web-booking\.spec\.ts$/, /mock-compare\.spec\.ts$/],
+      testIgnore: [
+        /web-booking\.spec\.ts$/,
+        /mock-compare\.spec\.ts$/,
+        /mock-compare-web\.spec\.ts$/,
+      ],
     },
     {
       name: 'iphone',

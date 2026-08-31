@@ -21,6 +21,7 @@ import {
   type SettingsSectionKey,
   toJstDay,
 } from './sections'
+import { WebPublishPanel } from './WebPublishPanel'
 
 /*
  * 設定の器（承認済みモック docs/frontend/mockups/eyex/images/SETTINGS-STORE.png）。
@@ -46,6 +47,7 @@ const DEFAULT_PANELS: Partial<Record<SettingsSectionKey, ComponentType<SettingsP
   purposes: PurposePanel,
   staff: StaffPanel,
   equipment: EquipmentPanel,
+  web: WebPublishPanel,
 }
 
 /** 保存の顛末に対する言い方。403 は EX-PERMISSION の面で断るので知らせを出さない。 */

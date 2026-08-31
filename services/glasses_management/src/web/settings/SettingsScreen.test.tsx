@@ -148,7 +148,7 @@ async function typeInto(label: string, value: string) {
 }
 
 describe('第2サイドバー', () => {
-  it('6 項目を上から店舗の情報・営業日・営業時間・ご来店の目的・スタッフと技能・設備と点検の順に持つ', async () => {
+  it('7 項目を上から店舗の情報・営業日・営業時間・ご来店の目的・スタッフと技能・設備と点検・Web予約の公開の順に持つ', async () => {
     await openSettings()
     const nav = screen.getByRole('navigation', { name: '設定の項目' })
     const names = Array.from(nav.querySelectorAll('button')).map((b) => b.textContent)
@@ -159,6 +159,7 @@ describe('第2サイドバー', () => {
       'ご来店の目的',
       'スタッフと技能',
       '設備と点検',
+      'Web予約の公開',
     ])
   })
 

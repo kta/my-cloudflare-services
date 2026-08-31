@@ -152,8 +152,9 @@ test('設定を開くと店舗の情報が出て、お店の基本と行き方�
   await expect(page.getByLabel('最寄り駅')).toHaveValue('東京メトロ 銀座駅')
   await expect(page.getByLabel('出口と所要時間')).toHaveValue('A1出口から徒歩3分')
   await expect(page.getByLabel('駐車場')).toHaveValue('提携駐車場はありません')
-  // 第2サイドバーはモックの 14 項目ではなく 6 項目だけを出す（P1 の決め #1）。
-  await expect(sectionNav(page).getByRole('button')).toHaveCount(6)
+  // 第2サイドバーはモックの 14 項目ではなく 7 項目だけを出す（P1 の決め #1）。
+  // 6 項目だったところへ P8 が「Web予約の公開」を足して 7 項目になった。
+  await expect(sectionNav(page).getByRole('button')).toHaveCount(7)
 })
 
 // @e2e-covers AC-SET-02
