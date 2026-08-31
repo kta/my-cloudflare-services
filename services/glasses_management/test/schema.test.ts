@@ -35,6 +35,8 @@ import {
   storeSettingsRevision,
   storeSlotRules,
   stores,
+  terminalSessions,
+  terminals,
   visitEvents,
   visitPurposes,
   walkIns,
@@ -1230,6 +1232,106 @@ describe('analytics_daily', () => {
     ])
     for (const column of table.columns) {
       expect(column.notNull).toBe(true)
+    }
+  })
+})
+
+/* --- P10 端末の使い分けと監査（013-terminals-and-audit） ------------------- */
+
+describe('terminals', () => {
+  const table = getTableConfig(terminals)
+
+  it('LOGIN-SHARED の置き場所一覧を組織・店舗・作成順で引ける', () => {
+    expect(columnsOf(table, 'terminals_org_store_created_idx')).toEqual([
+      'organization_id',
+      'store_id',
+      'created_at',
+    ])
+    // 同じ店舗に同じ名前の置き場所を作れないわけではない（名前は付け替えられる）。
+    expect(isUnique(table, 'terminals_org_store_created_idx')).toBe(false)
+    expect(table.indexes).toHaveLength(1)
+  })
+
+  it('楽観ロックの version を持つ（PATCH が 409 を返せる）', () => {
+    const version = table.columns.find((c) => c.name === 'version')
+    expect(version?.getSQLType()).toBe('integer')
+    expect(version?.notNull).toBe(true)
+    // DDL の DEFAULT に意味を持たせない（version=1 はアプリ層が入れる）。
+    expect(version?.hasDefault).toBe(false)
+  })
+
+  it('pin_hash と auto_lock_seconds を持ち、外部キーを宣言していない', () => {
+    expect(table.name).toBe('terminals')
+    expect(table.foreignKeys).toHaveLength(0)
+    expect(table.columns.filter((c) => c.primary).map((c) => c.name)).toEqual(['id'])
+    expect(table.columns.map((c) => c.name)).toEqual([
+      'id',
+      'organization_id',
+      'store_id',
+      'name',
+      'kind',
+      'place_note',
+      'device_label',
+      'pin_hash',
+      'auto_lock_seconds',
+      'last_seen_at',
+      'is_active',
+      'version',
+      'created_at',
+    ])
+    expect(table.columns.find((c) => c.name === 'auto_lock_seconds')?.getSQLType()).toBe('integer')
+    // 暗証番号のハッシュも最終通信も、まだ無い状態がある。
+    expect(table.columns.find((c) => c.name === 'pin_hash')?.notNull).toBe(false)
+    expect(table.columns.find((c) => c.name === 'last_seen_at')?.notNull).toBe(false)
+    for (const name of ['organization_id', 'store_id', 'name', 'kind', 'is_active', 'created_at']) {
+      expect(table.columns.find((c) => c.name === name)?.notNull).toBe(true)
+    }
+  })
+})
+
+describe('terminal_sessions', () => {
+  const table = getTableConfig(terminalSessions)
+
+  it('端末の現在の使用者を組織・端末・開始時刻で引ける', () => {
+    expect(columnsOf(table, 'terminal_sessions_org_terminal_started_idx')).toEqual([
+      'organization_id',
+      'terminal_id',
+      'started_at',
+    ])
+    // 引き継ぎで前の行を失効させて新しい行を積むので、一意にしない。
+    expect(isUnique(table, 'terminal_sessions_org_terminal_started_idx')).toBe(false)
+  })
+
+  it('期限切れの掃除を組織・期限で引ける', () => {
+    expect(columnsOf(table, 'terminal_sessions_org_expires_idx')).toEqual([
+      'organization_id',
+      'expires_at',
+    ])
+    expect(table.indexes).toHaveLength(2)
+  })
+
+  it('外部キーを宣言していない', () => {
+    expect(table.name).toBe('terminal_sessions')
+    expect(table.foreignKeys).toHaveLength(0)
+    expect(table.columns.filter((c) => c.primary).map((c) => c.name)).toEqual(['id'])
+    expect(table.columns.filter((c) => c.hasDefault)).toHaveLength(0)
+    expect(table.columns.map((c) => c.name)).toEqual([
+      'id',
+      'organization_id',
+      'store_id',
+      'terminal_id',
+      'staff_id',
+      'mode',
+      'started_at',
+      'expires_at',
+      'revoked_at',
+      'created_at',
+    ])
+    // 共有モードは担当を持たず、生きている間は revoked_at が NULL である。
+    expect(table.columns.find((c) => c.name === 'staff_id')?.notNull).toBe(false)
+    expect(table.columns.find((c) => c.name === 'revoked_at')?.notNull).toBe(false)
+    for (const name of ['organization_id', 'store_id', 'terminal_id', 'mode', 'expires_at']) {
+      expect(table.columns.find((c) => c.name === name)?.notNull).toBe(true)
     }
   })
 })

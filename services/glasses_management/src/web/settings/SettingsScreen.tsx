@@ -2,6 +2,7 @@ import type { StaffMember } from '@app/contracts'
 import { cn, focusRing } from '@app/ui'
 import { type ComponentType, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { client, subjectFromToken } from '../client'
+import { PermissionWall } from '../shell/PermissionWall'
 import { CalendarPanel } from './CalendarPanel'
 import { EquipmentPanel } from './EquipmentPanel'
 import { HoursPanel } from './HoursPanel'
@@ -21,6 +22,7 @@ import {
   type SettingsSectionKey,
   toJstDay,
 } from './sections'
+import { TerminalSettings } from './TerminalSettings'
 import { WebPublishPanel } from './WebPublishPanel'
 
 /*
@@ -48,6 +50,7 @@ const DEFAULT_PANELS: Partial<Record<SettingsSectionKey, ComponentType<SettingsP
   staff: StaffPanel,
   equipment: EquipmentPanel,
   web: WebPublishPanel,
+  terminals: TerminalSettings,
 }
 
 /** 保存の顛末に対する言い方。403 は EX-PERMISSION の面で断るので知らせを出さない。 */
@@ -69,6 +72,11 @@ const CLEAN: Summary = { dirtyCount: 0, danger: false, dangerNote: null, blocked
 
 export type SettingsScreenProps = {
   storeId: string
+  /**
+   * いまの端末。渡されていて、その場に店長がいるなら、403 のその場で
+   * 「店長の暗証番号で続ける」（EX-PERMISSION）を出す。
+   */
+  terminalId?: string
   /** いまの時刻（ISO8601）。実行時刻に依存させないため、面へはここから注ぐ。 */
   now?: string
   initialSection?: SettingsSectionKey
@@ -76,7 +84,13 @@ export type SettingsScreenProps = {
   panels?: Partial<Record<SettingsSectionKey, ComponentType<SettingsPanelProps>>>
 }
 
-export function SettingsScreen({ storeId, now, initialSection, panels }: SettingsScreenProps) {
+export function SettingsScreen({
+  storeId,
+  terminalId,
+  now,
+  initialSection,
+  panels,
+}: SettingsScreenProps) {
   const [section, setSection] = useState<SettingsSectionKey>(initialSection ?? 'store')
   const [summary, setSummary] = useState<Summary>(CLEAN)
   const [notice, setNotice] = useState<string | null>(null)
@@ -85,6 +99,8 @@ export function SettingsScreen({ storeId, now, initialSection, panels }: Setting
   const draft = useRef<PanelDraft | null>(null)
   const compact = useCompactSidebar()
   const { actor, staff } = useViewer(storeId)
+  // その場にいる店長（EX-PERMISSION の右半分の持ち主）。いなければ壁は出さない。
+  const manager = staff?.find((member) => member.role === 'manager')
   const registry = useMemo(() => ({ ...DEFAULT_PANELS, ...panels }), [panels])
 
   const current = SETTINGS_SECTIONS.find((item) => item.key === section) ?? SETTINGS_SECTIONS[0]
@@ -206,7 +222,25 @@ export function SettingsScreen({ storeId, now, initialSection, panels }: Setting
             )}
           </p>
 
-          {refused && <PermissionRefusal target={title} actor={actor} changes={refused} />}
+          {refused &&
+            (terminalId !== undefined && manager !== undefined ? (
+              <PermissionWall
+                terminalId={terminalId}
+                managerStaffId={manager.id}
+                target={title}
+                permission="設定の変更"
+                actor={actor}
+                changes={refused}
+                onElevated={() => {
+                  // 通ったら、下書きはそのままにもう一度同じ保存を投げる。
+                  setRefused(null)
+                  void onSave()
+                }}
+                onBack={() => setRefused(null)}
+              />
+            ) : (
+              <PermissionRefusal target={title} actor={actor} changes={refused} />
+            ))}
 
           {Panel ? (
             <Panel

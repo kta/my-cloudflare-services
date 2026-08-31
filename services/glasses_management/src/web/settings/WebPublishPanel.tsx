@@ -404,6 +404,7 @@ export function WebPublishPanel({ storeId, onDraftChange }: SettingsPanelProps) 
           {editingMessage ? (
             <textarea
               aria-label="お客様へのお知らせ文"
+              autoComplete="off"
               value={draft.message}
               rows={3}
               onChange={(event) =>

@@ -2,6 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from './App'
+import { saveTerminal } from './terminal/terminalState'
 
 /*
  * 承認済みモック（docs/frontend/mockups/eyex/images/HOME.png）の骨格が
@@ -53,7 +54,21 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+/**
+ * 業務開始。P10 から、業務画面へ入る前に「この iPad は誰の・どこの端末か」が要る
+ * （`TerminalStart` の 6 面）。ここは器の骨格を見るテストなので、決まったあとの
+ * 状態から始める。6 面そのものは `start/` と `login/` のテストで見る。
+ */
 async function startWork() {
+  saveTerminal({
+    terminalId: 'eeeeeeee-ffff-4aaa-8bbb-000000000001',
+    terminalName: '銀座店 レジ横iPad',
+    mode: 'shared',
+    staffId: null,
+    staffName: null,
+    sessionId: '99999999-8888-4777-8666-000000000001',
+    autoLockSeconds: 120,
+  })
   render(<App />)
   await userEvent.type(screen.getByLabelText('お店のコード'), 'eyex')
   await userEvent.click(screen.getByRole('button', { name: '業務を始める' }))
@@ -187,5 +202,85 @@ describe('業務を終える', () => {
     )
     await userEvent.click(screen.getByRole('button', { name: '業務を終える' }))
     expect(screen.getByLabelText('お店のコード')).toBeInTheDocument()
+  })
+})
+
+describe('端末の使い方が決まるまで', () => {
+  const TERMINAL = {
+    id: 'eeeeeeee-ffff-4aaa-8bbb-000000000001',
+    storeId: stores[0]?.id ?? '',
+    name: '銀座店 レジ横iPad',
+    kind: 'shared' as const,
+    placeNote: 'レジの右側　固定スタンド',
+    deviceLabel: 'EYEX-iPad-07',
+    autoLockSeconds: 120,
+    isActive: true,
+    hasPin: true,
+    lastSeenAt: null,
+    isOnline: false,
+    version: 1,
+    createdAt: '2026-08-01T00:00:00.000Z',
+  }
+
+  function json(body: unknown, status = 200) {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url.includes('/api/auth/token')) return json({ token: 'test-token' })
+        if (url.includes('/api/staff/terminals') && url.includes('/sessions')) {
+          return json(
+            {
+              id: '99999999-8888-4777-8666-000000000001',
+              terminalId: TERMINAL.id,
+              staffId: null,
+              mode: 'shared',
+              startedAt: '2026-08-27T00:41:00.000Z',
+              expiresAt: '2026-08-27T00:43:00.000Z',
+            },
+            201,
+          )
+        }
+        if (url.includes('/api/staff/terminals')) return json({ items: [TERMINAL] })
+        if (url.includes('/api/staff/stores')) return json(stores)
+        return new Response('not found', { status: 404 })
+      }),
+    )
+  })
+
+  it('業務を始めると、まず「この iPad の使い方を決めてください」が出る', async () => {
+    render(<App />)
+    await userEvent.type(screen.getByLabelText('お店のコード'), 'eyex')
+    await userEvent.click(screen.getByRole('button', { name: '業務を始める' }))
+    expect(
+      await screen.findByRole('heading', { name: 'この iPad の使い方を決めてください' }),
+    ).toBeInTheDocument()
+    // まだ戻る先が無いので、上のバーに `⌂` を置かない。
+    expect(screen.queryByRole('button', { name: 'トップへ' })).not.toBeInTheDocument()
+  })
+
+  it('置き場所と店舗の暗証番号を通ると、左の柱の下に置き場所と「共有で使っています」が出る', async () => {
+    render(<App />)
+    await userEvent.type(screen.getByLabelText('お店のコード'), 'eyex')
+    await userEvent.click(screen.getByRole('button', { name: '業務を始める' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'みんなで使う端末にする' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'この置き場所で始める' }))
+    for (const digit of '2580') {
+      await userEvent.click(await screen.findByRole('button', { name: digit }))
+    }
+    await userEvent.click(screen.getByRole('button', { name: '確定' }))
+    await waitFor(() =>
+      expect(screen.getByRole('navigation', { name: '画面の切り替え' })).toBeInTheDocument(),
+    )
+    const rail = screen.getByRole('navigation', { name: '画面の切り替え' })
+    expect(rail).toHaveTextContent('銀座店 レジ横iPad')
+    expect(rail).toHaveTextContent('共有で使っています')
   })
 })

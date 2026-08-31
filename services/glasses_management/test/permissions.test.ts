@@ -17,7 +17,9 @@ import { signAccessToken } from '@app/shared'
 import { beforeAll, describe, expect, it } from 'vitest'
 import {
   BASE,
+  createTerminal,
   INTERNAL_HEADERS,
+  insertAlert,
   insertBusinessHours,
   insertReservation,
   insertShift,
@@ -30,6 +32,8 @@ import {
   jstAt,
   LEDGER_DATE,
   orgId,
+  setStaffPin,
+  startSession as startTerminalSession,
   tokenFor,
 } from './helpers'
 
@@ -43,9 +47,17 @@ type ActorName =
   | 'keeper'
   | 'expired'
   | 'wrong-secret'
+  // P10: どちらも **manager と同じ JWT** で、違うのは端末セッションの状態だけである。
+  // 「権限が足りない(403 forbidden)」と「個人モードが足りない(403 personal_mode_required)」を
+  // 取り違えないことを、この 2 主体で表から見る。
+  | 'shared-session'
+  | 'personal-session'
 
 const ORG = orgId()
 const NOW = '2026-08-27T02:08:00.000Z'
+/** 端末の店舗共通の暗証番号と、中村 彩 の暗証番号。どちらも弱くない 4 桁。 */
+const TERMINAL_PIN = '4831'
+const STAFF_PIN = '2748'
 const tokens: Record<Exclude<ActorName, 'none'>, string> = {
   staff: '',
   admin: '',
@@ -55,6 +67,8 @@ const tokens: Record<Exclude<ActorName, 'none'>, string> = {
   keeper: '',
   expired: '',
   'wrong-secret': '',
+  'shared-session': '',
+  'personal-session': '',
 }
 
 /** 表が叩く実在の行。設定の書き込みが 200 になる形を用意しておく。 */
@@ -111,6 +125,16 @@ const fixture = {
   webBookingCode: '',
   webManagementCode: '',
   reviewableWebBookingId: '',
+  // P10 の 11 ルートが 200 で返る足場。
+  // 端末は 2 台に分ける — 表の `POST .../sessions` が置き場所を引き継いで
+  // 前のセッションを失効させるので、`personal-session` の足場を同じ台に置くと、
+  // 表の行の順序で 403 personal_mode_required に化ける。
+  terminalId: '',
+  sessionTerminalId: '',
+  sharedSessionId: '',
+  personalSessionId: '',
+  pinStaffId: '',
+  alertId: '',
 }
 
 /** dev グラントが載せる `sub`。membership の `userId` はこれに合わせる。 */
@@ -144,6 +168,9 @@ beforeAll(async () => {
     { sub: subOf(ORG, ':clerk'), org: ORG, email: 'clerk@example.test', role: 'staff' },
     JWT_SECRET,
   )
+  // P10 の 2 主体は **manager と同じ JWT** を持ち、違いは `x-terminal-session` だけ。
+  tokens['shared-session'] = tokens.manager
+  tokens['personal-session'] = tokens.manager
   // 録音は閲覧（再生・一覧）と保全（保全・削除）で権限が分かれる（Q-03）。
   // 2 つを 1 人に持たせると「読めるが消せない」が表から消えるので、別々の人にする。
   tokens.reader = await signAccessToken(
@@ -184,10 +211,14 @@ beforeAll(async () => {
     )
     .run()
   // 店長は分析も開ける（`analytics.read`）。持たないスタッフは 403 になる。
+  // 端末の管理と監査の読み返しも店長が持つ（membership は org × store × user で 1 行なので、
+  // ここで 1 度に渡す。2 度に分けると unique 制約でぶつかって後の 1 回が落ちる）。
   await syncMembership(ORG, fixture.storeId, subOf(ORG, ':manager'), [
     'settings.read',
     'settings.manage',
     'analytics.read',
+    'terminal.manage',
+    'audit.read',
   ])
   await syncMembership(ORG, fixture.storeId, subOf(ORG, ':clerk'), ['settings.read'])
   await syncMembership(ORG, fixture.storeId, subOf(ORG, ':reader'), ['recording.read'])
@@ -505,7 +536,62 @@ beforeAll(async () => {
         .bind(ORG, receipt.code)
         .first<{ id: string }>()
     )?.id ?? crypto.randomUUID()
+
+  /* --- P10 端末・監査・お知らせ --- */
+  // 自動ロックは上限の 1800 秒にする。既定の 120 秒だと、表を流し切る前に
+  // `personal-session` の足場が期限切れになり、403 のはずが 403 の別の理由で通る。
+  const terminal = await createTerminal(tokens.manager, {
+    storeId: fixture.storeId,
+    name: '銀座店 レジ横iPad',
+    pin: TERMINAL_PIN,
+    autoLockSeconds: 1800,
+  })
+  fixture.terminalId = String(terminal.body?.id ?? crypto.randomUUID())
+  const sessionTerminal = await createTerminal(tokens.manager, {
+    storeId: fixture.storeId,
+    name: '銀座店 受付台iPad',
+    pin: TERMINAL_PIN,
+    autoLockSeconds: 1800,
+  })
+  fixture.sessionTerminalId = String(sessionTerminal.body?.id ?? crypto.randomUUID())
+
+  fixture.pinStaffId = crypto.randomUUID()
+  await env.DB.prepare(
+    'INSERT INTO staff (id, organization_id, store_id, display_name, role, max_parallel_reservations, is_active, sort_order, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
+  )
+    .bind(fixture.pinStaffId, ORG, fixture.storeId, '中村 彩', 'staff', 1, '1', 1, NOW, NOW)
+    .run()
+  await setStaffPin(tokens.manager, fixture.storeId, fixture.pinStaffId, STAFF_PIN)
+
+  // 共有と個人の 2 つの足場。**別々の端末に置く**（1 端末に生きたセッションは 1 本だけ）。
+  const shared = await startTerminalSession(tokens.manager, fixture.terminalId, {
+    mode: 'shared',
+    pin: TERMINAL_PIN,
+  })
+  fixture.sharedSessionId = String(shared.body?.id ?? crypto.randomUUID())
+  const personalTerminal = await createTerminal(tokens.manager, {
+    storeId: fixture.storeId,
+    name: '佐藤 美咲の iPad',
+    kind: 'personal',
+    autoLockSeconds: 1800,
+  })
+  const personal = await startTerminalSession(tokens.manager, String(personalTerminal.body?.id), {
+    mode: 'personal',
+    staffId: fixture.pinStaffId,
+    pin: STAFF_PIN,
+  })
+  fixture.personalSessionId = String(personal.body?.id ?? crypto.randomUUID())
+
+  fixture.alertId = await insertAlert(ORG, fixture.storeId)
 })
+
+/** 端末の版。表の主体が順に更新するので、送る直前に読み直す。 */
+async function currentTerminalVersion(): Promise<number> {
+  const row = await env.DB.prepare('SELECT version FROM terminals WHERE id = ?')
+    .bind(fixture.terminalId)
+    .first<{ version: number }>()
+  return row?.version ?? 1
+}
 
 /** 取消の表が 1 行ずつ食べるご予約。使い切ったら「無いご予約」を指す。 */
 function nextCancellableReservation(): string {
@@ -524,7 +610,16 @@ function nextRecording(pool: string[]): string {
 
 function headersFor(actor: ActorName): HeadersInit {
   if (actor === 'none') return JSON_HEADERS
-  return { ...JSON_HEADERS, authorization: `Bearer ${tokens[actor]}` }
+  const base = { ...JSON_HEADERS, authorization: `Bearer ${tokens[actor]}` }
+  // 端末セッションは JWT に載らない（同じ人が共有端末と個人端末を持ち替える）。
+  // どのセッションで叩いているかは `x-terminal-session` で運ぶ。
+  if (actor === 'shared-session') {
+    return { ...base, 'x-terminal-session': fixture.sharedSessionId }
+  }
+  if (actor === 'personal-session') {
+    return { ...base, 'x-terminal-session': fixture.personalSessionId }
+  }
+  return base
 }
 
 /** いまの設定の版。店長の保存が 1 行ごとに版を進めるので、送る直前に読み直す。 */
@@ -824,6 +919,56 @@ const weeklyShifts = () =>
  * 200 系は経路が通ったこと、401 は未認証、403 は権限不足、404 は存在しないこと。
  */
 let permissionVisitMinute = 5
+
+/**
+ * P10 の 3 つの期待。
+ *
+ * `TERMINAL_READ` は置き場所の一覧（誰でも読める）。
+ * `TERMINAL_WRITE` は端末の登録・更新（`terminal.manage` を持つ店長だけ）。
+ * `SESSION_ANY` は業務の開始・終了・昇格（**JWT だけ**。共有端末は個人ログイン無しで
+ * 業務を回すのが目的なので、ここに権限の壁を置かない）。
+ *
+ * `shared-session` が 403 になるのは**権限ではなく個人モードが足りない**からで、
+ * `personal_mode_required` という別のコードで返る（下の 3 本で直接見る）。
+ * 端末セッションが 1 本も無い主体（`manager` など）は `system` として通す —
+ * ここで止めると、端末を 1 台も登録していない最初の 1 回が永久に通らない。
+ */
+const TERMINAL_READ = {
+  none: 401,
+  staff: 200,
+  manager: 200,
+  clerk: 200,
+  expired: 401,
+  'wrong-secret': 401,
+  'shared-session': 200,
+  'personal-session': 200,
+} as const
+const TERMINAL_WRITE = {
+  none: 401,
+  staff: 403,
+  manager: 200,
+  clerk: 403,
+  expired: 401,
+  'wrong-secret': 401,
+  'shared-session': 403,
+  'personal-session': 200,
+} as const
+const SESSION_ANY = {
+  none: 401,
+  staff: 200,
+  manager: 200,
+  clerk: 200,
+  expired: 401,
+  'wrong-secret': 401,
+} as const
+const AUDIT_READ = {
+  none: 401,
+  staff: 403,
+  manager: 200,
+  clerk: 403,
+  expired: 401,
+  'wrong-secret': 401,
+} as const
 
 const TABLE: Row[] = [
   {
@@ -1564,6 +1709,95 @@ const TABLE: Row[] = [
       'wrong-secret': 401,
     },
   },
+  /* --- P10 端末・監査・お知らせ --- */
+  {
+    name: '置き場所の一覧は誰でも読める',
+    method: 'GET',
+    path: () => `/api/staff/terminals?storeId=${fixture.storeId}`,
+    expected: TERMINAL_READ,
+  },
+  {
+    name: '端末の登録は terminal.manage を持つ店長が、個人モードで行う',
+    method: 'POST',
+    path: () => `/api/staff/terminals?storeId=${fixture.storeId}`,
+    body: () => ({
+      name: '銀座店 予備iPad',
+      kind: 'shared',
+      placeNote: '',
+      deviceLabel: '',
+      autoLockSeconds: 1800,
+      isActive: true,
+      pin: TERMINAL_PIN,
+    }),
+    // 登録は行が増えるので 201（更新の 200 と取り違えない）。
+    expected: { ...TERMINAL_WRITE, manager: 201, 'personal-session': 201 },
+  },
+  {
+    name: '端末の更新は terminal.manage を持つ店長が、個人モードで行う',
+    method: 'PATCH',
+    path: () => `/api/staff/terminals/${fixture.terminalId}`,
+    body: async () => ({ version: await currentTerminalVersion(), name: '銀座店 レジ横iPad' }),
+    expected: TERMINAL_WRITE,
+  },
+  {
+    name: '業務の開始は JWT だけで通る（共有端末は個人ログインを求めない）',
+    method: 'POST',
+    path: () => `/api/staff/terminals/${fixture.sessionTerminalId}/sessions`,
+    body: () => ({ mode: 'shared', pin: TERMINAL_PIN }),
+    expected: { ...SESSION_ANY, staff: 201, manager: 201, clerk: 201 },
+  },
+  {
+    name: '無いセッションの終了は 404（権限では落とさない）',
+    method: 'DELETE',
+    path: () => `/api/staff/terminals/${fixture.sessionTerminalId}/sessions/${crypto.randomUUID()}`,
+    expected: { ...SESSION_ANY, staff: 404, manager: 404, clerk: 404 },
+  },
+  {
+    name: '個人モードへの昇格は JWT だけで通る（通ったあとに個人モードになる）',
+    method: 'POST',
+    path: () => `/api/staff/terminals/${fixture.sessionTerminalId}/elevate`,
+    body: () => ({ staffId: fixture.pinStaffId, pin: STAFF_PIN, reason: 'settings' }),
+    expected: { ...SESSION_ANY, staff: 201, manager: 201, clerk: 201 },
+  },
+  {
+    name: '監査の読み返しは audit.read を持つ店長だけ',
+    method: 'GET',
+    path: () => `/api/staff/audit?storeId=${fixture.storeId}`,
+    expected: AUDIT_READ,
+  },
+  {
+    name: 'お知らせは店舗の誰でも読める',
+    method: 'GET',
+    path: () => `/api/staff/alerts?storeId=${fixture.storeId}`,
+    expected: READ,
+  },
+  {
+    name: 'お知らせ 1 件の更新は店舗の誰でもできる',
+    method: 'PATCH',
+    path: () => `/api/staff/alerts/${fixture.alertId}`,
+    body: () => ({ readAt: NOW }),
+    expected: READ,
+  },
+  {
+    name: 'すべて既読にするは店舗の誰でもできる',
+    method: 'POST',
+    path: () => '/api/staff/alerts/read-all',
+    body: () => ({ storeId: fixture.storeId }),
+    expected: READ,
+  },
+  {
+    name: '本人の暗証番号の設定は settings.manage を持つ店長が、個人モードで行う',
+    method: 'PUT',
+    path: () => `/api/staff/stores/${fixture.storeId}/staff/${fixture.pinStaffId}/pin`,
+    body: () => ({ pin: STAFF_PIN }),
+    expected: TERMINAL_WRITE,
+  },
+  {
+    name: '端末の未知パスも default-deny の対象',
+    method: 'GET',
+    path: () => '/api/staff/terminals/not-a-route',
+    expected: { none: 401, staff: 404, manager: 404, expired: 401, 'wrong-secret': 401 },
+  },
 ]
 
 describe('権限マトリクス', () => {
@@ -1819,5 +2053,61 @@ describe('分析は 401 と 403 と 400 を取り違えない', () => {
       body: JSON.stringify({}),
     })
     expect(res.status).toBe(401)
+  })
+})
+
+describe('端末は 401 と 403 の 2 種類を取り違えない', () => {
+  it('期限切れのトークンは 401 で、個人モードがあっても通らない', async () => {
+    // 個人モードの足場（`x-terminal-session`）を添えても、JWT が切れていれば 401。
+    const res = await SELF.fetch(`${BASE}/api/staff/terminals?storeId=${fixture.storeId}`, {
+      headers: { ...headersFor('expired'), 'x-terminal-session': fixture.personalSessionId },
+    })
+    expect(res.status).toBe(401)
+  })
+
+  it('権限が足りないのは 403 forbidden、個人モードが足りないのは 403 personal_mode_required で、コードが違う', async () => {
+    const body = JSON.stringify({ version: await currentTerminalVersion(), name: '別の名前' })
+    const noPermission = await SELF.fetch(`${BASE}/api/staff/terminals/${fixture.terminalId}`, {
+      method: 'PATCH',
+      headers: headersFor('clerk'),
+      body,
+    })
+    expect(noPermission.status).toBe(403)
+    expect(await noPermission.json()).toMatchObject({ error: 'forbidden' })
+
+    const noPersonalMode = await SELF.fetch(`${BASE}/api/staff/terminals/${fixture.terminalId}`, {
+      method: 'PATCH',
+      headers: headersFor('shared-session'),
+      body,
+    })
+    expect(noPersonalMode.status).toBe(403)
+    expect(await noPersonalMode.json()).toMatchObject({ error: 'personal_mode_required' })
+  })
+
+  it('個人モードの期限が切れた直後は 403 personal_mode_required になる（401 にしない）', async () => {
+    // 401 を返すと、画面は再ログインへ導いてしまう。切れているのは端末セッションの
+    // 昇格であって、JWT ではない。
+    await env.DB.prepare('UPDATE terminal_sessions SET expires_at = ? WHERE id = ?')
+      .bind('2020-01-01T00:00:00.000Z', fixture.personalSessionId)
+      .run()
+    const res = await SELF.fetch(`${BASE}/api/staff/terminals/${fixture.terminalId}`, {
+      method: 'PATCH',
+      headers: headersFor('personal-session'),
+      body: JSON.stringify({ version: await currentTerminalVersion(), name: 'まだ別の名前' }),
+    })
+    expect(res.status).toBe(403)
+    expect(await res.json()).toMatchObject({ error: 'personal_mode_required' })
+  })
+
+  it('未知パス /api/staff/terminals/not-a-route は 404 で、認証の前に漏れない', async () => {
+    const anonymous = await SELF.fetch(`${BASE}/api/staff/terminals/not-a-route`, {
+      headers: headersFor('none'),
+    })
+    expect(anonymous.status).toBe(401)
+
+    const authenticated = await SELF.fetch(`${BASE}/api/staff/terminals/not-a-route`, {
+      headers: headersFor('staff'),
+    })
+    expect(authenticated.status).toBe(404)
   })
 })

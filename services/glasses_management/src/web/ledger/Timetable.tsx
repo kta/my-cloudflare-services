@@ -3,6 +3,7 @@ import { cn, focusRing } from '@app/ui'
 import { type KeyboardEvent, useEffect, useRef, useState } from 'react'
 import { visitLabel } from '../../worker/domain/customers'
 import { bandSourceLabel, type LedgerBandTone } from '../../worker/domain/ledger'
+import { maskLane } from '../shell/mask'
 import {
   bandName,
   bandToneOf,
@@ -66,6 +67,11 @@ export type TimetableProps = {
    * 渡さない器では行き先が無いので、押せて何も起きないボタンを置かない。
    */
   onOpenSettings?: () => void
+  /**
+   * 自動で伏せているあいだ（P10 / AC-TERM-12）。**お名前だけ**を `●●●●` に置き換える。
+   * 時刻・件数・ご用件・担当は読めたままにする。
+   */
+  masked?: boolean
 }
 
 export function Timetable({
@@ -73,6 +79,7 @@ export function Timetable({
   selectedReservationId,
   onSelectEntry,
   onOpenSettings,
+  masked = false,
 }: TimetableProps) {
   const [held, setHeld] = useState<string | null>(null)
   const [active, setActive] = useState({ row: 0, column: 0 })
@@ -128,7 +135,10 @@ export function Timetable({
   }
 
   const columns = columnCount(view.closesAt)
-  const rows = view.lanes.map((lane) => laneSegments(lane, view.date, columns))
+  // 伏せるのはここ 1 か所。読み上げ名（`bandName`）も帯の文字も同じ値から出るので、
+  // 伏せ字にした値が DOM のどこにも残らない。
+  const lanes = masked ? view.lanes.map(maskLane) : view.lanes
+  const rows = lanes.map((lane) => laneSegments(lane, view.date, columns))
   // 行が減ったときに焦点の行番号を丸める。並べ方を戻した直後に `active.row` が
   // 行数を越えたままだと、どの枠にも `tabIndex=0` が当たらず台帳へ Tab で入れなくなる。
   const activeRow = Math.min(active.row, rows.length - 1)
@@ -203,7 +213,7 @@ export function Timetable({
           role="grid"
           aria-label="予約台帳"
           aria-colcount={columns + 1}
-          aria-rowcount={view.lanes.length + 1}
+          aria-rowcount={lanes.length + 1}
           onKeyDown={onKeyDown}
           /* 目盛りは 1 枚うしろ。位置指定した要素は静的な要素より**あとに**描かれるので、
              格子の側も位置指定にしないと、線が帯の文字と焦点の輪を横切ってしまう
@@ -211,7 +221,7 @@ export function Timetable({
           className="relative grid h-full text-grid"
           style={{
             gridTemplateColumns: gridTemplateColumns(columns),
-            gridTemplateRows: gridTemplateRows(view.lanes),
+            gridTemplateRows: gridTemplateRows(lanes),
           }}
         >
           {/* biome-ignore lint/a11y/useSemanticElements: 上の grid と同じ理由（行は display:contents） */}
@@ -240,7 +250,7 @@ export function Timetable({
             ))}
           </div>
 
-          {view.lanes.map((lane, rowIndex) => (
+          {lanes.map((lane, rowIndex) => (
             <Lane
               key={`${lane.kind}:${lane.id ?? lane.name}`}
               lane={lane}

@@ -1,16 +1,25 @@
 import { expect, test } from '@playwright/test'
+import { enterSharedWorkspace } from './terminal-start'
 
 /**
  * 土台の受け入れ基準（AC-FOUND-01..05）を、実際のブラウザと実 Worker で確かめる。
  * `vite preview` が実 workerd を動かすので、/api も本物である。
  */
 
-const ORG = 'e2e-foundation'
+/** 店舗が 1 つも届いていない組織（AC-FOUND-03 の盤面）。 */
+const EMPTY_ORG = 'e2e-foundation'
+/*
+ * 業務画面まで入る 3 本は seed の組織で始める。P10 から業務開始のあとに端末の面が
+ * 挟まり、置き場所を 1 台も持たない組織では業務画面へ入れないためである
+ * （店舗が届いていないこと自体は AC-FOUND-03 が引き続き `EMPTY_ORG` で見る）。
+ */
+const ORG = 'org-eyex-seed'
 
-async function startWork(page: import('@playwright/test').Page) {
+async function startWork(page: import('@playwright/test').Page, org = ORG) {
   await page.goto('/')
-  await page.getByLabel('お店のコード').fill(ORG)
+  await page.getByLabel('お店のコード').fill(org)
   await page.getByRole('button', { name: '業務を始める' }).click()
+  if (org === ORG) await enterSharedWorkspace(page)
 }
 
 // @e2e-covers AC-FOUND-01
@@ -44,7 +53,7 @@ test('サイドバーはつまみで細い柱にたため、もう一度押す�
 
 // @e2e-covers AC-FOUND-03
 test('店舗がまだ届いていないときは、その事実だけを出す', async ({ page }) => {
-  await startWork(page)
+  await startWork(page, EMPTY_ORG)
   await expect(page.getByText('お店がまだ登録されていません。')).toBeVisible()
 })
 

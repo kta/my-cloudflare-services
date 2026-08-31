@@ -14,6 +14,7 @@ import { cn, focusRing, focusRingOnPine } from '@app/ui'
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { client } from '../client'
 import { WalkinPanel } from '../reception/WalkinPanel'
+import { maskView } from '../shell/mask'
 import { dateLabel, nowChipLabel, shiftDate } from './metrics'
 import { OfflineBanner } from './OfflineBanner'
 import { ReservationDetail, type ReservationDetailPhase } from './ReservationDetail'
@@ -79,6 +80,11 @@ export type LedgerScreenProps = {
    * 通信断の帯が出て「再接続を試す」を押し続ける行き止まりになるので、外へ知らせる。
    */
   onSessionExpired?: () => void
+  /**
+   * 自動で伏せているあいだ（P10 / AC-TERM-12）。お客様のお名前を伏せ、
+   * **60 秒ごとの取り直しも止める**（伏せている間は API を叩かない）。
+   */
+  masked?: boolean
 }
 
 export function LedgerScreen({
@@ -91,6 +97,7 @@ export function LedgerScreen({
   onOpenSettings,
   onOpenCheckin,
   onSessionExpired,
+  masked = false,
 }: LedgerScreenProps) {
   const [date, setDate] = useState<LocalDate>(() => initialDate ?? toJstDateString(new Date()))
   const [axis, setAxis] = useState<LedgerAxis>('staff')
@@ -188,12 +195,14 @@ export function LedgerScreen({
   // 60 秒ごとに取り直す。開いたままの iPad の線と札が朝の時刻で止まらないための唯一の
   // 手立てであり、通信が切れている間はそのまま自動再試行になる（UC-LEDGER-09 主フロー 3）。
   useEffect(() => {
+    // 伏せているあいだは取り直さない。表に戻った器が読み直す。
+    if (masked) return
     const timer = setInterval(() => {
       setAutoRound((count) => count + 1)
       setReload((count) => count + 1)
     }, RELOAD_INTERVAL_MS)
     return () => clearInterval(timer)
-  }, [])
+  }, [masked])
 
   // 名簿は日付を動かしても変わらないので、店舗 1 つにつき 1 度だけ読む。
   useEffect(() => {
@@ -277,7 +286,9 @@ export function LedgerScreen({
   // 尋ねた日・並べ方・かたちと届いた応答が食い違っている間は、古い台帳を出さない。
   const fresh =
     data !== null && data.date === date && data.axis === axis && data.view === mode ? data : null
-  const shown = offline ? data : fresh
+  // 伏せているあいだは帯も一覧も同じ値から描く（覆いが半透明なので透けて見える）。
+  const visible = offline ? data : fresh
+  const shown = masked && visible !== null ? maskView(visible) : visible
   // 「本日」の行き先も本日かどうかの判定も、応答の `serverNow` から出す。
   const today = data === null ? date : toJstDateString(new Date(data.serverNow))
   // 通信が切れている間は「現在 11:08」を出さない。届いていない以上いま何時かは分からず、
@@ -421,6 +432,7 @@ export function LedgerScreen({
             ))
           ) : (
             <Timetable
+              masked={masked}
               view={shown}
               selectedReservationId={openId}
               onSelectEntry={(entry) => setOpenId(entry === null ? null : entry.reservationId)}

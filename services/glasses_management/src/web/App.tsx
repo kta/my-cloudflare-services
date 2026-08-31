@@ -1,7 +1,9 @@
-import type { StaffMember, Store } from '@app/contracts'
+import type { Recording, StaffMember, StaffShift, Store } from '@app/contracts'
 import { auth, toJstDateString } from '@app/shared'
 import { Button, Field, focusRing, focusRingOnPine, Notice, TextInput } from '@app/ui'
 import { type FormEvent, type ReactNode, useCallback, useEffect, useState } from 'react'
+import { AlertList } from './alerts/AlertList'
+import type { AlertCounts } from './alerts/alertLabels'
 import { AnalyticsScreen } from './analytics/AnalyticsScreen'
 import { BookingScreen } from './booking/BookingScreen'
 import { ChangeScreen } from './change/ChangeScreen'
@@ -9,11 +11,21 @@ import { client } from './client'
 import { CustomerScreen } from './customers/CustomerScreen'
 import { MyReservations } from './home/MyReservations'
 import { LedgerScreen } from './ledger/LedgerScreen'
+import { type ElevateCandidate, PersonalMode } from './mode/PersonalMode'
 import { type HistoryFilters, ReceptionHistory } from './reception/ReceptionHistory'
 import { ReceptionScreen } from './reception/ReceptionScreen'
 import { SettingsScreen } from './settings/SettingsScreen'
 import { AppShell } from './shell/AppShell'
 import { DESTINATIONS, RAIL_BY_DEFAULT } from './shell/destinations'
+import { LockVeil } from './shell/LockVeil'
+import { useAutoLock } from './shell/useIdle'
+import { TerminalStart } from './terminal/TerminalStart'
+import {
+  clearTerminal,
+  loadTerminal,
+  type TerminalContext,
+  terminalNote,
+} from './terminal/terminalState'
 
 /*
  * P0（基盤）の画面。承認済みモック docs/frontend/mockups/eyex/images/HOME.png の
@@ -26,17 +38,19 @@ import { DESTINATIONS, RAIL_BY_DEFAULT } from './shell/destinations'
 
 export function App() {
   const [org, setOrg] = useState(() => auth.getOrganization())
-  return org ? (
-    <Workspace
-      org={org}
-      onSignOut={() => {
-        auth.logout()
-        setOrg(null)
-      }}
-    />
-  ) : (
-    <StartWork onStarted={setOrg} />
-  )
+  // この iPad が誰の・どこの端末か（P10）。決まるまで業務画面へ入れない。
+  const [terminal, setTerminal] = useState<TerminalContext | null>(() => loadTerminal())
+
+  function signOut() {
+    auth.logout()
+    clearTerminal()
+    setTerminal(null)
+    setOrg(null)
+  }
+
+  if (org === null) return <StartWork onStarted={setOrg} />
+  if (terminal === null) return <TerminalStart onReady={setTerminal} onQuit={signOut} />
+  return <Workspace terminal={terminal} onSignOut={signOut} />
 }
 
 /** 業務開始。実運用では admin の認証に差し替わる（いまは dev グラント）。 */
@@ -87,7 +101,7 @@ function StartWork({ onStarted }: { onStarted: (org: string) => void }) {
   )
 }
 
-function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
+function Workspace({ terminal, onSignOut }: { terminal: TerminalContext; onSignOut: () => void }) {
   const [current, setCurrent] = useState('home')
   const [rail, setRail] = useState(false)
   // 個人トップの 1 行から来たとき、台帳のその帯の詳細を開いた状態で出す。
@@ -115,6 +129,18 @@ function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
   // 予約を探す面の「顧客台帳で調べる」から来たとき、入れたお名前を検索欄へ引き継ぐ
   // （AC-CHANGE-24）。台帳をふつうに開いたときは空のまま。
   const [customerQuery, setCustomerQuery] = useState('')
+  // 対応が要るお知らせの件数（左の柱と上のバーの入口が同じ数を出す）。
+  const [alertCount, setAlertCount] = useState(0)
+  const [today] = useState(() => toJstDateString(new Date()))
+  /*
+   * 離席した共有端末を伏せる（UC-TERM-08）。**個人の端末では伏せない。**
+   * 伏せるのは画面だけで、業務は終わらせない —— 打ちかけの入力はそのまま残り、
+   * 「画面にさわって続ける」で最新を読み直す（伏せている間は API を叩かない）。
+   */
+  const { locked, unlock } = useAutoLock({
+    seconds: terminal.autoLockSeconds,
+    enabled: terminal.mode === 'shared',
+  })
 
   const load = useCallback(async () => {
     const res = await client.api.staff.stores.$get()
@@ -138,6 +164,25 @@ function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
     load().catch(() => setError('通信できませんでした。画面を開き直してください。'))
   }, [load])
 
+  const store = stores?.find((s) => s.isActive) ?? stores?.[0]
+  const storeId = store?.id
+
+  // 入口の件数。読めなくても業務は止めない（数が出ないだけ）。
+  useEffect(() => {
+    if (storeId === undefined) return
+    let alive = true
+    client.api.staff.alerts
+      .$get({ query: { storeId, kind: 'all', audience: 'store' } })
+      .then(async (res) => (res.ok ? ((await res.json()) as { counts: AlertCounts }) : null))
+      .then((body) => {
+        if (alive && body) setAlertCount(body.counts.all)
+      })
+      .catch(() => undefined)
+    return () => {
+      alive = false
+    }
+  }, [storeId])
+
   function navigate(key: string, reservationId: string | null = null, walkin = false) {
     if (key !== 'customers') setCustomerQuery('')
     setCurrent(key)
@@ -151,8 +196,6 @@ function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
     setBookingCustomer(customer ?? null)
     navigate('book')
   }
-
-  const store = stores?.find((s) => s.isActive) ?? stores?.[0]
 
   /*
    * 予約の受付（BOOK-01〜06）は**サイドバーを出さない**（`design/05-screen-flow.md` §3.3）ので、
@@ -184,16 +227,35 @@ function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
       storeSubline={
         current === 'home'
           ? '営業中　10:00–19:00'
-          : current === 'search'
-            ? changeSubline
-            : (DESTINATIONS.find((destination) => destination.key === current)?.label ?? '')
+          : current === 'alerts'
+            ? 'お知らせとアラート'
+            : current === 'search'
+              ? changeSubline
+              : (DESTINATIONS.find((destination) => destination.key === current)?.label ?? '')
       }
       current={current}
       onNavigate={(key) => navigate(key)}
       rail={rail}
       onToggleRail={() => setRail((v) => !v)}
-      terminalNote={[`${org} の端末`, '共有で使っています']}
+      alertCount={alertCount}
+      {...(current === 'alerts' ? {} : { onOpenAlerts: () => navigate('alerts') })}
+      terminalNote={terminalNote(terminal)}
       barCenter={barCenter}
+      {...(locked
+        ? { barTag: { text: 'お客様の情報を隠しています', tone: 'danger' as const } }
+        : {})}
+      veil={
+        locked ? (
+          <LockVeil
+            onContinue={() => {
+              unlock()
+              // 表に戻ったときに読み直す（伏せているあいだは 1 回も叩いていない）。
+              load().catch(() => setError('通信できませんでした。画面を開き直してください。'))
+            }}
+            onQuit={onSignOut}
+          />
+        ) : null
+      }
       barActions={
         <button
           type="button"
@@ -222,6 +284,7 @@ function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
         ) : current === 'ledger' ? (
           store ? (
             <LedgerScreen
+              masked={locked}
               storeId={store.id}
               initialReservationId={openReservation ?? undefined}
               initialWalkinOpen={walkinPanel}
@@ -255,6 +318,8 @@ function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
           store ? (
             <HistoryPane
               storeId={store.id}
+              storeName={store.name}
+              terminal={terminal}
               initialQuery={historyQuery}
               onQueryChange={setHistoryQuery}
               onOpenReservation={(id) => navigate('ledger', id)}
@@ -310,9 +375,22 @@ function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
           ) : (
             <p className="p-11 text-body text-ink-muted">読み込んでいます…</p>
           )
+        ) : current === 'alerts' ? (
+          /* お知らせとアラート（ALERTS）。横断して読む監査の一覧は作らない —— 監査は
+             受付履歴の 1 件からたどる形に限る。 */
+          store ? (
+            <AlertList
+              storeId={store.id}
+              today={today}
+              onOpenLedger={() => navigate('ledger')}
+              onCountsChange={(counts) => setAlertCount(counts.all)}
+            />
+          ) : (
+            <p className="p-11 text-body text-ink-muted">読み込んでいます…</p>
+          )
         ) : current === 'settings' ? (
           store ? (
-            <SettingsScreen storeId={store.id} />
+            <SettingsScreen storeId={store.id} terminalId={terminal.terminalId} />
           ) : (
             <p className="p-11 text-body text-ink-muted">読み込んでいます…</p>
           )
@@ -432,44 +510,143 @@ function PrimaryAction({
  */
 function HistoryPane({
   storeId,
+  storeName,
+  terminal,
   initialQuery,
   onQueryChange,
   onOpenReservation,
   onStartBooking,
 }: {
   storeId: string
+  storeName: string
+  /** いまの端末。共有モードなら、保全の前にご本人の確認を挟む。 */
+  terminal: TerminalContext
   initialQuery?: HistoryFilters
   onQueryChange: (filters: HistoryFilters) => void
   onOpenReservation: (reservationId: string) => void
   onStartBooking: () => void
 }) {
   const [staff, setStaff] = useState<{ id: string; name: string }[]>([])
+  const [candidates, setCandidates] = useState<readonly ElevateCandidate[]>([])
+  const [recordings, setRecordings] = useState<readonly Recording[]>([])
+  /** 保全しようとしている 1 本。ご本人の確認が済むまでここに控える（捨てない）。 */
+  const [elevating, setElevating] = useState<Recording | null>(null)
+  /** 個人モードの期限（ミリ秒）。過ぎたら同じ操作でもう一度確認を求める（AC-TERM-12）。 */
+  const [personalUntil, setPersonalUntil] = useState(0)
+  const [notice, setNotice] = useState<string | null>(null)
   const [today] = useState(() => toJstDateString(new Date()))
+
+  const loadRecordings = useCallback(async () => {
+    const res = await client.api.staff.recordings.$get({ query: { storeId, limit: '200' } })
+    if (res.ok) setRecordings((await res.json()).items)
+  }, [storeId])
 
   useEffect(() => {
     let live = true
-    client.api.staff.stores[':storeId'].staff
-      .$get({ param: { storeId } })
-      .then(async (res) => {
-        if (!live || !res.ok) return
-        const rows: StaffMember[] = await res.json()
-        if (live) setStaff(rows.map((row) => ({ id: row.id, name: row.displayName })))
+    Promise.all([
+      client.api.staff.stores[':storeId'].staff.$get({ param: { storeId } }),
+      client.api.staff.stores[':storeId']['staff-shifts'].$get({
+        param: { storeId },
+        query: { from: today, to: today },
+      }),
+    ])
+      .then(async ([staffRes, shiftRes]) => {
+        if (!live || !staffRes.ok) return
+        const rows: StaffMember[] = await staffRes.json()
+        const shifts: StaffShift[] = shiftRes.ok ? await shiftRes.json() : []
+        if (!live) return
+        setStaff(rows.map((row) => ({ id: row.id, name: row.displayName })))
+        setCandidates(
+          rows
+            .filter((row) => row.isActive)
+            .map((row) => ({
+              id: row.id,
+              name: row.displayName,
+              job: row.jobLabel ?? '',
+              offToday: !shifts.some((shift) => shift.staffId === row.id && shift.kind === 'work'),
+            })),
+        )
       })
       .catch(() => undefined)
     return () => {
       live = false
     }
-  }, [storeId])
+  }, [storeId, today])
+
+  useEffect(() => {
+    loadRecordings().catch(() => undefined)
+  }, [loadRecordings])
+
+  /** 保全そのもの。**録音は消さない**（`legal_hold` を立てるだけ）。 */
+  const hold = useCallback(
+    async (recording: Recording) => {
+      try {
+        const res = await client.api.staff.recordings[':recordingId'].hold.$post({
+          param: { recordingId: recording.id },
+          json: { legalHold: true, reason: '受付の記録として残すため' },
+        })
+        setNotice(
+          res.ok
+            ? 'この録音を保全しました。期限が来ても消えません。'
+            : '保全できませんでした。時間をおいてお試しください。',
+        )
+        if (res.ok) await loadRecordings()
+      } catch {
+        setNotice('通信できませんでした。時間をおいてお試しください。')
+      }
+    },
+    [loadRecordings],
+  )
+
+  /*
+   * 責任の残る操作の前に個人モードを求める（UC-TERM-09）。個人の端末と、まだ期限の
+   * 内側にある個人モードでは求め直さない。
+   */
+  function preserve(recording: Recording) {
+    setNotice(null)
+    if (terminal.mode === 'personal' || Date.now() < personalUntil) {
+      void hold(recording)
+      return
+    }
+    setElevating(recording)
+  }
+
+  if (elevating !== null) {
+    return (
+      <PersonalMode
+        storeName={storeName}
+        terminalName={terminal.terminalName}
+        terminalId={terminal.terminalId}
+        reason="recording"
+        staff={candidates}
+        onElevated={(session) => {
+          setPersonalUntil(Date.parse(session.expiresAt))
+          setElevating(null)
+          void hold(elevating)
+        }}
+        onCancel={() => setElevating(null)}
+      />
+    )
+  }
 
   return (
-    <ReceptionHistory
-      storeId={storeId}
-      today={today}
-      staff={staff}
-      {...(initialQuery === undefined ? {} : { initialQuery })}
-      onQueryChange={onQueryChange}
-      onOpenReservation={onOpenReservation}
-      onStartBooking={onStartBooking}
-    />
+    <div className="flex h-full min-h-0 flex-col">
+      {notice !== null && (
+        <p role="status" className="px-8 pt-6 text-body text-ink-muted">
+          {notice}
+        </p>
+      )}
+      <ReceptionHistory
+        storeId={storeId}
+        today={today}
+        staff={staff}
+        {...(initialQuery === undefined ? {} : { initialQuery })}
+        onQueryChange={onQueryChange}
+        onOpenReservation={onOpenReservation}
+        onStartBooking={onStartBooking}
+        recordings={recordings}
+        onPreserveRecording={preserve}
+      />
+    </div>
   )
 }

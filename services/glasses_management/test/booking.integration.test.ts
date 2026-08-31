@@ -12,8 +12,11 @@
 import { env, SELF } from 'cloudflare:test'
 import { describe, expect, it } from 'vitest'
 import {
+  auditRowsOf,
   authed,
   BASE,
+  createTerminal,
+  grantStorePermissions,
   insertBusinessHours,
   insertEquipment,
   insertReservation,
@@ -25,6 +28,7 @@ import {
   jstAt,
   LEDGER_DATE,
   orgId,
+  startSession as startTerminalSession,
   tokenFor,
 } from './helpers'
 
@@ -356,7 +360,7 @@ describe('予約の確定', () => {
     expect(audits.results).toHaveLength(1)
     const audit = audits.results[0]
     expect(audit?.action).toBe('reservation.created')
-    expect(audit?.targetType).toBe('reservation')
+    expect(audit?.targetType).toBe('reservations')
     expect(audit?.targetId).toBe(res.body.id)
     expect(audit?.storeId).toBe(t.storeId)
     // 1 操作でまとまった行を束ねる鍵。同じ `db.batch()` の行は同じ値を持つ。
@@ -833,5 +837,69 @@ describe('仮の押さえ', () => {
     })
     expect(res.status).toBe(200)
     expect((await countRows(t.org)).reservations).toBe(1)
+  })
+})
+
+/*
+ * 監査の主体（P10 `013-terminals-and-audit` AC-TERM-08）。共有端末は個人ログイン無しで
+ * 予約を受けられるので、**残るのは端末そのもの**でなければ「誰が受けたか」が空になる。
+ * 主体は端末が名乗った業務セッション（`x-terminal-session`）だけが決める。
+ */
+describe('受け付けた主体', () => {
+  it('共有モードの端末が名乗ると、予約の作成の監査は端末が主体になる', async () => {
+    const t = await bookingTenant()
+    await grantStorePermissions(t.org, t.storeId, `dev:${t.org}`, [
+      'settings.read',
+      'settings.manage',
+      'terminal.manage',
+    ])
+    const terminal = await createTerminal(t.token, { storeId: t.storeId, pin: '2580' })
+    const terminalId = String(terminal.body?.id)
+    const started = await startTerminalSession(t.token, terminalId, {
+      mode: 'shared',
+      pin: '2580',
+    })
+    const sessionId = String((started.body as { id?: string } | null)?.id)
+
+    const res = await SELF.fetch(`${BASE}/api/staff/reservations`, {
+      method: 'POST',
+      headers: {
+        ...authed(t.token),
+        'idempotency-key': crypto.randomUUID(),
+        'x-terminal-session': sessionId,
+      },
+      body: JSON.stringify({
+        storeId: t.storeId,
+        startsAt: AT_11,
+        purposeIds: [t.purposeId],
+        staffId: t.staffId,
+        source: 'phone',
+      }),
+    })
+    expect(res.status).toBe(200)
+
+    const created = (await auditRowsOf(t.org)).filter((row) => row.action === 'reservation.created')
+    expect(created).toHaveLength(1)
+    expect(created[0]).toMatchObject({
+      actor_type: 'terminal',
+      actor_id: terminalId,
+      terminal_id: terminalId,
+      target_type: 'reservations',
+    })
+  })
+
+  it('端末が名乗らない経路では、これまでどおり担当が主体のまま残る', async () => {
+    const t = await bookingTenant()
+    const res = await confirm(t.token, crypto.randomUUID(), {
+      storeId: t.storeId,
+      startsAt: AT_11,
+      purposeIds: [t.purposeId],
+      staffId: t.staffId,
+      source: 'phone',
+    })
+    expect(res.status).toBe(200)
+    const created = (await auditRowsOf(t.org)).filter((row) => row.action === 'reservation.created')
+    expect(created).toHaveLength(1)
+    expect(created[0]).toMatchObject({ actor_type: 'staff', terminal_id: null })
   })
 })

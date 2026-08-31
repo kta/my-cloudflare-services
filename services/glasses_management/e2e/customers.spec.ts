@@ -1,5 +1,6 @@
 import type { APIRequestContext, Locator, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
+import { enterSharedWorkspace } from './terminal-start'
 
 /**
  * 顧客台帳（007-customer-records）の受け入れ基準を、実ブラウザと実 Worker で確かめる。
@@ -256,6 +257,7 @@ async function startWork(page: Page): Promise<void> {
     await code.fill(ORG)
     await page.getByRole('button', { name: '業務を始める' }).click()
   }
+  await enterSharedWorkspace(page)
   await expect(page.locator('header').first()).toContainText('EYEX 銀座店')
 }
 

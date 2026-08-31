@@ -128,3 +128,21 @@ describe('defaults', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Could not save')
   })
 })
+
+describe('autofill', () => {
+  it('turns autofill off by default so a shared terminal never suggests the last customer', () => {
+    render(
+      <>
+        <TextInput aria-label="name" />
+        <Textarea aria-label="memo" />
+      </>,
+    )
+    expect(screen.getByLabelText('name')).toHaveAttribute('autocomplete', 'off')
+    expect(screen.getByLabelText('memo')).toHaveAttribute('autocomplete', 'off')
+  })
+
+  it('still lets a customer-facing field opt back in', () => {
+    render(<TextInput aria-label="name" autoComplete="name" />)
+    expect(screen.getByLabelText('name')).toHaveAttribute('autocomplete', 'name')
+  })
+})

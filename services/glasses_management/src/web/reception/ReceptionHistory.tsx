@@ -2,6 +2,7 @@ import type {
   LocalDate,
   ReceptionHistoryDetail,
   ReceptionHistoryEntry,
+  Recording,
   RecordingSummary,
   ReservationStatus,
   SearchRelaxation,
@@ -114,6 +115,16 @@ export type ReceptionHistoryProps = {
    * 欄が `RecordingSummary` になったらここへ 1 行で繋ぎ替える。
    */
   recording?: RecordingSummary | null
+  /**
+   * この店舗の録音（P10）。開いている 1 件のぶんを受付セッション id で引き当てる。
+   * `recording` を直に渡されたときはそちらが勝つ。
+   */
+  recordings?: readonly Recording[]
+  /**
+   * 「この録音を保全する」（UC-TERM-09 / AC-TERM-10）。**この面では確認を求めない** ——
+   * ご本人の確認（MODE-PERSONAL）を挟むかどうかは器が決める。
+   */
+  onPreserveRecording?: (recording: Recording) => void
 }
 
 type ListPhase = 'loading' | 'ready' | 'error' | 'forbidden'
@@ -279,6 +290,8 @@ export function ReceptionHistory({
   onOpenReservation,
   onStartBooking,
   recording = null,
+  recordings = [],
+  onPreserveRecording,
 }: ReceptionHistoryProps) {
   const [filters, setFilters] = useState<HistoryFilters>(() => ({
     ...defaultFilters(today),
@@ -566,6 +579,8 @@ export function ReceptionHistory({
             selected={selectedId !== null}
             staffName={staffName}
             recording={recording}
+            recordings={recordings}
+            {...(onPreserveRecording === undefined ? {} : { onPreserveRecording })}
             onOpenReservation={onOpenReservation}
           />
         </div>
@@ -596,6 +611,8 @@ function HistoryDetail({
   selected,
   staffName,
   recording,
+  recordings,
+  onPreserveRecording,
   onOpenReservation,
 }: {
   detail: ReceptionHistoryDetail | null
@@ -603,6 +620,8 @@ function HistoryDetail({
   selected: boolean
   staffName: (id: string | null) => string | null
   recording: RecordingSummary | null
+  recordings: readonly Recording[]
+  onPreserveRecording?: (recording: Recording) => void
   onOpenReservation: (reservationId: string) => void
 }) {
   if (!selected) {
@@ -633,6 +652,20 @@ function HistoryDetail({
 
   const reservation = detail.reservation
   const assigned = reservation?.assignments.find((row) => row.kind === 'staff') ?? null
+  /*
+   * この受付の録音（P10）。器が `recording` を直に渡したときはそれを描き、
+   * 渡していなければ店舗の録音から受付セッション id で引き当てる。
+   */
+  const found =
+    recordings.find(
+      (row) => row.receptionSessionId === detail.sessionId && row.state === 'stored',
+    ) ?? null
+
+  const shown: RecordingSummary | null =
+    recording ??
+    (found === null
+      ? null
+      : { id: found.id, state: found.state, durationSeconds: found.durationSeconds })
   const tag = reservation === null ? null : (resultTag(reservation.status) ?? RESULT_LABELS.settled)
   const received =
     detail.receivedBy === null
@@ -739,10 +772,32 @@ function HistoryDetail({
        * 聞けない録音（無い・端末に残ったまま・消した）のときは**見出しごと出さない**。
        * 空の節が残ると「読み込めていない」のか「もう無い」のかが手元から見分けられない。
        */}
-      {hasPlayableRecording(recording) && (
+      {hasPlayableRecording(shown) && (
         <div>
           <h3 className="m-0 mb-3 text-body font-semibold text-ink-muted">受付のときの録音</h3>
-          <RecordingPlayer recording={recording} placement="inline" />
+          <RecordingPlayer recording={shown} placement="inline" />
+          {/*
+           * 保全（UC-TERM-09）。**すでに保全されている録音にボタンを出さない**
+           * （押せて何も起きない操作を置かない）。解除の経路はこの面に置かない。
+           */}
+          {found !== null &&
+            onPreserveRecording !== undefined &&
+            (found.legalHold ? (
+              <p className="mt-3 text-grid text-ink-muted">
+                この録音は保全されています。期限が来ても消えません。
+              </p>
+            ) : (
+              <button
+                type="button"
+                onClick={() => onPreserveRecording(found)}
+                className={cn(
+                  'mt-3 min-h-11 rounded-ctl border border-line-strong bg-surface px-4 text-body font-semibold text-ink',
+                  focusRing,
+                )}
+              >
+                この録音を保全する
+              </button>
+            ))}
         </div>
       )}
     </section>

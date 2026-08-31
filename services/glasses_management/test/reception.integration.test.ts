@@ -17,9 +17,12 @@
 import { env, SELF } from 'cloudflare:test'
 import { describe, expect, it } from 'vitest'
 import {
+  auditRowsOf,
   authed,
   BASE,
+  createTerminal,
   FIXED_NOW,
+  grantStorePermissions,
   insertBusinessHours,
   insertReservation,
   insertShift,
@@ -30,6 +33,7 @@ import {
   jstAt,
   LEDGER_DATE,
   orgId,
+  startSession,
   tokenFor,
 } from './helpers'
 
@@ -1822,5 +1826,68 @@ describe('まとめられて消えたお客様へは結びつけない', () => {
     // 断られた更新は版も customer_id も動かさない。
     const rows = await walkinRows(t.org, t.storeId, LEDGER_DATE)
     expect(rows[0]).toMatchObject({ customerId: null, version: 1 })
+  })
+})
+
+/*
+ * 監査の主体（P10 `013-terminals-and-audit`）。レジ横の共有 iPad は個人ログイン無しで
+ * ご来店を受けるので、**残るのは端末そのもの**でなければ「誰が受けたか」が空になる。
+ * 主体は端末が名乗った業務セッション（`x-terminal-session`）だけが決める。
+ */
+describe('受け付けた主体', () => {
+  it('共有モードの端末が名乗ると、ご来店と工程の監査は端末が主体になる', async () => {
+    const t = await receptionTenant()
+    await grantStorePermissions(t.org, t.storeId, `dev:${t.org}`, [
+      'settings.read',
+      'settings.manage',
+      'terminal.manage',
+    ])
+    const terminal = await createTerminal(t.token, { storeId: t.storeId, pin: '2580' })
+    const terminalId = String(terminal.body?.id)
+    const started = await startSession(t.token, terminalId, { mode: 'shared', pin: '2580' })
+    const sessionId = String(started.body?.id)
+    const named = { ...authed(t.token), 'x-terminal-session': sessionId }
+
+    const walkin = await SELF.fetch(`${BASE}/api/staff/walkins`, {
+      method: 'POST',
+      headers: named,
+      body: JSON.stringify(walkinBody(t.storeId, '11:02')),
+    })
+    expect(walkin.status).toBe(200)
+    const walkinId = ((await walkin.json()) as { id: string }).id
+    const visit = await SELF.fetch(`${BASE}/api/staff/visits`, {
+      method: 'POST',
+      headers: named,
+      body: JSON.stringify({
+        storeId: t.storeId,
+        subjectType: 'walkin',
+        subjectId: walkinId,
+        stage: 'consulting',
+        occurredAt: jstAt(LEDGER_DATE, '11:05'),
+      }),
+    })
+    expect(visit.status).toBe(200)
+
+    const rows = await auditRowsOf(t.org)
+    const created = rows.filter((row) => row.action === 'walkin.created')
+    const staged = rows.filter((row) => row.action === 'visit.stage.changed')
+    expect(created).toHaveLength(1)
+    expect(staged).toHaveLength(1)
+    for (const row of [...created, ...staged]) {
+      expect(row).toMatchObject({
+        actor_type: 'terminal',
+        actor_id: terminalId,
+        terminal_id: terminalId,
+      })
+    }
+  })
+
+  it('端末が名乗らない経路では、これまでどおり担当が主体のまま残る', async () => {
+    const t = await receptionTenant()
+    const created = await createWalkin(t.token, walkinBody(t.storeId, '11:02'))
+    expect(created.status).toBe(200)
+    const rows = (await auditRowsOf(t.org)).filter((row) => row.action === 'walkin.created')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ actor_type: 'staff', terminal_id: null })
   })
 })
