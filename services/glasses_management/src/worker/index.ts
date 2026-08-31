@@ -2,6 +2,12 @@ import {
   Alert,
   AlertList,
   AlertListQuery,
+  type AnalyticsMetric,
+  AnalyticsQuery,
+  AnalyticsReport,
+  AnalyticsRollupRequest,
+  AnalyticsRollupResult,
+  AnalyticsTargets,
   AvailabilityQuery,
   type AvailabilityReason,
   AvailabilityResponse,
@@ -106,6 +112,7 @@ import {
   StaffSkillsInput,
   Store,
   StoreDetail,
+  StoreIdQuery,
   StoreMembership,
   StorePatch,
   type StorePermission,
@@ -178,6 +185,9 @@ import {
   webBookingSettings,
 } from './db/schema'
 import { slotLockRequests, slotLockStatements, UNASSIGNED_TARGET_KEY } from './db/slot-locks'
+import { ANALYTICS_TARGETS, addDays } from './domain/analytics'
+import { buildReport, type DailyRow } from './domain/analytics-report'
+import { type AnalyticsRow, rollupDay } from './domain/analytics-rollup'
 import {
   type AvailabilityInput,
   computeAvailability,
@@ -394,6 +404,9 @@ const toJstMinutes = (instant: string): number =>
     ((Date.parse(instant) + JST_OFFSET_MS) % (MINUTES_PER_DAY * MS_PER_MINUTE)) / MS_PER_MINUTE,
   )
 
+/** query から受け取る店舗 id の形。契約（`Uuid`）と同じものを認可の前に見る。 */
+const UUID_PATTERN = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
+
 /** 空白区切りの許可リストに含まれるか。知らない語は届かない（同期で fail close 済み）。 */
 const allows = (permissions: string, perm: StorePermission): boolean =>
   permissions.split(' ').includes(perm)
@@ -428,10 +441,39 @@ async function findStore(db: Db, org: string, storeId: string) {
  * **body / query の `organizationId` や `storeId` を認可の根拠にしない。**
  * 店舗に紐づかない面（ご来店の目的）は、同じ組織のどこかの店舗で権限を持っていればよい。
  */
-function requireStorePermission(perm: StorePermission): MiddlewareHandler<Env> {
+function requireStorePermission(
+  perm: StorePermission,
+  options: { storeIdFrom?: 'param' | 'query' } = {},
+): MiddlewareHandler<Env> {
+  const from = options.storeIdFrom ?? 'param'
   return async (c, next) => {
     const db = drizzle(c.env.DB)
     const { org, sub } = c.get('auth')
+    if (from === 'query') {
+      // query で受ける面（分析）。**入力検証が認可より先**なので、店舗を書いていない
+      // 要求は 400（403 にすると「権限が無い」と読めてしまう）。
+      const raw = c.req.query('storeId')
+      if (raw === undefined || !UUID_PATTERN.test(raw)) {
+        return c.json({ error: 'bad_request' }, 400)
+      }
+      // **店舗の存在を先に引かない。** 他組織の店舗 id を渡されたとき、404 と 403 の
+      // 違いでその店舗が在ることを漏らさないためである（membership が無ければ一律 403）。
+      const granted = await db
+        .select({ permissions: storeMemberships.permissions })
+        .from(storeMemberships)
+        .where(
+          and(
+            eq(storeMemberships.organizationId, org),
+            eq(storeMemberships.userId, sub),
+            eq(storeMemberships.storeId, raw),
+          ),
+        )
+      if (!granted.some((row) => allows(row.permissions, perm))) {
+        return c.json({ error: 'forbidden' }, 403)
+      }
+      await next()
+      return
+    }
     const storeId: string | undefined = c.req.param('storeId')
     if (storeId !== undefined && !(await findStore(db, org, storeId))) {
       return c.json({ error: 'not_found' }, 404)
@@ -3193,6 +3235,242 @@ async function applyWebPublications(
   }
   // **自動で取り消した件数を他の数に混ぜない**（0 でないことが単独で読めるようにする）。
   return { applied: found.results.length, skipped, autoCancelled }
+}
+
+/** JST の暦日 `YYYY-MM-DD` の始まり（UTC の ISO8601）。JST は +9 時間の固定オフセット。 */
+function jstDayStart(date: string): string {
+  return new Date(Date.parse(`${date}T00:00:00.000Z`) - 9 * 3_600_000).toISOString()
+}
+
+/** 保持期限の下限。当月を含めて 25 か月（= 24 か月前の 1 日）より前の行は消す。 */
+function analyticsRetentionFloor(today: string): string {
+  const [y, m] = today.split('-').map(Number)
+  const months = (y as number) * 12 + ((m as number) - 1) - 24
+  return `${Math.floor(months / 12)}-${String((months % 12) + 1).padStart(2, '0')}-01`
+}
+
+/**
+ * 1 店舗 1 日分の生データを読み、`rollupDay()`（純関数）に渡して行を作る。
+ * **画面はこの結果（`analytics_daily`）しか読まない**ので、生データの走査はここだけ。
+ */
+async function rollupStoreDay(
+  env: Bindings,
+  store: { id: string; organizationId: string },
+  date: string,
+): Promise<{ rows: AnalyticsRow[]; dropped: number }> {
+  const dayStart = jstDayStart(date)
+  const dayEnd = jstDayStart(addDays(date, 1))
+
+  const [hours, exceptions, dayReservations, walkInRows, events] = await Promise.all([
+    env.DB.prepare(
+      'SELECT weekday, is_closed AS isClosed FROM store_business_hours WHERE organization_id = ? AND store_id = ?',
+    )
+      .bind(store.organizationId, store.id)
+      .all<{ weekday: number; isClosed: string }>(),
+    env.DB.prepare(
+      'SELECT date, kind FROM store_calendar_exceptions WHERE organization_id = ? AND store_id = ? AND date = ?',
+    )
+      .bind(store.organizationId, store.id, date)
+      .all<{ date: string; kind: string }>(),
+    env.DB.prepare(
+      'SELECT id, source, status, starts_at AS startsAt, created_at AS createdAt, ' +
+        'cancel_reason AS cancelReason, customer_id AS customerId FROM reservations ' +
+        'WHERE organization_id = ? AND store_id = ? AND ((starts_at >= ? AND starts_at < ?) ' +
+        'OR (created_at >= ? AND created_at < ?))',
+    )
+      .bind(store.organizationId, store.id, dayStart, dayEnd, dayStart, dayEnd)
+      .all<{
+        id: string
+        source: string
+        status: string
+        startsAt: string
+        createdAt: string
+        cancelReason: string | null
+        customerId: string | null
+      }>(),
+    env.DB.prepare(
+      'SELECT id, reservation_id AS reservationId, arrived_at AS arrivedAt FROM walk_ins ' +
+        'WHERE organization_id = ? AND store_id = ? AND visit_date = ?',
+    )
+      .bind(store.organizationId, store.id, date)
+      .all<{ id: string; reservationId: string; arrivedAt: string }>(),
+    env.DB.prepare(
+      'SELECT subject_type AS subjectType, subject_id AS subjectId, stage, ' +
+        'occurred_at AS occurredAt, staff_id AS staffId FROM visit_events ' +
+        'WHERE organization_id = ? AND store_id = ? AND occurred_at >= ? AND occurred_at < ?',
+    )
+      .bind(store.organizationId, store.id, dayStart, dayEnd)
+      .all<{
+        subjectType: string
+        subjectId: string
+        stage: string
+        occurredAt: string
+        staffId: string | null
+      }>(),
+  ])
+
+  const reservationIds = dayReservations.results.map((row) => row.id)
+  const placeholders = reservationIds.map(() => '?').join(',')
+  const assignments =
+    reservationIds.length === 0
+      ? { results: [] as { reservationId: string; kind: string; targetId: string | null }[] }
+      : await env.DB.prepare(
+          'SELECT reservation_id AS reservationId, kind, target_id AS targetId ' +
+            `FROM reservation_assignments WHERE organization_id = ? AND reservation_id IN (${placeholders})`,
+        )
+          .bind(store.organizationId, ...reservationIds)
+          .all<{ reservationId: string; kind: string; targetId: string | null }>()
+  const purposes =
+    reservationIds.length === 0
+      ? { results: [] as { reservationId: string; purposeId: string }[] }
+      : await env.DB.prepare(
+          'SELECT reservation_id AS reservationId, purpose_id AS purposeId ' +
+            `FROM reservation_purposes WHERE organization_id = ? AND reservation_id IN (${placeholders})`,
+        )
+          .bind(store.organizationId, ...reservationIds)
+          .all<{ reservationId: string; purposeId: string }>()
+
+  // 再来は「その日の来店客の、その日より後 90 日以内の来店」。窓の外は読まない。
+  const customerIds = [
+    ...new Set(
+      dayReservations.results.flatMap((row) => (row.customerId === null ? [] : [row.customerId])),
+    ),
+  ]
+  const laterVisits =
+    customerIds.length === 0
+      ? []
+      : (
+          await env.DB.prepare(
+            'SELECT customer_id AS customerId, starts_at AS startsAt FROM reservations ' +
+              'WHERE organization_id = ? AND store_id = ? AND starts_at >= ? AND starts_at < ? ' +
+              `AND status NOT IN ('cancelled','no_show') AND customer_id IN (${customerIds.map(() => '?').join(',')})`,
+          )
+            .bind(
+              store.organizationId,
+              store.id,
+              dayEnd,
+              jstDayStart(addDays(date, 91)),
+              ...customerIds,
+            )
+            .all<{ customerId: string; startsAt: string }>()
+        ).results.map((row) => ({
+          customerId: row.customerId,
+          date: toJstDateString(row.startsAt),
+        }))
+
+  const visitCounts =
+    customerIds.length === 0
+      ? []
+      : (
+          await env.DB.prepare(
+            'SELECT id AS customerId, visit_count AS visitCount FROM customers ' +
+              `WHERE organization_id = ? AND id IN (${customerIds.map(() => '?').join(',')})`,
+          )
+            .bind(store.organizationId, ...customerIds)
+            .all<{ customerId: string; visitCount: number }>()
+        ).results
+
+  return rollupDay({
+    organizationId: store.organizationId,
+    storeId: store.id,
+    date,
+    businessHours: hours.results,
+    calendarExceptions: exceptions.results,
+    reservations: dayReservations.results,
+    reservationAssignments: assignments.results,
+    reservationPurposes: purposes.results,
+    walkIns: walkInRows.results,
+    visitEvents: events.results,
+    laterVisits,
+    customerVisitCounts: visitCounts,
+  })
+}
+
+/**
+ * 日次集計。当日分と前日分（既定 `days=2`）を数え直して upsert し、保持期限より
+ * 古い行を消す。**1 店舗が失敗しても残りを止めない**（`failed` に数えて次へ進む）。
+ */
+async function rollupAnalytics(
+  env: Bindings,
+  input: { now: Date; days: number; ahead: number; limit: number },
+): Promise<{
+  stores: number
+  days: number
+  rows: number
+  deleted: number
+  dropped: number
+  failed: number
+}> {
+  const nowIso = input.now.toISOString()
+  const today = toJstDateString(input.now)
+  // 過去（数え直し）と先（入り具合）の両方を書く。**先を書かないとトップの未来側の
+  // 棒と「来週」が永久に 0 になる**（画面は `analytics_daily` しか読まないため）。
+  const dates = [
+    ...Array.from({ length: input.days }, (_, i) => addDays(today, -i)),
+    ...Array.from({ length: input.ahead }, (_, i) => addDays(today, i + 1)),
+  ]
+
+  const stores = await env.DB.prepare(
+    "SELECT id, organization_id AS organizationId FROM stores WHERE is_active = '1' " +
+      'ORDER BY created_at ASC LIMIT ?1',
+  )
+    .bind(input.limit)
+    .all<{ id: string; organizationId: string }>()
+
+  let written = 0
+  let dropped = 0
+  let failed = 0
+  for (const store of stores.results) {
+    try {
+      for (const date of dates) {
+        const result = await rollupStoreDay(env, store, date)
+        dropped += result.dropped
+        // 一意 index の 6 列で衝突させる。同じ日を何度数え直しても 2 行目を作らない。
+        const statements = result.rows.map((row) =>
+          env.DB.prepare(
+            'INSERT INTO analytics_daily (id, organization_id, store_id, date, metric, dimension, ' +
+              'dimension_key, value, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?) ' +
+              'ON CONFLICT (organization_id, store_id, date, metric, dimension, dimension_key) ' +
+              'DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at',
+          ).bind(
+            crypto.randomUUID(),
+            row.organizationId,
+            row.storeId,
+            row.date,
+            row.metric,
+            row.dimension,
+            row.dimensionKey,
+            row.value,
+            nowIso,
+            nowIso,
+          ),
+        )
+        for (let i = 0; i < statements.length; i += 50) {
+          const chunk = statements.slice(i, i + 50)
+          if (chunk.length === 0) continue
+          await env.DB.batch(chunk as [D1PreparedStatement, ...D1PreparedStatement[]])
+        }
+        written += result.rows.length
+      }
+    } catch (err) {
+      // 1 店舗の壊れで他店の朝礼を止めない。次の実行で拾い直す。
+      console.error('analytics rollup failed', store.id, err)
+      failed += 1
+    }
+  }
+
+  const purged = await env.DB.prepare('DELETE FROM analytics_daily WHERE date < ?1')
+    .bind(analyticsRetentionFloor(today))
+    .run()
+
+  return {
+    stores: stores.results.length,
+    days: dates.length,
+    rows: written,
+    deleted: purged.meta.changes ?? 0,
+    dropped,
+    failed,
+  }
 }
 
 const routes = app
@@ -8941,6 +9219,114 @@ const routes = app
     },
   )
 
+  /* --- 分析（P9） -------------------------------------------------------- */
+
+  /**
+   * タブ 1 枚ぶんの数字（`GET /api/staff/analytics`）。
+   *
+   * **読むのは `analytics_daily` だけ**で、生データ（予約・受付・来店）を 1 行も走査しない
+   * （`03-data-model.md` §11.4 / `07-nfr.md` §4.2）。D1 に投げるのは多くて 3 本である。
+   * 数え方（小標本抑制・営業日数・中央値）は `domain/analytics-report.ts` の純関数に置き、
+   * ここは行を集めて渡すだけにする。
+   */
+  .get(
+    '/api/staff/analytics',
+    requireStorePermission('analytics.read', { storeIdFrom: 'query' }),
+    async (c) => {
+      const { org } = c.get('auth')
+      const query = validQuery(c, AnalyticsQuery, c.req.query())
+
+      const reservationMetric =
+        query.countBy === 'received_date' ? 'reservations_received' : 'reservations'
+      const metrics: Record<AnalyticsMetric, string[]> = {
+        overview: ['closed', reservationMetric],
+        reservation_count: ['closed', reservationMetric],
+        reservation_source: ['closed', reservationMetric],
+        cancellation: ['closed', 'cancellations', 'reservations', 'no_shows'],
+        visit_frequency: ['closed', 'receptions'],
+        staff: ['closed', 'receptions', 'revisits_90d'],
+        purpose: ['closed', reservationMetric],
+        wait_time: ['closed', 'wait_seconds_median', 'receptions'],
+      }
+      const wanted = metrics[query.metric]
+
+      const readRows = async (from: string, to: string) =>
+        (
+          await c.env.DB.prepare(
+            'SELECT date, metric, dimension, dimension_key AS dimensionKey, value ' +
+              'FROM analytics_daily WHERE organization_id = ? AND store_id = ? ' +
+              `AND date >= ? AND date <= ? AND metric IN (${wanted.map(() => '?').join(',')})`,
+          )
+            .bind(org, query.storeId, from, to, ...wanted)
+            .all<DailyRow>()
+        ).results
+
+      const rows = await readRows(query.from, query.to)
+
+      // 「前の月の中央値」はお待ち時間タブだけが要る。他のタブで 1 本余計に投げない。
+      const previousTo = addDays(`${query.from.slice(0, 7)}-01`, -1)
+      const previousMonthRows =
+        query.metric === 'wait_time'
+          ? await readRows(`${previousTo.slice(0, 7)}-01`, previousTo)
+          : []
+
+      // 件数 0 の担当も点として返すので、名簿は分析の側で引く（受付の行だけでは出ない）。
+      const staffList =
+        query.metric === 'staff'
+          ? (
+              await c.env.DB.prepare(
+                'SELECT id, display_name AS name FROM staff WHERE organization_id = ? ' +
+                  "AND store_id = ? AND is_active = '1' ORDER BY sort_order, id",
+              )
+                .bind(org, query.storeId)
+                .all<{ id: string; name: string }>()
+            ).results
+          : []
+
+      // 削除された目的も、期間に予約があれば名前のまま残す（`is_active` で絞らない）。
+      const purposeNames =
+        query.metric === 'purpose'
+          ? new Map(
+              (
+                await c.env.DB.prepare(
+                  'SELECT id, name_internal AS name FROM visit_purposes ' +
+                    'WHERE organization_id = ? AND (store_id = ? OR store_id IS NULL)',
+                )
+                  .bind(org, query.storeId)
+                  .all<{ id: string; name: string }>()
+              ).results.map((row) => [row.id, row.name] as const),
+            )
+          : new Map<string, string>()
+
+      return c.json(
+        AnalyticsReport.parse(
+          buildReport({
+            query,
+            rows,
+            previousMonthRows,
+            staffList,
+            purposeNames,
+            now: query.now === undefined ? new Date() : new Date(query.now),
+            targets: ANALYTICS_TARGETS,
+          }),
+        ),
+      )
+    },
+  )
+
+  /**
+   * 目安の 3 つ（`GET /api/staff/analytics/targets`）。**全店共通の固定値**なので
+   * D1 を 1 回も読まない。画面から変える操作は作らない（設定の置き場も持たない）。
+   */
+  .get(
+    '/api/staff/analytics/targets',
+    requireStorePermission('analytics.read', { storeIdFrom: 'query' }),
+    (c) => {
+      validQuery(c, StoreIdQuery, c.req.query())
+      return c.json(AnalyticsTargets.parse(ANALYTICS_TARGETS))
+    },
+  )
+
   /**
    * 確認待ちのまま**受信日**の 24:00 JST を越えた Web 予約を自動で取り消す保守。
    * 共有鍵で守られていて、テナントのトークンでは越えられない。
@@ -8959,6 +9345,26 @@ const routes = app
     },
   )
 
+  /**
+   * 日次集計（P9）。当日分と前日分を数え直し、25 か月より古い行を消す。
+   * 共有鍵で守られていて、テナントのトークンでは越えられない。
+   * `now` を受け取れるようにしてあるのは、日境界をテストから注入するためである。
+   */
+  .post(
+    '/api/internal/maintenance/analytics/rollup',
+    zValidator('json', AnalyticsRollupRequest),
+    async (c) => {
+      const input = c.req.valid('json')
+      const result = await rollupAnalytics(c.env, {
+        now: input.now === undefined ? new Date() : new Date(input.now),
+        days: input.days,
+        ahead: input.ahead,
+        limit: input.limit,
+      })
+      return c.json(AnalyticsRollupResult.parse(result))
+    },
+  )
+
 // web 側はこの型だけを（type-only で）読み、`hc<AppType>` のクライアントを作る。
 export type AppType = typeof routes
 
@@ -8966,15 +9372,22 @@ export type AppType = typeof routes
  * 日次の保守（`wrangler.jsonc` の `triggers.crons`）。**アカウント全体の Cron 枠 5 本の
  * うち 1 本目**をこのサービスが使う（`04-api.md` §3.2）。
  *
- * **1 つが失敗しても後続を止めない。**いまは録音の掃除 1 本だが、P8 以降がこの中へ
- * 処理を足していくので、try/catch で包む形を最初から作っておく（1 本目が投げたせいで
- * 勤務の窓送りが止まる、という壊れ方を作らない）。
+ * **1 つが失敗しても後続を止めない。**録音の掃除と日次集計を try/catch で 1 本ずつ
+ * 包む（1 本目が投げたせいで翌朝の朝礼の数字が出ない、という壊れ方を作らない）。
+ * **Cron は増やさない** — アカウント全体の枠は 5 本なので、この 1 本に足していく。
  */
 async function scheduled(_controller: ScheduledController, env: Bindings): Promise<void> {
+  const now = new Date()
   try {
-    await purgeRecordings(env, { now: new Date(), limit: 100 })
+    await purgeRecordings(env, { now, limit: 100 })
   } catch (err) {
     console.error('scheduled recordings purge failed', err)
+  }
+  try {
+    // 当日分と前日分を数え直し（前日は終業後の記録が遅れて入るため）、先 7 日も書く。
+    await rollupAnalytics(env, { now, days: 2, ahead: 7, limit: 100 })
+  } catch (err) {
+    console.error('scheduled analytics rollup failed', err)
   }
 }
 

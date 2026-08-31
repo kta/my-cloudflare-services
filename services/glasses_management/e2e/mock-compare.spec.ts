@@ -96,6 +96,8 @@ async function revokeManager(request: APIRequestContext): Promise<void> {
         'customer.read',
         'customer.write',
         'settings.read',
+        // 分析は seed の盤面をそのまま読むので、配り直しでも `analytics.read` を落とさない。
+        'analytics.read',
       ],
       createdAt: '2026-08-01T00:00:00.000Z',
     },
@@ -123,6 +125,8 @@ async function grantStore(request: APIRequestContext): Promise<void> {
         'customer.read',
         'customer.write',
         'settings.read',
+        // 分析は seed の盤面をそのまま読むので、配り直しでも `analytics.read` を落とさない。
+        'analytics.read',
         'settings.manage',
       ],
       createdAt: '2026-08-01T00:00:00.000Z',
@@ -2105,6 +2109,130 @@ test.describe('承認済みモックとの突き合わせ', () => {
     await expect(page).toHaveScreenshot('EX-UPLOAD-FAILED.png', {
       scale: 'device',
       maxDiffPixelRatio: 0.0163,
+    })
+  })
+  /* --- 分析（ANALYTICS-TOP / COUNT / STAFF / WAIT / CANCEL） --------------- */
+
+  /**
+   * 分析の 1 タブを開く。数字は seed が入れた `analytics_daily` から来るので、
+   * 端末の時計を 2026年8月27日 11:08 に据えるだけで「対象の期間」は 2026年8月になる。
+   * **読み込み中の姿を撮らない**ので、グラフが出るまで待つ。
+   */
+  async function openAnalytics(page: Page, tab: string): Promise<void> {
+    await pinTo1108(page)
+    await startWork(page)
+    await page
+      .getByRole('navigation', { name: '画面の切り替え' })
+      .getByRole('button', { name: '分析', exact: true })
+      .click()
+    if (tab !== 'トップ') await page.getByRole('tab', { name: tab, exact: true }).click()
+    await expect(page.getByRole('tabpanel').getByRole('img').first()).toBeVisible()
+    await expect(page.getByTestId('definition')).toBeVisible()
+  }
+
+  /*
+   * 5 面に共通する既知差分（**許してよいと決めた差**。P9 の前提の逸脱 1〜7）:
+   *   1. 人数の「名」を出さない（TOP の 88名/92名/55名、COUNT の 414名）。Q-11 が
+   *      解けるまで人数を数える経路が無く、いまの値は根拠を持てない。
+   *   2. 8月の棒は 31 本（モックは 30 本で 8/31 が落ちている）。「1日あたり」も
+   *      暦どおりの営業日 27 日で割る（モックの 26 日は 8/31 の数え落としに由来する）。
+   *   3. 取り消しの積み上げは 5 層（モックは 3 層）。凡例の文字は CHANGE-CANCEL の
+   *      4 択と 1 字も違えない。
+   *   4. 上のバーの「お知らせ 3」… P10 で足す。
+   *   5. 「対象の期間」「かぞえる日」はモックが紙の再現のために置いている偽の印ではなく、
+   *      キーボードで選べる本物の選択肢の組にしてある（丸印と札の寸法がその分だけ違う）。
+   *   6. 数字はモックの絵に描かれた値ではなく seed の実データ（合計 320 件・受付 328 件）。
+   *   7. 残りは和文の字形（承認済みモックは端末の実機、こちらは Chromium）。
+   * `maxDiffPixelRatio` は**下げるだけ。上げてはいけない。**
+   */
+
+  test('ANALYTICS-TOP — 分析・トップ', async ({ page }) => {
+    await openAnalytics(page, 'トップ')
+    await expect(page.getByRole('heading', { name: '予約の入り具合' })).toBeVisible()
+    /*
+     * この面だけの差:
+     *   - 棒が 31 本（モックは 8/20〜9/3 の 15 本）。「対象の期間」で選んだ月をそのまま
+     *     数えるためで、期間を選び直して「適用」を押す（AC-ANA-03）という決めと、
+     *     「まだ集計できていない日は 0 件として描かない」（AC-ANA-15）が同じ軸に乗る。
+     *   - 「週の予約」の右にモックが持つ人数の列（88名/92名/55名）が無い（既知差分 1）。
+     *   - グラフの下に「何を、いつを基準に、どれだけの母数で数えたか」の 1 行が入るぶん、
+     *     「週の予約」が 1 行ぶん下がる。
+     * 実測 377,991 / 3,868,560 ＝ 9.7709%（2026-09-01 の 1 巡目。棒の列を
+     * 横軸のラベルより狭くつぶさない直しで 9.7934% から下がった）。
+     */
+    await expect(page).toHaveScreenshot('ANALYTICS-TOP.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.0978,
+    })
+  })
+
+  test('ANALYTICS-COUNT — 分析・予約数', async ({ page }) => {
+    await openAnalytics(page, '予約数')
+    await expect(page.getByRole('heading', { name: '日別の予約数' })).toBeVisible()
+    /*
+     * この面だけの差:
+     *   - 棒が 31 本（モックは 30 本で 8/31 を落としている）。「1日あたり」も暦どおりの
+     *     営業日 27 日で割った 11.9 件になる（モックの 12.3 件は 26 日で割った値）。
+     *   - 「414名」の列が無い（既知差分 1）。棒の高さと「最も多い日」は seed の実データ。
+     *   - 切り口の 2 群は本物の radio group なので、丸印と札の寸法がモックの偽の印と違う。
+     *   - 定義の 1 行がグラフとまとめの間に入る。
+     * 実測 439,096 / 3,868,560 ＝ 11.3505%（2026-09-01 の 1 巡目。棒の列を
+     * 横軸のラベルより狭くつぶさない直しで 11.6962% から下がった）。
+     */
+    await expect(page).toHaveScreenshot('ANALYTICS-COUNT.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.1136,
+    })
+  })
+
+  test('ANALYTICS-STAFF — 分析・担当者', async ({ page }) => {
+    await openAnalytics(page, '担当者')
+    await expect(page.getByTestId('staff-caption')).toContainText('合計 328件')
+    /*
+     * この面だけの差:
+     *   - 行は seed の実データ（佐藤 84・高橋 71・中村 66・小林 52・渡辺 19・山田 0・
+     *     担当が未定 36 ＝ 合計 328 件）。渡辺は標本 20 件に満たないので率が「—」になる。
+     *   - 「90日以内の再来」の列見出しは目安（90 日）から作る。
+     * 実測 283,308 / 3,868,560 ＝ 7.3233%（2026-09-01 の 1 巡目）。
+     */
+    await expect(page).toHaveScreenshot('ANALYTICS-STAFF.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.0733,
+    })
+  })
+
+  test('ANALYTICS-WAIT — 分析・お待ち時間', async ({ page }) => {
+    await openAnalytics(page, 'お待ち時間')
+    await expect(page.getByTestId('wait-median')).toHaveText('8分40秒')
+    /*
+     * この面だけの差:
+     *   - 中央値・前の月・母数は seed の実データ（8分40秒／7分20秒／受付 328 件）。
+     *   - 凡例は塗りに加えて地模様（斜線）と系列名の文字を持つ（AC-ANA-17）。
+     *   - 受付が 0 件の時間帯は棒を描かず、軸だけを残す。
+     * 実測 292,971 / 3,868,560 ＝ 7.5730%（2026-09-01 の 1 巡目。棒の上に
+     * モックと同じ値の文字（5:10）を戻して 7.6512% から下がった）。
+     */
+    await expect(page).toHaveScreenshot('ANALYTICS-WAIT.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.0758,
+    })
+  })
+
+  test('ANALYTICS-CANCEL — 分析・取り消し', async ({ page }) => {
+    await openAnalytics(page, '取り消し')
+    await expect(page.getByRole('heading', { name: '6か月のまとめ' })).toBeVisible()
+    /*
+     * この面だけの差:
+     *   - 積み上げが 5 層（モックは 3 層）で、凡例の文字は CHANGE-CANCEL の 4 択と
+     *     1 字も違えない（既知差分 3）。凡例が 5 つに増えるぶん見出しの帯が広い。
+     *   - 棒の下の「7月　37件・11.9%」と 6か月のまとめは seed の実データ。
+     *   - まとめの 3 行目が「取消件数」（モックの「無断キャンセル」は 5 層の 1 つになった）。
+     * 実測 389,721 / 3,868,560 ＝ 10.0741%（2026-09-01 の 1 巡目。3〜8 月に
+     * 「まだ集計中」の日を置かない盤面へ直して 13.2498% から下がった）。
+     */
+    await expect(page).toHaveScreenshot('ANALYTICS-CANCEL.png', {
+      scale: 'device',
+      maxDiffPixelRatio: 0.1008,
     })
   })
 })

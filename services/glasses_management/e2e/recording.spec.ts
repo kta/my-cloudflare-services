@@ -60,6 +60,8 @@ const RECORDING_PERMISSIONS = [
   'customer.read',
   'customer.write',
   'settings.read',
+  // 分析は seed の盤面をそのまま読むので、配り直しでも `analytics.read` を落とさない。
+  'analytics.read',
   'settings.manage',
   'recording.read',
   'recording.manage',

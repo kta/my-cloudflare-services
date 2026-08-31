@@ -12,7 +12,9 @@ import { describe, expect, it } from 'vitest'
 import {
   authed,
   BASE,
+  grantStorePermissions,
   INTERNAL_HEADERS,
+  insertAnalyticsDaily,
   insertBusinessHours,
   insertReservation,
   insertShift,
@@ -23,6 +25,7 @@ import {
   JSON_HEADERS,
   jstAt,
   LEDGER_DATE,
+  markAnalyticsDays,
   orgId,
   syncOrganization,
   tokenFor,
@@ -1936,5 +1939,97 @@ describe('お客様向け Web 予約は組織をまたがない', () => {
       .bind(storeB.storeId)
       .first<{ isPublished: string; version: number }>()
     expect(row).toEqual({ isPublished: '1', version: 1 })
+  })
+})
+
+/* ═════════════════════════════════════════════════════════════════════════
+ * 分析（P9）
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+describe('分析は組織と店舗を越えない', () => {
+  const AUGUST = 'from=2026-08-01&to=2026-08-31'
+
+  /** 分析を開ける人を 1 人作り、8/10 に予約を `count` 件だけ数えた状態にする。 */
+  async function seedAnalytics(count: number) {
+    const org = orgId()
+    const token = await tokenFor(org)
+    const storeId = await insertStore(org)
+    await grantStorePermissions(org, storeId, `dev:${org}`, ['analytics.read'])
+    await markAnalyticsDays(org, storeId, ['2026-08-10'])
+    await insertAnalyticsDaily(org, storeId, [
+      { date: '2026-08-10', metric: 'reservations', value: count },
+    ])
+    return { org, token, storeId }
+  }
+
+  const totalOf = async (token: string, storeId: string, extra = '') => {
+    const res = await SELF.fetch(
+      `${BASE}/api/staff/analytics?storeId=${storeId}&metric=reservation_count&${AUGUST}${extra}`,
+      { headers: authed(token) },
+    )
+    const body = (await res.json().catch(() => null)) as {
+      summary?: { label: string; value: string }[]
+    } | null
+    return {
+      status: res.status,
+      total: body?.summary?.find((row) => row.label === '合計')?.value ?? null,
+    }
+  }
+
+  it('3 テナントが同じ期間・同じ指標を集計しても、数字が互いに混ざらない', async () => {
+    const [a, b, c] = await Promise.all([seedAnalytics(11), seedAnalytics(22), seedAnalytics(33)])
+    expect(await totalOf(a.token, a.storeId)).toEqual({ status: 200, total: '11' })
+    expect(await totalOf(b.token, b.storeId)).toEqual({ status: 200, total: '22' })
+    expect(await totalOf(c.token, c.storeId)).toEqual({ status: 200, total: '33' })
+  })
+
+  it('他組織の storeId を渡しても 403 で、その店舗が存在するかどうかも分からない', async () => {
+    const [a, b] = await Promise.all([seedAnalytics(11), seedAnalytics(22)])
+    // 実在する他組織の店舗と、どこにも無い店舗が**同じ答え**になる。
+    const real = await totalOf(a.token, b.storeId)
+    const imaginary = await totalOf(a.token, crypto.randomUUID())
+    expect(real.status).toBe(403)
+    expect(imaginary.status).toBe(403)
+    expect(real.total).toBeNull()
+  })
+
+  it('query の organizationId を混ぜても、JWT の org でしか集計しない', async () => {
+    const [a, b] = await Promise.all([seedAnalytics(11), seedAnalytics(22)])
+    // 契約は未知の鍵を通さない（400）。他組織の org を騙っても数字は動かない。
+    const spoofed = await totalOf(a.token, a.storeId, `&organizationId=${b.org}`)
+    expect(spoofed.status).toBe(400)
+    expect(await totalOf(a.token, a.storeId)).toEqual({ status: 200, total: '11' })
+  })
+
+  it('日次 upsert が他組織の行を 1 行も書き換えない（同じ日・同じ指標でも組織で分かれる）', async () => {
+    const [a, b] = await Promise.all([seedAnalytics(11), seedAnalytics(22)])
+    const rows = await env.DB.prepare(
+      "SELECT organization_id AS org, value FROM analytics_daily WHERE date = '2026-08-10' " +
+        "AND metric = 'reservations' AND organization_id IN (?, ?) ORDER BY value",
+    )
+      .bind(a.org, b.org)
+      .all<{ org: string; value: number }>()
+    expect(rows.results).toEqual([
+      { org: a.org, value: 11 },
+      { org: b.org, value: 22 },
+    ])
+  })
+
+  it('担当していない自組織の店舗も 403 になる（membership が無ければ通さない）', async () => {
+    const a = await seedAnalytics(11)
+    // 同じ組織の別店舗。権限を配っていないので開けない。
+    const another = await insertStore(a.org, 'EYEX 丸の内店')
+    await markAnalyticsDays(a.org, another, ['2026-08-10'])
+    expect((await totalOf(a.token, another)).status).toBe(403)
+  })
+
+  it('テナントのトークンでは内部 API（保守）に触れない', async () => {
+    const a = await seedAnalytics(11)
+    const res = await SELF.fetch(`${BASE}/api/internal/maintenance/analytics/rollup`, {
+      method: 'POST',
+      headers: authed(a.token),
+      body: JSON.stringify({}),
+    })
+    expect(res.status).toBe(401)
   })
 })

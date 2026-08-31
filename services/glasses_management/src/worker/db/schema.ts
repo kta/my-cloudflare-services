@@ -13,7 +13,7 @@ import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-or
  * P0（基盤）の 3 つに、P1（店舗の受付条件）の 16 と P2（枠の一次排他）の 1、
  * P3（電話・店頭からの予約受付）の 3 と P4（顧客台帳）の 4、
  * P5（来店受付とウォークイン）の 2 と P7（受付の録音）の 2、
- * P8（お客様向け Web 予約）の 2 を足した 33 表がここにある。
+ * P8（お客様向け Web 予約）の 2 と P9（分析）の 1 を足した 34 表がここにある。
  */
 
 /**
@@ -1215,5 +1215,62 @@ export const webBookings = sqliteTable(
     uniqueIndex('web_bookings_org_public_code_idx').on(t.organizationId, t.publicCode),
     // LEDGER-LIST の「確認待ち 1件」・ALERTS の「Web予約が2件、確認待ちです」。
     index('web_bookings_org_store_status_idx').on(t.organizationId, t.storeId, t.status),
+  ],
+)
+
+/**
+ * 日次の集計（P9 分析）。**画面はこの 1 表しか読まない** — 生データ
+ * （reservations / visit_events / walk_ins）の走査を画面から行わない。
+ *
+ * 1 行 = 店舗 × 暦日（JST） × metric × 切り口。value は real で、件数も
+ * 中央値（秒）も同じ列に入る。**率は保存しない**（期間で足したときに
+ * 「率の平均」になり、日ごとの母数の違いが消える）。再来は分子
+ * （metric='revisits_90d'）だけを保存し、分母は同じ dimension_key の
+ * 'receptions' を使って読み出し時に割る。小標本抑制（分母 20 件未満）は
+ * この分母でしか判定できない。
+ *
+ * metric='closed' は「その日を集計した」印を兼ねる（1=定休・臨時休業／
+ * 0=営業日）。定休日の 0 件（value=0 の行がある）と欠測（行が無い）を
+ * これで区別する。「1日あたり」の分母（営業日数）と「まだ集計中です」の
+ * 日数もここから出る。
+ *
+ * metric='guests'（人数）は書かない。何人のお客様かを数える経路が無く、
+ * 画面にも「名」を出さない（Q-11 のいまの前提）。
+ *
+ * 語彙は packages/contracts の AnalyticsDailyMetric / AnalyticsDimension を
+ * 単一ソースにし、**D1 に CHECK 制約を書かない**（語彙が増えるたびに
+ * テーブル再作成のマイグレーションが出るのを避ける）。
+ */
+export const analyticsDaily = sqliteTable(
+  'analytics_daily',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    storeId: text('store_id').notNull(),
+    date: text('date').notNull(), // 'YYYY-MM-DD'（JST の暦日）
+    metric: text('metric').notNull(), // AnalyticsDailyMetric の 8 値
+    dimension: text('dimension').notNull(), // AnalyticsDimension の 6 値
+    dimensionKey: text('dimension_key').notNull(), // total は ''、hour は '14'、担当未定は 'unassigned'
+    value: real('value').notNull(), // 件数・秒・0/1。率は入れない
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (t) => [
+    // 日次 upsert の一意鍵。同じ日を数え直しても 2 行目を作らせない。
+    uniqueIndex('analytics_daily_org_store_date_metric_dim_idx').on(
+      t.organizationId,
+      t.storeId,
+      t.date,
+      t.metric,
+      t.dimension,
+      t.dimensionKey,
+    ),
+    // タブ 1 枚ぶんの読み出し（metric を決めて期間で引く）。
+    index('analytics_daily_org_store_metric_date_idx').on(
+      t.organizationId,
+      t.storeId,
+      t.metric,
+      t.date,
+    ),
   ],
 )

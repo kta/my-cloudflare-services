@@ -2923,3 +2923,178 @@ export const WebPublicationApplyResult = z.strictObject({
   autoCancelled: CountInteger,
 })
 export type WebPublicationApplyResult = z.infer<typeof WebPublicationApplyResult>
+
+/* ------------------------------------------------------------------------- *
+ * P9 分析（`specs/glasses_management/features/012-analytics`）
+ *
+ * 朝礼と月次のふりかえりで使う 8 タブの入出力。**人数（「名」）を持たない** —
+ * 何人のお客様かを数える経路がまだ無いので、件数だけを返す（Q-11）。
+ * 率は「小標本抑制」で伏せることがあり、伏せた率は 0 ではなく `null` で表す。
+ * ------------------------------------------------------------------------- */
+
+/**
+ * タブ 1 枚 = metric 1 つ。1 画面で 2 本叩かないので、トップ（`overview`）にも
+ * 自分の値を与える（`reservation_count` の使い回しにしない）。
+ */
+export const AnalyticsMetric = z.enum([
+  'overview',
+  'reservation_count',
+  'reservation_source',
+  'cancellation',
+  'visit_frequency',
+  'staff',
+  'purpose',
+  'wait_time',
+])
+export type AnalyticsMetric = z.infer<typeof AnalyticsMetric>
+
+/**
+ * `analytics_daily.metric` の語彙。画面の 8 タブ（`AnalyticsMetric`）とは別物で、
+ * こちらは**日次で数えて保存する量**である。`guests`（人数）は書かない。
+ * `closed` は「その日を集計した」印を兼ねる（1=定休・臨時休業／0=営業日）ので、
+ * 定休日の 0 件（行がある）と欠測（行が無い）を区別できる。
+ */
+export const AnalyticsDailyMetric = z.enum([
+  'closed',
+  'reservations',
+  'reservations_received',
+  'receptions',
+  'cancellations',
+  'no_shows',
+  'wait_seconds_median',
+  'revisits_90d',
+])
+export type AnalyticsDailyMetric = z.infer<typeof AnalyticsDailyMetric>
+
+/**
+ * `analytics_daily.dimension` の語彙。`total` のとき `dimension_key` は空文字。
+ * `hour` は `'14'`（2 桁ゼロ埋めしない）。`staff` の担当未定は `'unassigned'`。
+ * `visit_frequency` は来店回数の 4 階級（`first` / `second` / `third_to_fifth` / `sixth_plus`）。
+ */
+export const AnalyticsDimension = z.enum([
+  'total',
+  'staff',
+  'purpose',
+  'hour',
+  'source',
+  'cancel_reason',
+  'visit_frequency',
+])
+export type AnalyticsDimension = z.infer<typeof AnalyticsDimension>
+
+/**
+ * `GET /api/staff/analytics` のクエリ。期間の上限は 400 日
+ * （2026-01-01〜2027-02-04 がちょうど 400 日）。
+ * `countBy` は「来店日で数えるか、受け付けた日で数えるか」。
+ */
+export const AnalyticsQuery = z
+  .strictObject({
+    storeId: Uuid,
+    metric: AnalyticsMetric,
+    from: LocalDate,
+    to: LocalDate,
+    granularity: z.enum(['day', 'month', 'hour', 'weekday']).default('day'),
+    countBy: z.enum(['visit_date', 'received_date']).default('visit_date'),
+    /**
+     * 「本日」の判定に使う基準時刻。**日境界をテストから注入するための口**で、
+     * 省くとサーバの時刻を使う（`AnalyticsRollupRequest.now` と同じ作法）。
+     */
+    now: IsoDateTime.optional(),
+  })
+  .refine(spanWithinDays(399), { message: '一度に見られるのは 400 日ぶんまで', path: ['to'] })
+export type AnalyticsQuery = z.infer<typeof AnalyticsQuery>
+
+/** `GET /api/staff/analytics/targets` のクエリ。 */
+export const StoreIdQuery = z.strictObject({ storeId: Uuid })
+export type StoreIdQuery = z.infer<typeof StoreIdQuery>
+
+/**
+ * グラフの 1 本（棒・点）。
+ * `secondaryValue` は**率**（0.00〜1.00）で、小標本で伏せたときは `null`。
+ * 状態は色ではなく `isClosed` / `isOverTarget` の真偽値で伝える。
+ */
+export const AnalyticsPoint = z.strictObject({
+  key: z.string().min(1).max(20),
+  label: z.string().min(1).max(30),
+  value: z.number().nonnegative(),
+  secondaryValue: z.number().min(0).max(1).nullable().default(null),
+  isClosed: z.boolean(),
+  isOverTarget: z.boolean(),
+})
+export type AnalyticsPoint = z.infer<typeof AnalyticsPoint>
+
+/** 積み上げの 1 層。凡例は色に頼らないので、模様を必ず持たせる。 */
+export const AnalyticsSeries = z.strictObject({
+  name: z.string().min(1).max(30),
+  pattern: z.enum(['solid', 'hatch', 'dot']),
+  points: AnalyticsPoint.array(),
+})
+export type AnalyticsSeries = z.infer<typeof AnalyticsSeries>
+
+/**
+ * タブ 1 枚ぶんの応答。`summary` は最大 3 行で、`value` は「8分40秒」「8月15日」の
+ * ように数でない値も入るため**文字列**にする。
+ * `businessDays` は「1日あたり」の分母（暦を正とした営業日数）、
+ * `pendingDays` は「〜日ぶんはまだ集計中です」に使う未集計の日数。
+ */
+export const AnalyticsReport = z.strictObject({
+  metric: AnalyticsMetric,
+  from: LocalDate,
+  to: LocalDate,
+  granularity: z.enum(['day', 'month', 'hour', 'weekday']),
+  countBy: z.enum(['visit_date', 'received_date']),
+  series: AnalyticsSeries.array(),
+  summary: z
+    .strictObject({
+      label: z.string().min(1).max(30),
+      value: z.string().max(40),
+      unit: z.string().max(8),
+      isOverTarget: z.boolean(),
+    })
+    .array()
+    .max(3),
+  target: z.number().nullable(),
+  suppressed: z.boolean(),
+  businessDays: CountInteger,
+  pendingDays: CountInteger,
+})
+export type AnalyticsReport = z.infer<typeof AnalyticsReport>
+
+/** 目安の 3 つ。全店共通の固定値で、画面から変える操作を作らない。 */
+export const AnalyticsTargets = z.strictObject({
+  waitMinutes: z.literal(8),
+  cancellationRatePercent: z.literal(10),
+  revisitWindowDays: z.literal(90),
+})
+export type AnalyticsTargets = z.infer<typeof AnalyticsTargets>
+
+/**
+ * 日次集計の保守。`now` は日境界をテストから注入するための口で、省くとサーバの
+ * 時刻を使う（`RecordingPurgeRequest` と同じ作法）。
+ * `days` は「当日から遡って何日ぶんを数え直すか」（既定 2 = 当日分と前日分）。
+ */
+export const AnalyticsRollupRequest = z.strictObject({
+  now: IsoDateTime.optional(),
+  days: QueryInteger.pipe(z.number().int().min(1).max(31)).default(2),
+  /**
+   * 「当日から何日**先**まで数えるか」（既定 7 = トップの前後 7 日ぶん）。
+   * 先の予定を数えないと、トップの未来側の棒と「来週」が永久に 0 のままになる。
+   */
+  ahead: QueryInteger.pipe(z.number().int().min(0).max(31)).default(7),
+  limit: QueryInteger.pipe(z.number().int().min(1).max(500)).default(100),
+})
+export type AnalyticsRollupRequest = z.infer<typeof AnalyticsRollupRequest>
+
+/**
+ * 集計の結果。**落とした行（`dropped`）と失敗した店舗（`failed`）を件数に混ぜない** —
+ * 前者はデータの壊れ、後者は次の実行で拾い直す対象で、直し方が違う。
+ */
+export const AnalyticsRollupResult = z.strictObject({
+  stores: CountInteger,
+  days: CountInteger,
+  rows: CountInteger,
+  deleted: CountInteger,
+  dropped: CountInteger,
+  failed: CountInteger,
+})
+export type AnalyticsRollupResult = z.infer<typeof AnalyticsRollupResult>

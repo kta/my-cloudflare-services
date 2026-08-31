@@ -231,6 +231,8 @@ async function grantManager(request: APIRequestContext): Promise<void> {
         'customer.read',
         'customer.write',
         'settings.read',
+        // 分析は seed の盤面をそのまま読むので、配り直しでも `analytics.read` を落とさない。
+        'analytics.read',
         'settings.manage',
       ],
       createdAt: '2026-08-01T00:00:00.000Z',
@@ -915,8 +917,15 @@ test('同じ Idempotency-Key で二度送っても、返る番号は同じで予
     params: { storeId: GINZA, from: slot.date, to: slot.date, limit: '50' },
   })
   expect(ledger.status()).toBe(200)
-  const items = ((await ledger.json()) as { items: { startsAt: string }[] }).items
-  expect(items.filter((row) => row.startsAt === slot.startsAt)).toHaveLength(1)
+  /*
+   * **Web から入った予約だけを数える。**同じ枠には店内の予約（`change.spec.ts` が
+   * 先の日付へ置く電話のご予約など）が同時に載ることがあり（同時受付上限は 3）、
+   * 枠だけで数えると Web の重複でないものまで拾ってしまう。
+   */
+  const items = ((await ledger.json()) as { items: { startsAt: string; source: string }[] }).items
+  expect(
+    items.filter((row) => row.startsAt === slot.startsAt && row.source === 'web'),
+  ).toHaveLength(1)
 })
 
 // @e2e-covers AC-WEB-11
@@ -955,8 +964,15 @@ test('回線が切れて同じ内容がもう一度送られても、台帳の�
     ...(await authed(request)),
     params: { storeId: GINZA, from: slot.date, to: slot.date, limit: '50' },
   })
-  const items = ((await ledger.json()) as { items: { startsAt: string }[] }).items
-  expect(items.filter((row) => row.startsAt === slot.startsAt)).toHaveLength(1)
+  /*
+   * **Web から入った予約だけを数える。**同じ枠には店内の予約（`change.spec.ts` が
+   * 先の日付へ置く電話のご予約など）が同時に載ることがあり（同時受付上限は 3）、
+   * 枠だけで数えると Web の重複でないものまで拾ってしまう。
+   */
+  const items = ((await ledger.json()) as { items: { startsAt: string; source: string }[] }).items
+  expect(
+    items.filter((row) => row.startsAt === slot.startsAt && row.source === 'web'),
+  ).toHaveLength(1)
 })
 
 // @e2e-covers AC-WEB-23

@@ -53,6 +53,8 @@ const MANAGER_PERMISSIONS = [
   'customer.read',
   'customer.write',
   'settings.read',
+  // 分析は seed の盤面をそのまま読むので、配り直しでも `analytics.read` を落とさない。
+  'analytics.read',
   'settings.manage',
 ]
 
@@ -872,14 +874,27 @@ test('トップに本日わたしが担当するご予約が時間順に並び�
 
 // @e2e-covers AC-LEDGER-22
 test('定休日は目盛りだけの空の格子を出さず、事実と「本日」だけを出す', async ({ page }) => {
+  /*
+   * 台帳は 2026年8月27日（木）から開く。次の火曜（定休）は 9月1日 だが、
+   * **実時刻の当日が定休に当たる日は seed が臨時営業を 1 行入れる**（`seed.mjs`。
+   * 来店受付の e2e が当日の暦日でしか組み立てられないため）ので、その日は避けて
+   * 次の火曜を開く。定休の事実そのものは動かない。
+   */
+  const jstToday = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10)
+  const addDays = (date: string, days: number) =>
+    new Date(Date.parse(`${date}T00:00:00.000Z`) + days * 86_400_000).toISOString().slice(0, 10)
+  const steps = addDays('2026-08-27', 5) === jstToday ? 12 : 5
+  const closed = addDays('2026-08-27', steps)
+  const month = Number(closed.slice(5, 7))
+  const day = Number(closed.slice(8, 10))
+
   await openLedger(page)
-  // 2026年9月1日（火）。火曜が定休。
-  for (let i = 0; i < 5; i += 1) {
+  for (let i = 0; i < steps; i += 1) {
     await page.getByRole('button', { name: '次の日' }).click()
   }
-  await expect(page.getByText('2026年9月1日（火）')).toBeVisible()
+  await expect(page.getByText(`${closed.slice(0, 4)}年${month}月${day}日（火）`)).toBeVisible()
 
-  await expect(page.getByText('9月1日（火）は定休日です。')).toBeVisible()
+  await expect(page.getByText(`${month}月${day}日（火）は定休日です。`)).toBeVisible()
   await expect(page.getByRole('grid', { name: '予約台帳' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: '本日' })).toBeVisible()
 })

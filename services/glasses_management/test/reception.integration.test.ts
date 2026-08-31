@@ -1752,8 +1752,10 @@ describe('受付履歴の読み足しと 0 件', () => {
 
   it('0 件のときは、実際に引ける件数の付いた緩和候補が同じ応答で返る', async () => {
     const t = await receptionTenant()
-    // 今月の頭に近い日の受付。狭い期間で絞ると 0 件になり、今月まで広げると見つかる。
-    const early = '2026-08-03'
+    // 今月の 1 日の受付。狭い期間（LEDGER_DATE の 1 日）で絞ると 0 件になり、
+    // 「今月まで広げる」候補で見つかる。**候補の「今月」はサーバの実時刻で決まる**ので、
+    // 固定の月を書くと月が変わった翌日に落ちる（暦日は実時刻から作る）。
+    const early = `${new Date(Date.now() + 9 * 3_600_000).toISOString().slice(0, 7)}-01`
     await createWalkin(t.token, {
       storeId: t.storeId,
       purposeNote: 'フレームの相談',
