@@ -1,5 +1,7 @@
 import type { APIRequestContext, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
+import type { SeededTerminalSession } from './support/terminal'
+import { completeSeededTerminalStart } from './support/terminal'
 
 /**
  * 受付の録音（010-recording）の受け入れ基準を、実ブラウザと実 Worker で確かめる。
@@ -178,14 +180,17 @@ type MicMode = 'granted' | 'denied'
 async function startWork(
   page: Page,
   options: { mic?: MicMode; now?: string; frozen?: boolean } = {},
-): Promise<void> {
+): Promise<SeededTerminalSession> {
   await page.addInitScript(mic((options.mic ?? 'granted') === 'granted'))
   if (options.frozen === true) await page.clock.install({ time: new Date(options.now ?? NOW) })
   else await page.clock.setFixedTime(new Date(options.now ?? NOW))
   await page.goto('/')
   await page.getByLabel('お店のコード').fill(ORG)
   await page.getByRole('button', { name: '業務を始める' }).click()
+  const session = await completeSeededTerminalStart(page)
   await expect(page.locator('header').first()).toContainText('EYEX 銀座店')
+  expect(session).not.toBeNull()
+  return session as SeededTerminalSession
 }
 
 /**
@@ -647,6 +652,7 @@ test('直したので、もう一度確かめる', async ({ page, request }) => 
   await page.addInitScript(mic(true))
   await page.getByRole('button', { name: '直したので、もう一度確かめる' }).click()
   await page.waitForLoadState('load')
+  await completeSeededTerminalStart(page)
 
   // 読み込み直したうえで、押した処理の中からもう一度判定する。こんどは通る。
   await page.getByRole('button', { name: /新しい予約を取る/ }).click()
@@ -1138,7 +1144,7 @@ test('3 回失敗するとお知らせに 1 件立つ', async ({ request }) => {
 // @e2e-covers AC-REC-20
 test('端末セッションが失効しても未送信の録音は残る', async ({ page, request }) => {
   await grantRecording(request)
-  await startWork(page, { frozen: true })
+  const terminalSession = await startWork(page, { frozen: true })
   await page.route(
     (url) => url.pathname.endsWith('/content'),
     (route) => route.fulfill({ status: 503, contentType: 'application/json', body: '{}' }),
@@ -1163,16 +1169,30 @@ test('端末セッションが失効しても未送信の録音は残る', async
   })
   await page.getByRole('button', { name: 'このまま続ける' }).click()
   await expect(page.getByRole('grid', { name: '予約台帳' })).toBeVisible()
-  await page.getByRole('button', { name: '業務を終える' }).click()
-  await expect(page.getByLabel('お店のコード')).toBeVisible()
+  const terminalId = await page.evaluate(() => sessionStorage.getItem('eyex.active-terminal-id'))
+  expect(terminalId).not.toBeNull()
+  const authorization = await authed(request)
+  const ended = await request.delete(
+    `/api/staff/terminals/${terminalId}/sessions/${terminalSession.id}`,
+    {
+      ...authorization,
+      headers: {
+        ...authorization.headers,
+        'x-terminal-id': terminalId ?? '',
+        'x-terminal-session': terminalSession.sessionToken,
+      },
+    },
+  )
+  expect(ended.status()).toBe(200)
+  await page.reload()
+  await expect(page.getByRole('heading', { name: 'この端末はどこに置きますか？' })).toBeVisible()
   await page.clock.fastForward(400_000)
   expect((await page.evaluate(READ_OUTBOX)) as string[]).toHaveLength(1)
   expect(sent).toBe(0)
 
   // 同じ端末でもう一度業務を始めると、自動の再送が再開する（5 分の固定間隔）。
   await page.unrouteAll()
-  await page.getByLabel('お店のコード').fill(ORG)
-  await page.getByRole('button', { name: '業務を始める' }).click()
+  await completeSeededTerminalStart(page)
   await startBooking(page)
   await expect(async () => {
     expect((await page.evaluate(READ_OUTBOX)) as string[]).toHaveLength(0)

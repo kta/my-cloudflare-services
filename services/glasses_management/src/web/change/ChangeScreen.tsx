@@ -206,6 +206,7 @@ export function ChangeScreen({
   onSubline,
   onChangeSlot,
   onSessionExpired,
+  isOffline = false,
 }: {
   storeId: string
   /** 完了の脚注に出す店舗の名前（「銀座店 この端末・11:12　操作者 中村 彩」）。 */
@@ -227,6 +228,8 @@ export function ChangeScreen({
   /** 担当・場所を変える（BOOK-03-SLOT-STAFF の再利用）。渡されないと 1 行で断る。 */
   onChangeSlot?: (detail: ReservationDetail) => void
   onSessionExpired?: () => void
+  /** Shell が検知した通信断。変更・取消の送信は行わない。 */
+  isOffline?: boolean
 }) {
   /*
    * 暦日は面を開いた時刻で決める。**残り時間の時計とは別に持つ** —— 1 秒ごとに
@@ -531,7 +534,7 @@ export function ChangeScreen({
 
   /** 変更を確定する。**送るのはここだけ**（差分の面も競合の面も送らない）。 */
   async function patchTo(startsAt: string, version: number, previousRange: string) {
-    if (detail === null) return
+    if (detail === null || isOffline) return
     const res = await client.api.staff.reservations[':reservationId'].$patch({
       param: { reservationId: detail.id },
       json: { version, startsAt },
@@ -576,7 +579,7 @@ export function ChangeScreen({
 
   /** 取り消す。理由は面が選ばせてからしか届かない（`ReservationCancelInput` は必須）。 */
   async function cancelReservation(reason: CancelReason) {
-    if (detail === null) return
+    if (detail === null || isOffline) return
     setConfirming(true)
     try {
       const res = await client.api.staff.reservations[':reservationId'].cancel.$post({
@@ -754,6 +757,7 @@ export function ChangeScreen({
                 setStep('search')
               })
             }}
+            isOffline={isOffline}
           />
         ) : step === 'search' ? (
           <ReservationSearch
@@ -851,6 +855,7 @@ export function ChangeScreen({
                 setConfirmError('うまく処理できませんでした。伺った内容は残っています。'),
               )
             }}
+            isOffline={isOffline}
           />
         ) : (
           <p className="px-11 py-9 text-body text-ink-muted">読み込んでいます…</p>

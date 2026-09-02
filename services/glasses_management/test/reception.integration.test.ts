@@ -98,13 +98,14 @@ async function createWalkin(
   token: string,
   body: Json,
   idempotencyKey?: string,
+  extraHeaders: Record<string, string> = {},
 ): Promise<{ status: number; body: Json }> {
   const res = await SELF.fetch(`${BASE}/api/staff/walkins`, {
     method: 'POST',
     headers:
       idempotencyKey === undefined
-        ? authed(token)
-        : { ...authed(token), 'Idempotency-Key': idempotencyKey },
+        ? { ...authed(token), ...extraHeaders }
+        : { ...authed(token), ...extraHeaders, 'Idempotency-Key': idempotencyKey },
     body: JSON.stringify(body),
   })
   return { status: res.status, body: (await res.json().catch(() => ({}))) as Json }
@@ -135,10 +136,14 @@ async function patchWalkin(
   return { status: res.status, body: (await res.json().catch(() => ({}))) as Json }
 }
 
-async function postVisit(token: string, body: Json): Promise<{ status: number; body: Json }> {
+async function postVisit(
+  token: string,
+  body: Json,
+  extraHeaders: Record<string, string> = {},
+): Promise<{ status: number; body: Json }> {
   const res = await SELF.fetch(`${BASE}/api/staff/visits`, {
     method: 'POST',
-    headers: authed(token),
+    headers: { ...authed(token), ...extraHeaders },
     body: JSON.stringify(body),
   })
   return { status: res.status, body: (await res.json().catch(() => ({}))) as Json }
@@ -278,6 +283,46 @@ const walkinBody = (storeId: string, time: string, extra: Json = {}): Json => ({
   ...extra,
 })
 
+async function seedTerminalSession(
+  tenant: Awaited<ReturnType<typeof receptionTenant>>,
+  mode: 'shared' | 'personal',
+) {
+  const terminalId = crypto.randomUUID()
+  const sessionToken = (mode === 'shared' ? 'q' : 'r').repeat(64)
+  const digest = new Uint8Array(
+    await crypto.subtle.digest('SHA-256', new TextEncoder().encode(sessionToken)),
+  )
+  let binary = ''
+  for (const byte of digest) binary += String.fromCharCode(byte)
+  const credentialHash = btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  await env.DB.prepare(
+    "INSERT INTO terminals (id, organization_id, store_id, name, kind, auto_lock_seconds, is_active, version, created_at) VALUES (?,?,?,'銀座店 レジ横iPad','shared',120,'1',1,?)",
+  )
+    .bind(terminalId, tenant.org, tenant.storeId, FIXED_NOW)
+    .run()
+  await env.DB.prepare(
+    'INSERT INTO terminal_sessions (id, organization_id, store_id, terminal_id, staff_id, mode, credential_hash, started_at, expires_at, revoked_at, created_at) VALUES (?,?,?,?,?,?,?,?,?,NULL,?)',
+  )
+    .bind(
+      crypto.randomUUID(),
+      tenant.org,
+      tenant.storeId,
+      terminalId,
+      mode === 'personal' ? tenant.staffId : null,
+      mode,
+      credentialHash,
+      FIXED_NOW,
+      mode === 'personal' ? '2026-08-27T02:10:00.000Z' : '2026-08-28T02:08:00.000Z',
+      FIXED_NOW,
+    )
+    .run()
+  return {
+    terminalId,
+    sessionToken,
+    headers: { 'x-terminal-id': terminalId, 'x-terminal-session': sessionToken },
+  }
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
  * T-009 代表フロー
  * ═══════════════════════════════════════════════════════════════════════════ */
@@ -299,6 +344,67 @@ describe('ウォークインの受付', () => {
 
     const ledger = await readLedger(t.token, { storeId: t.storeId, date: LEDGER_DATE })
     expect(ledger.body).toMatchObject({ walkinWaitingCount: 1, nextTicketNo: 2 })
+  })
+
+  it('共有sessionはwalk-in作成の全監査を端末主体にし、invalid pairは書込みも監査も拒む', async () => {
+    const t = await receptionTenant()
+    const shared = await seedTerminalSession(t, 'shared')
+    const created = await createWalkin(
+      t.token,
+      walkinBody(t.storeId, '11:02'),
+      undefined,
+      shared.headers,
+    )
+    expect(created.status).toBe(200)
+    const audits = await env.DB.prepare(
+      "SELECT action, actor_type AS actorType, actor_id AS actorId, terminal_id AS terminalId FROM audit_events WHERE organization_id = ? AND action IN ('reservation.created','walkin.created') ORDER BY action",
+    )
+      .bind(t.org)
+      .all<{ action: string; actorType: string; actorId: string; terminalId: string }>()
+    expect(audits.results).toHaveLength(2)
+    for (const audit of audits.results) {
+      expect(audit).toMatchObject({
+        actorType: 'terminal',
+        actorId: shared.terminalId,
+        terminalId: shared.terminalId,
+      })
+    }
+
+    const denied = await createWalkin(t.token, walkinBody(t.storeId, '11:32'), undefined, {
+      'x-terminal-id': shared.terminalId,
+    })
+    expect(denied.status).toBe(403)
+    expect(denied.body).toEqual({ error: 'terminal_session_invalid' })
+    expect(await walkinRows(t.org, t.storeId, LEDGER_DATE)).toHaveLength(1)
+  })
+
+  it('個人sessionはreception stage変更を本人主体・端末付きで監査する', async () => {
+    const t = await receptionTenant()
+    const walkin = await createWalkin(t.token, walkinBody(t.storeId, '11:02'))
+    const personal = await seedTerminalSession(t, 'personal')
+    const changed = await postVisit(
+      t.token,
+      {
+        storeId: t.storeId,
+        subjectType: 'walkin',
+        subjectId: walkin.body.id,
+        stage: 'consulting',
+        occurredAt: jstAt(LEDGER_DATE, '11:05'),
+        staffId: t.staffId,
+      },
+      personal.headers,
+    )
+    expect(changed.status).toBe(200)
+    const audit = await env.DB.prepare(
+      "SELECT actor_type AS actorType, actor_id AS actorId, terminal_id AS terminalId FROM audit_events WHERE organization_id = ? AND action = 'visit.stage.changed' AND target_id = ?",
+    )
+      .bind(t.org, walkin.body.id)
+      .first<{ actorType: string; actorId: string; terminalId: string }>()
+    expect(audit).toEqual({
+      actorType: 'staff',
+      actorId: t.staffId,
+      terminalId: personal.terminalId,
+    })
   })
 
   it("同じ操作で source='walkin' の予約と枠の占有が 1 件ずつできる", async () => {

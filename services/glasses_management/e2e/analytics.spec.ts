@@ -1,5 +1,6 @@
 import type { APIRequestContext, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
+import { completeSeededTerminalStart } from './support/terminal'
 
 /**
  * 012-analytics の受入れ。analytics_daily は seed.mjs の固定データを読む想定で、
@@ -43,6 +44,7 @@ async function openAnalytics(page: Page, request: APIRequestContext): Promise<vo
       response.url().endsWith('/api/staff/stores') && response.request().method() === 'GET',
   )
   await page.getByRole('button', { name: '業務を始める' }).click()
+  await completeSeededTerminalStart(page)
   expect((await storesResponse).status()).toBe(200)
   await expect(page.getByRole('button', { name: 'EYEX 丸の内店へ切り替える' })).toBeVisible()
   const reportRequest = page.waitForRequest(
@@ -77,6 +79,7 @@ async function openOtherOrganizationAnalytics(
       response.url().endsWith('/api/staff/stores') && response.request().method() === 'GET',
   )
   await page.getByRole('button', { name: '業務を始める' }).click()
+  await completeSeededTerminalStart(page)
   expect((await storesResponse).status()).toBe(200)
   await expect(page.locator('header').first()).toContainText('別組織店')
   const reportRequest = page.waitForRequest(
@@ -330,8 +333,9 @@ test('待ち時間と取り消しの凡例は地模様と文字で識別でき�
 
 // @e2e-covers AC-ANA-18
 test('予約数の二つの切替はキーボードで読めて選べる', async ({ page, request }) => {
-  await page.setViewportSize({ width: 375, height: 812 })
   await openAnalytics(page, request)
+  // 端末の業務開始は iPad 専用。分析面を開いてから、ここで確認したい狭幅へ切り替える。
+  await page.setViewportSize({ width: 375, height: 812 })
   const tabs = [
     'トップ',
     '予約数',

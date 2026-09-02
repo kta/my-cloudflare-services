@@ -133,6 +133,37 @@ describe('担当店舗の同期', () => {
     expect(saved?.permissions).toBe('')
   })
 
+  it('同じ組織・利用者・店舗が別IDで再同期されても1行へ収束する', async () => {
+    const org = orgId()
+    await syncOrganization({ id: org, revision: 1 })
+    const storeId = crypto.randomUUID()
+    const firstId = crypto.randomUUID()
+    const latestId = crypto.randomUUID()
+    const base = {
+      organizationId: org,
+      storeId,
+      userId: 'user-reassigned',
+      createdAt: NOW,
+    }
+    await SELF.fetch(`${BASE}/api/internal/store-memberships/sync`, {
+      method: 'POST',
+      headers: INTERNAL_HEADERS,
+      body: JSON.stringify({ id: firstId, ...base, permissions: ['store.read'] }),
+    })
+    const response = await SELF.fetch(`${BASE}/api/internal/store-memberships/sync`, {
+      method: 'POST',
+      headers: INTERNAL_HEADERS,
+      body: JSON.stringify({ id: latestId, ...base, permissions: ['terminal.manage'] }),
+    })
+    expect(response.status).toBe(200)
+    const rows = await env.DB.prepare(
+      'SELECT id, permissions FROM store_memberships WHERE organization_id = ? AND user_id = ? AND store_id = ?',
+    )
+      .bind(org, base.userId, storeId)
+      .all<{ id: string; permissions: string }>()
+    expect(rows.results).toEqual([{ id: latestId, permissions: 'terminal.manage' }])
+  })
+
   it('許可リストに無い権限は 400 で落とす（fail close）', async () => {
     const res = await SELF.fetch(`${BASE}/api/internal/store-memberships/sync`, {
       method: 'POST',

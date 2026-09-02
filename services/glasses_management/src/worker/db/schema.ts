@@ -1270,3 +1270,69 @@ export const webBookings = sqliteTable(
     index('web_bookings_status_created_idx').on(t.status, t.createdAt),
   ],
 )
+
+/**
+ * 店内端末の置き場所。端末ごとの共有 PIN と自動ロック秒数をここに持つ。
+ *
+ * PIN は `hmac$<base64>` のハッシュだけを保存し、NULL は共有PINが未設定であることを表す。
+ * terminal_sessions との外部キーは張らない。端末の無効化後も監査・セッションを残すため、
+ * 参照の整合性はアプリ層で守る。
+ */
+export const terminals = sqliteTable(
+  'terminals',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    storeId: text('store_id').notNull(),
+    name: text('name').notNull(),
+    kind: text('kind').notNull(), // 'shared' | 'personal'
+    placeNote: text('place_note'),
+    deviceLabel: text('device_label'),
+    pinHash: text('pin_hash'),
+    autoLockSeconds: integer('auto_lock_seconds').notNull(),
+    lastSeenAt: text('last_seen_at'),
+    isActive: text('is_active').notNull(), // '0' | '1'
+    version: integer('version').notNull(),
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => [
+    // LOGIN-SHARED の置き場所一覧を、店舗内の作成順で読む。
+    index('terminals_org_store_created_idx').on(t.organizationId, t.storeId, t.createdAt),
+  ],
+)
+
+/**
+ * 端末で業務中の共有・個人モード。失効・終了は行を消さず revoked_at に記録する。
+ */
+export const terminalSessions = sqliteTable(
+  'terminal_sessions',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    storeId: text('store_id').notNull(),
+    terminalId: text('terminal_id').notNull(),
+    staffId: text('staff_id'),
+    mode: text('mode').notNull(), // 'shared' | 'personal'
+    // 平文の bearer token は保存しない。既存 0009 行との互換のため NULL 可。
+    credentialHash: text('credential_hash'),
+    startedAt: text('started_at').notNull(),
+    expiresAt: text('expires_at').notNull(),
+    revokedAt: text('revoked_at'),
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => [
+    // 端末の現行セッション候補を started_at の新しい順に読む。
+    index('terminal_sessions_org_terminal_started_idx').on(
+      t.organizationId,
+      t.terminalId,
+      t.startedAt,
+    ),
+    index('terminal_sessions_org_terminal_credential_idx').on(
+      t.organizationId,
+      t.terminalId,
+      t.credentialHash,
+    ),
+    // scheduled の期限切れ掃除は組織ごとの expires_at 範囲走査。
+    index('terminal_sessions_org_expires_idx').on(t.organizationId, t.expiresAt),
+  ],
+)

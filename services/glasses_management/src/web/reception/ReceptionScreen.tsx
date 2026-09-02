@@ -52,6 +52,8 @@ export type ReceptionScreenProps = {
   initialCheckinId?: string
   /** 業務の期限が切れた（401）とき。 */
   onSessionExpired?: () => void
+  /** Shell が検知した通信断。書込み操作を先に止める。 */
+  isOffline?: boolean
 }
 
 export function ReceptionScreen({
@@ -60,6 +62,7 @@ export function ReceptionScreen({
   onOpenLedger,
   initialCheckinId,
   onSessionExpired,
+  isOffline: shellOffline = false,
 }: ReceptionScreenProps) {
   const [date] = useState<LocalDate>(() => initialDate ?? toJstDateString(new Date()))
   const [scope, setScope] = useState<'active' | 'all'>('active')
@@ -214,7 +217,7 @@ export function ReceptionScreen({
   )
 
   /** 一度は読めていて、いまの取り直しだけが落ちている（＝通信断）。 */
-  const offline = failed === 'error' && board !== null
+  const offline = shellOffline || (failed === 'error' && board !== null)
 
   /*
    * 受け付ける面は**盤面が届いてから**開く。予定時刻との差の 1 行はサーバの `serverNow`
@@ -228,6 +231,7 @@ export function ReceptionScreen({
         attentions={attentionsOf(customer)}
         lastVisit={lastVisitOf(customer)}
         busy={busy}
+        isOffline={offline}
         onBack={() => {
           setCheckinId(null)
           setReturnTo(reservation.id)
@@ -301,7 +305,7 @@ export function ReceptionScreen({
        * **いつ時点の姿か**と**いま書けないこと**を文字で言う。60 秒ごとの取り直しが
        * そのまま自動再試行になるので、次に試す時刻も出す（台帳と同じ帯を使う）。
        */}
-      {offline && (
+      {offline && !shellOffline && (
         <OfflineBanner
           lastServerNow={board.serverNow}
           nextRetryAt={new Date(
@@ -321,11 +325,13 @@ export function ReceptionScreen({
         notice={notice}
         focusSubjectId={returnTo}
         onAdvance={(row, cell) => {
+          if (offline) return
           addVisitEvent(row, cell.stage).catch(() =>
             setNotice('記録できませんでした。もう一度お試しください。'),
           )
         }}
         onLeave={(row) => {
+          if (offline) return
           addVisitEvent(row, 'left').catch(() =>
             setNotice('記録できませんでした。もう一度お試しください。'),
           )
@@ -335,6 +341,7 @@ export function ReceptionScreen({
           setCheckinId(row.subjectId)
         }}
         onLinkCustomer={setLinking}
+        isOffline={offline}
         {...(onOpenLedger === undefined ? {} : { onReceiveVisit: onOpenLedger })}
       />
       {linking !== null && (

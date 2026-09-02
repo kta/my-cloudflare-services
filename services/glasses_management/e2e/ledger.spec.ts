@@ -1,5 +1,6 @@
 import type { APIRequestContext, Locator, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
+import { completeSeededTerminalStart } from './support/terminal'
 
 /**
  * 空き枠と予約台帳（005-availability-and-ledger）の受け入れ基準を、実ブラウザと
@@ -130,18 +131,24 @@ async function pinServerNow(page: Page, at = SERVER_NOW): Promise<void> {
 
 /* --- 画面を開く ---------------------------------------------------------- */
 
-async function startWork(page: Page, at = SERVER_NOW): Promise<void> {
+async function startWork(
+  page: Page,
+  at = SERVER_NOW,
+  mode: 'shared' | 'personal' = 'shared',
+): Promise<void> {
   await pinDeviceClock(page, at)
   await pinServerNow(page)
   await page.goto('/')
   await page.getByLabel('お店のコード').fill(ORG)
   await page.getByRole('button', { name: '業務を始める' }).click()
+  await completeSeededTerminalStart(page, mode)
   await expect(page.locator('header').first()).toContainText('EYEX 銀座店')
 }
 
 /** 同じ端末で画面を開き直す。すでに業務を始めているので名乗り直さない。 */
-async function reopen(page: Page): Promise<void> {
+async function reopen(page: Page, mode: 'shared' | 'personal' = 'shared'): Promise<void> {
   await page.goto('/')
+  await completeSeededTerminalStart(page, mode)
   await expect(page.locator('header').first()).toContainText('EYEX 銀座店')
 }
 
@@ -844,13 +851,13 @@ test('トップに本日わたしが担当するご予約が時間順に並び�
   await membership()
   await beMe(VIEWER)
   try {
-    // 担当のご予約が 0 件の日（佐藤 美咲 は金曜がお休み）は行き止まりにしない。
-    await startWork(page, '2026-08-28T02:08:00.000Z')
+    // 佐藤 美咲が勤務していて担当予約が0件の土曜も、行き止まりにしない。
+    await startWork(page, '2026-08-29T02:08:00.000Z', 'personal')
     await expect(page.getByText('本日ご担当のご予約はありません。')).toBeVisible()
     await expect(page.getByRole('button', { name: '店全体の台帳を見る' })).toBeVisible()
 
     await pinDeviceClock(page)
-    await reopen(page)
+    await reopen(page, 'personal')
     const mine = page.getByRole('region', { name: '本日わたしが担当するご予約' })
     await expect(mine).toContainText('4件')
     const rows = mine.getByRole('listitem')

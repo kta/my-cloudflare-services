@@ -1,5 +1,6 @@
 import type { APIRequestContext, Locator, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
+import { completeSeededTerminalStart } from './support/terminal'
 
 /**
  * 顧客台帳（007-customer-records）の受け入れ基準を、実ブラウザと実 Worker で確かめる。
@@ -247,11 +248,13 @@ async function startWork(page: Page): Promise<void> {
   await page.goto('/')
   const code = page.getByLabel('お店のコード')
   const nav = page.getByRole('navigation', { name: '画面の切り替え' })
-  await expect(code.or(nav).first()).toBeVisible()
+  const placePick = page.getByRole('heading', { name: 'この端末はどこに置きますか？' })
+  await expect(code.or(nav).or(placePick).first()).toBeVisible()
   if ((await code.count()) > 0) {
     await code.fill(ORG)
     await page.getByRole('button', { name: '業務を始める' }).click()
   }
+  await completeSeededTerminalStart(page)
   await expect(page.locator('header').first()).toContainText('EYEX 銀座店')
 }
 

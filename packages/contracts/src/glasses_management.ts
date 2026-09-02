@@ -2577,7 +2577,7 @@ export type Alert = z.infer<typeof Alert>
  */
 export const AlertListQuery = z.strictObject({
   storeId: Uuid.optional(),
-  audience: z.enum(['store', 'ops']).default('store'),
+  kind: z.enum(['all', 'action', 'info', 'resolved']).default('all'),
   limit: Limit,
   cursor: Cursor.optional(),
 })
@@ -2588,8 +2588,202 @@ export const AlertList = z.strictObject({
   items: Alert.array().default([]),
   nextCursor: Cursor.nullable().default(null),
   total: CountInteger,
+  counts: z
+    .strictObject({
+      all: CountInteger,
+      action: CountInteger,
+      info: CountInteger,
+      resolved: CountInteger,
+    })
+    .default({ all: 0, action: 0, info: 0, resolved: 0 }),
 })
 export type AlertList = z.infer<typeof AlertList>
+
+/** お知らせの既読・対応済み更新。空の PATCH は受け付けない。 */
+export const AlertPatch = z
+  .strictObject({
+    readAt: IsoDateTime.nullable().optional(),
+  })
+  .refine((value) => value.readAt !== undefined, {
+    message: 'readAt を指定する',
+  })
+export type AlertPatch = z.infer<typeof AlertPatch>
+
+export const AlertReadAllInput = z.strictObject({ storeId: Uuid.optional() })
+export type AlertReadAllInput = z.infer<typeof AlertReadAllInput>
+
+export const AlertReadAllResult = z.strictObject({ updated: CountInteger })
+export type AlertReadAllResult = z.infer<typeof AlertReadAllResult>
+
+/* ------------------------------------------------------------------------- *
+ * P10 端末・個人モード・監査
+ * ------------------------------------------------------------------------- */
+
+export const Pin = z.string().regex(/^\d{4,6}$/, '暗証番号は4〜6桁の数字にする')
+export type Pin = z.infer<typeof Pin>
+
+export const TerminalKind = z.enum(['shared', 'personal'])
+export type TerminalKind = z.infer<typeof TerminalKind>
+
+export const Terminal = z.strictObject({
+  id: Uuid,
+  storeId: Uuid,
+  name: z.string().trim().min(1).max(60),
+  kind: TerminalKind,
+  placeNote: z.string().trim().max(40).default(''),
+  deviceLabel: z.string().trim().max(30).default(''),
+  autoLockSeconds: z.number().int().min(30).max(1800).default(120),
+  isActive: z.boolean(),
+  hasPin: z.boolean(),
+  lastSeenAt: IsoDateTime.nullable(),
+  isOnline: z.boolean(),
+  version: Version,
+  createdAt: IsoDateTime,
+})
+export type Terminal = z.infer<typeof Terminal>
+
+export const TerminalListQuery = z.strictObject({
+  storeId: Uuid,
+  includeInactive: QueryFlag,
+  kind: TerminalKind.optional(),
+})
+export type TerminalListQuery = z.infer<typeof TerminalListQuery>
+
+const terminalInputShape = {
+  name: z.string().trim().min(1).max(60),
+  kind: TerminalKind,
+  placeNote: z.string().trim().max(40).default(''),
+  deviceLabel: z.string().trim().max(30).default(''),
+  autoLockSeconds: z.number().int().min(30).max(1800).default(120),
+  isActive: z.boolean().default(true),
+  pin: Pin.optional(),
+}
+
+export const TerminalInput = z.strictObject(terminalInputShape)
+export type TerminalInput = z.infer<typeof TerminalInput>
+
+export const TerminalPatch = z.strictObject({
+  name: terminalInputShape.name.optional(),
+  kind: terminalInputShape.kind.optional(),
+  placeNote: terminalInputShape.placeNote.removeDefault().optional(),
+  deviceLabel: terminalInputShape.deviceLabel.removeDefault().optional(),
+  autoLockSeconds: terminalInputShape.autoLockSeconds.removeDefault().optional(),
+  isActive: terminalInputShape.isActive.removeDefault().optional(),
+  pin: Pin.optional(),
+  version: Version,
+})
+export type TerminalPatch = z.infer<typeof TerminalPatch>
+
+export const TerminalSessionStart = z.discriminatedUnion('mode', [
+  z.strictObject({ mode: z.literal('personal'), staffId: Uuid, pin: Pin }),
+  z.strictObject({ mode: z.literal('shared'), pin: Pin }),
+])
+export type TerminalSessionStart = z.infer<typeof TerminalSessionStart>
+
+export const TerminalSession = z.strictObject({
+  id: Uuid,
+  terminalId: Uuid,
+  staffId: Uuid.nullable(),
+  mode: z.enum(['shared', 'personal']),
+  startedAt: IsoDateTime,
+  expiresAt: IsoDateTime,
+  sessionToken: z
+    .string()
+    .min(64)
+    .max(128)
+    .regex(/^[A-Za-z0-9_-]+$/),
+})
+export type TerminalSession = z.infer<typeof TerminalSession>
+
+export const ReauthInput = z.strictObject({
+  staffId: Uuid,
+  pin: Pin,
+  reason: z.enum(['recording', 'attention', 'settings', 'customer_merge']),
+})
+export type ReauthInput = z.infer<typeof ReauthInput>
+
+export const PinInvalidError = z.strictObject({
+  error: z.literal('pin_invalid'),
+  remainingAttempts: z.number().int().min(0).max(2),
+})
+export type PinInvalidError = z.infer<typeof PinInvalidError>
+
+export const PinLockedError = z.strictObject({
+  error: z.literal('pin_locked'),
+  retryAfterSeconds: z.number().int().positive(),
+  remainingAttempts: z.literal(0),
+})
+export type PinLockedError = z.infer<typeof PinLockedError>
+
+export const StaffPinInput = z.strictObject({ pin: Pin })
+export type StaffPinInput = z.infer<typeof StaffPinInput>
+
+export const PinSetResult = z.strictObject({ staffId: Uuid, updatedAt: IsoDateTime })
+export type PinSetResult = z.infer<typeof PinSetResult>
+
+export const AuditActorType = z.enum(['staff', 'terminal', 'system', 'customer'])
+export type AuditActorType = z.infer<typeof AuditActorType>
+
+export const AuditTargetType = z.enum([
+  'organizations',
+  'stores',
+  'store_business_hours',
+  'store_blackout_windows',
+  'store_calendar_exceptions',
+  'store_slot_rules',
+  'staff',
+  'staff_skills',
+  'staff_weekly_shifts',
+  'staff_shifts',
+  'equipment',
+  'equipment_maintenance',
+  'visit_purposes',
+  'purpose_requirements',
+  'reservations',
+  'walk_ins',
+  'reception_sessions',
+  'customers',
+  'customer_notes',
+  'recordings',
+  'web_bookings',
+  'web_booking_settings',
+  'alerts',
+  'terminals',
+])
+export type AuditTargetType = z.infer<typeof AuditTargetType>
+
+export const AuditEvent = z.strictObject({
+  id: Uuid,
+  occurredAt: IsoDateTime,
+  actorType: AuditActorType,
+  actorId: z.string().nullable(),
+  terminalId: Uuid.nullable(),
+  action: z.string().trim().min(1).max(80),
+  targetType: AuditTargetType,
+  targetId: z.string().min(1),
+  correlationId: Uuid.nullable(),
+  beforeJson: z.unknown(),
+  afterJson: z.unknown(),
+})
+export type AuditEvent = z.infer<typeof AuditEvent>
+
+export const AuditSearchQuery = z.strictObject({
+  storeId: Uuid.optional(),
+  from: LocalDate.optional(),
+  to: LocalDate.optional(),
+  actorId: z.string().min(1).optional(),
+  action: z.string().trim().min(1).max(80).optional(),
+  limit: QueryInteger.pipe(z.number().int().min(1).max(200)).default(50),
+  cursor: Cursor.optional(),
+})
+export type AuditSearchQuery = z.infer<typeof AuditSearchQuery>
+
+export const AuditEventList = z.strictObject({
+  items: AuditEvent.array().default([]),
+  nextCursor: Cursor.nullable().default(null),
+  total: CountInteger,
+})
+export type AuditEventList = z.infer<typeof AuditEventList>
 
 /* ------------------------------------------------------------------------- *
  * P9 分析

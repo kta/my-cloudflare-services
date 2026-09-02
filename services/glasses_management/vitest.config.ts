@@ -16,6 +16,7 @@ export default defineConfig({
           // wrangler vars から機密を撤去したぶん、テストは自前で dev 値を供給する
           INTERNAL_KEY: 'dev-internal-key',
           JWT_SECRET: 'dev-jwt-secret-change-me',
+          AUTH_PEPPER: 'dev-auth-pepper-change-me',
           AUTH_DEV_GRANT: 'true',
           // 受付履歴の「今月まで広げる」候補を、CI の実行日ではなく世界観データの
           // 基準時刻で検証する。
@@ -26,6 +27,11 @@ export default defineConfig({
         serviceBindings: {
           NOTIFIER: () =>
             new Response(JSON.stringify({ status: 'sent', id: 'stub' }), { status: 200 }),
+          ADMIN: () =>
+            new Response(JSON.stringify({ error: 'not_stubbed' }), {
+              status: 501,
+              headers: { 'content-type': 'application/json' },
+            }),
         },
       },
     }),

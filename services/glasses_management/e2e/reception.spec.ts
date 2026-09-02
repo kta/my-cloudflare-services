@@ -1,5 +1,6 @@
 import type { APIRequestContext, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
+import { completeSeededTerminalStart } from './support/terminal'
 
 /**
  * 来店受付とウォークイン（008-reception-and-walkin）の受け入れ基準を、実ブラウザと
@@ -495,6 +496,7 @@ async function startWork(page: Page): Promise<void> {
   await page.goto('/')
   await page.getByLabel('お店のコード').fill(ORG)
   await page.getByRole('button', { name: '業務を始める' }).click()
+  await completeSeededTerminalStart(page)
   await expect(page.locator('header').first()).toContainText('EYEX 銀座店')
 }
 

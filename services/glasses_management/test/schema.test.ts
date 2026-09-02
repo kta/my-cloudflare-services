@@ -35,6 +35,8 @@ import {
   storeSettingsRevision,
   storeSlotRules,
   stores,
+  terminalSessions,
+  terminals,
   visitEvents,
   visitPurposes,
   walkIns,
@@ -1233,5 +1235,65 @@ describe('analytics_daily', () => {
       'metric',
       'date',
     ])
+  })
+})
+
+describe('terminals', () => {
+  const table = getTableConfig(terminals)
+
+  it('LOGIN-SHARED の置き場所一覧を組織・店舗・作成順で引ける', () => {
+    expect(columnsOf(table, 'terminals_org_store_created_idx')).toEqual([
+      'organization_id',
+      'store_id',
+      'created_at',
+    ])
+    expect(isUnique(table, 'terminals_org_store_created_idx')).toBe(false)
+  })
+
+  it('楽観ロックの version を持つ', () => {
+    const version = table.columns.find((column) => column.name === 'version')
+    expect(version?.notNull).toBe(true)
+    expect(version?.columnType).toBe('SQLiteInteger')
+  })
+
+  it('PIN hash と自動ロック秒数を持ち、外部キーを宣言しない', () => {
+    expect(table.columns.find((column) => column.name === 'pin_hash')?.notNull).toBe(false)
+    expect(table.columns.find((column) => column.name === 'auto_lock_seconds')?.notNull).toBe(true)
+    expect(table.foreignKeys).toHaveLength(0)
+  })
+})
+
+describe('terminal_sessions', () => {
+  const table = getTableConfig(terminalSessions)
+
+  it('端末の現在の使用者を組織・端末・開始時刻で引ける', () => {
+    expect(columnsOf(table, 'terminal_sessions_org_terminal_started_idx')).toEqual([
+      'organization_id',
+      'terminal_id',
+      'started_at',
+    ])
+  })
+
+  it('期限切れの掃除を組織・期限で引ける', () => {
+    expect(columnsOf(table, 'terminal_sessions_org_expires_idx')).toEqual([
+      'organization_id',
+      'expires_at',
+    ])
+  })
+
+  it('セッション資格情報はnullable hashだけを持ち、組織・端末・hashで照合できる', () => {
+    const credentialHash = table.columns.find((column) => column.name === 'credential_hash')
+    expect(credentialHash).toBeDefined()
+    expect(credentialHash?.notNull).toBe(false)
+    expect(columnsOf(table, 'terminal_sessions_org_terminal_credential_idx')).toEqual([
+      'organization_id',
+      'terminal_id',
+      'credential_hash',
+    ])
+    expect(isUnique(table, 'terminal_sessions_org_terminal_credential_idx')).toBe(false)
+  })
+
+  it('外部キーを宣言しない', () => {
+    expect(table.foreignKeys).toHaveLength(0)
   })
 })

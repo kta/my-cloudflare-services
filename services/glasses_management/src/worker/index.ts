@@ -2,11 +2,17 @@ import {
   Alert,
   AlertList,
   AlertListQuery,
+  AlertPatch,
+  AlertReadAllInput,
+  AlertReadAllResult,
   AnalyticsQuery,
   AnalyticsReport,
   AnalyticsRollupRequest,
   AnalyticsRollupResult,
   AnalyticsTargets,
+  AuditEvent,
+  AuditEventList,
+  AuditSearchQuery,
   AvailabilityQuery,
   type AvailabilityReason,
   AvailabilityResponse,
@@ -44,10 +50,13 @@ import {
   IssueTokenRequest,
   LedgerQuery,
   LedgerView,
+  LoginRequest,
+  LoginResponse,
   MaintenanceQuery,
   NotificationJob,
   NotificationResult,
   OrganizationSync,
+  PinSetResult,
   type Plan,
   PublicAvailabilityQuery,
   PublicAvailabilityResponse,
@@ -67,6 +76,7 @@ import {
   PurposeListQuery,
   PurposeOrderInput,
   PurposeRequirementsInput,
+  ReauthInput,
   ReceptionHistoryDetail,
   ReceptionHistoryList,
   ReceptionHistoryQuery,
@@ -87,6 +97,8 @@ import {
   RecordingRetainedError,
   type RecordingState,
   RecordingStatePatch,
+  RefreshRequest,
+  RefreshResponse,
   ReservationCancelInput,
   ReservationChangeHistory,
   ReservationChangeInput,
@@ -104,6 +116,7 @@ import {
   StaffMember,
   StaffMemberInput,
   StaffMemberPatch,
+  StaffPinInput,
   StaffReservationCreate,
   StaffShift,
   StaffShiftQuery,
@@ -115,6 +128,12 @@ import {
   StoreMembership,
   StorePatch,
   type StorePermission,
+  Terminal,
+  TerminalInput,
+  TerminalListQuery,
+  TerminalPatch,
+  TerminalSession,
+  TerminalSessionStart,
   VisitBoard,
   VisitBoardQuery,
   VisitEvent,
@@ -137,12 +156,15 @@ import {
 } from '@app/contracts'
 import {
   type AuthVariables,
+  hashStretched,
   internalAuth,
   type OrgResolver,
   requireActiveOrg,
   signAccessToken,
+  stretchPin,
   tenantAuth,
   toJstDateString,
+  verifyStretched,
 } from '@app/shared'
 import type {
   D1Database,
@@ -157,6 +179,7 @@ import { and, asc, eq, gte, inArray, isNull, lt, lte, or } from 'drizzle-orm'
 import { type DrizzleD1Database, drizzle } from 'drizzle-orm/d1'
 import { type Context, Hono, type MiddlewareHandler } from 'hono'
 import { except } from 'hono/combine'
+import { getCookie, setCookie } from 'hono/cookie'
 import { HTTPException } from 'hono/http-exception'
 import {
   type AvailabilityDayRows,
@@ -180,6 +203,7 @@ import {
   storeSettingsRevision,
   storeSlotRules,
   stores,
+  terminals,
   visitPurposes,
   webBookingSettings,
 } from './db/schema'
@@ -190,6 +214,7 @@ import {
   type AnalyticsVisitEvent,
   rollupAnalyticsDay,
 } from './domain/analytics-rollup'
+import { resolveActor } from './domain/audit'
 import {
   type AvailabilityInput,
   computeAvailability,
@@ -244,6 +269,13 @@ import {
   shortLivedKey,
   verifyManagementCode,
 } from './domain/management-code'
+import {
+  isPinLocked,
+  isWeakPin,
+  nextFailureState,
+  parsePinFailure,
+  pinFailureKey,
+} from './domain/pin'
 import { issueTicket, verifyTicket } from './domain/playback'
 import { buildHistoryList, type ReceptionHistoryRow } from './domain/reception-history'
 import { nextRecordingCode, nextState, r2KeyFor, uploadFailedAlert } from './domain/recording'
@@ -273,6 +305,12 @@ import {
   validateHoursInput,
   warnBusinessHours,
 } from './domain/store-settings'
+import {
+  expiresAtFrom,
+  isOnline,
+  sessionAuthorizationAt,
+  sharedExpiresAtFrom,
+} from './domain/terminal-session'
 import { type BoardSubjectRow, buildBoard, planBoardSteps } from './domain/visit-board'
 import { jstVisitDate, nextTicketNo, waitedMinutes } from './domain/walkin'
 import {
@@ -301,10 +339,14 @@ export type Bindings = {
   RECORDINGS: R2Bucket
   /** 予約確定メール等の同期送信先（notifier）。Queues は使わない。 */
   NOTIFIER: Fetcher
+  /** 認証の正本。初回ログイン・refresh・本人PIN照合はadminへ委譲する。 */
+  ADMIN: Fetcher
   /** /api/internal/* を守る共有鍵（admin からの service binding 呼び出し）。 */
   INTERNAL_KEY: string
   /** アクセス JWT の HS256 署名鍵。admin（認証の正本）と同じ値。 */
   JWT_SECRET: string
+  /** PINハッシュ用のpepper。本番はwrangler secret、devだけ.dev.vars。 */
+  AUTH_PEPPER: string
   /**
    * お客様のご予約ページの公開ドメイン（`eyex.jp`）。SETTINGS-WEB の「ご案内のページ」を
    * `stores.slug` と繋いで組み立てるためだけに使う。**この値を表に持たない。**
@@ -469,6 +511,169 @@ function requireStorePermission(
     }
     await next()
   }
+}
+
+/**
+ * 責任の残る操作は、同じJWTでも生きた個人モードの端末セッションを要求する。
+ *
+ * 端末機能より前からある API は、端末をまだ登録していない店舗でも使い続けられるよう、
+ * `whenTerminalIsActive` のときだけヘッダー無しを従来の個人操作として扱う。新しい端末 UI は
+ * `domainFetch()` が必ずヘッダーを付けるため、共有端末からの責任操作はここで確実に止まる。
+ */
+const TERMINAL_SESSION_TOKEN = /^[A-Za-z0-9_-]{64,128}$/
+
+function base64Url(bytes: Uint8Array): string {
+  let binary = ''
+  for (const byte of bytes) binary += String.fromCharCode(byte)
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+async function sessionCredential(): Promise<{ token: string; hash: string }> {
+  const bytes = crypto.getRandomValues(new Uint8Array(48))
+  const token = base64Url(bytes)
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token))
+  return { token, hash: base64Url(new Uint8Array(digest)) }
+}
+
+async function hashSessionToken(token: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token))
+  return base64Url(new Uint8Array(digest))
+}
+
+type AuthenticatedTerminalSession = {
+  id: string
+  storeId: string
+  terminalId: string
+  staffId: string | null
+  mode: 'shared' | 'personal'
+  credentialHash: string
+  startedAt: string
+  expiresAt: string
+  authorization: 'shared' | 'personal'
+}
+
+function terminalSessionInvalid(c: Context<Env>): never {
+  throw new HTTPException(403, {
+    res: c.json({ error: 'terminal_session_invalid' }, 403),
+  })
+}
+
+async function authenticatedTerminalSession(
+  c: Context<Env>,
+  scope: { terminalId?: string; storeId?: string; sessionId?: string } = {},
+): Promise<AuthenticatedTerminalSession> {
+  const terminalId = c.req.header('x-terminal-id')
+  const token = c.req.header('x-terminal-session')
+  if (terminalId === undefined || token === undefined || !TERMINAL_SESSION_TOKEN.test(token)) {
+    return terminalSessionInvalid(c)
+  }
+  if (scope.terminalId !== undefined && terminalId !== scope.terminalId) {
+    return terminalSessionInvalid(c)
+  }
+  const credentialHash = await hashSessionToken(token)
+  const clauses = [
+    's.organization_id = ?',
+    's.terminal_id = ?',
+    's.credential_hash = ?',
+    's.revoked_at IS NULL',
+    "t.is_active = '1'",
+  ]
+  const params: unknown[] = [c.get('auth').org, terminalId, credentialHash]
+  if (scope.storeId !== undefined) {
+    clauses.push('s.store_id = ?')
+    params.push(scope.storeId)
+  }
+  if (scope.sessionId !== undefined) {
+    clauses.push('s.id = ?')
+    params.push(scope.sessionId)
+  }
+  const row = await c.env.DB.prepare(
+    'SELECT s.id, s.store_id AS storeId, s.terminal_id AS terminalId, s.staff_id AS staffId, s.mode, s.credential_hash AS credentialHash, s.started_at AS startedAt, s.expires_at AS expiresAt, s.revoked_at AS revokedAt ' +
+      'FROM terminal_sessions s INNER JOIN terminals t ON t.organization_id = s.organization_id AND t.id = s.terminal_id ' +
+      `WHERE ${clauses.join(' AND ')} ORDER BY s.started_at DESC LIMIT 1`,
+  )
+    .bind(...params)
+    .first<{
+      id: string
+      storeId: string
+      terminalId: string
+      staffId: string | null
+      mode: 'shared' | 'personal'
+      credentialHash: string
+      startedAt: string
+      expiresAt: string
+      revokedAt: string | null
+    }>()
+  if (row === null) return terminalSessionInvalid(c)
+  const authorization = sessionAuthorizationAt(row, new Date(c.env.TEST_NOW ?? Date.now()))
+  if (authorization === null) return terminalSessionInvalid(c)
+  return { ...row, authorization }
+}
+
+function requirePersonalMode(
+  subject = '設定の変更',
+  input: { whenTerminalIsActive?: boolean } = {},
+): MiddlewareHandler<Env> {
+  return async (c, next) => {
+    const terminalId = c.req.header('x-terminal-id')
+    const sessionToken = c.req.header('x-terminal-session')
+    if (terminalId === undefined && sessionToken === undefined) {
+      if (input.whenTerminalIsActive) {
+        await next()
+        return
+      }
+      return c.json({ error: 'personal_mode_required', subject }, 403)
+    }
+    const session = await authenticatedTerminalSession(c)
+    if (session.authorization !== 'personal') {
+      return c.json({ error: 'personal_mode_required', subject }, 403)
+    }
+    await next()
+  }
+}
+
+type OperationActor = {
+  actorType: 'staff' | 'terminal'
+  actorId: string | null
+  terminalId: string | null
+}
+
+/** 端末ヘッダーを信用せず、同じ組織・店舗のセッションから操作主体を解決する。 */
+async function operationActor(
+  c: Context<Env>,
+  storeId: string,
+  fallbackStaffId: string | null,
+): Promise<OperationActor> {
+  const terminalId = c.req.header('x-terminal-id')
+  const sessionToken = c.req.header('x-terminal-session')
+  if (terminalId === undefined && sessionToken === undefined) {
+    return { actorType: 'staff', actorId: fallbackStaffId, terminalId: null }
+  }
+  const session = await authenticatedTerminalSession(c, { storeId })
+  if (session.authorization === 'personal' && session.staffId !== null) {
+    const actor = resolveActor({
+      mode: 'personal',
+      staffId: session.staffId,
+      terminalId: session.terminalId,
+    })
+    return { actorType: 'staff', actorId: actor.subjectId, terminalId: actor.terminalId }
+  }
+  if (session.authorization === 'shared') {
+    const actor = resolveActor({ mode: 'shared', staffId: null, terminalId: session.terminalId })
+    return { actorType: 'terminal', actorId: actor.subjectId, terminalId: actor.terminalId }
+  }
+  return terminalSessionInvalid(c)
+}
+
+/** headerless legacyを許すstaff APIでも、端末headerが一方でもあればpairを必ず検証する。 */
+async function validateTerminalPairWhenPresent(c: Context<Env>, storeId: string): Promise<void> {
+  if (
+    c.req.header('x-terminal-id') === undefined &&
+    c.req.header('x-terminal-session') === undefined
+  ) {
+    return
+  }
+  await authenticatedTerminalSession(c, { storeId })
 }
 
 /**
@@ -1623,6 +1828,66 @@ app.post('/api/auth/token', zValidator('json', IssueTokenRequest), async (c) => 
   return c.json({ token })
 })
 
+const REFRESH_COOKIE = 'refresh_token'
+
+async function adminAuthFetch(env: Bindings, path: string, body: unknown) {
+  return env.ADMIN.fetch(`https://admin.internal${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-internal-key': env.INTERNAL_KEY },
+    body: JSON.stringify(body),
+  })
+}
+
+/** 本番の初回トークンは認証の正本adminから受け取り、refresh tokenだけcookie境界へ移す。 */
+app.post('/api/auth/login', zValidator('json', LoginRequest), async (c) => {
+  const response = await adminAuthFetch(
+    c.env,
+    '/api/internal/domain-auth/login',
+    c.req.valid('json'),
+  )
+  const body = await response.json().catch(() => null)
+  if (!response.ok || body === null) {
+    return new Response(JSON.stringify(body ?? { error: 'auth_unavailable' }), {
+      status: response.status,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+  const parsed = LoginResponse.parse(body)
+  setCookie(c, REFRESH_COOKIE, parsed.refreshToken, {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'Strict',
+    path: '/api/auth',
+  })
+  const { refreshToken: _omit, ...publicBody } = parsed
+  return c.json(publicBody)
+})
+
+app.post('/api/auth/refresh', async (c) => {
+  const refreshToken = getCookie(c, REFRESH_COOKIE)
+  if (refreshToken === undefined) return c.json({ error: 'unauthorized' }, 401)
+  const response = await adminAuthFetch(
+    c.env,
+    '/api/internal/domain-auth/refresh',
+    RefreshRequest.parse({ refreshToken }),
+  )
+  const body = await response.json().catch(() => null)
+  if (!response.ok || body === null) {
+    return new Response(JSON.stringify(body ?? { error: 'auth_unavailable' }), {
+      status: response.status,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+  const parsed = RefreshResponse.parse(body)
+  setCookie(c, REFRESH_COOKIE, parsed.refreshToken, {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'Strict',
+    path: '/api/auth',
+  })
+  return c.json({ token: parsed.token })
+})
+
 // ルートはチェーンする。`typeof routes` が RPC クライアントの型になる。
 
 /* ───────────────────────────────────────────────────────────────────────────
@@ -1893,6 +2158,8 @@ function auditRow(
     /** 組織そのものへの操作（受付履歴の閲覧）だけ null になる。 */
     storeId: string | null
     actorId: string | null
+    actorType?: 'staff' | 'terminal'
+    terminalId?: string | null
     action: string
     targetType: string
     targetId: string
@@ -1920,13 +2187,15 @@ function auditRow(
   return db
     .prepare(
       'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
-        `SELECT ?, ?, ?, 'staff', ?, NULL, ?, ?, ?, NULL, ?, ?, ?${guard}`,
+        `SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?${guard}`,
     )
     .bind(
       crypto.randomUUID(),
       input.organizationId,
       input.storeId,
+      input.actorType ?? 'staff',
       input.actorId,
+      input.terminalId ?? null,
       input.action,
       input.targetType,
       input.targetId,
@@ -2421,15 +2690,16 @@ async function readableRecording(
 /**
  * 録音の監査 1 行。`auditRow()` と分けてあるのは `actor_type` が動くからである —
  * 保管の完了と 24 時間放置の打ち切りは**人が押した操作ではない**ので `system` で残す。
- * 端末欄は P10 まで NULL（`013-terminals-and-audit`）。
+ * P10 の端末操作では、検証済みセッションから端末欄も残す。
  */
 function recordingAudit(
   db: D1Database,
   input: {
     organizationId: string
     storeId: string
-    actorType: 'staff' | 'system'
+    actorType: 'staff' | 'system' | 'terminal'
     actorId: string | null
+    terminalId?: string | null
     action: string
     recordingId: string
     after: unknown
@@ -2440,7 +2710,7 @@ function recordingAudit(
   return db
     .prepare(
       'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
-        "VALUES (?,?,?,?,?,NULL,?,'recording',?,NULL,?,?,?)",
+        "VALUES (?,?,?,?,?,?,?,'recordings',?,NULL,?,?,?)",
     )
     .bind(
       crypto.randomUUID(),
@@ -2448,6 +2718,7 @@ function recordingAudit(
       input.storeId,
       input.actorType,
       input.actorId,
+      input.terminalId ?? null,
       input.action,
       input.recordingId,
       JSON.stringify(input.after),
@@ -2509,7 +2780,7 @@ async function raiseUploadFailedAlert(
   const existing = await db
     .prepare(
       "SELECT id FROM alerts WHERE organization_id = ? AND code = 'recording.upload_failed' " +
-        'AND target_id = ? AND resolved_at IS NULL LIMIT 1',
+        "AND audience = 'store' AND target_id = ? AND resolved_at IS NULL LIMIT 1",
     )
     .bind(input.organizationId, input.recordingId)
     .first<{ id: string }>()
@@ -2538,6 +2809,39 @@ async function raiseUploadFailedAlert(
       input.occurredAt,
     )
     .run()
+}
+
+/** `stored` 遷移と同じ D1 batch で、対応する未解決 alert と追記監査を閉じる。 */
+function resolveUploadFailedAlertStatements(
+  db: D1Database,
+  input: {
+    organizationId: string
+    storeId: string
+    recordingId: string
+    resolvedAt: string
+  },
+): D1PreparedStatement[] {
+  const correlationId = crypto.randomUUID()
+  const predicate =
+    "organization_id = ? AND store_id = ? AND audience = 'store' AND code = 'recording.upload_failed' AND target_id = ? AND resolved_at IS NULL"
+  return [
+    db
+      .prepare(
+        'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
+          `SELECT id, organization_id, store_id, 'system', NULL, NULL, 'alert.resolved', 'alerts', id, json_object('resolvedAt',resolved_at), json_object('resolvedAt',?), ?, ? FROM alerts WHERE ${predicate}`,
+      )
+      .bind(
+        input.resolvedAt,
+        correlationId,
+        input.resolvedAt,
+        input.organizationId,
+        input.storeId,
+        input.recordingId,
+      ),
+    db
+      .prepare(`UPDATE alerts SET resolved_at = ?, resolved_by = NULL WHERE ${predicate}`)
+      .bind(input.resolvedAt, input.organizationId, input.storeId, input.recordingId),
+  ]
 }
 
 /** 一覧の続き。並べ方に結び付いた不透明な値（`(時刻, id)` の複合カーソル）。 */
@@ -3320,7 +3624,7 @@ function isAnalyticsClosed(
  * 生表はここだけが読む。表示 API は analytics_daily に閉じる。
  */
 export async function rollupAnalytics(
-  env: Bindings,
+  env: Pick<Bindings, 'DB'>,
   input: {
     from: string
     to: string
@@ -3591,8 +3895,12 @@ const routes = app
       .insert(storeMemberships)
       .values(row)
       .onConflictDoUpdate({
-        target: storeMemberships.id,
-        set: { storeId: row.storeId, userId: row.userId, permissions: row.permissions },
+        target: [
+          storeMemberships.organizationId,
+          storeMemberships.userId,
+          storeMemberships.storeId,
+        ],
+        set: { id: row.id, permissions: row.permissions },
       })
     return c.json(membership, 200)
   })
@@ -3620,6 +3928,662 @@ const routes = app
           createdAt: r.createdAt,
         })),
       ),
+    )
+  })
+
+  /* --- 端末と業務セッション（P10） -------------------------------------- */
+
+  .get('/api/staff/terminals', zValidator('query', TerminalListQuery), async (c) => {
+    const { org } = c.get('auth')
+    const query = c.req.valid('query')
+    if (!(await findStore(drizzle(c.env.DB), org, query.storeId))) {
+      return c.json({ error: 'not_found' }, 404)
+    }
+    const terminalIdHeader = c.req.header('x-terminal-id')
+    const terminalSessionHeader = c.req.header('x-terminal-session')
+    if (terminalIdHeader !== undefined || terminalSessionHeader !== undefined) {
+      const session = await authenticatedTerminalSession(c, { storeId: query.storeId })
+      await c.env.DB.prepare(
+        'UPDATE terminals SET last_seen_at = ? WHERE organization_id = ? AND store_id = ? AND id = ?',
+      )
+        .bind(
+          new Date(c.env.TEST_NOW ?? Date.now()).toISOString(),
+          org,
+          query.storeId,
+          session.terminalId,
+        )
+        .run()
+    }
+    const clauses = ['organization_id = ?', 'store_id = ?']
+    const params: unknown[] = [org, query.storeId]
+    if (!query.includeInactive) clauses.push("is_active = '1'")
+    if (query.kind !== undefined) {
+      clauses.push('kind = ?')
+      params.push(query.kind)
+    }
+    const rows = await c.env.DB.prepare(
+      'SELECT id, store_id AS storeId, name, kind, place_note AS placeNote, ' +
+        'device_label AS deviceLabel, pin_hash AS pinHash, auto_lock_seconds AS autoLockSeconds, ' +
+        'last_seen_at AS lastSeenAt, is_active AS isActive, version, created_at AS createdAt ' +
+        `FROM terminals WHERE ${clauses.join(' AND ')} ORDER BY created_at ASC`,
+    )
+      .bind(...params)
+      .all<{
+        id: string
+        storeId: string
+        name: string
+        kind: 'shared' | 'personal'
+        placeNote: string | null
+        deviceLabel: string | null
+        pinHash: string | null
+        autoLockSeconds: number
+        lastSeenAt: string | null
+        isActive: string
+        version: number
+        createdAt: string
+      }>()
+    const now = new Date(c.env.TEST_NOW ?? Date.now())
+    return c.json(
+      Terminal.array().parse(
+        rows.results.map((row) => ({
+          id: row.id,
+          storeId: row.storeId,
+          name: row.name,
+          kind: row.kind,
+          placeNote: row.placeNote ?? '',
+          deviceLabel: row.deviceLabel ?? '',
+          autoLockSeconds: row.autoLockSeconds,
+          isActive: row.isActive === '1',
+          hasPin: row.pinHash !== null,
+          lastSeenAt: row.lastSeenAt,
+          isOnline: isOnline(row.lastSeenAt, now),
+          version: row.version,
+          createdAt: row.createdAt,
+        })),
+      ),
+    )
+  })
+
+  .post(
+    '/api/staff/terminals/:terminalId/sessions',
+    zValidator('json', TerminalSessionStart),
+    async (c) => {
+      const { org } = c.get('auth')
+      const terminalId = c.req.param('terminalId')
+      const input = c.req.valid('json')
+      const terminal = await c.env.DB.prepare(
+        "SELECT id, store_id AS storeId, pin_hash AS pinHash, auto_lock_seconds AS autoLockSeconds FROM terminals WHERE organization_id = ? AND id = ? AND is_active = '1'",
+      )
+        .bind(org, terminalId)
+        .first<{ id: string; storeId: string; pinHash: string | null; autoLockSeconds: number }>()
+      if (terminal === null) return c.json({ error: 'not_found' }, 404)
+
+      const staffId = input.mode === 'personal' ? input.staffId : null
+      let storedHash = terminal.pinHash
+      if (staffId !== null) {
+        const member = await c.env.DB.prepare(
+          "SELECT pin_hash AS pinHash FROM staff WHERE organization_id = ? AND store_id = ? AND id = ? AND is_active = '1'",
+        )
+          .bind(org, terminal.storeId, staffId)
+          .first<{ pinHash: string | null }>()
+        if (member === null) return c.json({ error: 'not_found' }, 404)
+        storedHash = member.pinHash
+      }
+
+      const failureKey = pinFailureKey(org, terminalId, staffId)
+      const now = new Date(c.env.TEST_NOW ?? Date.now())
+      const nowIso = now.toISOString()
+      const rawFailure = await c.env.SHORT_LIVED.get(failureKey)
+      const failure = parsePinFailure(rawFailure)
+      // Workers KV のTTL下限は60秒。値の時刻で30秒境界を守り、物理削除は60秒に任せる。
+      const previous =
+        failure !== null && now.getTime() - Date.parse(failure.failedAt) <= 30_000
+          ? failure.attempts
+          : 0
+      if (
+        failure !== null &&
+        failure.attempts >= 3 &&
+        isPinLocked(new Date(failure.failedAt), now)
+      ) {
+        const elapsedSeconds = Math.floor((now.getTime() - Date.parse(failure.failedAt)) / 1000)
+        return c.json(
+          {
+            error: 'pin_locked',
+            retryAfterSeconds: Math.max(1, 30 - elapsedSeconds),
+            remainingAttempts: 0,
+          },
+          429,
+        )
+      }
+
+      const stretched = await stretchPin(
+        input.pin,
+        org,
+        staffId ?? terminalId,
+        c.env.TEST_NOW === undefined ? undefined : 1,
+      )
+      const verified =
+        storedHash !== null && (await verifyStretched(stretched, c.env.AUTH_PEPPER, storedHash))
+      if (!verified) {
+        const state = nextFailureState(previous)
+        await c.env.SHORT_LIVED.put(
+          failureKey,
+          JSON.stringify({ attempts: state.attempts, failedAt: nowIso }),
+          { expirationTtl: 60 },
+        )
+        await c.env.DB.prepare(
+          'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
+            "VALUES (?,?,?,'terminal',?,?, 'terminal.pin.failed','terminals',?,NULL,?,?,?)",
+        )
+          .bind(
+            crypto.randomUUID(),
+            org,
+            terminal.storeId,
+            terminalId,
+            terminalId,
+            terminalId,
+            JSON.stringify({ staffId, remainingAttempts: state.remainingAttempts }),
+            crypto.randomUUID(),
+            nowIso,
+          )
+          .run()
+        if (state.locked) {
+          return c.json({ error: 'pin_locked', retryAfterSeconds: 30, remainingAttempts: 0 }, 429)
+        }
+        return c.json({ error: 'pin_invalid', remainingAttempts: state.remainingAttempts }, 401)
+      }
+
+      await c.env.SHORT_LIVED.delete(failureKey)
+      const sessionId = crypto.randomUUID()
+      const expiresAt =
+        input.mode === 'shared'
+          ? sharedExpiresAtFrom(now)
+          : expiresAtFrom(now, terminal.autoLockSeconds)
+      const correlationId = crypto.randomUUID()
+      const credential = await sessionCredential()
+      // stale read を置かず、既存行の終了監査→全 revoke→新規行→開始監査を1 batchにする。
+      const result = await c.env.DB.batch([
+        c.env.DB.prepare(
+          'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
+            "SELECT id, organization_id, store_id, ?, ?, terminal_id, 'terminal.session.ended', 'terminals', terminal_id, NULL, json_object('reason','taken_over','sessionId',id), ?, ? FROM terminal_sessions " +
+            'WHERE organization_id = ? AND terminal_id = ? AND revoked_at IS NULL',
+        ).bind(
+          input.mode === 'personal' ? 'staff' : 'terminal',
+          staffId ?? terminalId,
+          correlationId,
+          nowIso,
+          org,
+          terminalId,
+        ),
+        c.env.DB.prepare(
+          'UPDATE terminal_sessions SET revoked_at = ? WHERE organization_id = ? AND terminal_id = ? AND revoked_at IS NULL',
+        ).bind(nowIso, org, terminalId),
+        c.env.DB.prepare(
+          'INSERT INTO terminal_sessions (id, organization_id, store_id, terminal_id, staff_id, mode, credential_hash, started_at, expires_at, revoked_at, created_at) ' +
+            "SELECT ?,?,?,?,?,?,?,?,?,NULL,? WHERE EXISTS (SELECT 1 FROM terminals WHERE organization_id = ? AND id = ? AND is_active = '1')",
+        ).bind(
+          sessionId,
+          org,
+          terminal.storeId,
+          terminalId,
+          staffId,
+          input.mode,
+          credential.hash,
+          nowIso,
+          expiresAt,
+          nowIso,
+          org,
+          terminalId,
+        ),
+        c.env.DB.prepare(
+          'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
+            "SELECT ?,?,?,?,?,?,?,'terminals',?,NULL,?,?,? WHERE EXISTS (SELECT 1 FROM terminal_sessions WHERE organization_id = ? AND id = ? AND credential_hash = ? AND revoked_at IS NULL)",
+        ).bind(
+          crypto.randomUUID(),
+          org,
+          terminal.storeId,
+          input.mode === 'personal' ? 'staff' : 'terminal',
+          staffId ?? terminalId,
+          terminalId,
+          'terminal.session.started',
+          terminalId,
+          JSON.stringify({ mode: input.mode, sessionId }),
+          correlationId,
+          nowIso,
+          org,
+          sessionId,
+          credential.hash,
+        ),
+        c.env.DB.prepare(
+          "UPDATE terminals SET last_seen_at = ? WHERE organization_id = ? AND id = ? AND is_active = '1'",
+        ).bind(nowIso, org, terminalId),
+      ])
+      if ((result[2]?.meta.changes ?? 0) === 0) return c.json({ error: 'not_found' }, 404)
+      return c.json(
+        TerminalSession.parse({
+          id: sessionId,
+          terminalId,
+          staffId,
+          mode: input.mode,
+          startedAt: nowIso,
+          expiresAt,
+          sessionToken: credential.token,
+        }),
+      )
+    },
+  )
+
+  .post(
+    '/api/staff/terminals',
+    requireStorePermission('terminal.manage', { storeIdFrom: 'query' }),
+    requirePersonalMode(),
+    zValidator('json', TerminalInput),
+    async (c) => {
+      const { org } = c.get('auth')
+      const storeId = c.req.query('storeId')
+      if (!storeId || !(await findStore(drizzle(c.env.DB), org, storeId))) {
+        return c.json({ error: 'not_found' }, 404)
+      }
+      const input = c.req.valid('json')
+      if (input.pin !== undefined && isWeakPin(input.pin)) {
+        return c.json({ error: 'weak_pin' }, 400)
+      }
+      const id = crypto.randomUUID()
+      const nowIso = new Date(c.env.TEST_NOW ?? Date.now()).toISOString()
+      const pinHash =
+        input.pin === undefined
+          ? null
+          : await hashStretched(
+              await stretchPin(input.pin, org, id, c.env.TEST_NOW === undefined ? undefined : 1),
+              c.env.AUTH_PEPPER,
+            )
+      const correlationId = crypto.randomUUID()
+      const actor = await operationActor(c, storeId, c.get('auth').sub)
+      await c.env.DB.batch([
+        c.env.DB.prepare(
+          'INSERT INTO terminals (id, organization_id, store_id, name, kind, place_note, device_label, pin_hash, auto_lock_seconds, last_seen_at, is_active, version, created_at) VALUES (?,?,?,?,?,?,?,?,?,NULL,?,1,?)',
+        ).bind(
+          id,
+          org,
+          storeId,
+          input.name,
+          input.kind,
+          input.placeNote,
+          input.deviceLabel,
+          pinHash,
+          input.autoLockSeconds,
+          flag(input.isActive),
+          nowIso,
+        ),
+        c.env.DB.prepare(
+          'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
+            "VALUES (?,?,?,?,?,?,'terminal.created','terminals',?,NULL,?,?,?)",
+        ).bind(
+          crypto.randomUUID(),
+          org,
+          storeId,
+          actor.actorType,
+          actor.actorId,
+          actor.terminalId,
+          id,
+          JSON.stringify({ name: input.name, kind: input.kind, hasPin: pinHash !== null }),
+          correlationId,
+          nowIso,
+        ),
+      ])
+      return c.json(
+        Terminal.parse({
+          id,
+          storeId,
+          name: input.name,
+          kind: input.kind,
+          placeNote: input.placeNote,
+          deviceLabel: input.deviceLabel,
+          autoLockSeconds: input.autoLockSeconds,
+          isActive: input.isActive,
+          hasPin: pinHash !== null,
+          lastSeenAt: null,
+          isOnline: false,
+          version: 1,
+          createdAt: nowIso,
+        }),
+      )
+    },
+  )
+
+  .patch(
+    '/api/staff/terminals/:terminalId',
+    requireStorePermission('terminal.manage'),
+    requirePersonalMode(),
+    zValidator('json', TerminalPatch),
+    async (c) => {
+      const { org, sub } = c.get('auth')
+      const terminalId = c.req.param('terminalId')
+      const input = c.req.valid('json')
+      const current = await c.env.DB.prepare(
+        'SELECT id, store_id AS storeId, name, kind, place_note AS placeNote, device_label AS deviceLabel, pin_hash AS pinHash, auto_lock_seconds AS autoLockSeconds, last_seen_at AS lastSeenAt, is_active AS isActive, version, created_at AS createdAt FROM terminals WHERE organization_id = ? AND id = ?',
+      )
+        .bind(org, terminalId)
+        .first<{
+          id: string
+          storeId: string
+          name: string
+          kind: 'shared' | 'personal'
+          placeNote: string | null
+          deviceLabel: string | null
+          pinHash: string | null
+          autoLockSeconds: number
+          lastSeenAt: string | null
+          isActive: string
+          version: number
+          createdAt: string
+        }>()
+      if (current === null) return c.json({ error: 'not_found' }, 404)
+      if (
+        !(await permittedStores(drizzle(c.env.DB), org, sub, 'terminal.manage')).includes(
+          current.storeId,
+        )
+      ) {
+        return c.json({ error: 'forbidden' }, 403)
+      }
+      if (input.pin !== undefined && isWeakPin(input.pin)) {
+        return c.json({ error: 'weak_pin' }, 400)
+      }
+      const nextPinHash =
+        input.pin === undefined
+          ? current.pinHash
+          : await hashStretched(
+              await stretchPin(
+                input.pin,
+                org,
+                terminalId,
+                c.env.TEST_NOW === undefined ? undefined : 1,
+              ),
+              c.env.AUTH_PEPPER,
+            )
+      const next = {
+        name: input.name ?? current.name,
+        kind: input.kind ?? current.kind,
+        placeNote: input.placeNote ?? current.placeNote ?? '',
+        deviceLabel: input.deviceLabel ?? current.deviceLabel ?? '',
+        autoLockSeconds: input.autoLockSeconds ?? current.autoLockSeconds,
+        isActive: input.isActive ?? current.isActive === '1',
+        hasPin: nextPinHash !== null,
+      }
+      const nowIso = new Date(c.env.TEST_NOW ?? Date.now()).toISOString()
+      const guard =
+        'EXISTS (SELECT 1 FROM terminals WHERE organization_id = ? AND id = ? AND version = ?)'
+      const actor = await operationActor(c, current.storeId, sub)
+      const update = c.env.DB.prepare(
+        'UPDATE terminals SET name = ?, kind = ?, place_note = ?, device_label = ?, pin_hash = ?, auto_lock_seconds = ?, is_active = ?, version = version + 1 WHERE organization_id = ? AND id = ? AND version = ?',
+      ).bind(
+        next.name,
+        next.kind,
+        next.placeNote,
+        next.deviceLabel,
+        nextPinHash,
+        next.autoLockSeconds,
+        flag(next.isActive),
+        org,
+        terminalId,
+        input.version,
+      )
+      const writes: Statement[] = [
+        c.env.DB.prepare(
+          'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
+            `SELECT ?, ?, ?, ?, ?, ?, 'terminal.updated', 'terminals', ?, ?, ?, ?, ? WHERE ${guard}`,
+        ).bind(
+          crypto.randomUUID(),
+          org,
+          current.storeId,
+          actor.actorType,
+          actor.actorId,
+          actor.terminalId,
+          terminalId,
+          JSON.stringify({
+            name: current.name,
+            kind: current.kind,
+            placeNote: current.placeNote ?? '',
+            deviceLabel: current.deviceLabel ?? '',
+            autoLockSeconds: current.autoLockSeconds,
+            isActive: current.isActive === '1',
+            hasPin: current.pinHash !== null,
+          }),
+          JSON.stringify(next),
+          crypto.randomUUID(),
+          nowIso,
+          org,
+          terminalId,
+          input.version,
+        ),
+      ]
+      if (!next.isActive) {
+        writes.push(
+          c.env.DB.prepare(
+            'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
+              "SELECT s.id, s.organization_id, s.store_id, ?, ?, ?, 'terminal.session.ended', 'terminals', s.terminal_id, NULL, json_object('reason','terminal_inactivated','sessionId',s.id), ?, ? FROM terminal_sessions s " +
+              'WHERE s.organization_id = ? AND s.terminal_id = ? AND s.revoked_at IS NULL ' +
+              `AND ${guard}`,
+          ).bind(
+            actor.actorType,
+            actor.actorId,
+            actor.terminalId,
+            crypto.randomUUID(),
+            nowIso,
+            org,
+            terminalId,
+            org,
+            terminalId,
+            input.version,
+          ),
+          c.env.DB.prepare(
+            'UPDATE terminal_sessions SET revoked_at = ? WHERE organization_id = ? AND terminal_id = ? AND revoked_at IS NULL ' +
+              `AND ${guard}`,
+          ).bind(nowIso, org, terminalId, org, terminalId, input.version),
+        )
+      }
+      writes.push(update)
+      const result = await c.env.DB.batch(writes)
+      if ((result.at(-1)?.meta.changes ?? 0) === 0) {
+        return c.json({ error: 'version_conflict', current: current.version }, 409)
+      }
+      return c.json(
+        Terminal.parse({
+          id: terminalId,
+          storeId: current.storeId,
+          ...next,
+          lastSeenAt: current.lastSeenAt,
+          isOnline: isOnline(current.lastSeenAt, new Date(c.env.TEST_NOW ?? Date.now())),
+          version: input.version + 1,
+          createdAt: current.createdAt,
+        }),
+      )
+    },
+  )
+
+  .delete('/api/staff/terminals/:terminalId/sessions/:sessionId', async (c) => {
+    const { org } = c.get('auth')
+    const nowIso = new Date(c.env.TEST_NOW ?? Date.now()).toISOString()
+    const terminalId = c.req.param('terminalId')
+    const sessionId = c.req.param('sessionId')
+    const session = await authenticatedTerminalSession(c, { terminalId, sessionId })
+    const actorType =
+      session.authorization === 'personal' && session.staffId !== null ? 'staff' : 'terminal'
+    const actorId = actorType === 'staff' ? session.staffId : terminalId
+    const guard =
+      'organization_id = ? AND terminal_id = ? AND id = ? AND credential_hash = ? AND revoked_at IS NULL'
+    const result = await c.env.DB.batch([
+      c.env.DB.prepare(
+        'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
+          `SELECT ?,?,?,?,?,?, 'terminal.session.ended','terminals',?,NULL,?,?,? WHERE EXISTS (SELECT 1 FROM terminal_sessions WHERE ${guard})`,
+      ).bind(
+        crypto.randomUUID(),
+        org,
+        session.storeId,
+        actorType,
+        actorId,
+        terminalId,
+        terminalId,
+        JSON.stringify({ sessionId, reason: 'ended' }),
+        crypto.randomUUID(),
+        nowIso,
+        org,
+        terminalId,
+        sessionId,
+        session.credentialHash,
+      ),
+      c.env.DB.prepare(`UPDATE terminal_sessions SET revoked_at = ? WHERE ${guard}`).bind(
+        nowIso,
+        org,
+        terminalId,
+        sessionId,
+        session.credentialHash,
+      ),
+    ])
+    if ((result[1]?.meta.changes ?? 0) === 0) return terminalSessionInvalid(c)
+    return c.json({ id: sessionId, deleted: true })
+  })
+
+  .post('/api/staff/terminals/:terminalId/elevate', zValidator('json', ReauthInput), async (c) => {
+    const { org } = c.get('auth')
+    const terminalId = c.req.param('terminalId')
+    const input = c.req.valid('json')
+    const now = new Date(c.env.TEST_NOW ?? Date.now())
+    const nowIso = now.toISOString()
+    const authenticated = await authenticatedTerminalSession(c, { terminalId })
+    if (authenticated.mode !== 'shared' || authenticated.authorization !== 'shared') {
+      return c.json({ error: 'personal_mode_required' }, 403)
+    }
+    const terminal = await c.env.DB.prepare(
+      'SELECT auto_lock_seconds AS autoLockSeconds FROM terminals WHERE organization_id = ? AND store_id = ? AND id = ?',
+    )
+      .bind(org, authenticated.storeId, terminalId)
+      .first<{ autoLockSeconds: number }>()
+    if (terminal === null) return terminalSessionInvalid(c)
+    const current = { ...authenticated, autoLockSeconds: terminal.autoLockSeconds }
+    const member = await c.env.DB.prepare(
+      "SELECT pin_hash AS pinHash FROM staff WHERE organization_id = ? AND store_id = ? AND id = ? AND is_active = '1'",
+    )
+      .bind(org, current.storeId, input.staffId)
+      .first<{ pinHash: string | null }>()
+    if (member === null) return c.json({ error: 'not_found' }, 404)
+    const failureKey = pinFailureKey(org, terminalId, input.staffId)
+    const failure = parsePinFailure(await c.env.SHORT_LIVED.get(failureKey))
+    const previous =
+      failure !== null && now.getTime() - Date.parse(failure.failedAt) <= 30_000
+        ? failure.attempts
+        : 0
+    if (failure !== null && previous >= 3 && isPinLocked(new Date(failure.failedAt), now)) {
+      const elapsedSeconds = Math.floor((now.getTime() - Date.parse(failure.failedAt)) / 1000)
+      return c.json(
+        {
+          error: 'pin_locked',
+          retryAfterSeconds: Math.max(1, 30 - elapsedSeconds),
+          remainingAttempts: 0,
+        },
+        429,
+      )
+    }
+    const stretched = await stretchPin(
+      input.pin,
+      org,
+      input.staffId,
+      c.env.TEST_NOW === undefined ? undefined : 1,
+    )
+    if (
+      member.pinHash === null ||
+      !(await verifyStretched(stretched, c.env.AUTH_PEPPER, member.pinHash))
+    ) {
+      const state = nextFailureState(previous)
+      await c.env.SHORT_LIVED.put(
+        failureKey,
+        JSON.stringify({ attempts: state.attempts, failedAt: nowIso }),
+        { expirationTtl: 60 },
+      )
+      await c.env.DB.prepare(
+        "INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) VALUES (?,?,?,'terminal',?,?,'terminal.pin.failed','terminals',?,NULL,?,?,?)",
+      )
+        .bind(
+          crypto.randomUUID(),
+          org,
+          current.storeId,
+          terminalId,
+          terminalId,
+          terminalId,
+          JSON.stringify({ staffId: input.staffId, remainingAttempts: state.remainingAttempts }),
+          crypto.randomUUID(),
+          nowIso,
+        )
+        .run()
+      return state.locked
+        ? c.json({ error: 'pin_locked', retryAfterSeconds: 30, remainingAttempts: 0 }, 429)
+        : c.json({ error: 'pin_invalid', remainingAttempts: state.remainingAttempts }, 401)
+    }
+    await c.env.SHORT_LIVED.delete(failureKey)
+    const sessionId = crypto.randomUUID()
+    const expiresAt = expiresAtFrom(now, current.autoLockSeconds)
+    const credential = await sessionCredential()
+    const guard =
+      "organization_id = ? AND terminal_id = ? AND id = ? AND credential_hash = ? AND mode = 'shared' AND revoked_at IS NULL AND expires_at > ?"
+    const result = await c.env.DB.batch([
+      c.env.DB.prepare(
+        'INSERT INTO terminal_sessions (id, organization_id, store_id, terminal_id, staff_id, mode, credential_hash, started_at, expires_at, revoked_at, created_at) ' +
+          `SELECT ?,?,?,?,?,'personal',?,?,?,NULL,? WHERE EXISTS (SELECT 1 FROM terminal_sessions WHERE ${guard})`,
+      ).bind(
+        sessionId,
+        org,
+        current.storeId,
+        terminalId,
+        input.staffId,
+        credential.hash,
+        nowIso,
+        expiresAt,
+        nowIso,
+        org,
+        terminalId,
+        current.id,
+        current.credentialHash,
+        nowIso,
+      ),
+      c.env.DB.prepare(
+        'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
+          `SELECT ?,?,?, 'staff',?,?, 'terminal.mode.elevated','terminals',?,NULL,?,?,? WHERE EXISTS (SELECT 1 FROM terminal_sessions WHERE ${guard})`,
+      ).bind(
+        crypto.randomUUID(),
+        org,
+        current.storeId,
+        input.staffId,
+        terminalId,
+        terminalId,
+        JSON.stringify({ reason: input.reason }),
+        crypto.randomUUID(),
+        nowIso,
+        org,
+        terminalId,
+        current.id,
+        current.credentialHash,
+        nowIso,
+      ),
+      c.env.DB.prepare(`UPDATE terminal_sessions SET revoked_at = ? WHERE ${guard}`).bind(
+        nowIso,
+        org,
+        terminalId,
+        current.id,
+        current.credentialHash,
+        nowIso,
+      ),
+    ])
+    if ((result[2]?.meta.changes ?? 0) === 0) return terminalSessionInvalid(c)
+    return c.json(
+      TerminalSession.parse({
+        id: sessionId,
+        terminalId,
+        staffId: input.staffId,
+        mode: 'personal',
+        startedAt: nowIso,
+        expiresAt,
+        sessionToken: credential.token,
+      }),
     )
   })
 
@@ -4057,6 +5021,54 @@ const routes = app
       const member = await oneStaffMember(db, org, storeId, staffId)
       if (!member) return c.json({ error: 'not_found' }, 404)
       return c.json(StaffMember.parse(member))
+    },
+  )
+
+  .put(
+    '/api/staff/stores/:storeId/staff/:staffId/pin',
+    requireStorePermission('settings.manage'),
+    requirePersonalMode('スタッフの暗証番号の再設定'),
+    zValidator('json', StaffPinInput),
+    async (c) => {
+      const { org } = c.get('auth')
+      const storeId = c.req.param('storeId')
+      const staffId = c.req.param('staffId')
+      const input = c.req.valid('json')
+      const member = await c.env.DB.prepare(
+        'SELECT id FROM staff WHERE organization_id = ? AND store_id = ? AND id = ?',
+      )
+        .bind(org, storeId, staffId)
+        .first()
+      if (member === null) return c.json({ error: 'not_found' }, 404)
+      if (isWeakPin(input.pin)) return c.json({ error: 'weak_pin' }, 400)
+
+      const nowIso = new Date(c.env.TEST_NOW ?? Date.now()).toISOString()
+      const pinHash = await hashStretched(
+        await stretchPin(input.pin, org, staffId, c.env.TEST_NOW === undefined ? undefined : 1),
+        c.env.AUTH_PEPPER,
+      )
+      const actor = await operationActor(c, storeId, c.get('auth').sub)
+      await c.env.DB.batch([
+        c.env.DB.prepare(
+          'UPDATE staff SET pin_hash = ?, pin_updated_at = ?, updated_at = ? WHERE organization_id = ? AND store_id = ? AND id = ?',
+        ).bind(pinHash, nowIso, nowIso, org, storeId, staffId),
+        c.env.DB.prepare(
+          "INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) VALUES (?,?,?,?,?,?,?,'staff',?,NULL,?,?,?)",
+        ).bind(
+          crypto.randomUUID(),
+          org,
+          storeId,
+          actor.actorType,
+          actor.actorId,
+          actor.terminalId,
+          'staff.pin.updated',
+          staffId,
+          JSON.stringify({ pinUpdatedAt: nowIso }),
+          crypto.randomUUID(),
+          nowIso,
+        ),
+      ])
+      return c.json(PinSetResult.parse({ staffId, updatedAt: nowIso }))
     },
   )
 
@@ -5129,6 +6141,7 @@ const routes = app
         Math.max(now.getTime(), Date.parse(reservation.updatedAt) + 1),
       ).toISOString()
       const actorId = await actorStaffId(db, org, reservation.storeId, sub)
+      const actor = await operationActor(c, reservation.storeId, actorId)
       const statements = buildChangeBatch({
         db: c.env.DB,
         organizationId: org,
@@ -5169,7 +6182,9 @@ const routes = app
           { kind: 'staff', targetId: staffMember?.id ?? null },
           ...units.map((unit) => ({ kind: 'equipment' as const, targetId: unit.id })),
         ],
-        actorId,
+        actorId: actor.actorId,
+        actorType: actor.actorType,
+        terminalId: actor.terminalId,
         correlationId: crypto.randomUUID(),
         // 監査は追記専用。平文のお名前・お電話番号を入れない（`07-nfr.md` §6.6）。
         audit: {
@@ -5285,6 +6300,7 @@ const routes = app
       const now = new Date()
       const nowIso = now.toISOString()
       const actorId = await actorStaffId(db, org, found.storeId, sub)
+      const actor = await operationActor(c, found.storeId, actorId)
       const walkin = await c.env.DB.prepare(
         'SELECT id FROM walk_ins WHERE organization_id = ? AND reservation_id = ?',
       )
@@ -5315,7 +6331,9 @@ const routes = app
           version: input.version,
           reason: input.reason,
           now,
-          actorId,
+          actorId: actor.actorId,
+          actorType: actor.actorType,
+          terminalId: actor.terminalId,
           correlationId: crypto.randomUUID(),
           audit: { before: { status: found.status } },
         }),
@@ -5356,8 +6374,9 @@ const routes = app
 
     const rows = await c.env.DB.prepare(
       'SELECT a.action, a.before_json AS beforeJson, a.after_json AS afterJson, ' +
-        'a.occurred_at AS occurredAt, s.display_name AS actorName FROM audit_events a ' +
+        'a.occurred_at AS occurredAt, COALESCE(s.display_name, t.name) AS actorName FROM audit_events a ' +
         'LEFT JOIN staff s ON s.organization_id = a.organization_id AND s.id = a.actor_id ' +
+        'LEFT JOIN terminals t ON t.organization_id = a.organization_id AND t.id = a.actor_id ' +
         'WHERE a.organization_id = ? AND a.target_id = ? ORDER BY a.occurred_at, a.id',
     )
       .bind(org, reservationId)
@@ -5591,6 +6610,7 @@ const routes = app
     const reservationId = crypto.randomUUID()
     const correlationId = crypto.randomUUID()
     const actorId = await actorStaffId(db, org, input.storeId, sub)
+    const actor = await operationActor(c, input.storeId, actorId)
     // 予期しない失敗（D1 の一時障害など）でも `in_progress` を残さない。残すと同じ
     // `Idempotency-Key` の再送が 24 時間ずっと 409 `idempotency_conflict` になり、
     // 伺った内容を持ったままの端末が確定できなくなる（`04-api.md` §6.2 の④）。
@@ -5632,7 +6652,7 @@ const routes = app
         version: FIRST_VERSION,
         createdAt: now.toISOString(),
         updatedAt: now.toISOString(),
-        createdBy: actorId,
+        createdBy: actor.actorType === 'staff' ? actor.actorId : null,
         cancelledAt: null,
         cancelReason: null,
       })
@@ -5659,7 +6679,9 @@ const routes = app
           slotRules,
           noteCustomer: input.noteCustomer,
           noteInternal: input.noteInternal,
-          actorId,
+          actorId: actor.actorId,
+          actorType: actor.actorType,
+          terminalId: actor.terminalId,
           correlationId,
           receptionSessionId,
           idempotency: idempotencyKey === null ? null : { key: idempotencyKey, response: detail },
@@ -5733,18 +6755,27 @@ const routes = app
     const startedAt = new Date().toISOString()
     const id = crypto.randomUUID()
     const actorId = await actorStaffId(db, org, storeId, sub)
+    const actor = await operationActor(c, storeId, actorId)
     await c.env.DB.prepare(
-      'INSERT INTO reception_sessions (id, organization_id, store_id, reservation_id, terminal_id, actor_id, started_at, ended_at, outcome, draft_json, created_at) VALUES (?,?,?,NULL,NULL,?,?,NULL,NULL,NULL,?)',
+      'INSERT INTO reception_sessions (id, organization_id, store_id, reservation_id, terminal_id, actor_id, started_at, ended_at, outcome, draft_json, created_at) VALUES (?,?,?,NULL,?,?,?,NULL,NULL,NULL,?)',
     )
-      .bind(id, org, storeId, actorId, startedAt, startedAt)
+      .bind(
+        id,
+        org,
+        storeId,
+        actor.terminalId,
+        actor.actorType === 'staff' ? actor.actorId : null,
+        startedAt,
+        startedAt,
+      )
       .run()
     return c.json(
       ReceptionSession.parse({
         id,
         storeId,
         reservationId: null,
-        terminalId: null,
-        actorId,
+        terminalId: actor.terminalId,
+        actorId: actor.actorType === 'staff' ? actor.actorId : null,
         startedAt,
         endedAt: null,
         outcome: null,
@@ -6156,7 +7187,7 @@ const routes = app
         // ④ 監査は追記専用。**平文のお名前・お電話番号を入れない**（`07-nfr.md` §6.6）。
         c.env.DB.prepare(
           'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
-            `SELECT ?, ?, ?, 'staff', ?, NULL, 'customer.merged', 'customer', ?, NULL, ?, ?, ? WHERE ${guard.clause}`,
+            `SELECT ?, ?, ?, 'staff', ?, NULL, 'customer.merged', 'customers', ?, NULL, ?, ?, ? WHERE ${guard.clause}`,
         ).bind(
           crypto.randomUUID(),
           org,
@@ -6639,6 +7670,7 @@ const routes = app
     const endsAt = new Date(Date.parse(startsAt) + durationMinutes * MS_PER_MINUTE).toISOString()
 
     const actorId = await actorStaffId(db, org, input.storeId, sub)
+    const actor = await operationActor(c, input.storeId, actorId)
     const correlationId = crypto.randomUUID()
 
     for (let attempt = 1; attempt <= WALKIN_TICKET_ATTEMPTS; attempt += 1) {
@@ -6690,7 +7722,9 @@ const routes = app
               },
               noteCustomer: '',
               noteInternal: '',
-              actorId,
+              actorId: actor.actorId,
+              actorType: actor.actorType,
+              terminalId: actor.terminalId,
               correlationId,
               receptionSessionId: null,
               idempotency:
@@ -6721,7 +7755,9 @@ const routes = app
             auditRow(c.env.DB, {
               organizationId: org,
               storeId: input.storeId,
-              actorId,
+              actorId: actor.actorId,
+              actorType: actor.actorType,
+              terminalId: actor.terminalId,
               action: 'walkin.created',
               targetType: 'walk_ins',
               targetId: walkinId,
@@ -7092,6 +8128,7 @@ const routes = app
     const eventId = crypto.randomUUID()
     const correlationId = crypto.randomUUID()
     const actorId = await actorStaffId(db, org, input.storeId, sub)
+    const actor = await operationActor(c, input.storeId, actorId)
     const eventApplied: Guard = {
       condition: 'EXISTS (SELECT 1 FROM visit_events WHERE organization_id = ? AND id = ?)',
       params: [org, eventId],
@@ -7168,7 +8205,9 @@ const routes = app
       auditRow(c.env.DB, {
         organizationId: org,
         storeId: input.storeId,
-        actorId,
+        actorId: actor.actorId,
+        actorType: actor.actorType,
+        terminalId: actor.terminalId,
         action: 'visit.stage.changed',
         targetType: input.subjectType === 'walkin' ? 'walk_ins' : 'reservations',
         targetId: input.subjectId,
@@ -7529,16 +8568,23 @@ const routes = app
         ? { results: [] as AuditChangeRecord[] }
         : await c.env.DB.prepare(
             'SELECT a.action, a.before_json AS beforeJson, a.after_json AS afterJson, a.occurred_at AS occurredAt, ' +
-              's.display_name AS actorName FROM audit_events a ' +
+              'COALESCE(s.display_name, t.name) AS actorName FROM audit_events a ' +
               'LEFT JOIN staff s ON s.organization_id = a.organization_id AND s.id = a.actor_id ' +
+              'LEFT JOIN terminals t ON t.organization_id = a.organization_id AND t.id = a.actor_id ' +
               `WHERE a.organization_id = ? AND a.target_id IN (${targets.map(() => '?').join(',')}) ` +
               'ORDER BY a.occurred_at, a.id',
           )
             .bind(org, ...targets)
             .all<AuditChangeRecord>()
 
-    const receivedBy =
-      session?.actorId === undefined || session?.actorId === null
+    const receivedBy = session?.terminalId
+      ? ((
+          await db
+            .select({ name: terminals.name })
+            .from(terminals)
+            .where(and(eq(terminals.organizationId, org), eq(terminals.id, session.terminalId)))
+        )[0]?.name ?? null)
+      : session?.actorId === undefined || session?.actorId === null
         ? null
         : ((
             await db
@@ -7583,6 +8629,11 @@ const routes = app
     const { org, sub } = c.get('auth')
     const input = c.req.valid('json')
     if (!(await findStore(db, org, input.storeId))) return c.json({ error: 'not_found' }, 404)
+    const actor = await operationActor(
+      c,
+      input.storeId,
+      await actorStaffId(db, org, input.storeId, sub),
+    )
     // 受付は org **と店舗**で引く。店舗を落とすと、他店の受付に録音をぶら下げられる。
     const session = (
       await db
@@ -7606,7 +8657,6 @@ const routes = app
     if (existing !== null) return c.json(Recording.parse(toRecording(existing)))
 
     const id = crypto.randomUUID()
-    const actorId = await actorStaffId(db, org, input.storeId, sub)
     const correlationId = crypto.randomUUID()
     // 鍵は `id` から決まる。端末から受けないので、再送が保管庫に二重に置かれない。
     const r2Key = r2KeyFor({
@@ -7660,8 +8710,9 @@ const routes = app
           recordingAudit(c.env.DB, {
             organizationId: org,
             storeId: input.storeId,
-            actorType: 'staff',
-            actorId,
+            actorType: actor.actorType,
+            actorId: actor.actorId,
+            terminalId: actor.terminalId,
             action: 'recording.started',
             recordingId: id,
             after: { code, receptionSessionId: input.receptionSessionId },
@@ -7696,6 +8747,7 @@ const routes = app
     const recordingId = c.req.param('recordingId')
     const row = await findRecording(c.env.DB, org, recordingId)
     if (row === null) return c.json({ error: 'not_found' }, 404)
+    await validateTerminalPairWhenPresent(c, row.storeId)
     if (row.state === 'deleted') return c.json({ error: 'invalid_transition' }, 409)
 
     // `audio/mp4; codecs=...` で届くので、媒体の型だけを見る。
@@ -7799,6 +8851,12 @@ const routes = app
         correlationId: crypto.randomUUID(),
         occurredAt: nowIso,
       }),
+      ...resolveUploadFailedAlertStatements(c.env.DB, {
+        organizationId: org,
+        storeId: row.storeId,
+        recordingId,
+        resolvedAt: nowIso,
+      }),
     ])
 
     return c.json(
@@ -7830,6 +8888,7 @@ const routes = app
       const recordingId = c.req.param('recordingId')
       const row = await findRecording(c.env.DB, org, recordingId)
       if (row === null) return c.json({ error: 'not_found' }, 404)
+      await validateTerminalPairWhenPresent(c, row.storeId)
       const input = c.req.valid('json')
       const moved = nextState(row.state as RecordingState, input.state)
       if (!moved.ok) return c.json({ error: 'invalid_transition' }, 409)
@@ -7893,6 +8952,16 @@ const routes = app
           }),
         )
       }
+      if (moved.state === 'stored') {
+        statements.push(
+          ...resolveUploadFailedAlertStatements(c.env.DB, {
+            organizationId: org,
+            storeId: row.storeId,
+            recordingId,
+            resolvedAt: nowIso,
+          }),
+        )
+      }
       await c.env.DB.batch(statements)
 
       if (moved.state === 'failed' && attempts >= RECORDING_ALERT_ATTEMPTS) {
@@ -7936,6 +9005,7 @@ const routes = app
     const recordingId = c.req.param('recordingId')
     const row = await findRecording(c.env.DB, org, recordingId)
     if (row === null) return c.json({ error: 'not_found' }, 404)
+    await validateTerminalPairWhenPresent(c, row.storeId)
     // **戻せるのは `failed` からだけ**にする。`nextState()` は `recording → uploading` も
     // 許すが、それは端末が録り終えて送り始める辺であって「もう一度送る」ではない。
     // まだ録っている録音をここで `uploading` にすると、送り終える前にサーバが送信中を名乗る。
@@ -8034,6 +9104,7 @@ const routes = app
       const { org, sub } = c.get('auth')
       const row = await readableRecording(c, 'recording.read')
       if (row === null || row.state !== 'stored') return c.json({ error: 'not_found' }, 404)
+      await validateTerminalPairWhenPresent(c, row.storeId)
 
       const now = new Date()
       const nowIso = now.toISOString()
@@ -8129,15 +9200,39 @@ const routes = app
   .post(
     '/api/staff/recordings/:recordingId/hold',
     requireStorePermission('recording.manage'),
+    requirePersonalMode('録音の保全', { whenTerminalIsActive: true }),
     zValidator('json', RecordingHoldInput),
     async (c) => {
       const db = drizzle(c.env.DB)
       const { org, sub } = c.get('auth')
       const row = await readableRecording(c, 'recording.manage')
       if (row === null) return c.json({ error: 'not_found' }, 404)
+      const now = new Date(c.env.TEST_NOW ?? Date.now())
+      if (
+        c.req.header('x-terminal-id') === undefined &&
+        c.req.header('x-terminal-session') === undefined
+      ) {
+        const active = await c.env.DB.prepare(
+          "SELECT 1 FROM terminal_sessions WHERE organization_id = ? AND store_id = ? AND revoked_at IS NULL AND ((mode = 'shared' AND expires_at > ?) OR (mode = 'personal' AND started_at > ?)) LIMIT 1",
+        )
+          .bind(
+            org,
+            row.storeId,
+            now.toISOString(),
+            new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString(),
+          )
+          .first()
+        if (active !== null) {
+          return c.json({ error: 'personal_mode_required', subject: '録音の保全' }, 403)
+        }
+      }
       const input = c.req.valid('json')
-      const nowIso = new Date().toISOString()
-      const actorId = await actorStaffId(db, org, row.storeId, sub)
+      const nowIso = now.toISOString()
+      const actor = await operationActor(
+        c,
+        row.storeId,
+        await actorStaffId(db, org, row.storeId, sub),
+      )
 
       await c.env.DB.batch([
         c.env.DB.prepare(
@@ -8146,8 +9241,9 @@ const routes = app
         recordingAudit(c.env.DB, {
           organizationId: org,
           storeId: row.storeId,
-          actorType: 'staff',
-          actorId,
+          actorType: actor.actorType,
+          actorId: actor.actorId,
+          terminalId: actor.terminalId,
           action: input.legalHold ? 'recording.hold_set' : 'recording.hold_cleared',
           recordingId: row.id,
           after: { legalHold: input.legalHold, reason: input.reason },
@@ -8174,6 +9270,7 @@ const routes = app
       const { org, sub } = c.get('auth')
       const row = await readableRecording(c, 'recording.manage')
       if (row === null) return c.json({ error: 'not_found' }, 404)
+      await validateTerminalPairWhenPresent(c, row.storeId)
       // まだ保管庫に入っていない録音には消す実体が無い。期限も決まっていないので、
       // `recording_retained`（いつから消せるか）を返しようがない。
       if (row.retainUntil === null) return c.json({ error: 'invalid_transition' }, 409)
@@ -8219,24 +9316,124 @@ const routes = app
     },
   )
 
-  /**
-   * お知らせの一覧（ALERTS ／ サイドバーの「お知らせ 3」）。
-   *
-   * P7 が返すのは `{ items, nextCursor, total }` までで、4 分類のタブと `counts` は
-   * P10（`013-terminals-and-audit`）が足す。既定を `audience='store'` にするのは、
-   * 運用のアラート（notifier の失敗など）を業務のお知らせに混ぜると
-   * 「対応が必要」の意味が薄まるからである。
-   */
+  .get(
+    '/api/staff/audit',
+    requireStorePermission('audit.read', { storeIdFrom: 'query' }),
+    zValidator('query', AuditSearchQuery),
+    async (c) => {
+      const { org, sub } = c.get('auth')
+      const query = c.req.valid('query')
+      const allowed = await permittedStores(drizzle(c.env.DB), org, sub, 'audit.read')
+      if (query.storeId !== undefined && !allowed.includes(query.storeId)) {
+        return c.json({ error: 'forbidden' }, 403)
+      }
+      if (allowed.length === 0) return c.json({ error: 'forbidden' }, 403)
+      const clauses = [
+        'organization_id = ?',
+        query.storeId === undefined
+          ? `store_id IN (${allowed.map(() => '?').join(',')})`
+          : 'store_id = ?',
+      ]
+      const params: unknown[] = [org, ...(query.storeId === undefined ? allowed : [query.storeId])]
+      if (query.from !== undefined) {
+        clauses.push('occurred_at >= ?')
+        params.push(`${query.from}T00:00:00.000+09:00`)
+      }
+      if (query.to !== undefined) {
+        const after = new Date(`${query.to}T00:00:00.000+09:00`)
+        after.setUTCDate(after.getUTCDate() + 1)
+        clauses.push('occurred_at < ?')
+        params.push(after.toISOString())
+      }
+      if (query.actorId !== undefined) {
+        clauses.push('actor_id = ?')
+        params.push(query.actorId)
+      }
+      if (query.action !== undefined) {
+        clauses.push('action = ?')
+        params.push(query.action)
+      }
+      const cursor = decodePageCursor(query.cursor)
+      if (cursor !== null) {
+        clauses.push('(occurred_at < ? OR (occurred_at = ? AND id < ?))')
+        params.push(cursor.at, cursor.at, cursor.id)
+      }
+      const where = clauses.join(' AND ')
+      const result = await c.env.DB.batch([
+        c.env.DB.prepare(`SELECT COUNT(*) AS total FROM audit_events WHERE ${where}`).bind(
+          ...params,
+        ),
+        c.env.DB.prepare(
+          'SELECT id, occurred_at AS occurredAt, actor_type AS actorType, actor_id AS actorId, terminal_id AS terminalId, action, target_type AS targetType, target_id AS targetId, correlation_id AS correlationId, before_json AS beforeJson, after_json AS afterJson ' +
+            `FROM audit_events WHERE ${where} ORDER BY occurred_at DESC, id DESC LIMIT ?`,
+        ).bind(...params, query.limit + 1),
+      ])
+      const raw = (result[1]?.results ?? []) as Array<{
+        id: string
+        occurredAt: string
+        beforeJson: string | null
+        afterJson: string | null
+      }>
+      const found = raw.map((row) => ({
+        ...row,
+        beforeJson: row.beforeJson === null ? null : JSON.parse(row.beforeJson),
+        afterJson: row.afterJson === null ? null : JSON.parse(row.afterJson),
+      }))
+      const items = found.slice(0, query.limit)
+      const last = items.at(-1)
+      return c.json(
+        AuditEventList.parse({
+          items: AuditEvent.array().parse(items),
+          nextCursor:
+            found.length > query.limit && last !== undefined
+              ? encodePageCursor(last.occurredAt, last.id)
+              : null,
+          total: ((result[0]?.results ?? []) as { total: number }[])[0]?.total ?? 0,
+        }),
+      )
+    },
+  )
+
   .get('/api/staff/alerts', zValidator('query', AlertListQuery), async (c) => {
-    const org = c.get('auth').org
+    const { org, sub } = c.get('auth')
     const query = c.req.valid('query')
-    const clauses = ['audience = ?']
-    const params: unknown[] = [org, query.audience]
-    if (query.storeId !== undefined) {
-      clauses.push('store_id = ?')
-      params.push(query.storeId)
+    const assigned = await c.env.DB.prepare(
+      'SELECT store_id AS storeId FROM store_memberships WHERE organization_id = ? AND user_id = ?',
+    )
+      .bind(org, sub)
+      .all<{ storeId: string }>()
+    const storeIds = assigned.results.map((row) => row.storeId)
+    if (query.storeId !== undefined && !storeIds.includes(query.storeId)) {
+      return c.json({ error: 'forbidden' }, 403)
     }
-    const where = `organization_id = ? AND ${clauses.join(' AND ')}`
+    const selected = query.storeId === undefined ? storeIds : [query.storeId]
+    if (selected.length === 0) {
+      return c.json(
+        AlertList.parse({
+          items: [],
+          nextCursor: null,
+          total: 0,
+          counts: { all: 0, action: 0, info: 0, resolved: 0 },
+        }),
+      )
+    }
+    const base = `organization_id = ? AND audience = 'store' AND store_id IN (${selected.map(() => '?').join(',')})`
+    const params: unknown[] = [org, ...selected]
+    const now = new Date(c.env.TEST_NOW ?? Date.now())
+    const today = toJstDateString(now)
+    const dayStart = new Date(`${today}T00:00:00.000+09:00`).toISOString()
+    const dayEndDate = new Date(`${today}T00:00:00.000+09:00`)
+    dayEndDate.setUTCDate(dayEndDate.getUTCDate() + 1)
+    const dayEnd = dayEndDate.toISOString()
+    const kinds = {
+      all: 'resolved_at IS NULL',
+      action: "resolved_at IS NULL AND severity = 'action'",
+      info: "resolved_at IS NULL AND severity = 'info'",
+      resolved: 'resolved_at >= ? AND resolved_at < ?',
+    } as const
+    const kindClause = kinds[query.kind]
+    const kindParams = query.kind === 'resolved' ? [dayStart, dayEnd] : []
+    const where = `${base} AND ${kindClause}`
 
     // 新しい順。続きは `(occurred_at, id)` を降順にたどる。
     const cursor = decodePageCursor(query.cursor)
@@ -8244,13 +9441,28 @@ const routes = app
     const pageParams = cursor === null ? [] : [cursor.at, cursor.at, cursor.id]
 
     const read = await c.env.DB.batch([
-      c.env.DB.prepare(`SELECT COUNT(*) AS total FROM alerts WHERE ${where}`).bind(...params),
+      c.env.DB.prepare(`SELECT COUNT(*) AS total FROM alerts WHERE ${where}`).bind(
+        ...params,
+        ...kindParams,
+      ),
       c.env.DB.prepare(
         'SELECT id, code, severity, audience, title, body, target_type AS targetType, ' +
           'target_id AS targetId, occurred_at AS occurredAt, read_at AS readAt, ' +
           `resolved_at AS resolvedAt, resolved_by AS resolvedBy FROM alerts WHERE ${where}${page} ` +
           'ORDER BY occurred_at DESC, id DESC LIMIT ?',
-      ).bind(...params, ...pageParams, query.limit + 1),
+      ).bind(...params, ...kindParams, ...pageParams, query.limit + 1),
+      c.env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM alerts WHERE ${base} AND resolved_at IS NULL`,
+      ).bind(...params),
+      c.env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM alerts WHERE ${base} AND resolved_at IS NULL AND severity = 'action'`,
+      ).bind(...params),
+      c.env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM alerts WHERE ${base} AND resolved_at IS NULL AND severity = 'info'`,
+      ).bind(...params),
+      c.env.DB.prepare(
+        `SELECT COUNT(*) AS n FROM alerts WHERE ${base} AND resolved_at >= ? AND resolved_at < ?`,
+      ).bind(...params, dayStart, dayEnd),
     ])
 
     const found = (read[1]?.results ?? []) as { id: string; occurredAt: string }[]
@@ -8264,8 +9476,82 @@ const routes = app
             ? encodePageCursor(last.occurredAt, last.id)
             : null,
         total: ((read[0]?.results ?? []) as { total: number }[])[0]?.total ?? 0,
+        counts: {
+          all: ((read[2]?.results ?? []) as { n: number }[])[0]?.n ?? 0,
+          action: ((read[3]?.results ?? []) as { n: number }[])[0]?.n ?? 0,
+          info: ((read[4]?.results ?? []) as { n: number }[])[0]?.n ?? 0,
+          resolved: ((read[5]?.results ?? []) as { n: number }[])[0]?.n ?? 0,
+        },
       }),
     )
+  })
+
+  .patch('/api/staff/alerts/:alertId', zValidator('json', AlertPatch), async (c) => {
+    const { org, sub } = c.get('auth')
+    const alertId = c.req.param('alertId')
+    const input = c.req.valid('json')
+    const row = await c.env.DB.prepare(
+      "SELECT store_id AS storeId, read_at AS readAt, resolved_at AS resolvedAt FROM alerts WHERE organization_id = ? AND id = ? AND audience = 'store'",
+    )
+      .bind(org, alertId)
+      .first<{ storeId: string; readAt: string | null; resolvedAt: string | null }>()
+    if (row === null) return c.json({ error: 'not_found' }, 404)
+    const assigned = await c.env.DB.prepare(
+      'SELECT 1 FROM store_memberships WHERE organization_id = ? AND store_id = ? AND user_id = ?',
+    )
+      .bind(org, row.storeId, sub)
+      .first()
+    if (assigned === null) return c.json({ error: 'forbidden' }, 403)
+    const nowIso = new Date(c.env.TEST_NOW ?? Date.now()).toISOString()
+    const readAt = input.readAt === undefined ? row.readAt : input.readAt
+    const actor = await operationActor(c, row.storeId, sub)
+    await c.env.DB.batch([
+      c.env.DB.prepare(
+        "UPDATE alerts SET read_at = ? WHERE organization_id = ? AND id = ? AND audience = 'store'",
+      ).bind(readAt, org, alertId),
+      c.env.DB.prepare(
+        'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      ).bind(
+        crypto.randomUUID(),
+        org,
+        row.storeId,
+        actor.actorType,
+        actor.actorId,
+        actor.terminalId,
+        'alert.read',
+        'alerts',
+        alertId,
+        JSON.stringify({ readAt: row.readAt, resolvedAt: row.resolvedAt }),
+        JSON.stringify({ readAt, resolvedAt: row.resolvedAt }),
+        crypto.randomUUID(),
+        nowIso,
+      ),
+    ])
+    const updated = await c.env.DB.prepare(
+      "SELECT id, code, severity, audience, title, body, target_type AS targetType, target_id AS targetId, occurred_at AS occurredAt, read_at AS readAt, resolved_at AS resolvedAt, resolved_by AS resolvedBy FROM alerts WHERE organization_id = ? AND id = ? AND audience = 'store'",
+    )
+      .bind(org, alertId)
+      .first()
+    return c.json(Alert.parse(updated))
+  })
+
+  .post('/api/staff/alerts/read-all', zValidator('json', AlertReadAllInput), async (c) => {
+    const { org, sub } = c.get('auth')
+    const input = c.req.valid('json')
+    if (input.storeId === undefined) return c.json({ error: 'store_required' }, 400)
+    const assigned = await c.env.DB.prepare(
+      'SELECT 1 FROM store_memberships WHERE organization_id = ? AND store_id = ? AND user_id = ?',
+    )
+      .bind(org, input.storeId, sub)
+      .first()
+    if (assigned === null) return c.json({ error: 'forbidden' }, 403)
+    const nowIso = new Date(c.env.TEST_NOW ?? Date.now()).toISOString()
+    const updated = await c.env.DB.prepare(
+      "UPDATE alerts SET read_at = ? WHERE organization_id = ? AND store_id = ? AND audience = 'store' AND read_at IS NULL",
+    )
+      .bind(nowIso, org, input.storeId)
+      .run()
+    return c.json(AlertReadAllResult.parse({ updated: updated.meta.changes }))
   })
 
   /**
@@ -8392,7 +9678,7 @@ const routes = app
         c.env.DB.prepare(
           'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, ' +
             'action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
-            `SELECT ?, ?, ?, 'staff', ?, NULL, 'settings.web_booking.updated', 'store', ?, NULL, ?, ?, ? WHERE ${guard}`,
+            `SELECT ?, ?, ?, 'staff', ?, NULL, 'settings.web_booking.updated', 'stores', ?, NULL, ?, ?, ? WHERE ${guard}`,
         ).bind(
           crypto.randomUUID(),
           org,
@@ -8788,6 +10074,7 @@ const routes = app
             noteCustomer: '',
             noteInternal: '',
             actorId: null,
+            actorType: 'customer',
             correlationId,
             receptionSessionId: null,
             idempotency: null,
@@ -9154,6 +10441,7 @@ const routes = app
         })),
         assignments: [{ kind: 'staff', targetId: null }],
         actorId: null,
+        actorType: 'customer',
         correlationId: crypto.randomUUID(),
         // 監査は追記専用。平文のお名前・お電話番号を入れない（`07-nfr.md` §6.6）。
         audit: {
@@ -9252,6 +10540,7 @@ const routes = app
         reason: 'customer',
         now,
         actorId: null,
+        actorType: 'customer',
         correlationId: crypto.randomUUID(),
         audit: { before: { startsAt: row.startsAt, source: 'web' } },
       })
@@ -9423,6 +10712,16 @@ type ScheduledMaintenanceTasks = {
   }) => Promise<{ nextStoreCursor: string | null; failedStores: string[]; dropped: number }>
   writeRollupCursor: (cursor: string | null) => Promise<unknown>
   purgeRecordings: (now: Date) => Promise<unknown>
+  purgeAuditAndSessions?: (now: Date) => Promise<unknown>
+}
+
+export async function purgeAuditAndSessions(db: D1Database, now: Date): Promise<void> {
+  const auditBefore = new Date(now.getTime() - 400 * 24 * 60 * 60 * 1000).toISOString()
+  const sessionsBefore = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString()
+  await db.batch([
+    db.prepare('DELETE FROM audit_events WHERE occurred_at < ?').bind(auditBefore),
+    db.prepare('DELETE FROM terminal_sessions WHERE expires_at < ?').bind(sessionsBefore),
+  ])
 }
 
 export async function runScheduledMaintenance(
@@ -9464,6 +10763,11 @@ export async function runScheduledMaintenance(
   } catch (err) {
     console.error('scheduled recordings purge failed', err)
   }
+  try {
+    await tasks.purgeAuditAndSessions?.(now)
+  } catch (err) {
+    console.error('scheduled audit and terminal session purge failed', err)
+  }
 }
 
 async function scheduled(controller: ScheduledController, env: Bindings): Promise<void> {
@@ -9481,6 +10785,7 @@ async function scheduled(controller: ScheduledController, env: Bindings): Promis
             expirationTtl: 172_800,
           }),
     purgeRecordings: (clock) => purgeRecordings(env, { now: clock, limit: 100 }),
+    purgeAuditAndSessions: (clock) => purgeAuditAndSessions(env.DB, clock),
   })
 }
 

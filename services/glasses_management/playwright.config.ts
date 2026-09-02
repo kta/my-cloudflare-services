@@ -1,6 +1,7 @@
 import { defineConfig, devices } from '@playwright/test'
 
-const E2E_TODAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tokyo' }).format(new Date())
+// 明示された暦日を優先し、指定が無いローカル実行もseedと同じ固定JST日にする。
+const E2E_TODAY = process.env.E2E_TODAY ?? '2026-08-27'
 
 function withDisposableState(command: string): string {
   return `E2E_STATE_PATH="$(mktemp -d)" && export E2E_STATE_PATH && trap 'rm -rf "$E2E_STATE_PATH"' EXIT && ${command}`

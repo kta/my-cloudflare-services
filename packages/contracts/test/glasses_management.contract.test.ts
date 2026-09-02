@@ -4,6 +4,8 @@ import {
   AlertCode,
   AlertList,
   AlertListQuery,
+  AlertPatch,
+  AlertReadAllResult,
   AnalyticsDailyDimension,
   AnalyticsDailyMetric,
   AnalyticsDailyRow,
@@ -14,6 +16,11 @@ import {
   AnalyticsRollupResult,
   AnalyticsSeries,
   AnalyticsTargets,
+  AuditActorType,
+  AuditEvent,
+  AuditEventList,
+  AuditSearchQuery,
+  AuditTargetType,
   AvailabilityLane,
   AvailabilityQuery,
   AvailabilityReason,
@@ -72,6 +79,10 @@ import {
   PhoneInput,
   PhoneNormalized,
   PhoneSuffix,
+  Pin,
+  PinInvalidError,
+  PinLockedError,
+  PinSetResult,
   Prescription,
   PublicAvailabilityQuery,
   PublicAvailabilityResponse,
@@ -84,6 +95,7 @@ import {
   PurposeOrderInput,
   PurposeRequirement,
   PurposeRequirementsInput,
+  ReauthInput,
   ReceptionHistoryDetail,
   ReceptionHistoryEntry,
   ReceptionHistoryList,
@@ -131,6 +143,7 @@ import {
   StaffMember,
   StaffMemberInput,
   StaffMemberPatch,
+  StaffPinInput,
   StaffReservationCreate,
   StaffShift,
   StaffShiftQuery,
@@ -141,6 +154,13 @@ import {
   StoreMembership,
   StorePatch,
   StorePermission,
+  Terminal,
+  TerminalInput,
+  TerminalKind,
+  TerminalListQuery,
+  TerminalPatch,
+  TerminalSession,
+  TerminalSessionStart,
   Version,
   VisitBoard,
   VisitBoardCell,
@@ -3403,15 +3423,14 @@ describe('Alert', () => {
 })
 
 describe('AlertListQuery', () => {
-  it('defaults audience to store', () => {
+  it('does not expose an audience selector to store clients', () => {
     // 運用のアラートを業務のお知らせに混ぜない。
-    expect(AlertListQuery.parse({}).audience).toBe('store')
-    expect(AlertListQuery.parse({ audience: 'ops' }).audience).toBe('ops')
     expect(AlertListQuery.parse({}).limit).toBe(50)
     expect(AlertListQuery.parse({ storeId: UUID }).storeId).toBe(UUID)
-    expect(() => AlertListQuery.parse({ audience: 'everyone' })).toThrow()
-    // `kind` の 4 分類と `counts` は P10（`013-terminals-and-audit`）。
-    expect(() => AlertListQuery.parse({ kind: 'action' })).toThrow()
+    expect(() => AlertListQuery.parse({ audience: 'store' })).toThrow()
+    expect(() => AlertListQuery.parse({ audience: 'ops' })).toThrow()
+    expect(AlertListQuery.parse({ kind: 'action' }).kind).toBe('action')
+    expect(() => AlertListQuery.parse({ kind: 'unknown' })).toThrow()
   })
 })
 
@@ -4077,5 +4096,134 @@ describe('Analytics contracts', () => {
         summary: [{ label: '中央値', value: 520, unit: '秒', isOverTarget: true }],
       }),
     ).toThrow()
+  })
+})
+
+describe('P10 terminal and audit contracts', () => {
+  const terminal = {
+    id: UUID,
+    storeId: UUID,
+    name: '銀座店 レジ横iPad',
+    kind: 'shared',
+    placeNote: 'レジの右側',
+    deviceLabel: 'EYEX-iPad-07',
+    autoLockSeconds: 120,
+    isActive: true,
+    hasPin: true,
+    lastSeenAt: '2026-08-27T02:08:00.000Z',
+    isOnline: true,
+    version: 1,
+    createdAt: '2026-08-27T02:08:00.000Z',
+  }
+
+  it('Pin accepts 4..6 digits and rejects other lengths or non-digits', () => {
+    expect(Pin.parse('2580')).toBe('2580')
+    expect(Pin.parse('258025')).toBe('258025')
+    for (const value of ['123', '1234567', '12a4']) expect(() => Pin.parse(value)).toThrow()
+  })
+
+  it('Terminal is strict, bounds its name and never carries pinHash', () => {
+    expect(Terminal.parse(terminal)).toMatchObject({ hasPin: true, isOnline: true })
+    expect(() => Terminal.parse({ ...terminal, name: '' })).toThrow()
+    expect(() => Terminal.parse({ ...terminal, name: 'a'.repeat(61) })).toThrow()
+    expect(() => Terminal.parse({ ...terminal, pinHash: 'secret' })).toThrow()
+    expect(TerminalKind.options).toEqual(['shared', 'personal'])
+  })
+
+  it('Terminal query/input/patch defaults and optimistic locking are explicit', () => {
+    expect(TerminalListQuery.parse({ storeId: UUID })).toEqual({
+      storeId: UUID,
+      includeInactive: false,
+    })
+    expect(TerminalInput.parse({ name: '受付', kind: 'shared' })).toMatchObject({
+      autoLockSeconds: 120,
+      isActive: true,
+    })
+    expect(() => TerminalInput.parse({ name: '受付', kind: 'shared', stale: true })).toThrow()
+    expect(() => TerminalPatch.parse({ name: '受付' })).toThrow()
+    expect(TerminalPatch.parse({ version: 1 })).toEqual({ version: 1 })
+  })
+
+  it('TerminalSessionStart is discriminated by mode', () => {
+    expect(
+      TerminalSessionStart.parse({ mode: 'personal', staffId: UUID, pin: '2580' }).staffId,
+    ).toBe(UUID)
+    expect(TerminalSessionStart.parse({ mode: 'shared', pin: '2580' }).mode).toBe('shared')
+    expect(() => TerminalSessionStart.parse({ mode: 'personal', pin: '2580' })).toThrow()
+    expect(() =>
+      TerminalSessionStart.parse({ mode: 'shared', staffId: UUID, pin: '2580' }),
+    ).toThrow()
+  })
+
+  it('TerminalSession and reauthentication expose no PIN material', () => {
+    const session = TerminalSession.parse({
+      id: UUID,
+      terminalId: UUID,
+      staffId: null,
+      mode: 'shared',
+      startedAt: '2026-08-27T02:08:00.000Z',
+      expiresAt: '2026-08-27T02:10:00.000Z',
+      sessionToken: 'a'.repeat(64),
+    })
+    expect(session.staffId).toBeNull()
+    expect(session.sessionToken).toHaveLength(64)
+    expect(() => TerminalSession.parse({ ...session, sessionToken: undefined })).toThrow()
+    expect(() => TerminalSession.parse({ ...session, sessionToken: 'a'.repeat(63) })).toThrow()
+    expect(() => TerminalSession.parse({ ...session, sessionToken: 'a'.repeat(129) })).toThrow()
+    expect(() =>
+      TerminalSession.parse({ ...session, sessionToken: `${'a'.repeat(63)}+` }),
+    ).toThrow()
+    expect(() => TerminalSession.parse({ ...session, credentialHash: 'secret' })).toThrow()
+    expect(JSON.stringify(session)).not.toContain('2580')
+    expect(ReauthInput.parse({ staffId: UUID, pin: '2580', reason: 'settings' }).reason).toBe(
+      'settings',
+    )
+    expect(() => ReauthInput.parse({ staffId: UUID, pin: '2580', reason: 'anything' })).toThrow()
+  })
+
+  it('PIN errors keep retry information bounded', () => {
+    expect(PinInvalidError.parse({ error: 'pin_invalid', remainingAttempts: 2 })).toBeTruthy()
+    expect(() => PinInvalidError.parse({ error: 'pin_invalid', remainingAttempts: 3 })).toThrow()
+    expect(
+      PinLockedError.parse({ error: 'pin_locked', retryAfterSeconds: 30, remainingAttempts: 0 }),
+    ).toBeTruthy()
+  })
+
+  it('audit actors and target types fail closed and use plural table names', () => {
+    expect(AuditActorType.options).toEqual(['staff', 'terminal', 'system', 'customer'])
+    expect(AuditTargetType.parse('reservations')).toBe('reservations')
+    expect(() => AuditTargetType.parse('reservation')).toThrow()
+  })
+
+  it('AuditEvent and list/search contracts preserve nullable actors and cursor shape', () => {
+    const event = {
+      id: UUID,
+      occurredAt: '2026-08-27T02:08:00.000Z',
+      actorType: 'system',
+      actorId: null,
+      terminalId: null,
+      action: 'organization.synced',
+      targetType: 'organizations',
+      targetId: UUID,
+      correlationId: null,
+      beforeJson: null,
+      afterJson: { active: true },
+    }
+    expect(AuditEvent.parse(event).actorId).toBeNull()
+    expect(AuditSearchQuery.parse({}).limit).toBe(50)
+    expect(() => AuditSearchQuery.parse({ limit: 201 })).toThrow()
+    expect(AuditEventList.parse({ items: [event], nextCursor: null, total: 1 }).total).toBe(1)
+  })
+
+  it('alert mutations are read-state-only and staff PIN updates never echo the PIN', () => {
+    expect(AlertPatch.parse({ readAt: null })).toEqual({ readAt: null })
+    expect(() => AlertPatch.parse({ resolved: true })).toThrow()
+    expect(() => AlertPatch.parse({ readAt: null, resolved: true })).toThrow()
+    expect(() => AlertPatch.parse({})).toThrow()
+    expect(AlertReadAllResult.parse({ updated: 0 }).updated).toBe(0)
+    expect(StaffPinInput.parse({ pin: '2580' }).pin).toBe('2580')
+    expect(
+      PinSetResult.parse({ staffId: UUID, updatedAt: '2026-08-27T02:08:00.000Z' }),
+    ).not.toHaveProperty('pin')
   })
 })

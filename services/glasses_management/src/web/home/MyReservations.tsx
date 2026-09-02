@@ -4,6 +4,7 @@ import { focusRing } from '@app/ui'
 import { useEffect, useState } from 'react'
 import { client } from '../client'
 import { jstClock } from '../ledger/metrics'
+import { maskCustomerIdentity } from '../shell/mask'
 
 /*
  * 個人端末のトップに出る「本日わたしが担当するご予約」
@@ -17,8 +18,8 @@ import { jstClock } from '../ledger/metrics'
  *
  * 「わたし」は JWT の `sub` と `staff.adminUserId` を突き合わせて引き当てる
  * （設定の名乗りと同じ道。`SettingsScreen` の `subjectFromToken` と同じ読み方）。
- * **誰にも当たらない端末（＝共有端末）ではこの面を出さない** —— HOME は共有端末の
- * トップで、モックにもこの一覧は無い。担当のご予約が 0 件の日だけ、事実 1 行と
+ * **誰にも当たらない端末（＝共有端末）では通常この面を出さない**。自動で伏せた背景に
+ * 限り、モックどおり時刻・件数・伏せ字の氏名を出す。担当のご予約が 0 件の日だけ、事実 1 行と
  * なぜ空かの 1 行と「店全体の台帳を見る」を出して行き止まりにしない（AC-LEDGER-21）。
  *
  * この面が描かないもの: お客様のお名前と来店回数（`customers` は `007-customer-records`）。
@@ -35,6 +36,17 @@ const STATUS_LABELS: Record<ReservationStatus, string> = {
 
 export type MyReservationsProps = {
   storeId: string
+  /** 共有端末を伏せた背景では、時刻と件数だけ読める本日の一覧を出す。 */
+  showShared?: boolean
+  /** 共有セッションでは、JWTの担当者情報にかかわらずロック専用一覧を作る。 */
+  sharedTerminal?: boolean
+  /** ロック時にだけ使う、PIIを伏せた表示専用snapshot。 */
+  onSharedSnapshot?: (snapshot: {
+    customerName: string
+    customerPhone: string
+    time: string
+    count: number
+  }) => void
   /** 1 行を押したとき。台帳のその帯の詳細を開く。 */
   onOpen: (reservationId: string) => void
   /** 「店全体の台帳を見る」を押したとき。 */
@@ -56,10 +68,19 @@ function subjectFromToken(): string | null {
   }
 }
 
-export function MyReservations({ storeId, onOpen, onOpenLedger }: MyReservationsProps) {
+export function MyReservations({
+  storeId,
+  showShared = false,
+  sharedTerminal = false,
+  onSharedSnapshot,
+  onOpen,
+  onOpenLedger,
+}: MyReservationsProps) {
   // null は「まだ分からない」。わたしが誰か分からない端末では最後まで null のままで、
   // この面は 1 つも要素を描かない。
   const [rows, setRows] = useState<LedgerEntry[] | null>(null)
+  const [shared, setShared] = useState(false)
+  const [total, setTotal] = useState(0)
 
   useEffect(() => {
     let live = true
@@ -78,7 +99,32 @@ export function MyReservations({ storeId, onOpen, onOpenLedger }: MyReservations
       const me = subject === null ? undefined : staff.find((row) => row.adminUserId === subject)
       const view = await ledgerRes.json()
       if (!live) return
-      if (me === undefined) return
+      if (sharedTerminal || me === undefined) {
+        const unique = new Map<string, LedgerEntry>()
+        for (const lane of view.lanes) {
+          if (lane.kind !== 'staff' && lane.kind !== 'unassigned') continue
+          for (const entry of lane.entries) unique.set(entry.reservationId, entry)
+        }
+        const upcoming = [...unique.values()]
+          .sort((a, b) => a.startsAt.localeCompare(b.startsAt))
+          .slice(0, 4)
+        const first = upcoming[0]
+        const masked = maskCustomerIdentity({
+          name: first?.customerName ?? '',
+          // 台帳応答は電話番号を返さない。固定の非実在値を伏せ字へ変換し、raw PIIを持ち込まない。
+          phone: '09000000000',
+        })
+        onSharedSnapshot?.({
+          customerName: masked.name,
+          customerPhone: masked.phone,
+          time: first ? jstClock(first.startsAt) : '—',
+          count: view.counts.all,
+        })
+        setShared(true)
+        setTotal(view.counts.all)
+        setRows(upcoming)
+        return
+      }
       const lane = view.lanes.find((row) => row.id === me.id)
       // 応答の行は開始の早い順に並んでいる（`buildLedgerView`）。並べ直さない。
       setRows(lane?.entries ?? [])
@@ -87,17 +133,17 @@ export function MyReservations({ storeId, onOpen, onOpenLedger }: MyReservations
     return () => {
       live = false
     }
-  }, [storeId])
+  }, [onSharedSnapshot, sharedTerminal, storeId])
 
   // わたしが誰か分からない端末（共有端末）には出さない。
-  if (rows === null) return null
+  if (rows === null || (shared && !showShared)) return null
 
   return (
-    <section aria-label="本日わたしが担当するご予約" className="w-100">
+    <section aria-label={shared ? '本日のご予約' : '本日わたしが担当するご予約'} className="w-100">
       <h2 className="text-lead font-bold text-ink">
-        本日わたしが担当するご予約
-        {rows.length > 0 && (
-          <span className="ml-3 font-normal text-ink-muted">{`${rows.length}件`}</span>
+        {shared ? '本日のご予約' : '本日わたしが担当するご予約'}
+        {(shared || rows.length > 0) && (
+          <span className="ml-3 font-normal text-ink-muted">{`${shared ? total : rows.length}件`}</span>
         )}
       </h2>
       {rows.length === 0 ? (
@@ -130,7 +176,7 @@ export function MyReservations({ storeId, onOpen, onOpenLedger }: MyReservations
                     {jstClock(entry.startsAt)}
                   </span>
                   <span className="ml-auto rounded-full border border-line-strong px-2.5 py-0.5 text-note font-semibold text-ink-muted">
-                    {STATUS_LABELS[entry.status]}
+                    {shared ? '●●●● 様' : STATUS_LABELS[entry.status]}
                   </span>
                 </span>
                 <span className="text-body text-ink-muted">{entry.purposeLabel}</span>

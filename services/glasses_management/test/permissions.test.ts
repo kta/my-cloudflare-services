@@ -192,6 +192,8 @@ beforeAll(async () => {
   await syncMembership(ORG, fixture.storeId, subOf(ORG, ':manager'), [
     'settings.read',
     'settings.manage',
+    'terminal.manage',
+    'audit.read',
   ])
   await syncMembership(ORG, fixture.storeId, subOf(ORG, ':clerk'), ['settings.read'])
   await syncMembership(ORG, fixture.storeId, subOf(ORG, ':analyst'), ['analytics.read'])
@@ -725,15 +727,72 @@ const RECORDING_MANAGE = {
   'wrong-secret': 401,
 } as const
 
-/** お知らせは店舗の誰でも読める（ALERTS は受付の面で、店長に絞らない）。 */
+/** お知らせは担当店舗の誰でも読める（ALERTS は店長に絞らない）。 */
 const ALERT_READ = {
+  none: 401,
+  staff: 403,
+  admin: 403,
+  manager: 200,
+  clerk: 200,
+  analyst: 200,
+  reader: 200,
+  keeper: 200,
+  expired: 401,
+  'wrong-secret': 401,
+} as const
+
+/** 端末の業務開始面は組織内の全スタッフが読める。 */
+const TERMINAL_READ = {
   none: 401,
   staff: 200,
   admin: 200,
   manager: 200,
   clerk: 200,
+  analyst: 200,
   reader: 200,
   keeper: 200,
+  expired: 401,
+  'wrong-secret': 401,
+} as const
+
+/** 組織内に無い端末・セッション・お知らせは、認証後も存在を漏らさず 404。 */
+const AUTHENTICATED_MISSING = {
+  none: 401,
+  staff: 404,
+  admin: 404,
+  manager: 404,
+  clerk: 404,
+  analyst: 404,
+  reader: 404,
+  keeper: 404,
+  expired: 401,
+  'wrong-secret': 401,
+} as const
+
+/** 端末設定は権限に加えて個人モードも必要。この表では個人セッションを渡さない。 */
+const TERMINAL_MANAGE_WITHOUT_PERSONAL = {
+  none: 401,
+  staff: 403,
+  admin: 403,
+  manager: 403,
+  clerk: 403,
+  analyst: 403,
+  reader: 403,
+  keeper: 403,
+  expired: 401,
+  'wrong-secret': 401,
+} as const
+
+/** 監査は audit.read を持つ店長だけが読める。 */
+const AUDIT_READ = {
+  none: 401,
+  staff: 403,
+  admin: 403,
+  manager: 200,
+  clerk: 403,
+  analyst: 403,
+  reader: 403,
+  keeper: 403,
   expired: 401,
   'wrong-secret': 401,
 } as const
@@ -1401,6 +1460,83 @@ const TABLE: Row[] = [
     method: 'GET',
     path: () => `/api/staff/alerts?storeId=${fixture.storeId}`,
     expected: ALERT_READ,
+  },
+  {
+    name: 'お知らせのまとめて既読は担当店舗の誰でも行える',
+    method: 'POST',
+    path: () => '/api/staff/alerts/read-all',
+    body: () => ({ storeId: fixture.storeId }),
+    expected: ALERT_READ,
+  },
+  {
+    name: '存在しないお知らせの更新は認証後に404になる',
+    method: 'PATCH',
+    path: () => `/api/staff/alerts/${crypto.randomUUID()}`,
+    body: () => ({ readAt: NOW }),
+    expected: AUTHENTICATED_MISSING,
+  },
+
+  /* --- 端末・監査（P10）--- */
+  {
+    name: '端末一覧は組織内のスタッフが読める',
+    method: 'GET',
+    path: () => `/api/staff/terminals?storeId=${fixture.storeId}`,
+    expected: TERMINAL_READ,
+  },
+  {
+    name: '存在しない端末では業務セッションを始められない',
+    method: 'POST',
+    path: () => `/api/staff/terminals/${crypto.randomUUID()}/sessions`,
+    body: () => ({ mode: 'shared', pin: '2580' }),
+    expected: AUTHENTICATED_MISSING,
+  },
+  {
+    name: '端末登録は端末管理権限だけでなく個人モードも要求する',
+    method: 'POST',
+    path: () => `/api/staff/terminals?storeId=${fixture.storeId}`,
+    body: () => ({
+      name: '検査用iPad',
+      kind: 'shared',
+      placeNote: 'レジ横',
+      deviceLabel: 'TEST-iPad',
+      pin: '2580',
+      autoLockSeconds: 120,
+      isActive: true,
+    }),
+    expected: TERMINAL_MANAGE_WITHOUT_PERSONAL,
+  },
+  {
+    name: '端末変更は端末管理権限だけでなく個人モードも要求する',
+    method: 'PATCH',
+    path: () => `/api/staff/terminals/${crypto.randomUUID()}`,
+    body: () => ({ name: '変更後', version: 1 }),
+    expected: TERMINAL_MANAGE_WITHOUT_PERSONAL,
+  },
+  {
+    name: '資格情報の無い端末セッションは終了できない',
+    method: 'DELETE',
+    path: () => `/api/staff/terminals/${crypto.randomUUID()}/sessions/${crypto.randomUUID()}`,
+    expected: TERMINAL_MANAGE_WITHOUT_PERSONAL,
+  },
+  {
+    name: '資格情報の無い端末は個人モードへ昇格できない',
+    method: 'POST',
+    path: () => `/api/staff/terminals/${crypto.randomUUID()}/elevate`,
+    body: () => ({ staffId: fixture.staffId, pin: '2580', reason: 'recording' }),
+    expected: TERMINAL_MANAGE_WITHOUT_PERSONAL,
+  },
+  {
+    name: 'スタッフPIN再設定は設定権限だけでなく個人モードも要求する',
+    method: 'PUT',
+    path: () => `/api/staff/stores/${fixture.storeId}/staff/${fixture.staffId}/pin`,
+    body: () => ({ pin: '2580' }),
+    expected: TERMINAL_MANAGE_WITHOUT_PERSONAL,
+  },
+  {
+    name: '監査は audit.read を持つ店長だけが読める',
+    method: 'GET',
+    path: () => `/api/staff/audit?storeId=${fixture.storeId}`,
+    expected: AUDIT_READ,
   },
 
   /* --- 分析（P9）--- */

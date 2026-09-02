@@ -69,6 +69,7 @@ export type ChangeDiffProps = {
   onReselect?: (choice: ConflictChoice) => void
   onBack: () => void
   onConfirm: () => void
+  isOffline?: boolean
 }
 
 export function ChangeDiff({
@@ -81,6 +82,7 @@ export function ChangeDiff({
   onReselect,
   onBack,
   onConfirm,
+  isOffline = false,
 }: ChangeDiffProps) {
   /*
    * 確定を押した瞬間に枠が埋まっていたときは、差分をしまって BOOK-CONFLICT と同じ形に
@@ -220,10 +222,14 @@ export function ChangeDiff({
             <button
               type="button"
               aria-label={
-                nothingChanged ? '変更を確定する　変えるところがまだありません' : undefined
+                isOffline
+                  ? '変更を確定する　通信が戻ると押せます'
+                  : nothingChanged
+                    ? '変更を確定する　変えるところがまだありません'
+                    : undefined
               }
               aria-busy={confirming ? true : undefined}
-              disabled={nothingChanged}
+              disabled={nothingChanged || isOffline}
               onClick={() => {
                 // 確定している間の 2 度目・3 度目の押下は届かせない。
                 if (confirming) return

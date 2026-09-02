@@ -1,5 +1,6 @@
 import type { APIRequestContext, Locator, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
+import { completeSeededTerminalStart } from './support/terminal'
 
 /**
  * 電話・店頭からの予約受付（006-booking-flow）の受け入れ基準を、実ブラウザと実 Worker で
@@ -80,6 +81,7 @@ async function startWork(page: Page): Promise<void> {
   await page.goto('/')
   await page.getByLabel('お店のコード').fill(ORG)
   await page.getByRole('button', { name: '業務を始める' }).click()
+  await completeSeededTerminalStart(page)
   await expect(page.locator('header').first()).toContainText('EYEX 銀座店')
 }
 

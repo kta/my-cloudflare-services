@@ -70,6 +70,8 @@ export type VisitBoardProps = {
   onReceiveVisit?: () => void
   /** 記録が届かなかったときの 1 文。届いた操作の結果は盤面そのものが語るので、失敗だけを言う。 */
   notice?: string | null
+  /** 通信断中は盤面を読み続けるが、状態を進める操作はできない。 */
+  isOffline?: boolean
   /**
    * 受け付ける面から戻ってきた行。**開いた要素へフォーカスを返す**ための値で、
    * その行のお客様欄へ焦点を戻す（戻ったあと Tab を最初から押し直さずに済む）。
@@ -88,6 +90,7 @@ export function VisitBoard({
   onMarkNoShow,
   onReceiveVisit,
   notice = null,
+  isOffline = false,
   focusSubjectId = null,
 }: VisitBoardProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -173,6 +176,7 @@ export function VisitBoard({
           <button
             type="button"
             onClick={onReceiveVisit}
+            disabled={isOffline}
             className={cn(
               'min-h-11 rounded-ctl bg-pine px-4.5 text-body font-semibold text-on-pine',
               focusRing,
@@ -198,6 +202,7 @@ export function VisitBoard({
           onLeave={onLeave}
           onLinkCustomer={onLinkCustomer}
           onMarkNoShow={onMarkNoShow}
+          isOffline={isOffline}
         />
       )}
 
@@ -210,6 +215,7 @@ export function VisitBoard({
             <button
               type="button"
               onClick={onReceiveVisit}
+              disabled={isOffline}
               className={cn(
                 'mt-2 min-h-13 rounded-ctl bg-pine px-6 text-lead font-bold text-on-pine',
                 focusRing,
@@ -270,7 +276,7 @@ export function VisitBoard({
                 }}
                 onPressCell={(cell, column) => {
                   setActive({ row: rowIndex, column })
-                  if (cell.state === 'next') onAdvance(row, cell)
+                  if (!isOffline && cell.state === 'next') onAdvance(row, cell)
                 }}
               />
             ))}
@@ -291,12 +297,14 @@ function RowActions({
   onLeave,
   onLinkCustomer,
   onMarkNoShow,
+  isOffline,
 }: {
   row: VisitBoardRow
   onOpenCheckin?: (row: VisitBoardRow) => void
   onLeave?: (row: VisitBoardRow) => void
   onLinkCustomer?: (row: VisitBoardRow) => void
   onMarkNoShow?: (row: VisitBoardRow) => void
+  isOffline: boolean
 }) {
   const received = row.cells.find((cell) => cell.stage === 'received')
   const canCheckin =
@@ -325,6 +333,7 @@ function RowActions({
           key={action.label}
           type="button"
           onClick={action.press}
+          disabled={isOffline}
           className={cn(
             'min-h-11 rounded-ctl border border-line-strong bg-surface px-3.5 text-grid font-semibold text-ink',
             focusRing,

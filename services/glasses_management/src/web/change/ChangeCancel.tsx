@@ -65,6 +65,7 @@ type ChangeCancelProps = {
   onBack: () => void
   onCancel: (reason: CancelReason) => void
   phase?: ChangeCancelPhase
+  isOffline?: boolean
 }
 
 /** 「8月27日（木）」。年をまたぐ知らせは出さないので年を落とす。 */
@@ -84,7 +85,13 @@ function Fact({ term, value, note }: { term: string; value: string; note: string
   )
 }
 
-export function ChangeCancel({ target, onBack, onCancel, phase = 'ready' }: ChangeCancelProps) {
+export function ChangeCancel({
+  target,
+  onBack,
+  onCancel,
+  phase = 'ready',
+  isOffline = false,
+}: ChangeCancelProps) {
   const [reason, setReason] = useState<CancelReason | null>(null)
   const backRef = useRef<HTMLButtonElement>(null)
   const headingId = useId()
@@ -246,11 +253,13 @@ export function ChangeCancel({ target, onBack, onCancel, phase = 'ready' }: Chan
         </p>
         <button
           type="button"
-          disabled={reason === null}
+          disabled={reason === null || isOffline}
           aria-label={
-            reason === null
-              ? 'この予約を取り消す（取り消しの理由を選ぶと押せます）'
-              : 'この予約を取り消す'
+            isOffline
+              ? 'この予約を取り消す（通信が戻ると押せます）'
+              : reason === null
+                ? 'この予約を取り消す（取り消しの理由を選ぶと押せます）'
+                : 'この予約を取り消す'
           }
           onClick={() => {
             if (reason !== null) onCancel(reason)

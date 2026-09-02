@@ -3,6 +3,9 @@ import type { ReactNode } from 'react'
 import { DESTINATIONS, type Destination, HOME_DESTINATION } from './destinations'
 import { Icon } from './icons'
 
+const ALERT_DESTINATION: Destination = { key: 'alerts', label: 'お知らせ', icon: 'alerts' }
+const HEADER_ALERT_DESTINATIONS = new Set(['home', 'ledger', 'customers', 'settings'])
+
 /*
  * 業務画面の骨格。承認済みモック（docs/frontend/mockups/eyex）の実測に合わせる。
  *   上のバー 64px（店名・日付・お知らせだけ）
@@ -31,6 +34,10 @@ export type AppShellProps = {
   barCenter?: ReactNode
   /** 上のバーの右端に足す操作。 */
   barActions?: ReactNode
+  /** 自動ロックなど、器全体を覆うモーダル。 */
+  overlay?: ReactNode
+  /** 共有端末のロック中は、ダイアログ以外をキーボード操作から除外する。 */
+  isLocked?: boolean
   children: ReactNode
 }
 
@@ -45,11 +52,16 @@ export function AppShell({
   terminalNote,
   barCenter,
   barActions,
+  overlay,
+  isLocked = false,
   children,
 }: AppShellProps) {
   return (
-    <div className="flex h-dvh flex-col bg-paper text-ink">
-      <header className="flex h-16 shrink-0 items-center gap-4 bg-pine px-4 text-on-pine">
+    <div className="relative flex h-dvh flex-col bg-paper text-ink">
+      <header
+        inert={isLocked ? true : undefined}
+        className="flex h-16 shrink-0 items-center gap-4 bg-pine px-4 text-on-pine"
+      >
         <button
           type="button"
           onClick={() => onNavigate('home')}
@@ -66,13 +78,29 @@ export function AppShell({
           <p className="truncate text-note opacity-90">{storeSubline}</p>
         </div>
         {barCenter}
-        <div className="ml-auto flex items-center gap-2">{barActions}</div>
+        <div className="ml-auto flex items-center gap-2">
+          {HEADER_ALERT_DESTINATIONS.has(current) && alertCount > 0 && (
+            <button
+              type="button"
+              onClick={() => onNavigate('alerts')}
+              aria-label={`お知らせ ${alertCount}件`}
+              className={`grid min-h-12 place-items-center gap-0 rounded-card px-3 text-lead font-semibold leading-tight ${focusRingOnPine}`}
+            >
+              <span>お知らせ</span>
+              <span className="min-w-5.5 rounded-full bg-danger px-1.5 text-center text-note font-bold leading-tight text-on-danger">
+                {alertCount}
+              </span>
+            </button>
+          )}
+          {barActions}
+        </div>
       </header>
 
       {/* 幅は任意値で書かない。--spacing の刻みで 76px（w-19）/ 216px（w-54）を作る。 */}
       <div className="flex min-h-0 flex-1">
         <nav
           aria-label="画面の切り替え"
+          inert={isLocked ? true : undefined}
           className={cn(
             'flex min-h-0 shrink-0 flex-col gap-1 overflow-hidden border-r border-line bg-surface-2 py-4',
             rail ? 'w-19 items-center px-2.5' : 'w-54 px-3.5',
@@ -131,6 +159,16 @@ export function AppShell({
             </NavGroupLabel>
           ))}
 
+          {current === 'alerts' && (
+            <NavItem
+              destination={ALERT_DESTINATION}
+              rail={rail}
+              current={current}
+              onNavigate={onNavigate}
+              alertCount={alertCount}
+            />
+          )}
+
           {!rail && terminalNote && (
             <p className="mt-auto border-t border-line px-2.5 pt-3.5 text-fine leading-snug text-ink-muted">
               {terminalNote.map((line) => (
@@ -144,6 +182,7 @@ export function AppShell({
 
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">{children}</div>
       </div>
+      {overlay}
     </div>
   )
 }
@@ -165,6 +204,11 @@ function NavItem({
     <button
       type="button"
       onClick={() => onNavigate(destination.key)}
+      aria-label={
+        destination.key === 'alerts' && alertCount > 0
+          ? `お知らせ ${alertCount}件`
+          : destination.label
+      }
       aria-current={current === destination.key ? 'page' : undefined}
       className={cn(
         'flex min-h-11.5 items-center rounded-card font-semibold',
@@ -177,7 +221,7 @@ function NavItem({
       {/* 柱にたたんでも名前は消さない。目に見えなくなるだけで、読み上げと
           キーボードの選択には残る（アイコンだけのボタンに名前が無いのは重大な欠陥）。 */}
       <span className={rail ? 'sr-only' : undefined}>{destination.label}</span>
-      {!rail && destination.key === 'home' && alertCount > 0 && (
+      {!rail && destination.key === 'alerts' && alertCount > 0 && (
         <span className="ml-auto min-w-5.5 rounded-full bg-danger px-1.5 text-center text-note font-bold text-on-danger">
           {alertCount}
         </span>

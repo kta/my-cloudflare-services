@@ -79,6 +79,8 @@ export type LedgerScreenProps = {
    * 通信断の帯が出て「再接続を試す」を押し続ける行き止まりになるので、外へ知らせる。
    */
   onSessionExpired?: () => void
+  /** Shell が検知した通信断。最後に読めた台帳は残し、書込みを止める。 */
+  isOffline?: boolean
 }
 
 export function LedgerScreen({
@@ -91,6 +93,7 @@ export function LedgerScreen({
   onOpenSettings,
   onOpenCheckin,
   onSessionExpired,
+  isOffline: shellOffline = false,
 }: LedgerScreenProps) {
   const [date, setDate] = useState<LocalDate>(() => initialDate ?? toJstDateString(new Date()))
   const [axis, setAxis] = useState<LedgerAxis>('staff')
@@ -262,7 +265,7 @@ export function LedgerScreen({
   // 操作の状態もその日・その並べ方へ戻し、届いていない日を出しているふりをしない。
   // 権限が無い・期限が切れたのに古い台帳を出し続けない。通信断だけが
   // 「読めたものをそのまま残す」。
-  const offline = failed === 'error' && data !== null
+  const offline = shellOffline || (failed === 'error' && data !== null)
   useEffect(() => {
     if (!offline || data === null) return
     setDate(data.date)
@@ -356,7 +359,7 @@ export function LedgerScreen({
         )}
       </div>
 
-      {offline && data !== null && (
+      {offline && !shellOffline && data !== null && (
         <OfflineBanner
           lastServerNow={data.serverNow}
           nextRetryAt={new Date(

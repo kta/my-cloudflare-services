@@ -1,7 +1,7 @@
-import type { StaffMember } from '@app/contracts'
+import type { StaffMember, TerminalSession } from '@app/contracts'
 import { cn, focusRing } from '@app/ui'
 import { type ComponentType, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { client, subjectFromToken } from '../client'
+import { client, domainFetch, subjectFromToken, TERMINAL_ID_KEY } from '../client'
 import { CalendarPanel } from './CalendarPanel'
 import { EquipmentPanel } from './EquipmentPanel'
 import { HoursPanel } from './HoursPanel'
@@ -21,6 +21,7 @@ import {
   type SettingsSectionKey,
   toJstDay,
 } from './sections'
+import { TerminalPanel } from './TerminalPanel'
 import { WebPublishPanel } from './WebPublishPanel'
 
 /*
@@ -48,6 +49,7 @@ const DEFAULT_PANELS: Partial<Record<SettingsSectionKey, ComponentType<SettingsP
   staff: StaffPanel,
   equipment: EquipmentPanel,
   web: WebPublishPanel,
+  terminals: TerminalPanel,
 }
 
 /** 保存の顛末に対する言い方。403 は EX-PERMISSION の面で断るので知らせを出さない。 */
@@ -135,6 +137,24 @@ export function SettingsScreen({ storeId, now, initialSection, panels }: Setting
     }
   }
 
+  async function elevateAndSave(staffId: string, pin: string): Promise<boolean> {
+    const terminalId = sessionStorage.getItem(TERMINAL_ID_KEY)
+    const pending = draft.current
+    if (!terminalId || !pending) return false
+    const response = await domainFetch(`/api/staff/terminals/${terminalId}/elevate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ staffId, pin, reason: 'settings' }),
+    })
+    if (!response.ok) return false
+    const session = (await response.json()) as TerminalSession
+    window.dispatchEvent(new CustomEvent('eyex:terminal-session', { detail: session }))
+    const outcome = await pending.save()
+    setRefused(outcome === 'forbidden' ? [...pending.changes] : null)
+    setNotice(SAVE_NOTICES[outcome])
+    return outcome === 'saved'
+  }
+
   function onDiscard() {
     draft.current?.discard()
     setNotice(null)
@@ -206,7 +226,17 @@ export function SettingsScreen({ storeId, now, initialSection, panels }: Setting
             )}
           </p>
 
-          {refused && <PermissionRefusal target={title} actor={actor} changes={refused} />}
+          {refused && (
+            <PermissionRefusal
+              target={title}
+              actor={actor}
+              changes={refused}
+              staff={staff ?? []}
+              {...(sessionStorage.getItem('eyex.active-terminal-id') === null
+                ? {}
+                : { onElevate: elevateAndSave })}
+            />
+          )}
 
           {Panel ? (
             <Panel

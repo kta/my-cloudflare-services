@@ -25,6 +25,14 @@ import { dynamicE2eShiftDates } from './seed-e2e.mjs'
 import { legacySeedMigrationStatements } from './seed-migration.mjs'
 
 const REMOTE = process.argv.includes('--remote')
+// 端末共有 PIN の pepper は Worker の AUTH_PEPPER と同じ値を使う。local は毎回同じ
+// 開発用値にして `make init` だけで再現可能にし、remote は secret と一致する値を要求する。
+const DEV_PEPPER = 'dev-auth-pepper-change-me'
+const PEPPER = REMOTE ? (process.env.AUTH_PEPPER ?? '') : DEV_PEPPER
+if (REMOTE && !PEPPER) {
+  console.error('❌ --remote には AUTH_PEPPER 環境変数(本番 secret と同値)が必要です。')
+  process.exit(1)
+}
 // e2e は使い捨ての D1（playwright.config.ts の `withDisposableState`）で走るので、
 // そちらへ入れる。開発者の .wrangler/state は E2E_STATE_PATH が無いときだけ使う。
 const PERSIST_TO = process.env.E2E_STATE_PATH
@@ -32,6 +40,36 @@ const NOW = '2026-08-01T00:00:00.000Z'
 const ORG = 'eyex'
 
 const q = (s) => `'${String(s).replace(/'/g, "''")}'`
+
+// packages/shared/src/password.ts の stretchPin / hashStretched と同じ二段階。
+// seed は Node で動くため、TypeScript の Worker module を直接 import せず同じ WebCrypto を使う。
+const enc = new TextEncoder()
+const b64 = (buf) => Buffer.from(new Uint8Array(buf)).toString('base64')
+const PIN_ITERATIONS = 600_000
+const stretchPin = async (pin, organizationId, terminalId) => {
+  const key = await crypto.subtle.importKey('raw', enc.encode(pin), 'PBKDF2', false, ['deriveBits'])
+  const bits = await crypto.subtle.deriveBits(
+    {
+      name: 'PBKDF2',
+      hash: 'SHA-256',
+      salt: enc.encode(`app:pin:${organizationId}:${terminalId}`),
+      iterations: PIN_ITERATIONS,
+    },
+    key,
+    256,
+  )
+  return b64(bits)
+}
+const hashStretched = async (stretched, pepper) => {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    enc.encode(pepper),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  )
+  return `hmac$${b64(await crypto.subtle.sign('HMAC', key, enc.encode(stretched)))}`
+}
 
 const stores = [
   {
@@ -68,6 +106,40 @@ const stores = [
 const uid = (group, n) => `${group}-0000-4000-8000-${String(n).padStart(12, '0')}`
 
 const GINZA = stores[0].id
+
+/* --- 端末（P10） --------------------------------------------------------- *
+ * `2580` はゾロ目でも連番でもない開発用の共有 PIN。平文をSQLへ入れず、端末ごとに
+ * stretchPin → pepper HMAC を行った hash だけを保存する。実運用のPINは設定画面で更新する。
+ */
+const terminals = [
+  {
+    id: uid('c0100000', 0),
+    name: '銀座店 レジ横iPad',
+    kind: 'shared',
+    placeNote: 'レジの右側　固定スタンド',
+    deviceLabel: 'EYEX-iPad-07',
+  },
+  {
+    id: uid('c0100000', 1),
+    name: '銀座店 受付iPad',
+    kind: 'shared',
+    placeNote: '入口の受付台',
+    deviceLabel: 'EYEX-iPad-07',
+  },
+  {
+    id: uid('c0100000', 2),
+    name: '銀座店 検査室iPad',
+    kind: 'shared',
+    placeNote: '検査室 1　測定機の脇',
+    deviceLabel: 'EYEX-iPad-07',
+  },
+]
+const terminalSeedRows = await Promise.all(
+  terminals.map(async (terminal) => ({
+    ...terminal,
+    pinHash: await hashStretched(await stretchPin('2580', ORG, terminal.id), PEPPER),
+  })),
+)
 
 /** 'HH:MM' に分を足す（同じ日の中でしか使わない）。 */
 const shift = (hhmm, minutes) => {
@@ -128,7 +200,7 @@ const blackoutWindows = businessHours
  * 木に出るのは 佐藤・高橋・中村 の 3 名（LEDGER-STAFF の行）、
  * 金に山田がいない（SETTINGS-STAFF「本日はお休み」／当日は 2026-08-28 金）。
  * 休憩 13:00–14:00 は佐藤 美咲だけが持つ（台帳の灰帯は佐藤の行にだけある）。
- * PIN は P10 で扱うので pin_hash は NULL のままにする。 */
+ * 開発用 PIN は共有端末と同じ `2580`。平文は入れず、スタッフIDをsaltにしたhashだけを置く。 */
 const staffMembers = [
   {
     name: '佐藤 美咲',
@@ -201,6 +273,12 @@ const staffMembers = [
     rest: null,
   },
 ]
+const staffSeedRows = await Promise.all(
+  staffMembers.map(async (member, index) => ({
+    ...member,
+    pinHash: await hashStretched(await stretchPin('2580', ORG, uid('c0010000', index)), PEPPER),
+  })),
+)
 
 /* --- 設備と点検（SETTINGS-EQUIPMENT） -------------------------------------- *
  * DB は 1 台 1 行の 7 行。設定画面が「相談カウンター 1・2」を 1 行に見せるのは
@@ -1042,6 +1120,12 @@ const lines = [
     (s) =>
       `INSERT OR IGNORE INTO stores (id, organization_id, name, slug, phone, address, access_note, is_active, created_at) VALUES (${q(s.id)}, ${q(ORG)}, ${q(s.name)}, ${q(s.slug)}, ${q(s.phone)}, ${q(s.address)}, ${q(s.accessNote)}, '1', ${q(NOW)});`,
   ),
+  // 銀座店の共有端末 3 台。端末の状態は last_seen_at と terminal_sessions から導くので、
+  // ここには状態列や平文PINを置かない。
+  ...terminalSeedRows.map(
+    (terminal) =>
+      `INSERT OR IGNORE INTO terminals (id, organization_id, store_id, name, kind, place_note, device_label, pin_hash, auto_lock_seconds, last_seen_at, is_active, version, created_at) VALUES (${q(terminal.id)}, ${q(ORG)}, ${q(GINZA)}, ${q(terminal.name)}, ${q(terminal.kind)}, ${q(terminal.placeNote)}, ${q(terminal.deviceLabel)}, ${q(terminal.pinHash)}, 120, NULL, '1', 1, ${q(NOW)});`,
+  ),
   ...storeInfo.flatMap((info) =>
     Object.entries(info)
       .filter(([column]) => column !== 'id')
@@ -1073,9 +1157,9 @@ const lines = [
   `INSERT OR IGNORE INTO store_calendar_exceptions (id, organization_id, store_id, date, kind, opens_at, closes_at, note, created_at, created_by) VALUES (${q(uid('b0040000', 0))}, ${q(ORG)}, ${q(GINZA)}, '2026-09-30', 'closed', NULL, NULL, '棚卸しのため', ${q(NOW)}, NULL);`,
 
   // スタッフ 7 名。
-  ...staffMembers.map(
+  ...staffSeedRows.map(
     (m, i) =>
-      `INSERT OR IGNORE INTO staff (id, organization_id, store_id, admin_user_id, display_name, kana, job_label, role, max_parallel_reservations, pin_hash, pin_updated_at, is_active, sort_order, created_at, updated_at) VALUES (${q(uid('c0010000', i))}, ${q(ORG)}, ${q(GINZA)}, ${m.adminUserId === null ? 'NULL' : q(m.adminUserId)}, ${q(m.name)}, ${q(m.kana)}, ${m.job === null ? 'NULL' : q(m.job)}, ${q(m.role)}, 1, NULL, NULL, '1', ${i}, ${q(NOW)}, ${q(NOW)});`,
+      `INSERT OR IGNORE INTO staff (id, organization_id, store_id, admin_user_id, display_name, kana, job_label, role, max_parallel_reservations, pin_hash, pin_updated_at, is_active, sort_order, created_at, updated_at) VALUES (${q(uid('c0010000', i))}, ${q(ORG)}, ${q(GINZA)}, ${m.adminUserId === null ? 'NULL' : q(m.adminUserId)}, ${q(m.name)}, ${q(m.kana)}, ${m.job === null ? 'NULL' : q(m.job)}, ${q(m.role)}, 1, ${q(m.pinHash)}, ${q(NOW)}, '1', ${i}, ${q(NOW)}, ${q(NOW)});`,
   ),
 
   // 技能 9 行。store_id は staff.store_id の写し。
@@ -1123,6 +1207,15 @@ const lines = [
     (m, i) =>
       `INSERT OR IGNORE INTO store_memberships (id, organization_id, store_id, user_id, permissions, created_at) VALUES (${q(uid('f0010000', i))}, ${q(ORG)}, ${q(GINZA)}, ${q(m.userId)}, ${q(m.permissions)}, ${q(NOW)});`,
   ),
+
+  // P10 の再送対象。retry の受付だけでは alert を閉じず、stored 遷移で閉じる E2E に使う。
+  `INSERT OR IGNORE INTO recordings (id, organization_id, store_id, code, reception_session_id, reservation_id, r2_key, content_type, duration_seconds, bytes, state, retain_until, legal_hold, upload_attempts, created_at, updated_at, deleted_at) VALUES (${q(uid('f0021000', 0))}, ${q(ORG)}, ${q(GINZA)}, 'EY-R-1482', ${q(uid('f0021001', 0))}, NULL, ${q(`recordings/${ORG}/${uid('f0021000', 0)}.m4a`)}, 'audio/mp4', NULL, NULL, 'failed', NULL, '0', 3, ${q(NOW)}, ${q(NOW)}, NULL);`,
+
+  // P10 の「お知らせ」3 件。承認済み ALERTS mock と同じく、対応が必要 1 件・お知らせ 2 件。
+  `INSERT OR IGNORE INTO alerts (id, organization_id, store_id, code, severity, audience, title, body, target_type, target_id, occurred_at, read_at, resolved_at, resolved_by, created_at) VALUES (${q(uid('f0020000', 0))}, ${q(ORG)}, ${q(GINZA)}, 'recording.upload_failed', 'action', 'store', '録音の保存に3回失敗しました', 'EY-R-1482　田中 花子 様。ご予約は成立しています。', 'recording', ${q(uid('f0021000', 0))}, '2026-08-27T02:04:00.000Z', NULL, NULL, NULL, ${q(NOW)});`,
+  `UPDATE alerts SET target_type = 'recording', target_id = ${q(uid('f0021000', 0))} WHERE id = ${q(uid('f0020000', 0))};`,
+  `INSERT OR IGNORE INTO alerts (id, organization_id, store_id, code, severity, audience, title, body, target_type, target_id, occurred_at, read_at, resolved_at, resolved_by, created_at) VALUES (${q(uid('f0020000', 1))}, ${q(ORG)}, ${q(GINZA)}, 'web_booking.pending', 'info', 'store', 'Web予約が2件、確認待ちです', '本日中に確認しないと自動で取り消されます。', 'reservation', NULL, '2026-08-27T01:41:00.000Z', NULL, NULL, NULL, ${q(NOW)});`,
+  `INSERT OR IGNORE INTO alerts (id, organization_id, store_id, code, severity, audience, title, body, target_type, target_id, occurred_at, read_at, resolved_at, resolved_by, created_at) VALUES (${q(uid('f0020000', 2))}, ${q(ORG)}, ${q(GINZA)}, 'equipment.maintenance_scheduled', 'info', 'store', '視力測定機 B の点検　8月30日 10:00–12:00', NULL, 'equipment', ${q(uid('d0010000', 1))}, '2026-08-27T00:12:00.000Z', NULL, NULL, NULL, ${q(NOW)});`,
 
   // analytics_daily は E2E の表示専用に固定する。dimension_label はロールアップ時の名称snapshot。
   ...analyticsRows.map(
