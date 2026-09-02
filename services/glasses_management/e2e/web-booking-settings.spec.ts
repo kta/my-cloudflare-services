@@ -1,5 +1,6 @@
 import type { APIRequestContext, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
+import { completeSeededTerminalStart } from './support/terminal'
 
 /**
  * お客様向け Web 予約（011-web-booking）のうち、**お店側**の 8 本。
@@ -210,6 +211,7 @@ async function startWork(page: Page): Promise<void> {
   await page.goto('/')
   await page.getByLabel('お店のコード').fill(ORG)
   await page.getByRole('button', { name: '業務を始める' }).click()
+  await completeSeededTerminalStart(page)
   await expect(page.locator('header').first()).toContainText('EYEX 銀座店')
 }
 
@@ -539,6 +541,7 @@ test('台帳の「確認待ち」からその 1 件を確定すると、確認�
 
   // 読み込み直すと器はトップへ戻るので、台帳をもう一度開いてから数え直す。
   await page.reload()
+  await completeSeededTerminalStart(page)
   await page
     .getByRole('navigation', { name: '画面の切り替え' })
     .getByRole('button', { name: '予約台帳', exact: true })

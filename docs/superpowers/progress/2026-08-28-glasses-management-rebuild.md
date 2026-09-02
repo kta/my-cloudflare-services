@@ -412,3 +412,62 @@ pnpm --filter @app/glasses_management e2e
 - STAFF 7.3666%（閾値 7.38%）
 - WAIT 8.8903%（閾値 8.91%）
 - CANCEL 10.9739%（閾値 11.00%）
+
+## P10 端末の使い分けと監査 — 完了（2026-09-01）
+
+作ったもの:
+
+- `terminals` / `terminal_sessions` と migration `0009_round_gwen_stacy.sql`。端末の置き場所、
+  共有・個人の使い方、PINの有無、自動で伏せるまでの秒数、楽観ロックの `version` を持つ
+- admin の認証源泉を `ADMIN` service binding から利用する業務開始、個人端末・共有端末の選択、
+  スタッフ／置き場所の選択、4〜6桁PIN、3回失敗後30秒の待ち、端末セッションの開始・終了
+- 平文PINは保存・応答・監査へ出さず、`AUTH_PEPPER` と端末／スタッフごとのsaltでハッシュだけを保持。
+  失敗回数は `SHORT_LIVED` KVへ30秒TTLで置く
+- 共有モードでは日常業務を続け、録音の保全など責任の残る操作だけ本人PINで個人モードへ昇格。
+  個人モードと共有端末の自動ロックは120秒ちょうどでは維持し、+1秒で失効／伏せる
+- 予約・録音・設定などの監査を本処理と同じ `db.batch()` へ追加。条件付き更新では同じ
+  `WHERE EXISTS` を監査INSERTにも付け、409になった操作だけが監査へ残らないようにした
+- お知らせを「対応が必要」「お知らせ」「対応済み」に分け、未読は赤い罫と「未読」の文字で示し、
+  付属操作が成功した1件だけを対応済みにする
+- 自動ロックの覆い、氏名と電話番号だけの伏せ字、`visibilitychange` 復帰時の時刻差判定、
+  通信断の帯と書き込み停止、入力途中の下書き保持、設定の権限不足画面
+- モックの無い「設定 › 端末」は既存設定パネルの型で、端末の新規登録、使い方の変更、
+  PINの作り直し、自動で伏せる時間の変更を実装
+
+確かめたこと:
+
+```text
+pnpm check
+  → 緑（lint / Knip / 全typecheck / 全unit・integration / coverage / traceability）
+  → glasses Worker 1,804 passed、web 980 passed
+  → Worker coverage 91.21 / 80.58 / 96.39 / 93.77%
+  → web coverage 82.27 / 77.74 / 82.23 / 85.65%
+pnpm --filter @app/glasses_management e2e
+  → 333 passed / 0 failed（mock 61本、P10のUC/AC、既存機能回帰を含む）
+pnpm test:traceability
+  → Approved の UC-TERM-01..16 / AC-TERM-01..22 がちょうど1 scenarioずつ対応
+pnpm --filter @app/glasses_management exec playwright test e2e/terminal-mock-compare.spec.ts --project=mock
+  → 正規閾値で10 passed。実測採取時は閾値だけ一時的に厳しくし、直後に戻した
+```
+
+端末10面の実測差（承認画像は更新していない）:
+
+- START-DEVICE-MODE 4.7427%
+- LOGIN-STAFF 2.0116%
+- LOGIN-STAFF-PIN 2.9368%
+- LOGIN-SHARED 2.1657%
+- LOGIN-SHARED-PIN 3.1412%
+- LOGIN-PIN-ERROR 4.6655%
+- MODE-PERSONAL 4.8550%
+- HOME-SHARED-LOCKED 2.3801%
+- ALERTS 5.4360%（未読を色だけにせず「未読」の札を追加）
+- EX-PERMISSION 8.1260%（依頼先未定の店長依頼ボタンを出さず、6桁対応テンキーを共通化）
+
+既存の EX-OFFLINE は 6.1260%。11面のうち8面が5%以下で、P10計画の基準を満たす。
+
+申し送り:
+
+1. `AuditTargetType` は監査対象のテーブル名そのまま（snake_case・複数形）に確定した。
+2. `terminals.version` を追加し、端末設定の更新を楽観ロックにした。
+3. Q-10の依頼先と承認フローが決まったら、EX-PERMISSIONに「この下書きを店長に依頼する」を戻し、
+   `AlertCode`へ `settings.approval_requested` を追加してAC-TERM-13とE2Eを更新する。

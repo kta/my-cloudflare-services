@@ -1,5 +1,6 @@
 import type { APIRequestContext, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
+import { completeSeededTerminalStart } from './support/terminal'
 
 /*
  * 実装した画面を、承認済みモックの基準画像（docs/frontend/mockups/eyex/reference/<画面ID>.png）と
@@ -151,10 +152,36 @@ async function beMe(request: APIRequestContext, adminUserId: string | null): Pro
   expect(res.status()).toBe(200)
 }
 
-async function startWork(page: Page): Promise<void> {
+async function startWork(page: Page, mode: 'shared' | 'personal' = 'shared'): Promise<void> {
+  const membership = await page.request.post('/api/internal/store-memberships/sync', {
+    headers: { 'x-internal-key': 'dev-internal-key' },
+    data: {
+      id: '0d0d0d0d-0d0d-4d0d-8d0d-0d0d0d0d0d0d',
+      organizationId: ORG,
+      storeId: GINZA,
+      userId: `dev:${ORG}`,
+      permissions: [
+        'store.read',
+        'store.manage',
+        'reservation.read',
+        'reservation.write',
+        'customer.read',
+        'customer.write',
+        'recording.read',
+        'recording.manage',
+        'settings.read',
+        'settings.manage',
+        'terminal.manage',
+        'audit.read',
+      ],
+      createdAt: '2026-08-01T00:00:00.000Z',
+    },
+  })
+  expect(membership.status()).toBe(200)
   await page.goto('/')
   await page.getByLabel('お店のコード').fill(ORG)
   await page.getByRole('button', { name: '業務を始める' }).click()
+  await completeSeededTerminalStart(page, mode)
   await page.getByRole('navigation', { name: '画面の切り替え' }).waitFor()
 }
 
@@ -827,8 +854,15 @@ test.describe('承認済みモックとの突き合わせ', () => {
     await grantStore(request)
     await beMe(request, VIEWER)
     try {
+      await page.route(/\/api\/staff\/alerts\?/, async (route) => {
+        const response = await route.fetch()
+        const body = (await response.json()) as {
+          counts: { all: number; action: number; info: number; resolved: number }
+        }
+        await route.fulfill({ response, json: { ...body, counts: { ...body.counts, all: 2 } } })
+      })
       await pinTo1108(page)
-      await startWork(page)
+      await startWork(page, 'personal')
       await expect(page.getByRole('region', { name: '本日わたしが担当するご予約' })).toBeVisible()
       /*
        * いま残っている差:

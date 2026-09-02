@@ -1,5 +1,6 @@
 import type { APIRequestContext, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
+import { completeSeededTerminalStart } from './support/terminal'
 
 /**
  * 店舗の受付条件（004-store-settings）の受け入れ基準を、実ブラウザと実 Worker で確かめる。
@@ -84,6 +85,7 @@ async function startWork(page: Page): Promise<void> {
   await page.goto('/')
   await page.getByLabel('お店のコード').fill(ORG)
   await page.getByRole('button', { name: '業務を始める' }).click()
+  await completeSeededTerminalStart(page)
   await expect(page.locator('header').first()).toContainText('EYEX 銀座店')
 }
 
@@ -152,9 +154,9 @@ test('設定を開くと店舗の情報が出て、お店の基本と行き方�
   await expect(page.getByLabel('最寄り駅')).toHaveValue('東京メトロ 銀座駅')
   await expect(page.getByLabel('出口と所要時間')).toHaveValue('A1出口から徒歩3分')
   await expect(page.getByLabel('駐車場')).toHaveValue('提携駐車場はありません')
-  // 第2サイドバーはモックの 14 項目ではなく 7 項目だけを出す（P1 の決め #1）。
-  // 6 項目だったところへ P8 が「Web予約の公開」を足して 7 項目になった。
-  await expect(sectionNav(page).getByRole('button')).toHaveCount(7)
+  // 第2サイドバーはモックの 14 項目ではなく、実装済みの項目だけを出す（P1 の決め #1）。
+  // P8 の「Web予約の公開」に続き、P10 が「端末」を足して 8 項目になった。
+  await expect(sectionNav(page).getByRole('button')).toHaveCount(8)
 })
 
 // @e2e-covers AC-SET-02

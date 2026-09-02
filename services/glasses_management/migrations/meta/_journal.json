@@ -64,6 +64,20 @@
       "when": 1788195348730,
       "tag": "0008_cool_whizzer",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1788205989022,
+      "tag": "0009_round_gwen_stacy",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1788217511149,
+      "tag": "0010_great_onslaught",
+      "breakpoints": true
     }
   ]
 }

@@ -415,6 +415,8 @@ export type BookingInput = {
   noteInternal: string
   /** 共有端末で個人が未確認なら null。 */
   actorId: string | null
+  actorType?: 'staff' | 'terminal' | 'customer' | 'system'
+  terminalId?: string | null
   /** 1 操作でまとまった行を束ねる。同じバッチの監査は同じ値を持つ。 */
   correlationId: string
   /** 進行中の受付。確定と同じバッチで `booked` にして閉じる。 */
@@ -481,7 +483,7 @@ export function bookingStatements(db: D1Database, input: BookingInput): D1Prepar
         input.noteInternal,
         createdAt,
         createdAt,
-        input.actorId,
+        input.actorType === undefined || input.actorType === 'staff' ? input.actorId : null,
         input.organizationId,
         input.reservationId,
       ),
@@ -541,13 +543,15 @@ export function bookingStatements(db: D1Database, input: BookingInput): D1Prepar
     db
       .prepare(
         'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
-          `SELECT ?, ?, ?, 'staff', ?, NULL, 'reservation.created', 'reservation', ?, NULL, ?, ?, ? WHERE ${LOCKED}`,
+          `SELECT ?, ?, ?, ?, ?, ?, 'reservation.created', 'reservations', ?, NULL, ?, ?, ? WHERE ${LOCKED}`,
       )
       .bind(
         crypto.randomUUID(),
         input.organizationId,
         input.storeId,
+        input.actorType ?? 'staff',
         input.actorId,
+        input.terminalId ?? null,
         input.reservationId,
         JSON.stringify({
           code: input.code,

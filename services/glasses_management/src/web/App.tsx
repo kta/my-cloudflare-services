@@ -1,19 +1,34 @@
-import type { StaffMember, Store } from '@app/contracts'
+import type { StaffMember, StaffShift, Store, Terminal, TerminalSession } from '@app/contracts'
 import { auth, toJstDateString } from '@app/shared'
 import { Button, Field, focusRing, focusRingOnPine, Notice, TextInput } from '@app/ui'
 import { type FormEvent, type ReactNode, useCallback, useEffect, useState } from 'react'
+import { AlertScreen } from './alerts/AlertScreen'
 import { AnalyticsPane } from './analytics/AnalyticsPane'
 import { BookingScreen } from './booking/BookingScreen'
 import { ChangeScreen } from './change/ChangeScreen'
-import { client } from './client'
+import {
+  clearTerminalSession,
+  client,
+  domainFetch,
+  storeTerminalSession,
+  TERMINAL_ID_KEY,
+} from './client'
 import { CustomerScreen } from './customers/CustomerScreen'
 import { MyReservations } from './home/MyReservations'
 import { LedgerScreen } from './ledger/LedgerScreen'
+import { PinEntry } from './login/PinEntry'
+import { PlacePick } from './login/PlacePick'
+import { StaffPick } from './login/StaffPick'
+import { PersonalMode } from './mode/PersonalMode'
 import { type HistoryFilters, ReceptionHistory } from './reception/ReceptionHistory'
 import { ReceptionScreen } from './reception/ReceptionScreen'
 import { SettingsScreen } from './settings/SettingsScreen'
 import { AppShell } from './shell/AppShell'
 import { DESTINATIONS, RAIL_BY_DEFAULT } from './shell/destinations'
+import { LockVeil } from './shell/LockVeil'
+import { OfflineBand } from './shell/OfflineBand'
+import { useIdle } from './shell/useIdle'
+import { DeviceMode } from './start/DeviceMode'
 
 /*
  * P0（基盤）の画面。承認済みモック docs/frontend/mockups/eyex/images/HOME.png の
@@ -24,12 +39,14 @@ import { DESTINATIONS, RAIL_BY_DEFAULT } from './shell/destinations'
  * 説明文は 2 つまで。空いた場所を埋めるために要素を足さない。
  */
 
-export function App() {
+export function App({ now = () => new Date() }: { now?: () => Date }) {
   const [org, setOrg] = useState(() => auth.getOrganization())
   return org ? (
     <Workspace
       org={org}
+      now={now}
       onSignOut={() => {
+        clearTerminalSession()
         auth.logout()
         setOrg(null)
       }}
@@ -87,7 +104,15 @@ function StartWork({ onStarted }: { onStarted: (org: string) => void }) {
   )
 }
 
-function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
+function Workspace({
+  org,
+  now,
+  onSignOut,
+}: {
+  org: string
+  now: () => Date
+  onSignOut: () => void
+}) {
   const [current, setCurrent] = useState('home')
   const [rail, setRail] = useState(false)
   // 個人トップの 1 行から来たとき、台帳のその帯の詳細を開いた状態で出す。
@@ -115,6 +140,31 @@ function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
   // 予約を探す面の「顧客台帳で調べる」から来たとき、入れたお名前を検索欄へ引き継ぐ
   // （AC-CHANGE-24）。台帳をふつうに開いたときは空のまま。
   const [customerQuery, setCustomerQuery] = useState('')
+  const [startPhase, setStartPhase] = useState<
+    'loading' | 'device' | 'staff' | 'place' | 'pin' | 'ready'
+  >('loading')
+  const [terminalMode, setTerminalMode] = useState<'personal' | 'shared' | null>(null)
+  const [terminals, setTerminals] = useState<Terminal[]>([])
+  const [staffMembers, setStaffMembers] = useState<StaffMember[]>([])
+  const [offIds, setOffIds] = useState<ReadonlySet<string>>(new Set())
+  const [selectedTerminal, setSelectedTerminal] = useState<Terminal | null>(null)
+  const [selectedStaff, setSelectedStaff] = useState<StaffMember | null>(null)
+  const [terminalSession, setTerminalSession] = useState<TerminalSession | null>(null)
+  const [pinFailure, setPinFailure] = useState<{
+    remainingAttempts?: number
+    retryAfterSeconds?: number
+  }>({})
+  const [alertCount, setAlertCount] = useState(0)
+  const [online, setOnline] = useState(() => navigator.onLine)
+  const [lastSyncedLabel, setLastSyncedLabel] = useState<string | null>(null)
+  const [nextRetryLabel, setNextRetryLabel] = useState<string | null>(null)
+  const [personalModeSubject, setPersonalModeSubject] = useState<string | null>(null)
+  const [lockSnapshot, setLockSnapshot] = useState<{
+    customerName: string
+    customerPhone: string
+    time: string
+    count: number
+  } | null>(null)
 
   const load = useCallback(async () => {
     const res = await client.api.staff.stores.$get()
@@ -125,18 +175,151 @@ function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
     }
     if (status === 503) {
       setError('お店の情報がまだ届いていません。しばらくしてからもう一度開いてください。')
+      setStartPhase('ready')
       return
     }
     if (!res.ok) {
       setError('お店の情報を読み込めませんでした。画面を開き直してください。')
+      setStartPhase('ready')
       return
     }
-    setStores(await res.json())
-  }, [onSignOut])
+    const found = (await res.json()) as Store[]
+    setStores(found)
+    if (found.length === 0) setStartPhase('ready')
+    setLastSyncedLabel(
+      new Intl.DateTimeFormat('ja-JP', {
+        timeZone: 'Asia/Tokyo',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: false,
+      }).format(now()),
+    )
+  }, [now, onSignOut])
+
+  const selectedAutoLock = selectedTerminal?.autoLockSeconds ?? 120
+  const clockNow = useCallback(() => now().getTime(), [now])
+  const idle = useIdle({
+    enabled: terminalSession?.mode === 'shared',
+    idleAfterMs: selectedAutoLock * 1000,
+    now: clockNow,
+    onResume: () => {
+      load().catch(() => undefined)
+    },
+  })
+  const personalIdle = useIdle({
+    enabled: terminalSession?.mode === 'personal',
+    idleAfterMs: 120_000,
+    now: clockNow,
+  })
 
   useEffect(() => {
-    load().catch(() => setError('通信できませんでした。画面を開き直してください。'))
+    load().catch(() => {
+      setError('通信できませんでした。画面を開き直してください。')
+      setStartPhase('ready')
+    })
   }, [load])
+
+  useEffect(() => {
+    const connected = () => {
+      setOnline(true)
+      setNextRetryLabel(null)
+    }
+    const disconnected = () => {
+      setOnline(false)
+      setNextRetryLabel(
+        new Intl.DateTimeFormat('ja-JP', {
+          timeZone: 'Asia/Tokyo',
+          hour: 'numeric',
+          minute: '2-digit',
+          hour12: false,
+        }).format(new Date(now().getTime() + 60_000)),
+      )
+    }
+    window.addEventListener('online', connected)
+    window.addEventListener('offline', disconnected)
+    return () => {
+      window.removeEventListener('online', connected)
+      window.removeEventListener('offline', disconnected)
+    }
+  }, [now])
+
+  useEffect(() => {
+    if (online || idle.isMasked) return undefined
+    let live = true
+    let timer: number
+
+    const retry = async () => {
+      await load().catch(() => undefined)
+      if (!live) return
+      if (navigator.onLine) {
+        setOnline(true)
+        setNextRetryLabel(null)
+        return
+      }
+      setNextRetryLabel(
+        new Intl.DateTimeFormat('ja-JP', {
+          timeZone: 'Asia/Tokyo',
+          hour: 'numeric',
+          minute: '2-digit',
+          hour12: false,
+        }).format(new Date(now().getTime() + 60_000)),
+      )
+      timer = window.setTimeout(retry, 60_000)
+    }
+
+    timer = window.setTimeout(retry, 60_000)
+    return () => {
+      live = false
+      window.clearTimeout(timer)
+    }
+  }, [idle.isMasked, load, now, online])
+
+  useEffect(() => {
+    const required = (event: Event) => {
+      const detail = (event as CustomEvent<{ subject?: unknown }>).detail
+      if (typeof detail?.subject === 'string') setPersonalModeSubject(detail.subject)
+    }
+    window.addEventListener('eyex:personal-mode-required', required)
+    return () => window.removeEventListener('eyex:personal-mode-required', required)
+  }, [])
+
+  // 共有端末では、前のお客様の入力をブラウザ候補へ残さない。後から開いた面も監視する。
+  useEffect(() => {
+    if (terminalSession?.mode !== 'shared') return undefined
+    const disable = (root: ParentNode) => {
+      for (const field of root.querySelectorAll('input, textarea')) {
+        field.setAttribute('autocomplete', 'off')
+      }
+    }
+    disable(document)
+    const observer = new MutationObserver(() => disable(document))
+    observer.observe(document.body, { childList: true, subtree: true })
+    return () => observer.disconnect()
+  }, [terminalSession?.mode])
+
+  useEffect(() => {
+    const elevated = (event: Event) => {
+      const session = (event as CustomEvent<TerminalSession>).detail
+      storeTerminalSession(session.terminalId, session.sessionToken)
+      setTerminalSession(session)
+    }
+    window.addEventListener('eyex:terminal-session', elevated)
+    return () => window.removeEventListener('eyex:terminal-session', elevated)
+  }, [])
+
+  useEffect(() => {
+    const updated = (event: Event) => {
+      const terminal = (event as CustomEvent<Terminal>).detail
+      if (!terminal || typeof terminal.id !== 'string') return
+      setTerminals((rows) => rows.map((row) => (row.id === terminal.id ? terminal : row)))
+      if (sessionStorage.getItem(TERMINAL_ID_KEY) !== terminal.id) return
+      setSelectedTerminal(terminal)
+      setTerminalMode(terminal.kind)
+      localStorage.setItem(`eyex.terminal-mode.${org}`, terminal.kind)
+    }
+    window.addEventListener('eyex:terminal-updated', updated)
+    return () => window.removeEventListener('eyex:terminal-updated', updated)
+  }, [org])
 
   function navigate(key: string, reservationId: string | null = null, walkin = false) {
     if (key !== 'customers') setCustomerQuery('')
@@ -154,23 +337,272 @@ function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
 
   const store = stores?.find((s) => s.isActive) ?? stores?.[0]
 
+  useEffect(() => {
+    if (!store) return
+    let live = true
+    const today = toJstDateString(now())
+    Promise.all([
+      auth.authFetch(`/api/staff/terminals?storeId=${encodeURIComponent(store.id)}`),
+      auth.authFetch(`/api/staff/stores/${store.id}/staff`),
+      auth.authFetch(`/api/staff/stores/${store.id}/staff-shifts?from=${today}&to=${today}`),
+      auth.authFetch(`/api/staff/alerts?storeId=${encodeURIComponent(store.id)}&kind=all&limit=1`),
+    ])
+      .then(async ([terminalResponse, staffResponse, shiftResponse, alertResponse]) => {
+        if (!live) return
+        if (alertResponse.ok) {
+          const alerts = (await alertResponse.json()) as { counts?: { all?: number } }
+          setAlertCount(alerts.counts?.all ?? 0)
+        }
+        if (!terminalResponse.ok) {
+          setStartPhase('ready')
+          return
+        }
+        const foundTerminals = (await terminalResponse.json()) as Terminal[]
+        if (foundTerminals.length === 0) {
+          setStartPhase('ready')
+          return
+        }
+        const foundStaff = staffResponse.ok ? ((await staffResponse.json()) as StaffMember[]) : []
+        const foundShifts = shiftResponse.ok ? ((await shiftResponse.json()) as StaffShift[]) : []
+        setTerminals(foundTerminals)
+        setStaffMembers(foundStaff)
+        setOffIds(
+          new Set(
+            foundStaff
+              .filter(
+                (member) =>
+                  !foundShifts.some(
+                    (shift) => shift.staffId === member.id && shift.kind === 'work',
+                  ),
+              )
+              .map((member) => member.id),
+          ),
+        )
+        const saved = localStorage.getItem(`eyex.terminal-mode.${org}`)
+        if (saved === 'personal' || saved === 'shared') {
+          setTerminalMode(saved)
+          setStartPhase(saved === 'personal' ? 'staff' : 'place')
+        } else {
+          setStartPhase('device')
+        }
+      })
+      .catch(() => {
+        if (live) setStartPhase('ready')
+      })
+    return () => {
+      live = false
+    }
+  }, [now, org, store])
+
+  useEffect(() => {
+    if (!personalIdle.isMasked || terminalSession?.mode !== 'personal') return
+    setTerminalSession({ ...terminalSession, mode: 'shared', staffId: null })
+  }, [personalIdle.isMasked, terminalSession])
+
+  async function startTerminalSession(pin: string) {
+    if (!selectedTerminal || !terminalMode) return
+    const response = await auth.authFetch(`/api/staff/terminals/${selectedTerminal.id}/sessions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(
+        terminalMode === 'personal'
+          ? { mode: 'personal', staffId: selectedStaff?.id, pin }
+          : { mode: 'shared', pin },
+      ),
+    })
+    if (response.status === 401 || response.status === 429) {
+      const failure = (await response.json()) as {
+        remainingAttempts: number
+        retryAfterSeconds?: number
+      }
+      setPinFailure({
+        remainingAttempts: failure.remainingAttempts,
+        ...(failure.retryAfterSeconds === undefined
+          ? {}
+          : { retryAfterSeconds: failure.retryAfterSeconds }),
+      })
+      return
+    }
+    if (!response.ok) {
+      setError('業務を始められませんでした。通信を確かめて、もう一度お試しください。')
+      return
+    }
+    const session = (await response.json()) as TerminalSession
+    storeTerminalSession(session.terminalId, session.sessionToken)
+    setTerminalSession(session)
+    setPinFailure({})
+    setStartPhase('ready')
+  }
+
+  async function endTerminalSession() {
+    if (terminalSession && selectedTerminal) {
+      await domainFetch(
+        `/api/staff/terminals/${selectedTerminal.id}/sessions/${terminalSession.id}`,
+        {
+          method: 'DELETE',
+        },
+      ).catch(() => undefined)
+    }
+    clearTerminalSession()
+    setTerminalSession(null)
+    setStartPhase(terminalMode === 'personal' ? 'staff' : 'place')
+  }
+
+  if (startPhase === 'loading') {
+    return (
+      <p role="status" className="p-11 text-body text-ink-muted">
+        読み込んでいます…
+      </p>
+    )
+  }
+  if (startPhase === 'device') {
+    return (
+      <DeviceMode
+        deviceLabel={terminals[0]?.deviceLabel || 'この iPad'}
+        onPersonal={() => {
+          localStorage.setItem(`eyex.terminal-mode.${org}`, 'personal')
+          setTerminalMode('personal')
+          setStartPhase('staff')
+        }}
+        onShared={() => {
+          localStorage.setItem(`eyex.terminal-mode.${org}`, 'shared')
+          setTerminalMode('shared')
+          setStartPhase('place')
+        }}
+      />
+    )
+  }
+  if (startPhase === 'staff') {
+    return (
+      <StaffPick
+        staff={staffMembers}
+        offIds={offIds}
+        onSelect={(member) => {
+          setSelectedStaff(member)
+          const terminal = terminals[0] ?? null
+          setSelectedTerminal(terminal)
+          if (terminal) sessionStorage.setItem(TERMINAL_ID_KEY, terminal.id)
+          setStartPhase('pin')
+        }}
+        onShared={() => {
+          localStorage.setItem(`eyex.terminal-mode.${org}`, 'shared')
+          setTerminalMode('shared')
+          setStartPhase('place')
+        }}
+      />
+    )
+  }
+  if (startPhase === 'place') {
+    return (
+      <PlacePick
+        terminals={terminals}
+        onSelect={(terminal) => {
+          setSelectedTerminal(terminal)
+          sessionStorage.setItem(TERMINAL_ID_KEY, terminal.id)
+          setStartPhase('pin')
+        }}
+        onChangeMode={() => setStartPhase('device')}
+      />
+    )
+  }
+  if (startPhase === 'pin' && selectedTerminal) {
+    return (
+      <PinEntry
+        key={`${terminalMode}:${selectedStaff?.id ?? selectedTerminal.id}:${pinFailure.remainingAttempts ?? 'new'}`}
+        kind={terminalMode ?? 'shared'}
+        title={
+          terminalMode === 'personal'
+            ? (selectedStaff?.displayName ?? 'スタッフ')
+            : selectedTerminal.name
+        }
+        detail={
+          terminalMode === 'personal'
+            ? `${selectedStaff?.jobLabel ?? '担当'} ／ 本日の勤務`
+            : selectedTerminal.placeNote
+        }
+        {...pinFailure}
+        onSubmit={(pin) =>
+          startTerminalSession(pin).catch(() => setError('通信できませんでした。'))
+        }
+        onBack={() => setStartPhase(terminalMode === 'personal' ? 'staff' : 'place')}
+      />
+    )
+  }
+
+  if (personalModeSubject !== null && selectedTerminal !== null) {
+    return (
+      <PersonalMode
+        subject={personalModeSubject}
+        staff={staffMembers}
+        offIds={offIds}
+        onCancel={() => setPersonalModeSubject(null)}
+        onConfirm={async (staffId, pin) => {
+          const response = await domainFetch(
+            `/api/staff/terminals/${selectedTerminal.id}/elevate`,
+            {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({
+                staffId,
+                pin,
+                reason: personalModeSubject.includes('録音') ? 'recording' : 'attention',
+              }),
+            },
+          )
+          if (!response.ok) return false
+          const session = (await response.json()) as TerminalSession
+          storeTerminalSession(session.terminalId, session.sessionToken)
+          setTerminalSession(session)
+          setSelectedStaff(staffMembers.find((member) => member.id === staffId) ?? null)
+          setPersonalModeSubject(null)
+          return true
+        }}
+      />
+    )
+  }
+
   /*
    * 予約の受付（BOOK-01〜06）は**サイドバーを出さない**（`design/05-screen-flow.md` §3.3）ので、
    * `AppShell` を通さずに面ごと入れ替える。出口はどちらもトップへ戻る。
    */
   if (current === 'book') {
     return store ? (
-      <BookingScreen
-        storeId={store.id}
-        storeName={store.name}
-        initialCustomer={bookingCustomer ?? undefined}
-        onExit={() => {
-          setBookingCustomer(null)
-          navigate('home')
-        }}
-        onOpenLedger={() => navigate('ledger')}
-        onSessionExpired={onSignOut}
-      />
+      <div className="relative h-dvh">
+        {idle.isMasked ? null : (
+          <BookingScreen
+            storeId={store.id}
+            storeName={store.name}
+            initialCustomer={bookingCustomer ?? undefined}
+            isOffline={!online}
+            onExit={() => {
+              setBookingCustomer(null)
+              navigate('home')
+            }}
+            onOpenLedger={() => navigate('ledger')}
+            onSessionExpired={onSignOut}
+          />
+        )}
+        {!online && !idle.isMasked && (
+          <div className="absolute inset-x-0 top-0 z-6">
+            <OfflineBand
+              lastSyncedLabel={lastSyncedLabel}
+              nextRetryLabel={nextRetryLabel}
+              onRetry={() => {
+                setOnline(navigator.onLine)
+                load().catch(() => undefined)
+              }}
+            />
+          </div>
+        )}
+        {idle.isMasked && (
+          <LockVeil
+            fullScreen
+            snapshot={lockSnapshot ?? undefined}
+            onContinue={idle.resume}
+            onEndSession={() => endTerminalSession()}
+          />
+        )}
+      </div>
     ) : (
       <p role="status" className="p-11 text-body text-ink-muted">
         読み込んでいます…
@@ -183,141 +615,194 @@ function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
       storeName={store ? store.name : 'EYEX'}
       storeSubline={
         current === 'home'
-          ? '営業中　10:00–19:00'
-          : current === 'search'
-            ? changeSubline
-            : (DESTINATIONS.find((destination) => destination.key === current)?.label ?? '')
+          ? idle.isMasked && selectedTerminal
+            ? `${selectedTerminal.name}（みんなで使う端末）`
+            : '営業中　10:00–19:00'
+          : current === 'alerts'
+            ? 'お知らせとアラート'
+            : current === 'search'
+              ? changeSubline
+              : (DESTINATIONS.find((destination) => destination.key === current)?.label ?? '')
       }
       current={current}
       onNavigate={(key) => navigate(key)}
       rail={rail}
       onToggleRail={() => setRail((v) => !v)}
-      terminalNote={[`${org} の端末`, '共有で使っています']}
+      isLocked={idle.isMasked}
+      alertCount={alertCount}
+      terminalNote={
+        terminalSession?.mode === 'personal'
+          ? [`${selectedStaff?.displayName ?? 'スタッフ'}の iPad`, '個人で使っています']
+          : terminalSession?.mode === 'shared' && selectedTerminal
+            ? [selectedTerminal.name, '共有で使っています']
+            : [`${org} の端末`, '共有で使っています']
+      }
       barCenter={barCenter}
+      overlay={
+        idle.isMasked ? (
+          <LockVeil
+            snapshot={lockSnapshot ?? undefined}
+            onContinue={idle.resume}
+            onEndSession={() => endTerminalSession()}
+          />
+        ) : null
+      }
       barActions={
-        <button
-          type="button"
-          onClick={onSignOut}
-          className={`min-h-12 min-w-15 rounded-card px-2 text-lead font-semibold text-on-pine ${focusRingOnPine}`}
-        >
-          業務を終える
-        </button>
+        terminalSession === null || terminalSession.mode === 'personal' ? (
+          <button
+            type="button"
+            onClick={terminalSession === null ? onSignOut : () => endTerminalSession()}
+            className={`min-h-12 min-w-15 rounded-card px-2 text-lead font-semibold text-on-pine ${focusRingOnPine}`}
+          >
+            業務を終える
+          </button>
+        ) : null
       }
     >
-      <div className="relative min-h-0 flex-1 overflow-hidden">
-        {error && (
-          <div className="px-11 pt-11">
-            <Notice>{error}</Notice>
-          </div>
-        )}
-        {current === 'home' ? (
-          <Home
-            stores={stores}
-            currentStoreId={store?.id}
-            onOpenReservation={(id) => navigate('ledger', id)}
-            onOpenLedger={() => navigate('ledger')}
-            onStartBooking={() => startBooking()}
-            onOpenSearch={() => navigate('search')}
-          />
-        ) : current === 'ledger' ? (
-          store ? (
-            <LedgerScreen
-              storeId={store.id}
-              initialReservationId={openReservation ?? undefined}
-              initialWalkinOpen={walkinPanel}
-              onBarCenter={setBarCenter}
-              onOpenSettings={() => navigate('settings')}
-              onOpenCheckin={(reservationId) => navigate('reception', reservationId)}
-              onSessionExpired={onSignOut}
+      {idle.isMasked ? null : (
+        <div className="relative min-h-0 flex-1 overflow-hidden">
+          {!online && (
+            <OfflineBand
+              lastSyncedLabel={lastSyncedLabel}
+              nextRetryLabel={nextRetryLabel}
+              onRetry={() => {
+                setOnline(navigator.onLine)
+                load().catch(() => undefined)
+              }}
             />
-          ) : (
-            <p className="p-11 text-body text-ink-muted">読み込んでいます…</p>
-          )
-        ) : current === 'reception' ? (
-          /* 来店受付。盤面と受け付ける面の行き来はこの器の中で起き、URL を持たない。
+          )}
+          {error && (
+            <div className="px-11 pt-11">
+              <Notice>{error}</Notice>
+            </div>
+          )}
+          {current === 'home' ? (
+            <Home
+              stores={stores}
+              currentStoreId={store?.id}
+              showSharedReservations={idle.isMasked}
+              sharedTerminal={terminalSession?.mode === 'shared'}
+              onSharedSnapshot={setLockSnapshot}
+              onOpenReservation={(id) => navigate('ledger', id)}
+              onOpenLedger={() => navigate('ledger')}
+              onStartBooking={() => startBooking()}
+              onOpenSearch={() => navigate('search')}
+            />
+          ) : current === 'ledger' ? (
+            store ? (
+              <LedgerScreen
+                storeId={store.id}
+                initialReservationId={openReservation ?? undefined}
+                initialWalkinOpen={walkinPanel}
+                onBarCenter={setBarCenter}
+                onOpenSettings={() => navigate('settings')}
+                onOpenCheckin={(reservationId) => navigate('reception', reservationId)}
+                onSessionExpired={onSignOut}
+                isOffline={!online}
+              />
+            ) : (
+              <p className="p-11 text-body text-ink-muted">読み込んでいます…</p>
+            )
+          ) : current === 'reception' ? (
+            /* 来店受付。盤面と受け付ける面の行き来はこの器の中で起き、URL を持たない。
              「＋ ご来店を受け付ける」の行き先は台帳（店頭の受付パネルはそちらにある）。
              ご予約のお客様を受け付ける入口も台帳の予約リストの「ご来店」で、そこから
              来たときだけ `initialCheckinId` を持って開く（盤面に載るのはお着きの方だけ）。 */
-          store ? (
-            <ReceptionScreen
-              storeId={store.id}
-              onOpenLedger={() => navigate('ledger', null, true)}
-              {...(openReservation === null ? {} : { initialCheckinId: openReservation })}
-              onSessionExpired={onSignOut}
-            />
-          ) : (
-            <p className="p-11 text-body text-ink-muted">読み込んでいます…</p>
-          )
-        ) : current === 'history' ? (
-          /* 受付履歴（HISTORY-LIST / HISTORY-EMPTY）。絞り込みは面の中に持つ。
+            store ? (
+              <ReceptionScreen
+                storeId={store.id}
+                onOpenLedger={() => navigate('ledger', null, true)}
+                {...(openReservation === null ? {} : { initialCheckinId: openReservation })}
+                onSessionExpired={onSignOut}
+                isOffline={!online}
+              />
+            ) : (
+              <p className="p-11 text-body text-ink-muted">読み込んでいます…</p>
+            )
+          ) : current === 'history' ? (
+            /* 受付履歴（HISTORY-LIST / HISTORY-EMPTY）。絞り込みは面の中に持つ。
              「予約を開く」は台帳のその帯の詳細へ渡し、戻ると同じ絞り込みへ戻る
              （器が `historyQuery` に控えている）。 */
-          store ? (
-            <HistoryPane
-              storeId={store.id}
-              initialQuery={historyQuery}
-              onQueryChange={setHistoryQuery}
-              onOpenReservation={(id) => navigate('ledger', id)}
-              onStartBooking={() => startBooking()}
-            />
-          ) : (
-            <p className="p-11 text-body text-ink-muted">読み込んでいます…</p>
-          )
-        ) : current === 'search' ? (
-          /* 予約を探す・直す（CHANGE-SEARCH / CHANGE-DATETIME / CHANGE-DIFF /
+            store ? (
+              <HistoryPane
+                storeId={store.id}
+                now={now}
+                initialQuery={historyQuery}
+                onQueryChange={setHistoryQuery}
+                onOpenReservation={(id) => navigate('ledger', id)}
+                onStartBooking={() => startBooking()}
+              />
+            ) : (
+              <p className="p-11 text-body text-ink-muted">読み込んでいます…</p>
+            )
+          ) : current === 'search' ? (
+            /* 予約を探す・直す（CHANGE-SEARCH / CHANGE-DATETIME / CHANGE-DIFF /
              CHANGE-CANCEL / CHANGE-DONE / EX-CONFLICT）。面の中の行き来は器が持ち、
              URL を持たない。時刻は器が自分で起こす —— 仮の押さえの残りを 1 秒ずつ
              進めるので、App の描画に縛らない。 */
-          store ? (
-            <ChangeScreen
-              storeId={store.id}
-              storeName={store.name}
-              onSubline={setChangeSubline}
-              onOpenCustomers={(name) => {
-                navigate('customers')
-                setCustomerQuery(name)
-              }}
-              onStartBooking={() => startBooking()}
-              onOpenLedger={() => navigate('ledger')}
-              onGoHome={() => navigate('home')}
-              onSessionExpired={onSignOut}
-            />
+            store ? (
+              <ChangeScreen
+                storeId={store.id}
+                storeName={store.name}
+                onSubline={setChangeSubline}
+                onOpenCustomers={(name) => {
+                  navigate('customers')
+                  setCustomerQuery(name)
+                }}
+                onStartBooking={() => startBooking()}
+                onOpenLedger={() => navigate('ledger')}
+                onGoHome={() => navigate('home')}
+                onSessionExpired={onSignOut}
+                isOffline={!online}
+              />
+            ) : (
+              <p className="p-11 text-body text-ink-muted">読み込んでいます…</p>
+            )
+          ) : current === 'customers' ? (
+            store ? (
+              <CustomerScreen
+                storeId={store.id}
+                stores={stores}
+                initialQuery={customerQuery}
+                onStartBooking={(customer) => startBooking(customer)}
+                onSessionExpired={onSignOut}
+              />
+            ) : (
+              <p className="p-11 text-body text-ink-muted">読み込んでいます…</p>
+            )
+          ) : current === 'alerts' ? (
+            store ? (
+              <AlertScreen
+                storeId={store.id}
+                now={now}
+                onCountChange={setAlertCount}
+                onOpenLedger={() => navigate('ledger')}
+              />
+            ) : (
+              <p className="p-11 text-body text-ink-muted">読み込んでいます…</p>
+            )
+          ) : current === 'settings' ? (
+            store ? (
+              <SettingsScreen storeId={store.id} />
+            ) : (
+              <p className="p-11 text-body text-ink-muted">読み込んでいます…</p>
+            )
+          ) : current === 'analytics' ? (
+            store ? (
+              <AnalyticsPane
+                storeId={store.id}
+                stores={stores ?? []}
+                onSessionExpired={onSignOut}
+                onBack={() => navigate('home')}
+              />
+            ) : (
+              <p className="p-11 text-body text-ink-muted">読み込んでいます…</p>
+            )
           ) : (
-            <p className="p-11 text-body text-ink-muted">読み込んでいます…</p>
-          )
-        ) : current === 'customers' ? (
-          store ? (
-            <CustomerScreen
-              storeId={store.id}
-              stores={stores}
-              initialQuery={customerQuery}
-              onStartBooking={(customer) => startBooking(customer)}
-              onSessionExpired={onSignOut}
-            />
-          ) : (
-            <p className="p-11 text-body text-ink-muted">読み込んでいます…</p>
-          )
-        ) : current === 'settings' ? (
-          store ? (
-            <SettingsScreen storeId={store.id} />
-          ) : (
-            <p className="p-11 text-body text-ink-muted">読み込んでいます…</p>
-          )
-        ) : current === 'analytics' ? (
-          store ? (
-            <AnalyticsPane
-              storeId={store.id}
-              stores={stores ?? []}
-              onSessionExpired={onSignOut}
-              onBack={() => navigate('home')}
-            />
-          ) : (
-            <p className="p-11 text-body text-ink-muted">読み込んでいます…</p>
-          )
-        ) : (
-          <p className="p-11 text-body text-ink-muted">この画面はこれから作ります。</p>
-        )}
-      </div>
+            <p className="p-11 text-body text-ink-muted">この画面はこれから作ります。</p>
+          )}
+        </div>
+      )}
     </AppShell>
   )
 }
@@ -325,6 +810,9 @@ function Workspace({ org, onSignOut }: { org: string; onSignOut: () => void }) {
 function Home({
   stores,
   currentStoreId,
+  showSharedReservations,
+  sharedTerminal,
+  onSharedSnapshot,
   onOpenReservation,
   onOpenLedger,
   onStartBooking,
@@ -332,6 +820,14 @@ function Home({
 }: {
   stores: Store[] | null
   currentStoreId?: string
+  showSharedReservations: boolean
+  sharedTerminal: boolean
+  onSharedSnapshot: (snapshot: {
+    customerName: string
+    customerPhone: string
+    time: string
+    count: number
+  }) => void
   onOpenReservation: (reservationId: string) => void
   onOpenLedger: () => void
   /** 受付の 5 工程へ入る。マイクの許可はこの指の操作の中で求める（Safari の制約）。 */
@@ -381,6 +877,9 @@ function Home({
       {currentStoreId !== undefined && (
         <MyReservations
           storeId={currentStoreId}
+          showShared={showSharedReservations}
+          sharedTerminal={sharedTerminal}
+          onSharedSnapshot={onSharedSnapshot}
           onOpen={onOpenReservation}
           onOpenLedger={onOpenLedger}
         />
@@ -430,19 +929,21 @@ function PrimaryAction({
  */
 function HistoryPane({
   storeId,
+  now,
   initialQuery,
   onQueryChange,
   onOpenReservation,
   onStartBooking,
 }: {
   storeId: string
+  now: () => Date
   initialQuery?: HistoryFilters
   onQueryChange: (filters: HistoryFilters) => void
   onOpenReservation: (reservationId: string) => void
   onStartBooking: () => void
 }) {
   const [staff, setStaff] = useState<{ id: string; name: string }[]>([])
-  const [today] = useState(() => toJstDateString(new Date()))
+  const today = toJstDateString(now())
 
   useEffect(() => {
     let live = true

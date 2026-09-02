@@ -1,4 +1,6 @@
-import { cn, focusRing } from '@app/ui'
+import type { StaffMember } from '@app/contracts'
+import { cn, focusRing, Keypad, PinField } from '@app/ui'
+import { useState } from 'react'
 import { refusalText, type SettingsActor } from './sections'
 
 /*
@@ -109,11 +111,31 @@ export function PermissionRefusal({
   target,
   actor,
   changes,
+  staff = [],
+  onElevate,
 }: {
   target: string
   actor: SettingsActor
   changes: readonly string[]
+  staff?: readonly StaffMember[]
+  onElevate?: (staffId: string, pin: string) => Promise<boolean>
 }) {
+  const managers = staff.filter((member) => member.isActive && member.role === 'manager')
+  const [staffId, setStaffId] = useState(managers[0]?.id ?? '')
+  const [pin, setPin] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [failed, setFailed] = useState(false)
+
+  async function confirmPin() {
+    if (busy || pin.length < 4) return
+    setBusy(true)
+    setFailed(false)
+    const ok = await onElevate?.(staffId, pin).catch(() => false)
+    setFailed(!ok)
+    if (!ok) setPin('')
+    setBusy(false)
+  }
+
   return (
     <div className="mb-6 rounded-panel border border-danger bg-danger-soft px-5.5 py-5">
       <h3 className="text-lead font-bold text-ink">この操作は店長だけができます</h3>
@@ -129,6 +151,48 @@ export function PermissionRefusal({
             ))}
           </ul>
         </>
+      )}
+      {onElevate && managers.length > 0 && (
+        <div className="mt-5 border-t border-danger/30 pt-5">
+          <h4 className="text-body font-bold">店長の暗証番号で続ける</h4>
+          <div className="mt-3 grid gap-5 lg:grid-cols-2">
+            <label className="grid min-w-52 gap-1 text-grid font-semibold">
+              操作する店長
+              <select
+                value={staffId}
+                onChange={(event) => setStaffId(event.target.value)}
+                className={`min-h-11 rounded-ctl border border-line bg-surface px-3 text-body font-normal ${focusRing}`}
+              >
+                {managers.map((member) => (
+                  <option key={member.id} value={member.id}>
+                    {member.displayName}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="grid gap-4">
+              <PinField
+                value={pin}
+                onChange={setPin}
+                onConfirm={() => void confirmPin()}
+                label="店長の暗証番号"
+                invalid={failed}
+              />
+              <Keypad
+                value={pin}
+                onChange={setPin}
+                onConfirm={() => void confirmPin()}
+                label="店長の暗証番号のテンキー"
+                confirmLabel={busy ? '確認しています…' : '店長として続ける'}
+              />
+            </div>
+          </div>
+          {failed && (
+            <p role="alert" className="mt-2 text-grid text-danger">
+              暗証番号を確認できませんでした。
+            </p>
+          )}
+        </div>
       )}
     </div>
   )

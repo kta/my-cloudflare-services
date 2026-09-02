@@ -1,5 +1,6 @@
 import type { APIRequestContext, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
+import { completeSeededTerminalStart } from './support/terminal'
 
 /**
  * 予約の検索・変更・取消（009-change-and-cancel）の受け入れ基準を、実ブラウザと実 Worker で
@@ -271,11 +272,13 @@ async function startWork(page: Page, nowIso: string): Promise<void> {
    */
   const code = page.getByLabel('お店のコード')
   const rail = page.getByRole('navigation', { name: '画面の切り替え' })
-  await expect(code.or(rail).first()).toBeVisible()
+  const placePick = page.getByRole('heading', { name: 'この端末はどこに置きますか？' })
+  await expect(code.or(rail).or(placePick).first()).toBeVisible()
   if (await code.isVisible()) {
     await code.fill(ORG)
     await page.getByRole('button', { name: '業務を始める' }).click()
   }
+  await completeSeededTerminalStart(page)
   await rail.waitFor()
 }
 

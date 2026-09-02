@@ -140,6 +140,33 @@ describe('本日わたしが担当するご予約', () => {
     expect(container).toBeEmptyDOMElement()
   })
 
+  it('共有端末のロックsnapshotにはmaskCustomerIdentityで変換した値だけを渡す', async () => {
+    const lanes = staffView().lanes.map((lane) => ({
+      ...lane,
+      entries: lane.entries.map((entry) => ({ ...entry, customerName: '田中 花子' })),
+    }))
+    stub(null, lanes)
+    const onSharedSnapshot = vi.fn()
+    render(
+      <MyReservations
+        storeId={STORE_ID}
+        showShared
+        onOpen={vi.fn()}
+        onOpenLedger={vi.fn()}
+        onSharedSnapshot={onSharedSnapshot}
+      />,
+    )
+
+    await screen.findByRole('region', { name: '本日のご予約' })
+    expect(onSharedSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customerName: '●●●● 様',
+        customerPhone: '090-●●●●-●●●●',
+      }),
+    )
+    expect(JSON.stringify(onSharedSnapshot.mock.calls)).not.toContain('田中 花子')
+  })
+
   it('名簿も台帳も読めなかった端末には何も出さない（トップを壊さない）', async () => {
     vi.stubGlobal(
       'fetch',

@@ -67,6 +67,7 @@ export type CheckinPanelProps = {
   onBack: () => void
   onReceive: (stage: 'received' | 'waiting', note: string) => void
   busy?: boolean
+  isOffline?: boolean
 }
 
 /** 「11:00 のご予約　5分早くお着きです」。ちょうどのときは差を出さない。 */
@@ -99,6 +100,7 @@ export function CheckinPanel({
   onBack,
   onReceive,
   busy = false,
+  isOffline = false,
 }: CheckinPanelProps) {
   const [done, setDone] = useState<ReadonlySet<string>>(() => new Set())
   const headingRef = useRef<HTMLHeadingElement>(null)
@@ -267,7 +269,7 @@ export function CheckinPanel({
           <div className="flex items-center gap-3">
             <button
               type="button"
-              disabled={subject.isReceived || busy}
+              disabled={subject.isReceived || busy || isOffline}
               onClick={() => onReceive('received', checkinNote(lines, done))}
               className={cn(
                 'min-h-14 min-w-70 rounded-ctl bg-pine px-6 text-bar font-bold text-on-pine',
@@ -279,7 +281,7 @@ export function CheckinPanel({
             </button>
             <button
               type="button"
-              disabled={busy}
+              disabled={busy || isOffline}
               onClick={() => onReceive('waiting', checkinNote(lines, done))}
               className={cn(
                 'min-h-12 rounded-ctl border border-line-strong bg-surface px-4.5 text-body font-semibold text-ink',

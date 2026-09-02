@@ -78,6 +78,8 @@ export type BookingScreenProps = {
   onOpenLedger?: () => void
   /** 業務の期限が切れた（401）。 */
   onSessionExpired?: () => void
+  /** Shell が検知した通信断。書込みは下書きを保ったまま止める。 */
+  isOffline?: boolean
 }
 
 /** 端末に置くのはこの 1 つだけ。お名前・お電話番号は置かない（§6.6）。 */
@@ -122,6 +124,7 @@ export function BookingScreen({
   onExit,
   onOpenLedger,
   onSessionExpired,
+  isOffline: shellOffline = false,
 }: BookingScreenProps) {
   const clock = useMemo(() => now ?? new Date().toISOString(), [now])
   const titleId = useId()
@@ -181,6 +184,7 @@ export function BookingScreen({
    * 400/409 は通信の問題ではない）。台帳と同じ考え方で、読めているものは消さずに残す。
    */
   const [offline, setOffline] = useState(false)
+  const isOffline = offline || shellOffline
   /*
    * 工程 1 を始めた時点で作り、成功するまで同じ値を送る（`04-api.md` §6.1）。
    * 枠を取られて選び直したときだけ作り直す —— 中身が変わるので、同じ鍵では
@@ -895,7 +899,7 @@ export function BookingScreen({
               staffName,
               equipmentNames,
             }}
-            isOffline={offline}
+            isOffline={isOffline}
             onBookAgain={bookAgain}
             onOpenLedger={onOpenLedger ?? onExit}
           />
@@ -947,7 +951,7 @@ export function BookingScreen({
         ) : step === 'slot' ? (
           <SlotStep
             availability={board}
-            phase={offline ? 'offline' : boardPhase}
+            phase={isOffline ? 'offline' : boardPhase}
             axis={axis}
             onAxisChange={setAxis}
             purposeLabel={purposeLabel}
@@ -983,7 +987,7 @@ export function BookingScreen({
             writer={writer}
             now={clock}
             onLookup={onCustomerLookup}
-            isOffline={offline}
+            isOffline={isOffline}
           />
         ) : (
           <ConfirmStep
@@ -1000,7 +1004,7 @@ export function BookingScreen({
             now={tick}
             renewalsUsed={draft.holdRenewals ?? 0}
             phase={bookingFailed ? 'error' : 'ready'}
-            isOffline={offline}
+            isOffline={isOffline}
             onJumpTo={(target) =>
               setStep(
                 (['datetime', 'purpose', 'slot', 'customer'] as const)[target - 1] ?? 'datetime',
@@ -1059,7 +1063,7 @@ export function BookingScreen({
             step === 'confirm' && conflict === null ? (
               <ConfirmAction
                 confirming={booking}
-                isOffline={offline}
+                isOffline={isOffline}
                 onConfirm={() => {
                   confirmBooking().catch(() => setBookingFailed(true))
                 }}
