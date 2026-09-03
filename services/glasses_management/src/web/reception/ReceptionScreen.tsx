@@ -8,14 +8,15 @@ import type {
   VisitBoard as VisitBoardShape,
 } from '@app/contracts'
 import { toJstDateString } from '@app/shared'
-import { cn, focusRing } from '@app/ui'
+import { cn, focusRing, UndoBar } from '@app/ui'
 import { useCallback, useEffect, useState } from 'react'
+import { BOARD_STAGES } from '../../worker/domain/visit-board'
 import { client } from '../client'
 import { currentPowerLabel, pdLabel } from '../customers/CustomerList'
 import { OfflineBanner } from '../ledger/OfflineBanner'
 import { type CheckinLastVisit, CheckinPanel, type CheckinSubject } from './CheckinPanel'
 import { LinkCustomerPanel } from './LinkCustomerPanel'
-import { VisitBoard } from './VisitBoard'
+import { STAGE_LABELS, VisitBoard } from './VisitBoard'
 
 /*
  * 来店受付の器（承認済みモック docs/frontend/mockups/eyex/images/RECEPTION-JOURNEY.png ／
@@ -174,6 +175,37 @@ export function ReceptionScreen({
   }, [checkinId])
 
   /** 工程を 1 行足す。**追記だけ**なので、どの操作もこの 1 本を通る。 */
+  /*
+   * 直前に積んだ工程を、数秒だけ戻せるようにしておく（UX 監査 NEW-04）。
+   * 押す前に確認を挟むと、1 日に何十回も押す操作が毎回止まる。だから押させてから、
+   * **戻す行を 1 本足して**打ち消す（`visit_events` は追記だけで、盤面は
+   * 「いまの工程より右は記録があっても空に戻す」ので、前の工程を積み直せば戻る）。
+   */
+  const [undoable, setUndoable] = useState<{
+    row: Pick<VisitBoardRow, 'subjectType' | 'subjectId'>
+    back: 'received' | VisitBoardCell['stage']
+    message: string
+  } | null>(null)
+
+  /**
+   * 押す前に立っていた工程。**盤面がいま描いている姿から読む** —— 追記だけの
+   * `visit_events` では「1 つ前」をサーバに聞けないので、押した列より左で最後に
+   * 済んでいる列を戻り先にする。左に 1 つも無ければ「受付」まで戻す。
+   */
+  function previousStage(
+    row: VisitBoardRow,
+    stage: VisitBoardCell['stage'] | 'left',
+  ): 'received' | VisitBoardCell['stage'] {
+    const target = BOARD_STAGES.indexOf(stage as (typeof BOARD_STAGES)[number])
+    const cut = target < 0 ? BOARD_STAGES.length : target
+    const done = row.cells.filter(
+      (cell) =>
+        cell.state !== 'empty' &&
+        BOARD_STAGES.indexOf(cell.stage as (typeof BOARD_STAGES)[number]) < cut,
+    )
+    return done[done.length - 1]?.stage ?? 'received'
+  }
+
   const addVisitEvent = useCallback(
     async (
       row: Pick<VisitBoardRow, 'subjectType' | 'subjectId'>,
@@ -326,15 +358,25 @@ export function ReceptionScreen({
         focusSubjectId={returnTo}
         onAdvance={(row, cell) => {
           if (offline) return
-          addVisitEvent(row, cell.stage).catch(() =>
-            setNotice('記録できませんでした。もう一度お試しください。'),
-          )
+          const back = previousStage(row, cell.stage)
+          addVisitEvent(row, cell.stage)
+            .then(() =>
+              setUndoable({
+                row,
+                back,
+                message: `${row.displayName}を「${STAGE_LABELS[cell.stage as (typeof BOARD_STAGES)[number]] ?? cell.stage}」へ進めました。`,
+              }),
+            )
+            .catch(() => setNotice('記録できませんでした。もう一度お試しください。'))
         }}
         onLeave={(row) => {
           if (offline) return
-          addVisitEvent(row, 'left').catch(() =>
-            setNotice('記録できませんでした。もう一度お試しください。'),
-          )
+          const back = previousStage(row, 'left')
+          addVisitEvent(row, 'left')
+            .then(() =>
+              setUndoable({ row, back, message: `${row.displayName}のご来店を終えました。` }),
+            )
+            .catch(() => setNotice('記録できませんでした。もう一度お試しください。'))
         }}
         onOpenCheckin={(row) => {
           setReturnTo(null)
@@ -344,6 +386,19 @@ export function ReceptionScreen({
         isOffline={offline}
         {...(onOpenLedger === undefined ? {} : { onReceiveVisit: onOpenLedger })}
       />
+      {undoable !== null && (
+        <UndoBar
+          message={undoable.message}
+          onUndo={() => {
+            const back = undoable
+            setUndoable(null)
+            addVisitEvent(back.row, back.back).catch(() =>
+              setNotice('元に戻せませんでした。もう一度お試しください。'),
+            )
+          }}
+          onDismiss={() => setUndoable(null)}
+        />
+      )}
       {linking !== null && (
         <LinkCustomerPanel
           storeId={storeId}

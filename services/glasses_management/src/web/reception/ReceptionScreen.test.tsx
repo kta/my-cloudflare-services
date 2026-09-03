@@ -445,6 +445,33 @@ describe('来店受付の器', () => {
     )
   })
 
+  it('進めた直後に「元に戻す」が出て、押すと 1 つ前の工程を積み直す', async () => {
+    /*
+     * 押す前に確認を挟むと、1 日に何十回も押す操作が毎回止まる。だから押させてから
+     * 数秒だけ戻せる形にした（UX 監査 NEW-04。それまで製品には元に戻す手立てが
+     * 1 つも無かった）。
+     */
+    const user = userEvent.setup()
+    stub()
+    show()
+    await screen.findByRole('grid')
+    await user.click(
+      screen.getByRole('gridcell', { name: '田中 花子 様　視力測定　次にやること　視力測定機 A' }),
+    )
+    const undo = await screen.findByRole('button', { name: '元に戻す' })
+    expect(screen.getByText('田中 花子 様を「視力測定」へ進めました。')).toBeInTheDocument()
+
+    await user.click(undo)
+    await waitFor(() => expect(posted).toHaveLength(2))
+    // 戻り先は、押した列より左で最後に済んでいる列（この行では「受付」まで）。
+    expect(posted[1]).toMatchObject({
+      stage: 'received',
+      subjectType: 'reservation',
+      subjectId: HANAKO_RESERVATION,
+    })
+    expect(screen.queryByRole('button', { name: '元に戻す' })).toBeNull()
+  })
+
   it('まだ受け付けていない行から来店受付の画面を開ける', async () => {
     const user = userEvent.setup()
     stub()

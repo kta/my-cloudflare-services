@@ -1064,6 +1064,45 @@ test('「次にやること　視力測定機 A」を押すと対応中になり
   )
 })
 
+test('工程を進めた直後に「元に戻す」が出て、押すと前の工程へ戻る', async ({ page, request }) => {
+  /*
+   * 押す前に確認を挟むと、1 日に何十回も押す操作が毎回止まる。だから押させてから
+   * 数秒だけ戻せる形にした（UX 監査 NEW-04。それまで製品には元に戻す手立てが
+   * 1 つも無かった）。
+   */
+  await clearBoard(request)
+  const reservation = await createReservation(request, {
+    startsAt: atJst(TODAY, '16:00'),
+    purposeIds: [ADJUST],
+    staffId: SATO,
+    equipmentIds: [MEASURE_A],
+  })
+  await addVisit(request, {
+    subjectType: 'reservation',
+    subjectId: reservation.id,
+    stage: 'received',
+  })
+  await addVisit(request, {
+    subjectType: 'reservation',
+    subjectId: reservation.id,
+    stage: 'fitting',
+  })
+
+  await openBoard(page)
+  await cell(page, 'お客様', '視力測定').click()
+  await expect(cell(page, 'お客様', '視力測定')).toHaveAccessibleName(
+    /^お客様\s+視力測定\s+対応中\s+\d{2}:\d{2}から$/,
+  )
+
+  await page.getByRole('button', { name: '元に戻す' }).click()
+  await expect(cell(page, 'お客様', 'フレーム選び')).toHaveAccessibleName(
+    /^お客様\s+フレーム選び\s+対応中/,
+  )
+  await expect(cell(page, 'お客様', '視力測定')).toHaveAccessibleName(
+    /^お客様\s+視力測定\s+次にやること\s+視力測定機 A/,
+  )
+})
+
 // @e2e-covers AC-RECEP-13
 test('お待たせしている行は赤地と「お待たせ中　18分」の両方で分かる', async ({ page, request }) => {
   await clearBoard(request)

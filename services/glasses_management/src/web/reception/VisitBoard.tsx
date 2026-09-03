@@ -30,7 +30,7 @@ import { EmptyState } from '../shell/EmptyState'
  */
 
 /** 盤面の 6 列の日本語名。並びは `worker/domain/visit-board.ts` の `BOARD_STAGES` が持つ。 */
-const STAGE_LABELS: Record<(typeof BOARD_STAGES)[number], string> = {
+export const STAGE_LABELS: Record<(typeof BOARD_STAGES)[number], string> = {
   received: '受付',
   consulting: 'ご相談',
   fitting: 'フレーム選び',

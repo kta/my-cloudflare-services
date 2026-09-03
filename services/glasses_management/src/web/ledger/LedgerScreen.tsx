@@ -75,6 +75,12 @@ export type LedgerScreenProps = {
    */
   onOpenCheckin: (reservationId: string) => void
   /**
+   * 予約リストの「内容を確認」。**必須**にしてある —— 任意にすると渡し忘れが
+   * 型で捕まらず、Web からのご予約が確認待ちのまま 24:00 を越えて黙って消える
+   * （UX 監査 NEW-05）。
+   */
+  onOpenReview: (reservationId: string) => void
+  /**
    * 詳細の「変更する」「取り消す」。**`onOpenCheckin` と同じく必須**にしてある ——
    * 任意にしていたときは器が 1 つも渡さず、押しても何も起きないボタンが 3 つ並んでいた。
    */
@@ -98,6 +104,7 @@ export function LedgerScreen({
   onBarCenter,
   onOpenSettings,
   onOpenCheckin,
+  onOpenReview,
   onOpenChange,
   onOpenCancel,
   onSessionExpired,
@@ -428,6 +435,7 @@ export function LedgerScreen({
                 onFilterChange={setFilter}
                 isOffline={offline}
                 onCheckin={onOpenCheckin}
+                onReview={onOpenReview}
               />
             ))
           ) : (

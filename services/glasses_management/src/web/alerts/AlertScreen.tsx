@@ -27,7 +27,12 @@ export function AlertScreen({
 }: {
   storeId: string
   onCountChange?: (count: number) => void
-  onOpenLedger?: () => void
+  /**
+   * 「台帳で確認する」。**そのお知らせが指しているご予約を連れていく** ——
+   * 捨てて今日の台帳を開くだけだと、Web からの確認待ちを 12 行の中から目で探し直す
+   * ことになり、探し当てられないまま 24:00 の自動取消に間に合わない（UX 監査 NEW-05）。
+   */
+  onOpenLedger?: (reservationId: string | null) => void
   now?: () => Date
 }) {
   const [kind, setKind] = useState<Kind>('all')
@@ -85,7 +90,7 @@ export function AlertScreen({
         await load()
       } else if (opensLedger(item)) {
         if (!onOpenLedger) throw new Error('missing-destination')
-        onOpenLedger()
+        onOpenLedger(item.targetId ?? null)
       } else {
         throw new Error('missing-action')
       }

@@ -56,6 +56,12 @@ export type ReservationListProps = {
    * 渡さなければ語だけの置き物になる（`005` が先に描いたときの姿）。
    */
   onCheckin?: (reservationId: string) => void
+  /**
+   * 「内容を確認」を押したとき。Web から入って**担当がまだ空**のご予約が確認待ちで、
+   * 受信日の 24:00 JST を越えると日次 Cron が黙って取り消す（お客様へメールは送らない）。
+   * 押しても何も起きない札を置いておくと、その黙った取消がそのまま起きる（UX 監査 NEW-05）。
+   */
+  onReview?: (reservationId: string) => void
 }
 
 /** 行から始められる次の操作。行き先は 008 / 009 が作るので、ここでは語と形だけを決める。 */
@@ -152,6 +158,7 @@ export function ReservationList({
   phase,
   isOffline = false,
   onCheckin,
+  onReview,
 }: ReservationListProps) {
   const state = phase ?? (view === null ? 'loading' : 'ready')
 
@@ -274,7 +281,9 @@ export function ReservationList({
                                 type="button"
                                 {...(action.kind === 'checkin' && onCheckin !== undefined
                                   ? { onClick: () => onCheckin(row.reservationId) }
-                                  : {})}
+                                  : action.kind === 'review' && onReview !== undefined
+                                    ? { onClick: () => onReview(row.reservationId) }
+                                    : {})}
                                 className={`min-h-11.5 shrink-0 rounded-ctl border px-2 text-note font-semibold ${TONE_CLASS[action.tone]} ${focusRing}`}
                               >
                                 {action.label}

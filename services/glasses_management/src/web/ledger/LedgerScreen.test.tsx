@@ -63,11 +63,12 @@ function devToken(sub: string): string {
   return `header.${btoa(JSON.stringify({ sub, org: 'eyex' }))}.signature`
 }
 
-/** 詳細の 3 操作。既定は何もしない関数（型で必須なので省略できない）。 */
+/** 詳細とリストの操作。既定は何もしない関数（型で必須なので省略できない）。 */
 const NO_OP_ACTIONS = {
   onOpenCheckin: () => {},
   onOpenChange: () => {},
   onOpenCancel: () => {},
+  onOpenReview: () => {},
 }
 
 async function openLedger(date = '2026-08-27', props: Record<string, unknown> = {}) {

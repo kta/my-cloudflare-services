@@ -240,7 +240,7 @@ export function ChangeScreen({
    */
   initialReservationId?: string
   /** 上と対で、日時変更と取り消しのどちらから始めるか。 */
-  initialStep?: 'datetime' | 'cancel'
+  initialStep?: 'datetime' | 'slot' | 'cancel'
   /** 担当・場所を変える（BOOK-03-SLOT-STAFF の再利用）。渡されないと 1 行で断る。 */
   onChangeSlot?: (detail: ReservationDetail) => void
   onSessionExpired?: () => void

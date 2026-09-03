@@ -194,7 +194,7 @@ function Workspace({
   const [nextRetryLabel, setNextRetryLabel] = useState<string | null>(null)
   const [personalModeSubject, setPersonalModeSubject] = useState<string | null>(null)
   /** 変更の面をどの工程から開くか（台帳の「変更する」／「取り消す」で分かれる）。 */
-  const [changeIntent, setChangeIntent] = useState<'datetime' | 'cancel'>('datetime')
+  const [changeIntent, setChangeIntent] = useState<'datetime' | 'slot' | 'cancel'>('datetime')
   /** 利用者が自分でサイドバーの幅を決めたか。決めたあとは画面ごとの既定を当てない。 */
   const [railTouched, setRailTouched] = useState(false)
   /** この業務のあいだに一度でも開いた画面。既定の幅は初回だけ当てる。 */
@@ -381,7 +381,7 @@ function Workspace({
    * **押した予約をそのまま持っていく。** 予約 id を渡さないと、受話器を持ったまま
    * まっさらな検索画面に降ろされ、いま画面に出ていたお名前を打ち直すことになる。
    */
-  function openChange(reservationId: string, intent: 'datetime' | 'cancel') {
+  function openChange(reservationId: string, intent: 'datetime' | 'slot' | 'cancel') {
     setChangeIntent(intent)
     navigate('search', reservationId)
   }
@@ -769,6 +769,10 @@ function Workspace({
                 onOpenCheckin={(reservationId) => navigate('reception', reservationId)}
                 onOpenChange={(reservationId) => openChange(reservationId, 'datetime')}
                 onOpenCancel={(reservationId) => openChange(reservationId, 'cancel')}
+                /* Web からのご予約の「内容を確認」。担当が空のまま 24:00 を越えると
+                   日次 Cron が黙って取り消すので、担当を決める面へ直に運ぶ
+                   （UX 監査 NEW-05）。 */
+                onOpenReview={(reservationId) => openChange(reservationId, 'slot')}
                 onSessionExpired={onSignOut}
                 isOffline={!online}
               />
@@ -850,7 +854,7 @@ function Workspace({
                 storeId={store.id}
                 now={now}
                 onCountChange={setAlertCount}
-                onOpenLedger={() => navigate('ledger')}
+                onOpenLedger={(reservationId) => navigate('ledger', reservationId)}
               />
             ) : (
               <p className="p-11 text-body text-ink-muted">読み込んでいます…</p>

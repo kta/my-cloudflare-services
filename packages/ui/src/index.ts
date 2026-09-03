@@ -21,3 +21,4 @@ export {
 } from './components'
 export { Dialog } from './dialog'
 export { Keypad, type KeypadProps, PinField, type PinFieldProps, TryMeter } from './keypad'
+export { UndoBar, type UndoBarProps } from './undo-bar'

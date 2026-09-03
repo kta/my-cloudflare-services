@@ -197,6 +197,12 @@ describe('お知らせ画面', () => {
     await userEvent.click(await screen.findByRole('button', { name: '台帳で確認する' }))
 
     expect(onOpenLedger).toHaveBeenCalledOnce()
+    /*
+     * 指しているご予約を連れていく。捨てて今日の台帳を開くだけだと、確認待ちの
+     * 1 件を 12 行の中から目で探し直すことになり、24:00 の自動取消に間に合わない
+     * （UX 監査 NEW-05）。
+     */
+    expect(onOpenLedger).toHaveBeenCalledWith('44444444-4444-4444-8444-444444444444')
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(screen.queryByRole('button', { name: '対応済みにする' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '確認する' })).not.toBeInTheDocument()

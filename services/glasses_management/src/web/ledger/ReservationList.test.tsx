@@ -123,10 +123,12 @@ function WithFilter({
   view = DAY,
   isOffline = false,
   onCheckin,
+  onReview,
 }: {
   view?: LedgerView
   isOffline?: boolean
   onCheckin?: (reservationId: string) => void
+  onReview?: (reservationId: string) => void
 }) {
   const [filter, setFilter] = useState<LedgerFilter>('all')
   return (
@@ -136,6 +138,7 @@ function WithFilter({
       onFilterChange={setFilter}
       isOffline={isOffline}
       {...(onCheckin === undefined ? {} : { onCheckin })}
+      {...(onReview === undefined ? {} : { onReview })}
     />
   )
 }
@@ -302,6 +305,19 @@ describe('予約リスト', () => {
     await userEvent.click(within(rows[2] as HTMLElement).getByRole('button', { name: 'ご来店' }))
     expect(onCheckin).toHaveBeenCalledTimes(1)
     expect(onCheckin.mock.calls[0]?.[0]).toEqual(expect.any(String))
+  })
+
+  it('「内容を確認」を押すと、そのご予約を連れて確認の画面へ渡す', async () => {
+    /*
+     * Web から入って担当が空のご予約は、受信日の 24:00 JST を越えると日次 Cron が
+     * 黙って取り消す。この札が何もしないままだったころは、店が気づく手立てが
+     * どこにも無かった（UX 監査 NEW-05）。
+     */
+    const onReview = vi.fn()
+    render(<WithFilter onReview={onReview} />)
+    await userEvent.click(screen.getByRole('button', { name: '内容を確認' }))
+    expect(onReview).toHaveBeenCalledTimes(1)
+    expect(onReview.mock.calls[0]?.[0]).toBe('r06')
   })
 
   it('ご来店の無かった行は押せる操作を持たず「ご来店なし」と書く', () => {

@@ -899,3 +899,22 @@ test('定休日は目盛りだけの空の格子を出さず、事実と「本�
   await expect(page.getByRole('grid', { name: '予約台帳' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: '本日' })).toBeVisible()
 })
+
+test('確認待ちの「内容を確認」から、担当を決める面へそのまま入れる', async ({ page }) => {
+  /*
+   * Web から入って担当が空のご予約は、受信日の 24:00 JST を越えると日次 Cron が
+   * 黙って取り消す（お客様へメールは送らない）。この札は長いあいだ押しても何も
+   * 起きず、店が気づく手立てがどこにも無かった（UX 監査 NEW-05）。
+   */
+  await openLedger(page)
+  await modeButton(page, '予約リスト').click()
+
+  const review = page.getByRole('button', { name: '内容を確認' }).first()
+  await expect(review).toBeVisible()
+  await review.click()
+
+  await expect(page.getByRole('table', { name: 'ご予約を置く盤' })).toBeVisible()
+  await expect(page.getByRole('list', { name: /予約の変更の工程/ })).toContainText(
+    '担当と場所を変える',
+  )
+})
