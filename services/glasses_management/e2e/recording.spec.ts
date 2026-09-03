@@ -313,6 +313,46 @@ async function authed(
   return { headers: { authorization: `Bearer ${token}` } }
 }
 
+/** seed の端末とスタッフ（`seed.mjs` の `uid()` は決め打ちの UUID を配る）。 */
+const RECEPTION_IPAD = 'c0100000-0000-4000-8000-000000000001'
+const SATO_MISAKI = 'c0010000-0000-4000-8000-000000000000'
+const SEED_PIN = '2580'
+
+/**
+ * 録音の保全は個人モードを求める（AC-TERM-10）。ヘッダーを持たない呼び出しは、
+ * 店舗に生きた端末セッションが無いあいだだけ従来どおり通る。e2e は D1 を 1 本しか持たず、
+ * 先に走る面が端末セッションを開くので、**この面も端末を通して個人モードへ上げる**。
+ * 共有で始めて `elevate` する順は、画面がたどる順そのものである。
+ */
+async function personalMode(
+  request: APIRequestContext,
+): Promise<{ headers: Record<string, string> }> {
+  const auth = await authed(request)
+  const started = await request.post(`/api/staff/terminals/${RECEPTION_IPAD}/sessions`, {
+    ...auth,
+    data: { mode: 'shared', pin: SEED_PIN },
+  })
+  expect(started.status(), await started.text()).toBe(200)
+  const shared = (await started.json()) as { sessionToken: string }
+  const elevated = await request.post(`/api/staff/terminals/${RECEPTION_IPAD}/elevate`, {
+    headers: {
+      ...auth.headers,
+      'x-terminal-id': RECEPTION_IPAD,
+      'x-terminal-session': shared.sessionToken,
+    },
+    data: { staffId: SATO_MISAKI, pin: SEED_PIN, reason: 'recording' },
+  })
+  expect(elevated.status(), await elevated.text()).toBe(200)
+  const personal = (await elevated.json()) as { sessionToken: string }
+  return {
+    headers: {
+      ...auth.headers,
+      'x-terminal-id': RECEPTION_IPAD,
+      'x-terminal-session': personal.sessionToken,
+    },
+  }
+}
+
 /** 録音を読める・保全できる担当店舗を配る。何度呼んでも同じ 1 行になる。 */
 async function grantRecording(request: APIRequestContext): Promise<void> {
   const res = await request.post('/api/internal/store-memberships/sync', {
@@ -1033,7 +1073,7 @@ test('保全を立てた録音は片づけで消えない', async ({ request }) 
   const after = new Date(Date.parse(stored.retainUntil ?? '') + 1000).toISOString()
 
   const held = await request.post(`/api/staff/recordings/${stored.id}/hold`, {
-    ...(await authed(request)),
+    ...(await personalMode(request)),
     data: { legalHold: true, reason: '苦情の申し立てを調べているため' },
   })
   expect(held.status(), await held.text()).toBe(200)
@@ -1046,7 +1086,7 @@ test('保全を立てた録音は片づけで消えない', async ({ request }) 
 
   // 外した瞬間に、同じ片づけで消える。
   const cleared = await request.post(`/api/staff/recordings/${stored.id}/hold`, {
-    ...(await authed(request)),
+    ...(await personalMode(request)),
     data: { legalHold: false, reason: '調べが終わったため' },
   })
   expect(cleared.status()).toBe(200)

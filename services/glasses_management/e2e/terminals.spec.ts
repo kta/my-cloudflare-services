@@ -66,6 +66,36 @@ async function authHeaders(request: APIRequestContext): Promise<Record<string, s
   return { authorization: `Bearer ${body.token}` }
 }
 
+/** seed が置く 3 件（対応が必要 1 / お知らせ 2）。AC-TERM-16 が数える母数である。 */
+const SEEDED_ALERTS = [
+  'f0020000-0000-4000-8000-000000000000',
+  'f0020000-0000-4000-8000-000000000001',
+  'f0020000-0000-4000-8000-000000000002',
+] as const
+
+/**
+ * e2e は D1 を 1 本しか持たず、先に走る面（録音の再送失敗など）がお知らせを増やす。
+ * AC-TERM-16 は「3 件ある」を前提に 1 件と 2 件を数えるので、**seed の 3 件以外を
+ * 対応済みにして**この面の前提をそろえる。増えた行を消すのではなく解決済みにするのは、
+ * お知らせに削除の経路が無いからである。
+ */
+async function normalizeAlerts(request: APIRequestContext): Promise<void> {
+  const headers = await authHeaders(request)
+  const response = await request.get('/api/staff/alerts?kind=all&limit=200', { headers })
+  expect(response.status()).toBe(200)
+  const { items } = (await response.json()) as {
+    items: Array<{ id: string; resolvedAt: string | null }>
+  }
+  for (const alert of items) {
+    const seeded = SEEDED_ALERTS.includes(alert.id as (typeof SEEDED_ALERTS)[number])
+    // seed の 3 件は未読へ戻す（先に走る面が「すべて既読にする」を押していることがある）。
+    const data = seeded ? { readAt: null } : { resolved: true }
+    if (!seeded && alert.resolvedAt !== null) continue
+    const patched = await request.patch(`/api/staff/alerts/${alert.id}`, { headers, data })
+    expect(patched.status(), await patched.text()).toBe(200)
+  }
+}
+
 // @e2e-covers UC-TERM-01 AC-TERM-01
 test('未設定の iPad は個人と共有の違いを3項目ずつ読める', async ({ page }) => {
   await login(page)
@@ -201,6 +231,16 @@ test('共有モードで予約を確定し、受付履歴に共有端末の操�
   await page.getByRole('button', { name: /^18:00 / }).click()
   await page.getByRole('button', { name: /^次へ進む/ }).click()
   await page.getByRole('button', { name: /^今のメガネを調整したい/ }).click()
+  /*
+   * 木曜は閉店前の片付けが 18:40–19:00 なので、18:00 から所要 45 分は収まらない
+   * （`booking.spec.ts` の AC-BOOK-03 が同じ枠を「収まらない時刻」の例に使っている）。
+   * 押せる時刻を焼き込むと、ほかの e2e がその枠を埋めたときに揺れる。アプリ自身が
+   * 出す「受付できない時刻のご案内」の先頭へ寄せて、いま取れる枠で確定させる。
+   */
+  const guidance = page.getByRole('group', { name: '受付できない時刻のご案内' })
+  await expect(guidance.getByRole('button').first()).toBeVisible()
+  await guidance.getByRole('button').first().click()
+  await expect(page.getByRole('button', { name: /^次へ進む/ })).toBeEnabled()
   await page.getByRole('button', { name: /^次へ進む/ }).click()
   await expect(page.getByRole('table', { name: 'ご予約を置く盤' })).toBeVisible()
   await page.getByRole('button', { name: '担当はあとで決める' }).click()
@@ -390,7 +430,8 @@ test('共有端末の操作主体は削除不能な監査イベントとして�
 })
 
 // @e2e-covers UC-TERM-14 AC-TERM-16
-test('お知らせは対応要否を分け、未読をまとめて既読にできる', async ({ page }) => {
+test('お知らせは対応要否を分け、未読をまとめて既読にできる', async ({ page, request }) => {
+  await normalizeAlerts(request)
   await startShared(page)
   await page.getByRole('button', { name: /^お知らせ \d+件$/ }).click()
   const kinds = page.getByRole('navigation', { name: 'お知らせの種類' })
