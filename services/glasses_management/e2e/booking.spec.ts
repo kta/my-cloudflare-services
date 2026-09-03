@@ -427,6 +427,24 @@ test('工程 3 で先約に重なると帯が重なり、右に先約のお名�
   const next = page.getByRole('button', { name: /^次へ進む/ }).last()
   await expect(next).toBeDisabled()
   await expect(next).toHaveAttribute('aria-label', '次へ進む　重なりを解くと進めます')
+
+  /*
+   * 重なりを解くのがこの面の仕事なので、**解く対象が画面に映っていること**。
+   * 盤は 1 日ぶんの列を持ち、窓に入るのは 8 列だけなので、放っておくと
+   * 15:00 は流れた先にある（UX 監査 J-05。それでも右の柱は「15:00 の先約があります」
+   * 「指でつかんで動かせます」と言うので、言われたものが 1 つも見えない）。
+   */
+  const board = page.getByRole('table', { name: 'ご予約を置く盤' })
+  const scroller = board.locator('xpath=ancestor::div[contains(@class,"overflow-auto")][1]')
+  const window = await scroller.boundingBox()
+  const placed = await page.getByText('重なっています').first().boundingBox()
+  expect(placed).not.toBeNull()
+  expect(placed?.x ?? 0).toBeGreaterThanOrEqual(window?.x ?? 0)
+  expect((placed?.x ?? 0) + (placed?.width ?? 0)).toBeLessThanOrEqual(
+    (window?.x ?? 0) + (window?.width ?? 0),
+  )
+  // 流したあとも、誰の行なのかが分かる（名前の列は左に貼り付く）。
+  await expect(page.getByRole('rowheader', { name: /佐藤 美咲/ })).toBeVisible()
 })
 
 // @e2e-covers AC-BOOK-06

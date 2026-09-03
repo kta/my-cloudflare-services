@@ -1,6 +1,6 @@
 import type { AvailabilityLane, AvailabilitySlot } from '@app/contracts'
 import { cn, focusRing } from '@app/ui'
-import type { PointerEvent, ReactNode, Ref } from 'react'
+import { type PointerEvent, type ReactNode, type Ref, useEffect, useRef } from 'react'
 import { jstClock } from '../ledger/metrics'
 import type { BoardCell } from './slot-drag'
 
@@ -202,9 +202,37 @@ export function SlotBoard({
   boardRef,
 }: SlotBoardProps) {
   const columns = columnStarts.length
+  const scrollerRef = useRef<HTMLDivElement>(null)
+
+  /*
+   * いま置いているご予約を必ず窓の中に入れる。
+   *
+   * 盤は 1 日ぶんの列を持つが、窓に入るのはモックの 8 列（10:00–14:00）だけで、
+   * 残りは横に流れる。**流れた先に置いてあると、この面の仕事そのものが見えない** ——
+   * 右の柱が「14:00 の先約があります」「指でつかんで動かせます」と言っているのに、
+   * その 14:00 も、つかむはずの帯も画面の外にある（UX 監査 J-05。実測で
+   * scrollWidth 1732 / clientWidth 864 / scrollLeft 0、映るのは 13:30 まで）。
+   *
+   * すでに見えているときは動かさない。運んでいる最中に盤が勝手に滑ると、
+   * 指と帯がずれる。
+   */
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 列の数と幅が変わったときも測り直す
+  useEffect(() => {
+    const box = scrollerRef.current
+    if (box === null) return
+    const next = scrollLeftFor({
+      scrollLeft: box.scrollLeft,
+      clientWidth: box.clientWidth,
+      scrollWidth: box.scrollWidth,
+      columns,
+      column: placed.column,
+      span,
+    })
+    if (next !== null) box.scrollLeft = next
+  }, [placed.column, span, columns])
 
   return (
-    <div className="min-h-0 flex-1 overflow-auto bg-surface">
+    <div ref={scrollerRef} className="min-h-0 flex-1 overflow-auto bg-surface">
       <div className="relative h-full" style={{ minWidth: boardMinWidth(columns) }}>
         {/* 目盛りは格子の裏に 1 枚。セルに縦罫を引かないので、帯が乗っても途切れない。 */}
         <div
@@ -245,7 +273,7 @@ export function SlotBoard({
           {/* biome-ignore lint/a11y/useSemanticElements: 上の table と同じ理由（行は display:contents） */}
           {/* biome-ignore lint/a11y/useFocusableInteractive: 行は箱を持たない（display:contents）ので焦点を受けない */}
           <div role="row" className="contents">
-            <Head>{axisLabel}</Head>
+            <Head pinned>{axisLabel}</Head>
             {columnStarts.map((start) => (
               <Head key={start}>{jstClock(start)}</Head>
             ))}
@@ -273,13 +301,51 @@ export function SlotBoard({
   )
 }
 
-function Head({ children }: { children: ReactNode }) {
+/**
+ * 置いているご予約を窓に入れるための `scrollLeft`。動かす必要が無ければ null。
+ *
+ * 窓に入るのはモックの 8 列（10:00–14:00）だけで、残りは横に流れる。
+ * 流れた先に置いてあると、この面の仕事（先約との重なりを解く）そのものが見えない。
+ * すでに見えているときは動かさない —— 運んでいる最中に盤が滑ると指と帯がずれる。
+ */
+export function scrollLeftFor({
+  scrollLeft,
+  clientWidth,
+  scrollWidth,
+  columns,
+  column,
+  span,
+}: {
+  scrollLeft: number
+  clientWidth: number
+  scrollWidth: number
+  columns: number
+  column: number
+  span: number
+}): number | null {
+  if (columns <= 0 || clientWidth <= 0 || scrollWidth <= clientWidth) return null
+  const columnWidth = (scrollWidth - LABEL_WIDTH_PX) / columns
+  if (!Number.isFinite(columnWidth) || columnWidth <= 0) return null
+  const left = LABEL_WIDTH_PX + column * columnWidth
+  const right = left + Math.max(1, span) * columnWidth
+  // 名前の列は貼り付いているので、その幅ぶんは「見えている」に数えない。
+  if (left >= scrollLeft + LABEL_WIDTH_PX && right <= scrollLeft + clientWidth) return null
+  const centered = (left + right) / 2 - clientWidth / 2
+  const next = Math.max(0, Math.min(centered, scrollWidth - clientWidth))
+  return next === scrollLeft ? null : next
+}
+
+function Head({ children, pinned = false }: { children: ReactNode; pinned?: boolean }) {
   return (
     /* biome-ignore lint/a11y/useSemanticElements: 上の table と同じ理由 */
     <div
       role="columnheader"
       tabIndex={-1}
-      className="flex min-h-8.5 items-center border-r border-line border-b border-line-strong bg-surface-2 px-2 font-semibold text-ink-muted"
+      className={cn(
+        'flex min-h-8.5 items-center border-r border-line border-b border-line-strong bg-surface-2 px-2 font-semibold text-ink-muted',
+        // 名前の列は左に貼り付ける（下の rowheader と同じ理由）。
+        pinned && 'sticky left-0 z-20',
+      )}
     >
       {children}
     </div>
@@ -331,11 +397,16 @@ function Row({
     /* biome-ignore lint/a11y/useSemanticElements: 上の table と同じ理由 */
     /* biome-ignore lint/a11y/useFocusableInteractive: 行は箱を持たない（display:contents）ので焦点を受けない */
     <div role="row" className="contents">
+      {/*
+        名前の列は左に貼り付ける。盤は 1 日ぶんの列を持ち、横に流れて使う面なので、
+        流したときに名前が一緒に消えると**誰の行なのか分からなくなる**（UX 監査 J-05）。
+        地は不透明（`bg-surface-2`）でなければ、下を通る帯が透けて名前が読めない。
+      */}
       {/* biome-ignore lint/a11y/useSemanticElements: 同上 */}
       <div
         role="rowheader"
         tabIndex={-1}
-        className="flex min-h-16 flex-col justify-center border-r border-line-strong border-b border-line bg-surface-2 px-2.5 py-1.5 font-semibold text-ink"
+        className="sticky left-0 z-20 flex min-h-16 flex-col justify-center border-r border-line-strong border-b border-line bg-surface-2 px-2.5 py-1.5 font-semibold text-ink"
       >
         <span>{lane.name}</span>
         {lane.subtitle !== '' && (
