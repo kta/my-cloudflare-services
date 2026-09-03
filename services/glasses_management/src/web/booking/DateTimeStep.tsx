@@ -89,6 +89,16 @@ export function DateTimeStep({
   onGuardChange,
 }: DateTimeStepProps) {
   const today = toJstDateString(new Date(now))
+  /*
+   * 開いた瞬間は本日を選んでおく。
+   *
+   * 以前は日付も時刻も選ばれておらず、時刻の札が 0 枚のまま
+   * 「お日にちをお選びください」だけが出ていた（UX 監査 UI-06）。
+   * 電話を受けた人がいちばん先に見たいのは今日の空きなので、その 1 タップを省く。
+   * 承認済みモック BOOK-01-DATETIME.png も本日を選んだ姿で描かれている。
+   * 途中まで入れた下書きがあるときは、そちらを優先する（本日で上書きしない）。
+   * 本日が定休のときは選ばない —— 押せない日を選んだ姿にしない（下の効果で外す）。
+   */
   const [date, setDate] = useState<LocalDate | null>(() =>
     draft.startsAt === null ? null : toJstDateString(new Date(draft.startsAt)),
   )
@@ -177,6 +187,23 @@ export function DateTimeStep({
     (hours?.rows ?? []).filter((row) => row.isClosed).map((row) => row.weekday),
   )
   const shownSlots = answer?.slots ?? []
+
+  /*
+   * 営業日が届いたら本日を選んでおく。
+   *
+   * 以前は日付も時刻も選ばれておらず、時刻の札が 0 枚のまま
+   * 「お日にちをお選びください」だけが出ていた（UX 監査 UI-06）。
+   * 電話を受けた人がいちばん先に見たいのは今日の空きなので、その 1 タップを省く。
+   * 承認済みモック BOOK-01-DATETIME.png も本日を選んだ姿で描かれている。
+   *
+   * **営業日が届くまで選ばない。** 先に選ぶと、本日が定休の日に
+   * 押せない札を選んだ姿が一瞬出る。下書きがあるときも触らない。
+   */
+  useEffect(() => {
+    if (date !== null || draft.startsAt !== null || hours === null) return
+    if (closedWeekdays.has(weekdayOf(today))) return
+    setDate(today)
+  }, [date, draft.startsAt, hours, closedWeekdays, today])
 
   const closedNote =
     closedWeekdays.size === 0

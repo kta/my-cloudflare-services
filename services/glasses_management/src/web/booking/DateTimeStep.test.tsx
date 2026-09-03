@@ -135,8 +135,14 @@ afterEach(() => {
 
 const availabilityCalls = () => asked.filter((url) => url.pathname === '/api/staff/availability')
 
-function Harness() {
-  const [draft, setDraft] = useState<ReceptionSessionDraft>(emptyDraft())
+function Harness({
+  now = NOW,
+  draft: initialDraft,
+}: {
+  now?: string
+  draft?: ReceptionSessionDraft
+} = {}) {
+  const [draft, setDraft] = useState<ReceptionSessionDraft>(initialDraft ?? emptyDraft())
   const [guard, setGuard] = useState<StepGuard>({
     canProceed: false,
     blockedReason: 'まだ伺っていません',
@@ -146,7 +152,7 @@ function Harness() {
     <div className="flex">
       <DateTimeStep
         storeId={STORE_ID}
-        now={NOW}
+        now={now}
         receptionSessionId={SESSION_ID}
         draft={draft}
         onDraftChange={setDraft}
@@ -163,10 +169,20 @@ async function openStep() {
 }
 
 describe('工程 1', () => {
-  it('日付も時刻も選んでいないと「次へ進む」が押せず、理由が読み上げで分かる', async () => {
+  it('時刻を選んでいないと「次へ進む」が押せず、理由が読み上げで分かる', async () => {
+    // 日付は本日が既に選ばれているので（UI-06）、足りないのは時刻だけである。
     await openStep()
     expect(
-      screen.getByRole('button', { name: '次へ進む　お日にちとお時間をお選びになると進めます' }),
+      await screen.findByRole('button', { name: '次へ進む　お時間をお選びになると進めます' }),
+    ).toBeDisabled()
+  })
+
+  it('本日が定休で日付も選べていないときは、両方が足りないと言う', async () => {
+    render(<Harness now="2026-09-01T02:08:00.000Z" />)
+    expect(
+      await screen.findByRole('button', {
+        name: '次へ進む　お日にちとお時間をお選びになると進めます',
+      }),
     ).toBeDisabled()
   })
 
@@ -320,5 +336,46 @@ describe('工程 1', () => {
       await screen.findByText('受け付けられる時刻を読み込めませんでした。'),
     ).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'もう一度読み込む' })).toBeInTheDocument()
+  })
+})
+
+/*
+ * 工程 1 は本日を選んだ姿で開く。
+ *
+ * 以前は日付も時刻も選ばれておらず、時刻の札が 0 枚のまま
+ * 「お日にちをお選びください。受け付けられる時刻をお出しします。」だけが出ていた
+ * （UX 監査 UI-06 / UI-09 と同じ「既定値を置かない」癖）。
+ * 承認済みモック BOOK-01-DATETIME.png は 27（本日）を選んだ姿で描かれている。
+ * 電話を受けた人がいちばん先に見たいのは今日の空きなので、その 1 タップを省く。
+ */
+describe('開いた瞬間の日付', () => {
+  it('本日が選ばれた姿で開き、その日の時刻の札が出る', async () => {
+    await openStep()
+    // 営業日が届いてから選ぶので、1 描画ぶん待つ。
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '8月27日（木）　本日' })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      ),
+    )
+    expect(await screen.findByRole('button', { name: /^11:30/ })).toBeInTheDocument()
+  })
+
+  it('本日が定休日なら選ばない（押せない日を選んだ姿にしない）', async () => {
+    // 2026-09-01 は火曜（定休）。
+    render(<Harness now="2026-09-01T02:08:00.000Z" />)
+    const closed = await screen.findByRole('button', { name: '9月1日（火）　定休' })
+    expect(closed).toBeDisabled()
+    // 営業日が届いてから選ぶので、押せない札が一瞬でも選ばれた姿にならない。
+    await waitFor(() => expect(closed).not.toHaveAttribute('aria-pressed', 'true'))
+    expect(screen.queryByRole('button', { name: /^\d{1,2}:\d{2}/ })).toBeNull()
+  })
+
+  it('途中まで入れた下書きがあれば、その日を優先する（本日で上書きしない）', async () => {
+    render(<Harness draft={{ ...emptyDraft(), startsAt: at('11:00', '2026-08-28') }} />)
+    expect(await screen.findByRole('button', { name: '8月28日（金）' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
   })
 })
