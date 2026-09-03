@@ -227,7 +227,7 @@ test('共有モードで予約を確定し、受付履歴に共有端末の操�
   await expect(page.getByText(/暗証番号/)).toHaveCount(0)
 
   await page.getByRole('button', { name: /^8月27日（木）/ }).click()
-  await page.getByRole('button', { name: /^ほかの時刻も見る/ }).click()
+  // 時刻の札は営業時間ぶんを全部出す（UX 監査 BOOK-05 で折りたたみをやめた）。
   await page.getByRole('button', { name: /^18:00 / }).click()
   await page.getByRole('button', { name: /^次へ進む/ }).click()
   await page.getByRole('button', { name: /^今のメガネを調整したい/ }).click()

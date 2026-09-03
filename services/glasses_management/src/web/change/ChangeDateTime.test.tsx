@@ -257,33 +257,20 @@ describe('候補が多い日', () => {
     )
   })
 
-  it('時刻の札は 8 枚までで、残りは「ほかの時刻も見る」の中にある', async () => {
+  it('サーバが返した時刻をひとつ残らず並べる（午後を畳んで隠さない）', async () => {
     show()
     await waitFor(() =>
       expect(screen.getByRole('button', { name: '10:00　受付できます' })).toBeInTheDocument(),
     )
     const group = within(screen.getByRole('group', { name: 'お時間' }))
-    const times = group
-      .getAllByRole('button')
-      .filter((button) => !/ほかの時刻も見る/.test(button.textContent ?? ''))
-    expect(times).toHaveLength(8)
-    // いまのご予約自身の 11:00 と、格子の頭から 7 枠。残りの 5 枠は畳まれている。
-    expect(times[0]).toHaveAccessibleName('11:00　いまのまま')
-    expect(group.getByRole('button', { name: 'ほかの時刻も見る（あと5件）' })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: '16:00　受付できます' })).not.toBeInTheDocument()
-  })
-
-  it('「ほかの時刻も見る」を押すと残りの時刻も並ぶ', async () => {
-    show()
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: '10:00　受付できます' })).toBeInTheDocument(),
-    )
-    await userEvent.click(screen.getByRole('button', { name: 'ほかの時刻も見る（あと5件）' }))
-    expect(screen.getByRole('button', { name: '16:00　受付できます' })).toBeInTheDocument()
+    // 12 枠に、いまのご予約自身の 11:00 を足した 13 枚。8 枚で切っていたころの畳みは無い。
+    expect(group.getAllByRole('button')).toHaveLength(MANY.length + 1)
+    // 畳んでいたころ隠れていたのは後ろ半分、つまり午後。変更先の相談でいちばん要る枠だった。
+    expect(group.getByRole('button', { name: '16:00　受付できます' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /^ほかの時刻も見る/ })).not.toBeInTheDocument()
   })
 
-  it('選んでいる時刻が窓の外なら、初めから全部の時刻を出す（選んだ札を隠さない）', async () => {
+  it('後ろのほうの時刻を選んでいても、その札がそのまま見えている', async () => {
     show({ chosenStartsAt: at('16:00') })
     await waitFor(() =>
       expect(screen.getByRole('button', { name: '16:00　選択中' })).toBeInTheDocument(),

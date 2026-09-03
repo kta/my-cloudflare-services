@@ -54,7 +54,12 @@ export function ChartGridlines({
     <div
       aria-hidden="true"
       data-testid="chart-gridlines"
-      className="pointer-events-none absolute inset-y-0 left-10 right-0 flex flex-col justify-between"
+      /*
+       * 目盛は**棒の背面**に敷く。位置指定を持つ要素は、位置指定の無い兄弟より手前に
+       * 描かれるので、`z-0` を明示しないと線が棒を横切って 1 本の棒が数本に割れて見える
+       * （UX 監査 UI-08。72 の棒が 4 本に分断されていた）。
+       */
+      className="pointer-events-none absolute inset-y-0 left-10 right-0 z-0 flex flex-col justify-between"
     >
       {ticks.map((value) => {
         return (

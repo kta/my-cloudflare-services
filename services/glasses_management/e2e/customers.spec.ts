@@ -305,9 +305,6 @@ async function walkToCustomerStep(page: Page, hhmm: string): Promise<void> {
 
   await page.getByRole('button', { name: new RegExp(`^${WALK_DAY}`) }).click()
   const slot = page.getByRole('button', { name: new RegExp(`^${hhmm} `) })
-  const more = page.getByRole('button', { name: /^ほかの時刻も見る/ })
-  await expect(slot.or(more).first()).toBeVisible()
-  if ((await slot.count()) === 0) await more.click()
   await expect(slot).toBeEnabled()
   await slot.click()
   await proceed(page)

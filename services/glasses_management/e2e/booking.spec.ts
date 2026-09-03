@@ -178,14 +178,9 @@ const dayButton = (page: Page, label: string): Locator =>
 const timeButton = (page: Page, hhmm: string): Locator =>
   page.getByRole('button', { name: new RegExp(`^${hhmm} `) })
 
-/** 時刻の窓（1 画面 8 枚）の外に隠れている時刻を開く。 */
-const moreTimes = (page: Page): Locator => page.getByRole('button', { name: /^ほかの時刻も見る/ })
-
-/** 工程 1。お日にちとお時間を選ぶ。窓の外の時刻は「ほかの時刻も見る」を開いてから押す。 */
+/** 工程 1。お日にちとお時間を選ぶ。時刻の札は営業時間ぶんが全部出る（UX 監査 BOOK-05）。 */
 async function pickDateTime(page: Page, hhmm: string): Promise<void> {
   await dayButton(page, DAY_LABEL).click()
-  await expect(timeButton(page, hhmm).or(moreTimes(page)).first()).toBeVisible()
-  if ((await timeButton(page, hhmm).count()) === 0) await moreTimes(page).click()
   await expect(timeButton(page, hhmm)).toBeEnabled()
   await timeButton(page, hhmm).click()
   await expect(timeButton(page, hhmm)).toHaveAttribute('aria-pressed', 'true')

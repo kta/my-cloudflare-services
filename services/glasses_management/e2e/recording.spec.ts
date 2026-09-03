@@ -236,14 +236,11 @@ async function proceed(page: Page): Promise<void> {
   await barNext(page).click()
 }
 
-/** 工程 1。お日にちとお時間を選ぶ。窓の外の時刻は「ほかの時刻も見る」を開いてから押す。 */
+/** 工程 1。お日にちとお時間を選ぶ。札は営業時間ぶんが全部並んでいる。 */
 async function pickDateTime(page: Page, hhmm: string): Promise<void> {
   const day = page.getByRole('button', { name: new RegExp(`^${DAY_LABEL}`) })
   const time = page.getByRole('button', { name: new RegExp(`^${hhmm} `) })
-  const more = page.getByRole('button', { name: /^ほかの時刻も見る/ })
   await day.click()
-  await expect(time.or(more).first()).toBeVisible()
-  if ((await time.count()) === 0) await more.click()
   await expect(time).toBeEnabled()
   await time.click()
   await expect(time).toHaveAttribute('aria-pressed', 'true')

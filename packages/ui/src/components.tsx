@@ -35,6 +35,17 @@ export const focusRing =
 export const focusRingOnPine =
   'focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-focus-on-pine'
 
+/**
+ * 押せないことの見せ方。**色を変えずに彩度だけ落とす。**
+ *
+ * 別の色へ塗り替えると、主操作が副ボタンや説明文に化けて序列が逆転する
+ * （設定の「保存」が無効のとき副ボタンと同じ姿になり、逆に押せる「変更を捨てる」が
+ * 枠なしの文字だけになっていた。UX 監査 UI-11）。
+ * `focusRing` と同じく**文字列**で配る —— コンポーネントの中に閉じると、
+ * 素の `<button>` を手書きした場所へ届かない（同 HIG-01）。
+ */
+export const disabledLook = 'disabled:cursor-not-allowed disabled:opacity-40'
+
 // All interactive controls meet the 44px touch-target floor.
 const controlBase = 'min-h-11 rounded-ctl font-sans text-sm'
 

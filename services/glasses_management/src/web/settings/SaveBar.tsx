@@ -1,5 +1,5 @@
 import type { StaffMember } from '@app/contracts'
-import { cn, focusRing, Keypad, PinField } from '@app/ui'
+import { cn, disabledLook, focusRing, Keypad, PinField } from '@app/ui'
 import { useState } from 'react'
 import { refusalText, type SettingsActor } from './sections'
 
@@ -45,10 +45,12 @@ export function SaveBar({
           type="button"
           onClick={onDiscard}
           disabled={!dirty || saving}
+          /* 枠を持たせて「押せるもの」に見せる。以前は枠なしの灰色文字で、
+             ただの説明文にしか見えなかった（UX 監査 UI-11）。 */
           className={cn(
-            'min-h-11 rounded-ctl px-4 text-body font-semibold',
-            dirty && !saving ? 'text-pine' : 'text-ink-faint',
+            'min-h-11 rounded-ctl border border-line-strong bg-surface px-4 text-body font-semibold text-pine',
             focusRing,
+            disabledLook,
           )}
         >
           変更を捨てる
@@ -84,12 +86,13 @@ export function SaveBar({
           type="button"
           onClick={onSave}
           disabled={!dirty || saving || blocked !== null}
+          /* 主操作は**押せないときも緑のまま**にし、彩度だけ落とす。
+             以前は無効のとき副ボタンと同じ姿になり、画面でいちばん弱い要素になっていた。
+             承認済みモック SETTINGS-STORE.png の「保存」は緑の塗りである。 */
           className={cn(
-            'min-h-11 rounded-ctl px-4 text-body font-semibold',
-            !dirty || saving || blocked !== null
-              ? 'border border-line bg-surface-2 text-ink-faint'
-              : 'bg-pine text-on-pine',
+            'min-h-11 rounded-ctl bg-pine px-4 text-body font-semibold text-on-pine',
             focusRing,
+            disabledLook,
           )}
         >
           {saving ? '保存しています…' : '保存'}

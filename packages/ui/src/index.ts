@@ -10,6 +10,7 @@ export {
   type ButtonVariant,
   buttonClass,
   Chip,
+  disabledLook,
   Field,
   focusRing,
   focusRingOnPine,

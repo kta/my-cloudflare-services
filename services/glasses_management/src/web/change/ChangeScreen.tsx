@@ -11,12 +11,14 @@ import type {
 import { auth, toJstDateString } from '@app/shared'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReservationSnapshot } from '../../worker/domain/reservation-change'
+import type { SlotChoice } from '../booking/SlotStep'
 import { client } from '../client'
 import { dateLabel, jstClock } from '../ledger/metrics'
 import { type CancelReason, ChangeCancel } from './ChangeCancel'
 import { ChangeDateTime } from './ChangeDateTime'
 import { ChangeDiff, type SlotTaken } from './ChangeDiff'
 import { ChangeDone } from './ChangeDone'
+import { ChangeSlot } from './ChangeSlot'
 import { type ConflictChoice, type ConflictFieldRow, ConflictPanel } from './ConflictPanel'
 import { ReservationSearch, type SearchConditions, type SearchPhase } from './ReservationSearch'
 
@@ -123,6 +125,11 @@ function snapshotOf(
     equipmentIds,
     equipmentNames: equipmentIds.map((id) => placeNames.get(id) ?? ''),
   }
+}
+
+/** 並びも含めて同じ設備かどうか。並べ替えただけの入力を「変えた」と数えないため。 */
+function sameIds(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && [...a].sort().join() === [...b].sort().join()
 }
 
 /** 版が合わなかったときにサーバが載せてくる相手の姿（`conflictingVersion`）。 */
@@ -249,7 +256,7 @@ export function ChangeScreen({
   const [clock, setClock] = useState(opened)
   useEffect(() => setClock(opened), [opened])
 
-  const [step, setStep] = useState<'search' | 'datetime' | 'diff' | 'cancel' | 'done'>(
+  const [step, setStep] = useState<'search' | 'datetime' | 'slot' | 'diff' | 'cancel' | 'done'>(
     initialReservationId === undefined ? 'search' : initialStep,
   )
   const [conditions, setConditions] = useState<SearchConditions>(BLANK)
@@ -270,6 +277,8 @@ export function ChangeScreen({
   const [placeNames, setPlaceNames] = useState<Map<string, string>>(() => new Map())
 
   const [chosenStartsAt, setChosenStartsAt] = useState<string | null>(null)
+  /* 担当・場所を選び直した結果。日時の道と混ざらないよう、別の入れ物に置く。 */
+  const [chosenSlot, setChosenSlot] = useState<SlotChoice | null>(null)
   const [hold, setHold] = useState<Hold | null>(null)
   const holdRef = useRef<Hold | null>(null)
   const [renewals, setRenewals] = useState(0)
@@ -488,16 +497,36 @@ export function ChangeScreen({
   }
 
   const before = detail === null ? null : snapshotOf(detail, staffNames, placeNames)
-  const after =
-    before === null || chosenStartsAt === null
-      ? before
-      : {
-          ...before,
-          startsAt: chosenStartsAt,
-          endsAt: new Date(
-            Date.parse(chosenStartsAt) + before.durationMinutes * 60 * 1000,
-          ).toISOString(),
-        }
+  /*
+   * 差分の右側。日時の道と担当・場所の道は同じ 1 枚の差分表に流れ込む
+   * （どちらから来ても「変わる行だけが緑地になる」1 つの読み方で済むように）。
+   */
+  const after = (() => {
+    if (before === null) return before
+    let next = before
+    if (chosenStartsAt !== null) {
+      next = {
+        ...next,
+        startsAt: chosenStartsAt,
+        endsAt: new Date(
+          Date.parse(chosenStartsAt) + before.durationMinutes * 60 * 1000,
+        ).toISOString(),
+      }
+    }
+    if (chosenSlot !== null) {
+      next = {
+        ...next,
+        startsAt: chosenSlot.startsAt,
+        endsAt: chosenSlot.endsAt,
+        staffId: chosenSlot.staffId,
+        staffName:
+          chosenSlot.staffId === null ? null : (staffNames.get(chosenSlot.staffId) ?? null),
+        equipmentIds: chosenSlot.equipmentIds,
+        equipmentNames: chosenSlot.equipmentIds.map((id) => placeNames.get(id) ?? ''),
+      }
+    }
+    return next
+  })()
 
   /**
    * 監査の 1 行を読み直す。**端末の時計で「11:12」と書かない** —— 受付履歴に実際に
@@ -550,12 +579,24 @@ export function ChangeScreen({
     })
   }
 
-  /** 変更を確定する。**送るのはここだけ**（差分の面も競合の面も送らない）。 */
+  /**
+   * 変更を確定する。**送るのはここだけ**（差分の面も競合の面も送らない）。
+   * 担当・場所の道から来たときは、**変わった欄だけ**を足して送る —— 契約は
+   * 「欄が無い＝そのまま」なので、触っていない欄を送ると差分表に無い行が
+   * 監査に残ってしまう。
+   */
   async function patchTo(startsAt: string, version: number, previousRange: string) {
     if (detail === null || isOffline) return
+    const slotFields: { staffId?: string | null; equipmentIds?: string[] } = {}
+    if (chosenSlot !== null && before !== null) {
+      if (chosenSlot.staffId !== before.staffId) slotFields.staffId = chosenSlot.staffId
+      if (!sameIds(chosenSlot.equipmentIds, before.equipmentIds)) {
+        slotFields.equipmentIds = chosenSlot.equipmentIds
+      }
+    }
     const res = await client.api.staff.reservations[':reservationId'].$patch({
       param: { reservationId: detail.id },
-      json: { version, startsAt },
+      json: { version, startsAt, ...slotFields },
     })
     const status: number = res.status
     if (status === 409) {
@@ -571,6 +612,7 @@ export function ChangeScreen({
     setDetail(saved)
     setConflict(null)
     setChosenStartsAt(null)
+    setChosenSlot(null)
     setDone({
       kind: 'changed',
       previousRange,
@@ -581,12 +623,14 @@ export function ChangeScreen({
   }
 
   async function confirm() {
-    if (detail === null || chosenStartsAt === null || before === null) return
+    if (detail === null || before === null) return
+    const startsAt = after?.startsAt ?? chosenStartsAt
+    if (startsAt === null) return
     setConfirming(true)
     setConfirmError(null)
     try {
       await patchTo(
-        chosenStartsAt,
+        startsAt,
         detail.version,
         `${jstClock(before.startsAt)}–${jstClock(before.endsAt)}`,
       )
@@ -807,11 +851,13 @@ export function ChangeScreen({
             }}
             onChangeSlot={() => {
               if (detail === null) return
-              if (onChangeSlot === undefined) {
-                setNotice('担当・場所を変える画面はこれから作ります。')
+              if (onChangeSlot !== undefined) {
+                onChangeSlot(detail)
                 return
               }
-              onChangeSlot(detail)
+              setNotice(null)
+              setChosenStartsAt(null)
+              setStep('slot')
             }}
             onCancelReservation={() => {
               if (detail === null) return
@@ -848,6 +894,27 @@ export function ChangeScreen({
               releaseHold()
               if (chosenStartsAt !== null) takeHold(chosenStartsAt, detail.durationMinutes)
             }}
+            onBack={backToSearch}
+            onNext={() => setStep('diff')}
+          />
+        ) : step === 'slot' && detail !== null && before !== null ? (
+          <ChangeSlot
+            storeId={storeId}
+            target={{
+              reservationId: detail.id,
+              startsAt: detail.startsAt,
+              durationMinutes: detail.durationMinutes,
+              purposeLabel: detail.purposeLabelInternal,
+              staffId: before.staffId,
+              equipmentIds: [...before.equipmentIds],
+            }}
+            isChanged={
+              chosenSlot !== null &&
+              (chosenSlot.staffId !== before.staffId ||
+                chosenSlot.startsAt !== before.startsAt ||
+                !sameIds(chosenSlot.equipmentIds, before.equipmentIds))
+            }
+            onChange={setChosenSlot}
             onBack={backToSearch}
             onNext={() => setStep('diff')}
           />

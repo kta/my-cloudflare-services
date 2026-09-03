@@ -1,10 +1,11 @@
 import type { VisitBoardCell, VisitBoardRow, VisitBoard as VisitBoardShape } from '@app/contracts'
-import { cn, focusRing } from '@app/ui'
+import { cn, disabledLook, focusRing } from '@app/ui'
 import { type KeyboardEvent, useEffect, useRef, useState } from 'react'
 import { visitLabel } from '../../worker/domain/customers'
 import { BOARD_STAGES } from '../../worker/domain/visit-board'
 import { dateLabel, jstClock } from '../ledger/metrics'
 import { VisitBadge } from '../ledger/Timetable'
+import { EmptyState } from '../shell/EmptyState'
 
 /*
  * 来店受付ボード（承認済みモック docs/frontend/mockups/eyex/images/RECEPTION-JOURNEY.png）。
@@ -208,23 +209,22 @@ export function VisitBoard({
 
       {rows.length === 0 ? (
         /* 0 名は行き止まりにしない（AC-RECEP-27）。見出し 1 行・理由 1 行・次の一手 1 つ。 */
-        <div role="status" className="grid flex-1 content-center justify-items-start gap-2 p-11">
-          <h2 className="text-title font-bold text-ink">ご来店中のお客様はいません</h2>
-          <p className="text-body text-ink-muted">まだどなたもお着きになっていません。</p>
+        <EmptyState title="ご来店中のお客様はいません" note="まだどなたもお着きになっていません。">
           {onReceiveVisit !== undefined && (
             <button
               type="button"
               onClick={onReceiveVisit}
               disabled={isOffline}
               className={cn(
-                'mt-2 min-h-13 rounded-ctl bg-pine px-6 text-lead font-bold text-on-pine',
+                'min-h-13 rounded-ctl bg-pine px-6 text-lead font-bold text-on-pine',
                 focusRing,
+                disabledLook,
               )}
             >
               ＋ ご来店を受け付ける
             </button>
           )}
-        </div>
+        </EmptyState>
       ) : (
         <div className="min-h-0 flex-1 overflow-auto px-9 py-7">
           {/* biome-ignore lint/a11y/useSemanticElements: <table> を display:grid にすると

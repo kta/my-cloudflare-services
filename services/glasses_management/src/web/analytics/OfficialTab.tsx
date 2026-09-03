@@ -79,20 +79,28 @@ export type OfficialAnalyticsReport =
   | WaitReport
   | CancelReport
 
-function VerticalBars({
+/*
+ * 縦棒のグラフ。承認済みモック ANALYTICS-TOP.png の作りに合わせる。
+ *
+ *   - **棒は軸の上に立つ。** 日付のラベルは枠の外へ出す。中に置くと、その高さぶん
+ *     棒が軸から浮く（以前は軸 y=523 に対して棒の底が y=488 で、35px の隙間があった）。
+ *   - **値のラベルを書かない。** 目盛が読めれば足りる。モックは 1 つも書いていない。
+ *   - **本日の帯はグラフの高さいっぱいに通す。**
+ *
+ * この面の約束は `OfficialTab.test.tsx` が固定している（UX 監査 UI-08）。
+ */
+export function VerticalBars({
   points,
   ariaLabel,
   todayLabel,
   target,
   ticks,
-  showValues = true,
 }: {
   points: readonly Point[]
   ariaLabel: string
   todayLabel?: string
   target?: number
   ticks?: readonly number[]
-  showValues?: boolean
 }) {
   const maximum = Math.max(1, target ?? 0, ...points.map((point) => point.value))
   const gridTicks = ticks ?? niceTicks(maximum)
@@ -103,7 +111,9 @@ function VerticalBars({
       aria-label={ariaLabel}
       className="relative min-w-150 border-line-strong border-b"
     >
+      {/* 棒を置く箱。ここには棒しか入れない —— ほかを入れると棒が軸から浮く。 */}
       <div
+        data-chart-plot
         className={cn(
           'relative flex h-50 items-end border-line border-y pl-10 pr-2',
           points.length > 20 ? 'gap-1' : 'gap-2',
@@ -115,14 +125,13 @@ function VerticalBars({
           return (
             <div
               key={point.label}
+              {...(isToday ? { 'data-chart-today': true } : {})}
               className={cn(
-                'flex h-full min-w-0 flex-1 flex-col justify-end',
-                isToday && 'rounded-t-ctl bg-pine-soft',
+                // 目盛（z-0）より手前に置く。そうしないと線が棒を横切る。
+                'relative z-10 flex h-full min-w-0 flex-1 flex-col justify-end',
+                isToday && 'bg-pine-soft',
               )}
             >
-              <span className="min-h-7 text-center text-grid text-ink-muted">
-                {showValues ? (point.isClosed ? '定休' : point.value) : ''}
-              </span>
               <span
                 aria-hidden="true"
                 className={cn(
@@ -132,15 +141,28 @@ function VerticalBars({
                 )}
                 style={{ height: `${(point.value / scaleMaximum) * 100}%` }}
               />
-              <span
-                className={cn(
-                  'mt-1.5 min-h-7 text-center text-grid text-ink-muted',
-                  isToday && 'font-semibold text-pine-deep',
-                )}
-              >
-                {isToday ? `${point.label} 本日` : point.label}
-              </span>
             </div>
+          )
+        })}
+      </div>
+      {/* 日付は軸線の下に置く。棒の箱の中に入れると、その高さぶん棒が軸から浮く。 */}
+      <div className={cn('flex pr-2 pl-10', points.length > 20 ? 'gap-1' : 'gap-2')}>
+        {points.map((point) => {
+          const isToday = point.label === todayLabel
+          return (
+            <span
+              key={point.label}
+              className={cn(
+                'mt-1.5 min-w-0 flex-1 text-center text-grid text-ink-muted',
+                isToday && 'font-semibold text-pine-deep',
+              )}
+            >
+              {isToday
+                ? `${point.label} 本日`
+                : point.isClosed
+                  ? `${point.label} 定休`
+                  : point.label}
+            </span>
           )
         })}
       </div>
@@ -329,7 +351,6 @@ function CountTab({
             points={report.points}
             target={report.selectedGranularity === 'day' ? 24 : undefined}
             ticks={report.selectedGranularity === 'day' ? [24, 18, 12, 6, 0] : undefined}
-            showValues={false}
             ariaLabel={`${appliedLabels[report.selectedGranularity]}の予約数。${countByLabel}で数えます。最も多いのは${maximum?.label ?? '—'}の${maximum?.value ?? 0}件${closed > 0 ? `、定休${closed}日は0件` : ''}${report.pendingDays ? `、${report.pendingDays}日ぶんはまだ集計中` : ''}。`}
           />
         </div>

@@ -49,7 +49,14 @@ const MAX_RENEWALS = 10
  * そのまま並べると 5 列 × 4 段の 18 枚になり、**選んだ結果の 1 文と仮の押さえの残り時間が
  * 画面の下に押し出されて見えなくなる。**P3 の `booking/DateTimeStep.tsx` と同じ窓にする。
  */
-const SLOT_WINDOW = 8
+/*
+ * 読み込み中に場所を取っておく札の枠の数。
+ * 読み終えたら**サーバが返した枠を全部出す** —— 8 枚で切って畳んでいたときに
+ * 隠れるのは営業時間の後ろ半分、つまり午後と夕方で、変更先の相談中に
+ * いちばん空いている時間帯を一度も案内しないことになる（UX 監査 CHG-02 / BOOK-05）。
+ * 入りきらないぶんは右の段全体が縦に流れる（予約フローの `booking/DateTimeStep.tsx` と同じ）。
+ */
+const SLOT_PLACEHOLDERS = 8
 
 /** 工程の帯。BOOK の 5 工程とは別の 4 段である（`design/05-screen-flow.md` §2.2）。 */
 const CHANGE_STEPS = ['予約を探す', '日時を変える', 'ご確認', '完了'] as const
@@ -135,7 +142,6 @@ export function ChangeDateTime({
   const [answer, setAnswer] = useState<AvailabilityResponse | null>(null)
   const [failed, setFailed] = useState(false)
   const [reload, setReload] = useState(0)
-  const [showAllSlots, setShowAllSlots] = useState(false)
 
   /*
    * 営業時間は店舗ごと 1 度だけ読む。暦の札に「定休」と書く手立てがほかに無い
@@ -219,15 +225,7 @@ export function ChangeDateTime({
           ...served.filter((slot) => slot.startsAt !== target.startsAt),
         ]
       : served
-  /*
-   * 選んでいる時刻が窓の外にあるときは、選んだ札が見えなくなるので初めから全部出す
-   * （`booking/DateTimeStep.tsx` と同じ手当て）。
-   */
-  const chosenIsHidden =
-    chosenStartsAt !== null &&
-    slots.findIndex((slot) => slot.startsAt === chosenStartsAt) >= SLOT_WINDOW
-  const shownSlots = showAllSlots || chosenIsHidden ? slots : slots.slice(0, SLOT_WINDOW)
-  const hiddenSlots = slots.length - shownSlots.length
+  const shownSlots = slots
 
   const remainingSeconds =
     holdExpiresAt === null
@@ -288,10 +286,7 @@ export function ChangeDateTime({
                   aria-label={`${dayName(day)}${suffix}`}
                   aria-pressed={chosen}
                   disabled={closed}
-                  onClick={() => {
-                    setDate(day)
-                    setShowAllSlots(false)
-                  }}
+                  onClick={() => setDate(day)}
                   className={cn(
                     'grid min-h-19 place-items-center rounded-card text-title font-semibold',
                     chosen
@@ -339,7 +334,7 @@ export function ChangeDateTime({
                   受け付けられる時刻を読み込んでいます…
                 </p>
                 <div aria-hidden="true" className="grid grid-cols-5 gap-3">
-                  {Array.from({ length: SLOT_WINDOW }, (_, index) => (
+                  {Array.from({ length: SLOT_PLACEHOLDERS }, (_, index) => (
                     <div key={index} className="min-h-24 rounded-card bg-surface-2" />
                   ))}
                 </div>
@@ -359,23 +354,6 @@ export function ChangeDateTime({
                     onPick={() => onChoose(slot.startsAt)}
                   />
                 ))}
-                {/*
-                  残りを開く操作は**格子の空いた 2 枠に置く**。窓は 8 枚なので 5 列の 2 段目は
-                  必ず 2 枠余る。下に 1 行足すと、選んだ結果の 1 文と仮の押さえの残り時間が
-                  810pt の外へ出てしまう（触れる大きさは札と同じ 96px）。
-                */}
-                {hiddenSlots > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setShowAllSlots(true)}
-                    className={cn(
-                      'col-span-2 min-h-24 rounded-card border border-line-strong bg-surface px-4 text-body font-semibold text-ink',
-                      focusRing,
-                    )}
-                  >
-                    {`ほかの時刻も見る（あと${hiddenSlots}件）`}
-                  </button>
-                )}
               </fieldset>
             )}
           </div>

@@ -3,8 +3,9 @@ import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 import { OfficialTab } from './OfficialTab'
 
+/* ラベルは日付だけ。「定休」は画面が `isClosed` から軸の下へ添える（UX 監査 UI-08）。 */
 const dailyPoints = Array.from({ length: 15 }, (_, index) => ({
-  label: index === 5 || index === 12 ? `${index + 20}/定休` : `${index + 20}`,
+  label: `${index + 20}`,
   value: index === 5 || index === 12 ? 0 : index + 3,
   secondaryValue: null,
   isClosed: index === 5 || index === 12,
@@ -33,7 +34,9 @@ describe('OfficialTab', () => {
     expect(screen.getByTestId('chart-gridlines')).toBeInTheDocument()
     expect(screen.getByRole('img')).toHaveAccessibleName(/15日分/)
     expect(screen.getByText('27 本日')).toBeInTheDocument()
-    expect(screen.getAllByText('定休')).toHaveLength(2)
+    // 定休の日は、軸の下のラベルに「25 定休」のように添える。
+    expect(screen.getByText('25 定休')).toBeInTheDocument()
+    expect(screen.getByText('32 定休')).toBeInTheDocument()
     expect(screen.getByText('先週')).toBeInTheDocument()
     expect(screen.getByText('今週')).toBeInTheDocument()
     expect(screen.getByText('来週')).toBeInTheDocument()
