@@ -5,12 +5,17 @@ import { Icon } from './icons'
 
 const ALERT_DESTINATION: Destination = { key: 'alerts', label: 'お知らせ', icon: 'alerts' }
 /*
- * 上のバーのお知らせは、**お知らせの面そのもの以外のどこにでも出す**。
- * 以前は home / ledger / customers / settings の 4 画面だけに出しており、
- * 来店受付・予約を探す・受付履歴・分析では「録音の保存に3回失敗しました（対応が必要）」が
- * 画面から消えていた。未読を隠す場所を作らない（UX 監査 UI-05）。
+ * 上のバーにお知らせを出す画面。**承認済みモックのとおり**にしてある。
+ *
+ * 来店受付・予約を探す・受付履歴・分析にはモックが意図してベルを描いていない
+ * （`RECEPTION-CHECKIN.png` の上のバーは店名だけで、右端は空である）。
+ * お客様が目の前に立っている面から通知を外す判断だと読める。
+ *
+ * ただしその結果、「録音の保存に3回失敗しました（対応が必要）」が 4 画面で
+ * 見えなくなる（UX 監査 UI-05）。ここを変えるなら承認済みモックを変えることになるので、
+ * 実装だけを先に動かさない。`docs/audit/2026-09-02-eyex-ux/` の宿題として残す。
  */
-const HEADER_ALERT_HIDDEN = new Set(['alerts'])
+const HEADER_ALERT_DESTINATIONS = new Set(['home', 'ledger', 'customers', 'settings'])
 
 /*
  * 業務画面の骨格。承認済みモック（docs/frontend/mockups/eyex）の実測に合わせる。
@@ -85,7 +90,7 @@ export function AppShell({
         </div>
         {barCenter}
         <div className="ml-auto flex items-center gap-2">
-          {!HEADER_ALERT_HIDDEN.has(current) && alertCount > 0 && (
+          {HEADER_ALERT_DESTINATIONS.has(current) && alertCount > 0 && (
             <button
               type="button"
               onClick={() => onNavigate('alerts')}

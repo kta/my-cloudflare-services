@@ -447,3 +447,90 @@ describe('お名前と来店回数（AC-CUST-24）', () => {
     expect(within(band).queryByText('様')).not.toBeInTheDocument()
   })
 })
+
+/*
+ * 帯の中の序列は「お名前 → 回数 → ご用件」。
+ *
+ * 以前は等幅太字の時刻がいちばん強く、お名前はその下に沈んでいた（5 行とも 13px で、
+ * 差は太さ 3 段だけ）。盤は x 位置が既に時刻を表しているので、帯の中の時刻は
+ * 同じ情報を 2 度描いたうえに、いちばん知りたいお名前より強く刷っていたことになる。
+ * 承認済みモック `LEDGER-STAFF.png` は帯に時刻を書かず、お名前を最大要素に置いている。
+ * UX 監査 UI-01 / LEDGER-05。
+ */
+describe('帯の中の序列', () => {
+  function customerLane(entries: LedgerEntry[]): LedgerView {
+    return staffView({
+      lanes: [
+        {
+          kind: 'staff',
+          id: 'b0000000-0000-4000-8000-000000000099',
+          name: '佐藤 美咲',
+          subtitle: '視力測定・加工',
+          entries,
+          blocks: [],
+        },
+      ],
+    })
+  }
+
+  const NAMED = {
+    reservationId: 'a0000000-0000-4000-8000-000000000201',
+    startsAt: at('11:00'),
+    endsAt: at('12:00'),
+    customerName: '田中 花子',
+    visitCount: 4,
+    purposeLabel: '新調相談・視力測定',
+    source: 'phone' as const,
+    status: 'confirmed' as const,
+    isUnassigned: false,
+  }
+  const SHORT = {
+    ...NAMED,
+    reservationId: 'a0000000-0000-4000-8000-000000000202',
+    startsAt: at('14:00'),
+    endsAt: at('14:30'),
+    customerName: '松本 一郎',
+    visitCount: 3,
+    purposeLabel: '受け取り',
+  }
+
+  it('60分の帯は、お名前がいちばん大きく最初に来る', () => {
+    render(<Timetable view={customerLane([NAMED])} />)
+    const band = bandOf('11:00から12:00　田中 花子 様　4回目　新調相談・視力測定　佐藤 美咲')
+    const name = within(band).getByText('田中 花子 様')
+    // お名前だけが 1 段大きい（他は 13px の text-grid）。
+    expect(name.className).toContain('text-lead')
+    // 帯の中でいちばん先に現れる文字がお名前である（葉のノードだけを見る）。
+    const texts = Array.from(band.querySelectorAll('span'))
+      .filter((node) => node.children.length === 0)
+      .map((node) => node.textContent?.trim() ?? '')
+      .filter((t) => t !== '')
+    expect(texts[0]).toBe('田中 花子 様')
+  })
+
+  it('帯の中に時刻を書かない（x の位置が既に時刻を表している）', () => {
+    render(<Timetable view={customerLane([NAMED])} />)
+    const band = bandOf('11:00から12:00　田中 花子 様　4回目　新調相談・視力測定　佐藤 美咲')
+    // 読み上げの名前（aria-label）は覆い隠すので、見えている文字だけを調べる。
+    expect(band.querySelector('span')?.parentElement?.textContent).not.toMatch(/\d{1,2}:\d{2}/)
+  })
+
+  it('30分の帯にも、時刻ではなくお名前を出す', () => {
+    render(<Timetable view={customerLane([SHORT])} />)
+    expect(screen.getByText('松本 様').className).toContain('text-lead')
+    // 帯の中に時刻の文字は出さない。
+    expect(screen.queryByText('14:00', { selector: 'span' })).toBeNull()
+  })
+
+  it('30分の帯のお名前は切り落とさず折り返す（「松…」で誰か分からなくしない）', () => {
+    render(<Timetable view={customerLane([SHORT])} />)
+    expect(screen.getByText('松本 様').className).not.toContain('truncate')
+  })
+
+  it('読み上げの名前には時刻が残る（画面から消しても、耳では時刻が要る）', () => {
+    render(<Timetable view={customerLane([NAMED])} />)
+    expect(
+      bandOf('11:00から12:00　田中 花子 様　4回目　新調相談・視力測定　佐藤 美咲'),
+    ).toBeInTheDocument()
+  })
+})

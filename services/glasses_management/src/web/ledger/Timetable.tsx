@@ -475,27 +475,26 @@ function Band({ entry, wide }: { entry: LedgerEntry; wide: boolean }) {
         BAND_TONE[bandToneOf(entry)],
       )}
     >
-      <span className="font-mono font-bold">
-        {jstClock(entry.startsAt)}
-        {/* 区切りだけ等幅から外す。13px の等幅では「–」が 2 本の短い線に割れて
-            「11:00--12:00」と読めてしまう（22px では 1 本に見えるので気づきにくい）。 */}
-        {wide && (
-          <>
-            <span className="font-sans font-normal">–</span>
-            {jstClock(entry.endsAt)}
-          </>
-        )}
-      </span>
-      {/* お名前と来店回数（AC-CUST-24）。60分以上（2 列）はフルネーム＋印、
-          30分（1 列）は姓だけに落とし印を持たない（文字予算がおよそ 6 字しかない）。 */}
+      {/*
+        帯の中はお名前がいちばん強い。**時刻は書かない** —— 帯の x の位置が既に時刻を
+        表しているので、書けば同じ情報を 2 度描くことになり、しかも以前は等幅太字の
+        時刻がお名前より強く刷られていた（UX 監査 UI-01）。承認済みモック
+        LEDGER-STAFF.png も帯に時刻を持たない。耳で聞く人のために、時刻は
+        セルの `aria-label` のほうに残してある。
+
+        60分以上（2 列）はフルネーム＋来店回数の印、30分（1 列）は姓だけに落とす
+        （文字予算がおよそ 6 字しかない。AC-CUST-24 / AC-LEDGER-06）。
+      */}
       {entry.customerName !== null &&
         (wide ? (
           <>
-            <span className="truncate font-semibold">{`${entry.customerName} 様`}</span>
+            <span className="truncate text-lead font-semibold">{`${entry.customerName} 様`}</span>
             {entry.visitCount !== null && <VisitBadge count={entry.visitCount} />}
           </>
         ) : (
-          <span className="font-semibold">{`${surnameOf(entry.customerName)} 様`}</span>
+          /* 30分（1 列 68px）は 17px の姓が 1 行に入らない。切り落とすと「松…」に
+             なって誰か分からなくなるので、2 行へ折り返す（モックも同じ）。 */
+          <span className="text-lead font-semibold leading-tight">{`${surnameOf(entry.customerName)} 様`}</span>
         ))}
       {/* 30分 1 列の文字予算はおよそ 6 字しかない。狭い帯にはご用件を入れない（AC-LEDGER-06）。 */}
       {wide && <span>{entry.purposeLabel}</span>}

@@ -369,19 +369,29 @@ describe('器の安定', () => {
 })
 
 /*
- * 未読のお知らせは、どの画面からでも見える。
- * 以前は home / ledger / customers / settings の 4 画面にしかベルが出ず、
- * 来店受付・予約を探す・受付履歴・分析では「録音の保存に3回失敗しました」が
- * 画面から消えていた。UX 監査 UI-05。
+ * 上のバーのお知らせは、承認済みモックが描いている画面にだけ出す。
+ *
+ * モック `RECEPTION-CHECKIN.png` の上のバーは店名だけで、右端は空である。
+ * お客様が目の前に立っている面から通知を外す判断だと読める。
+ * その結果「録音の保存に3回失敗しました」が 4 画面で見えなくなるのは
+ * UX 監査 UI-05 の宿題で、変えるならモックを変えることになる。
+ * この面は**いまの約束を固定して、黙って動かないようにする**ためにある。
  */
 describe('お知らせのベル', () => {
-  it.each(['予約台帳', '来店受付', '予約を探す', '受付履歴', '顧客台帳', '分析', '設定'])(
-    '%s でも未読の件数が見える',
+  it.each(['予約台帳', '顧客台帳', '設定'])('%s では未読の件数が見える', async (label) => {
+    await startWork()
+    const nav = await screen.findByRole('navigation', { name: '画面の切り替え' })
+    await userEvent.click(within(nav).getByRole('button', { name: label }))
+    expect(screen.getByRole('button', { name: /^お知らせ/ })).toBeInTheDocument()
+  })
+
+  it.each(['来店受付', '予約を探す', '受付履歴', '分析'])(
+    '%s ではモックのとおり出さない（変えるならモックから）',
     async (label) => {
       await startWork()
       const nav = await screen.findByRole('navigation', { name: '画面の切り替え' })
       await userEvent.click(within(nav).getByRole('button', { name: label }))
-      expect(screen.getByRole('button', { name: /^お知らせ/ })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /^お知らせ/ })).toBeNull()
     },
   )
 })
