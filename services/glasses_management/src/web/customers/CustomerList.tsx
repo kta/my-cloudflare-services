@@ -224,6 +224,22 @@ export function CustomerList({
     onSelect(customerId)
   }
 
+  /*
+   * 一覧が届いたら先頭の 1 名を選ぶ。
+   *
+   * 以前は何も選ばれずに開き、画面の 30% を占める右ペインが灰色の 1 行だけだった。
+   * 承認済みモック `CUSTOMER-LIST.png` は選択済みの姿で描かれており、
+   * 68 枚のモックに右ペインが空の絵は 1 枚も無い（UX 監査 UI-09）。
+   * **一度でも自分で選んだら、そのあとは触らない**（並べ方や絞り込みを変えても、
+   * 選んだ人が外れないのが AC-CUST-03 の約束である）。
+   */
+  const firstId = found.items[0]?.id ?? null
+  useEffect(() => {
+    if (selectedId !== null || firstId === null) return
+    setSelectedId(firstId)
+    onSelect(firstId)
+  }, [firstId, selectedId, onSelect])
+
   function clearConditions() {
     setQuery('')
     setVisitRange(null)

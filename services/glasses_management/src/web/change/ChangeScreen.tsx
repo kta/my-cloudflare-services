@@ -346,6 +346,13 @@ export function ChangeScreen({
         setTotal(list.total)
         setRelaxations(list.relaxations)
         setPhase('ready')
+        /*
+         * 結果が届いたら先頭の 1 件を選ぶ。以前は何も選ばれずに開き、
+         * 画面の 53% を占める右ペインが灰色の 1 行だけだった（UX 監査 UI-09）。
+         * 承認済みモック `CHANGE-SEARCH.png` も選択済みの姿で描かれている。
+         * **自分で選んだあとや、台帳から予約を持って来たときは触らない。**
+         */
+        setSelectedId((current) => current ?? list.items[0]?.id ?? null)
       })
       .catch(() => {
         if (live) setPhase('error')

@@ -559,3 +559,36 @@ describe('台帳から予約を持って開く', () => {
     ).toBeInTheDocument()
   })
 })
+
+/*
+ * 検索の結果が届いたら、先頭の 1 件を選んで右を埋める。
+ * 以前は何も選ばれずに開き、画面の 53% を占める右ペインが
+ * 「左のご予約をお選びください。」という灰色の 1 行だけだった（UX 監査 UI-09）。
+ * 承認済みモック `CHANGE-SEARCH.png` は EY-2608-0142 を選択済みで描いている。
+ */
+describe('検索した直後の選択', () => {
+  it('結果が届いたら先頭の 1 件を選び、右を埋める', async () => {
+    show()
+    await waitForRows()
+    // 「左のご予約をお選びください。」の空状態ではなく、1 件の中身が出ている。
+    expect(screen.queryByText(/左のご予約をお選びください/)).toBeNull()
+  })
+
+  it('1 件も無いときは何も選ばず、空状態をそのまま出す', async () => {
+    searchAnswer = () => ({ items: [], nextCursor: null, total: 0, relaxations: [] })
+    show()
+    await waitFor(() =>
+      expect(screen.getByText(/この条件では、ご予約が見つかりませんでした/)).toBeInTheDocument(),
+    )
+    // 何も選ばれていないので、1 件の中身は出ない。
+    expect(screen.queryByText('田中 花子 様')).toBeNull()
+  })
+
+  it('台帳から予約を持って来たときは、その予約が対象のまま（先頭で上書きしない）', async () => {
+    show({ initialReservationId: RESERVATION_ID, initialStep: 'datetime' })
+    expect(
+      await screen.findByRole('heading', { name: 'お日にちはこのままでよろしいですか？' }),
+    ).toBeInTheDocument()
+    expect(screen.getByText('田中 花子 様')).toBeInTheDocument()
+  })
+})

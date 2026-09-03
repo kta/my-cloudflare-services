@@ -371,8 +371,10 @@ describe('受付履歴', () => {
     await userEvent.click(screen.getByRole('button', { name: /結果/ }))
     await userEvent.click(screen.getByRole('button', { name: '取消' }))
     await userEvent.type(screen.getByRole('searchbox', { name: 'お客様名で探す' }), '田中')
-    await waitFor(() => expect(asked.at(-1)?.searchParams.get('name')).toBe('田中'))
-    const last = asked.at(-1)
+    // 先頭の 1 件を自動で選ぶので、`asked` の末尾は詳細の要求になる。一覧の要求だけを見る。
+    const listCalls = () => asked.filter((url) => url.pathname === '/api/staff/reception-sessions')
+    await waitFor(() => expect(listCalls().at(-1)?.searchParams.get('name')).toBe('田中'))
+    const last = listCalls().at(-1)
     expect(last?.searchParams.get('status')).toBe('cancelled')
     expect(last?.searchParams.get('from')).toBe('2026-08-21')
     expect(last?.searchParams.get('to')).toBe('2026-08-27')
@@ -392,12 +394,14 @@ describe('受付履歴', () => {
     expect(screen.getByRole('searchbox', { name: 'お客様名で探す' })).toHaveValue('田中')
   })
 
-  it('選択中の行は aria-current="true" を持つ', async () => {
+  it('選択中の行は aria-current="true" を持ち、選び直すと移る', async () => {
     await opened()
-    const first = rows()[0] as HTMLElement
-    expect(first).not.toHaveAttribute('aria-current')
-    await userEvent.click(first)
+    // 開いた瞬間に先頭が選ばれている（UX 監査 UI-09）。
     await waitFor(() => expect(rows()[0]).toHaveAttribute('aria-current', 'true'))
+    const second = rows()[1] as HTMLElement
+    await userEvent.click(second)
+    await waitFor(() => expect(rows()[1]).toHaveAttribute('aria-current', 'true'))
+    expect(rows()[0]).not.toHaveAttribute('aria-current')
   })
 
   it('録音の欄はこのフェーズでは出さない', async () => {
@@ -534,5 +538,33 @@ describe('受付履歴が 0 件', () => {
         .getAllByRole('button')
         .map((node) => node.textContent),
     ).toEqual(['期間8月25日 〜 8月26日', '担当佐藤 美咲', '結果取消'])
+  })
+})
+
+/*
+ * 一覧が届いたら、先頭の 1 件を選んで右を埋める。
+ * 以前は何も選ばれずに開き、画面の 58% を占める右ペインが
+ * 「左の 1 件をお選びください。」という灰色の 1 行だけだった（UX 監査 UI-09）。
+ * 左の 12 件のうち先頭を選ぶだけで埋まるものを、利用者にその 1 タップを押させない。
+ */
+describe('開いた瞬間の選択', () => {
+  it('一覧が届いたら先頭の 1 件を選び、右を埋める', async () => {
+    await opened()
+    await waitFor(() => expect(screen.queryByText(/左の 1 件をお選びください/)).toBeNull())
+  })
+
+  it('選ばれた行に印が付く', async () => {
+    await opened()
+    await waitFor(() => expect(rows()[0]).toHaveAttribute('aria-current', 'true'))
+  })
+
+  it('利用者が別の行を選んだら、その選択を勝手に戻さない', async () => {
+    await opened()
+    await waitFor(() => expect(rows()[0]).toHaveAttribute('aria-current', 'true'))
+    const second = rows()[1]
+    if (second === undefined) throw new Error('2 件目が無い')
+    await userEvent.click(second)
+    expect(second).toHaveAttribute('aria-current', 'true')
+    expect(rows()[0]).not.toHaveAttribute('aria-current')
   })
 })

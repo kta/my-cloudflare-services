@@ -343,6 +343,21 @@ export function ReceptionHistory({
     }
   }, [load, reloadCount])
 
+  /*
+   * 一覧が届いたら先頭の 1 件を選ぶ。以前は何も選ばれずに開き、
+   * 画面の 58% を占める右ペインが灰色の 1 行だけだった（UX 監査 UI-09）。
+   * 左の 1 件を押すだけで埋まるものを、その 1 タップぶん利用者に押させない。
+   * **自分で選んだあとは触らない**（絞り込みを変えたときは上の副作用が選択を外すので、
+   * そのあともう一度ここが先頭を選ぶ）。
+   */
+  const firstEntry = items[0]
+  useEffect(() => {
+    if (selectedId !== null || firstEntry === undefined) return
+    select(firstEntry)
+    // select は毎描画で作り直されるが、見たいのは「先頭が変わったか」だけである。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [firstEntry, selectedId])
+
   function select(entry: ReceptionHistoryEntry) {
     setSelectedId(entry.entryId)
     setDetail(null)
