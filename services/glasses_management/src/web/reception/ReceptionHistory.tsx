@@ -15,6 +15,7 @@ import { client } from '../client'
 import { dateLabel, jstClock, shiftDate } from '../ledger/metrics'
 import { VisitBadge } from '../ledger/Timetable'
 import { hasPlayableRecording, RecordingPlayer } from '../recording/RecordingPlayer'
+import { EmptyState, LoadingState } from '../shell/EmptyState'
 import { LoadFailed } from '../shell/LoadFailed'
 
 /*
@@ -629,11 +630,17 @@ function HistoryDetail({
   onOpenReservation: (reservationId: string) => void
 }) {
   if (!selected) {
+    // 空・読み込み中・失敗を形で見分ける（UX 監査 UI-10）。
     return (
-      <section aria-label="選んだ受付の中身" className="min-w-0 flex-1 bg-surface px-8 py-7">
-        <p className="text-body text-ink-muted">
-          左の 1 件をお選びください。受け付けた人とそのあとの変更がここに出ます。
-        </p>
+      <section
+        aria-label="選んだ受付の中身"
+        className="flex min-w-0 flex-1 flex-col bg-surface px-8 py-7"
+      >
+        <EmptyState
+          title="受付を選んでください"
+          note="左の 1 件を押すと、受け付けた人とそのあとの変更がここに出ます。"
+          live={false}
+        />
       </section>
     )
   }
@@ -648,8 +655,11 @@ function HistoryDetail({
   }
   if (detail === null) {
     return (
-      <section aria-label="選んだ受付の中身" className="min-w-0 flex-1 bg-surface px-8 py-7">
-        <p className="text-body text-ink-muted">受付の中身を読み込んでいます…</p>
+      <section
+        aria-label="選んだ受付の中身"
+        className="flex min-w-0 flex-1 flex-col bg-surface px-8 py-7"
+      >
+        <LoadingState label="受付の中身を読み込んでいます" rows={6} />
       </section>
     )
   }

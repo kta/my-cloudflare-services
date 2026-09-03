@@ -625,8 +625,25 @@ test('ご要望を手書きのまま残し、文字に変換するボタンは�
   await page.mouse.move((box?.x ?? 0) + 60, (box?.y ?? 0) + 60)
   await page.mouse.down()
   await page.mouse.move((box?.x ?? 0) + 220, (box?.y ?? 0) + 130, { steps: 10 })
+  // まだ離していない。離すまで用紙が白いままだと「書けていない」と思って二度なぞることになる。
+  await expect(page.getByTestId('handwriting-live')).toBeVisible()
+  await page.mouse.up()
+  await expect(page.getByTestId('handwriting-live')).toHaveCount(0)
+  await expect(page.getByTestId('handwriting-stroke')).toHaveCount(1)
+
+  // 消しゴムは「なぞったところを消す」道具。触れていない線は残る。
+  await page.mouse.move((box?.x ?? 0) + 60, (box?.y ?? 0) + 260)
+  await page.mouse.down()
+  await page.mouse.move((box?.x ?? 0) + 220, (box?.y ?? 0) + 260, { steps: 10 })
+  await page.mouse.up()
+  await expect(page.getByTestId('handwriting-stroke')).toHaveCount(2)
+  await page.getByRole('button', { name: '消しゴム' }).click()
+  await page.mouse.move((box?.x ?? 0) + 140, (box?.y ?? 0) + 260)
+  await page.mouse.down()
+  await page.mouse.move((box?.x ?? 0) + 160, (box?.y ?? 0) + 260, { steps: 5 })
   await page.mouse.up()
   await expect(page.getByTestId('handwriting-stroke')).toHaveCount(1)
+  await page.getByRole('button', { name: 'ペン' }).click()
 
   await page.getByRole('button', { name: '手書きのまま残す' }).click()
   const kept = page.getByRole('group', { name: '残したご要望' })

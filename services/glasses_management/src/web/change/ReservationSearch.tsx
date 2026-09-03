@@ -11,6 +11,7 @@ import type { ReactNode } from 'react'
 import { visitLabel } from '../../worker/domain/customers'
 import { jstClock } from '../ledger/metrics'
 import { hasPlayableRecording, RecordingPlayer } from '../recording/RecordingPlayer'
+import { EmptyState, LoadingState } from '../shell/EmptyState'
 
 /*
  * 予約を探す・1 件を確かめる（承認済みモック
@@ -287,16 +288,14 @@ export function ReservationSearch({
             onStartBooking={onStartBooking}
           />
         ) : selectedId === null ? (
-          <p className="px-10 py-9 text-body text-ink-muted">
-            左のご予約をお選びください。中身をここに出します。
-          </p>
+          /* 空・読み込み中・失敗を形で見分ける（UX 監査 UI-10）。 */
+          <EmptyState
+            title="ご予約を選んでください"
+            note="左の 1 件を押すと、中身をここに出します。"
+            live={false}
+          />
         ) : detailPhase === 'loading' ? (
-          <div className="px-10 py-9">
-            <p role="status" className="text-body text-ink-muted">
-              ご予約の中身を読み込んでいます…
-            </p>
-            <div aria-hidden="true" className="mt-6 h-60 rounded-panel bg-surface-2" />
-          </div>
+          <LoadingState label="ご予約の中身を読み込んでいます" rows={6} />
         ) : detail === null || detailPhase !== 'ready' ? (
           <p role="alert" className="px-10 py-9 text-body text-ink">
             {detailPhase === 'not_found'

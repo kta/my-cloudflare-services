@@ -1072,7 +1072,7 @@ test('工程を進めた直後に「元に戻す」が出て、押すと前の�
    */
   await clearBoard(request)
   const reservation = await createReservation(request, {
-    startsAt: atJst(TODAY, '16:00'),
+    startsAt: atJst(TODAY, '18:00'),
     purposeIds: [ADJUST],
     staffId: SATO,
     equipmentIds: [MEASURE_A],

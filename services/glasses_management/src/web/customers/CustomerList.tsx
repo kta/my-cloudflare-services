@@ -14,6 +14,7 @@ import {
   visitLabel,
 } from '../../worker/domain/customers'
 import { jstClock } from '../ledger/metrics'
+import { EmptyState, LoadingState } from '../shell/EmptyState'
 
 /*
  * 顧客台帳の一覧と、選んだ 1 名の要約
@@ -239,6 +240,18 @@ export function CustomerList({
     setSelectedId(firstId)
     onSelect(firstId)
   }, [firstId, selectedId, onSelect])
+
+  /*
+   * 当てはまる方が 1 人もいなくなったら、選択を外す。
+   * 外さないと、左に「当てはまるお客様はいません」と出ているのに、
+   * 右にはその条件に当てはまらない方の要約が読み込まれ続けたまま残る。
+   */
+  const nothingFound = found.items.length === 0
+  useEffect(() => {
+    if (!nothingFound || selectedId === null) return
+    setSelectedId(null)
+    onSelect(null)
+  }, [nothingFound, selectedId, onSelect])
 
   function clearConditions() {
     setQuery('')
@@ -603,17 +616,23 @@ function SummaryPane({
       aria-label="選んだお客様の要約"
       className="flex w-90 flex-none flex-col overflow-y-auto bg-surface px-7 py-8"
     >
+      {/*
+        空・読み込み中・失敗を**形で見分けられる**ようにする。以前はどれも灰色の 1 行で、
+        文字を読むまで区別が付かなかった（UX 監査 UI-10）。
+      */}
       {selectedId === null ? (
-        <p className="text-body text-ink-muted">
-          お客様の行をお選びください。選んだ方の要約がここに出ます。
-        </p>
+        <EmptyState
+          title="お客様を選んでください"
+          note="左の行を押すと、その方の要約がここに出ます。"
+          live={false}
+        />
       ) : summary === null ? (
         phase === 'error' ? (
           <p role="alert" className="text-body text-ink-muted">
             この方の要約を読み込めませんでした。もう一度お選びください。
           </p>
         ) : (
-          <p className="text-body text-ink-muted">要約を読み込んでいます…</p>
+          <LoadingState label="要約を読み込んでいます" rows={5} />
         )
       ) : (
         <>

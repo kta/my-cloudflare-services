@@ -17,6 +17,7 @@ export function EmptyState({
   title,
   note,
   children,
+  live = true,
 }: {
   /** 何が無いかを 1 行で。`--text-title` 以上で出す。 */
   title: string
@@ -24,10 +25,17 @@ export function EmptyState({
   note?: string
   /** 復帰の手段。**必ず 1 つは置く**（行き止まりを作らない）。 */
   children?: ReactNode
+  /**
+   * 読み込みの結果として空になった面は `true`（既定）。読み込みの前から出ている
+   * 「左で 1 件選んでください」のような待ちの面は `false` にする ——
+   * 何も変わっていないのに読み上げが割り込むと、同じ画面で本当に変わったほう
+   * （一覧の件数など）が読み飛ばされる。
+   */
+  live?: boolean
 }) {
   return (
     <div
-      role="status"
+      role={live ? 'status' : undefined}
       data-empty-state
       className="grid flex-1 content-center justify-items-center gap-3 px-11 py-16 text-center"
     >

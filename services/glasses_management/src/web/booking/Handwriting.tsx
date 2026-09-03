@@ -34,6 +34,16 @@ const PAPER_HEIGHT = 420
 /** 罫の間隔。モックの `background-size: 100% 44px` と同じ。 */
 const RULE_STEP = 44
 
+/*
+ * 消しゴムが線に触れたと見なす半径（用紙の座標）。
+ * 太さ「太」の 7px より広く取る —— ぴったり同じだと、線の真上を狙わないと消えず、
+ * 「消えない消しゴム」になる。
+ */
+const ERASER_REACH = 12
+
+/** 用紙の座標。 */
+type Point = { x: number; y: number }
+
 const TOOLS = [
   { key: 'pen', label: 'ペン' },
   { key: 'marker', label: 'マーカー' },
@@ -134,51 +144,74 @@ export function Handwriting({
   const [tool, setTool] = useState<ToolKey>('pen')
   const [width, setWidth] = useState<WidthKey>('medium')
   const [strokes, setStrokes] = useState<readonly HandwrittenStroke[]>([])
-  const drawing = useRef<{ pointerId: number; points: string[] } | null>(null)
+  /*
+   * いま引いている途中の線。ref ではなく state に置く —— ref に貯めるだけだと
+   * 指を離すまで用紙に何も出ず、「書けていない」と思って二度なぞることになる。
+   * 1 本ぶんの点の配列を差し替えるだけなので、なぞっている間の再描画は用紙 1 枚に収まる。
+   */
+  const [live, setLive] = useState<readonly Point[] | null>(null)
+  const drawing = useRef<number | null>(null)
   // Apple Pencil が触れている間は指のイベントを捨てる（手のひらの誤爆を防ぐ）。
   const penDown = useRef(false)
   const paperRef = useRef<HTMLDivElement>(null)
 
   const stroke = WIDTHS.find((item) => item.key === width)?.stroke ?? 4
 
-  /** 用紙の中の座標へ直す。測れない環境（jsdom）では原点のままでよい。 */
-  function pointOf(event: ReactPointerEvent<HTMLDivElement>): string {
+  /*
+   * 用紙の中の座標へ直す。
+   * `<svg>` は `preserveAspectRatio="xMinYMin meet"` なので、用紙の枠より縦横比が
+   * 合わないぶんは**縮小して左上に寄る**。枠の幅と高さでそれぞれ割ると、その縮小と
+   * 余白を無視することになり、線が指より右下へずれて出る。だから縮尺は 1 つだけ求める。
+   * 測れない環境（jsdom）では原点のままでよい。
+   */
+  function pointOf(event: ReactPointerEvent<HTMLDivElement>): Point {
     const box = paperRef.current?.getBoundingClientRect()
-    if (box === undefined || box.width === 0) return `${event.clientX} ${event.clientY}`
-    const x = ((event.clientX - box.left) / box.width) * PAPER_WIDTH
-    const y = ((event.clientY - box.top) / box.height) * PAPER_HEIGHT
-    return `${x.toFixed(1)} ${y.toFixed(1)}`
+    if (box === undefined || box.width === 0 || box.height === 0) {
+      return { x: event.clientX, y: event.clientY }
+    }
+    const scale = Math.min(box.width / PAPER_WIDTH, box.height / PAPER_HEIGHT)
+    return {
+      x: round1((event.clientX - box.left) / scale),
+      y: round1((event.clientY - box.top) / scale),
+    }
+  }
+
+  /** 消しゴムでなぞった 1 点に触れた線を落とす。 */
+  function eraseAt(point: Point) {
+    setStrokes((kept) => kept.filter((item) => !touches(item, point)))
   }
 
   function onPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     if (event.pointerType === 'touch' && penDown.current) return
     if (event.pointerType === 'pen') penDown.current = true
-    drawing.current = { pointerId: event.pointerId, points: [pointOf(event)] }
+    drawing.current = event.pointerId
+    const point = pointOf(event)
+    if (tool === 'eraser') eraseAt(point)
+    else setLive([point])
     const target = event.currentTarget
     if (typeof target.setPointerCapture === 'function') target.setPointerCapture(event.pointerId)
   }
 
   function onPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
-    const active = drawing.current
-    if (active === null || active.pointerId !== event.pointerId) return
+    if (drawing.current !== event.pointerId) return
     // `touch-action: none` と合わせて、なぞっている間は背後の本文を 1px も動かさない。
     event.preventDefault()
-    active.points.push(pointOf(event))
+    const point = pointOf(event)
+    if (tool === 'eraser') {
+      eraseAt(point)
+      return
+    }
+    setLive((points) => (points === null ? [point] : [...points, point]))
   }
 
   function onPointerUp(event: ReactPointerEvent<HTMLDivElement>) {
-    const active = drawing.current
+    if (drawing.current !== event.pointerId) return
     drawing.current = null
     if (event.pointerType === 'pen') penDown.current = false
-    if (active === null || active.points.length === 0) return
-    const [head, ...rest] = active.points
-    const d = `M${head}${rest.map((point) => `L${point}`).join('')}`
-    if (tool === 'eraser') {
-      // 消しゴムは線を消す道具なので、最後の 1 本を取り下げる（筆跡を白で塗り重ねない）。
-      setStrokes((kept) => kept.slice(0, -1))
-      return
-    }
-    setStrokes((kept) => [...kept, { d, stroke, tool }])
+    const points = live
+    setLive(null)
+    if (tool === 'eraser' || points === null || points.length === 0) return
+    setStrokes((kept) => [...kept, { d: toPath(points), stroke, tool }])
   }
 
   function keep() {
@@ -232,6 +265,10 @@ export function Handwriting({
             </button>
           ))}
           <span aria-hidden="true" className="mx-1.5 h-8 w-px bg-line-strong" />
+          {/*
+            消しゴムは「なぞったところを消す」道具、この札は「さっきの 1 本をなかったことにする」。
+            別の仕事なので、名前も置き場所も分けている。
+          */}
           <button
             type="button"
             disabled={empty}
@@ -293,6 +330,18 @@ export function Handwriting({
                 opacity={item.tool === 'marker' ? 0.45 : 1}
               />
             ))}
+            {live !== null && live.length > 0 && (
+              <path
+                data-testid="handwriting-live"
+                d={toPath(live)}
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={stroke}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                opacity={tool === 'marker' ? 0.45 : 1}
+              />
+            )}
           </svg>
         </div>
         <p className="mt-3 text-right text-grid text-ink-muted">{signature(writer, now)}</p>
@@ -354,4 +403,55 @@ function toSvg(strokes: readonly HandwrittenStroke[], description: string): stri
     )
     .join('')
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${PAPER_WIDTH} ${PAPER_HEIGHT}" role="img" aria-label="${description}">${paths}</svg>`
+}
+
+function round1(value: number): number {
+  return Math.round(value * 10) / 10
+}
+
+/** 点の並びを 1 本の線に直す。 */
+function toPath(points: readonly Point[]): string {
+  const [head, ...rest] = points
+  if (head === undefined) return ''
+  return `M${head.x} ${head.y}${rest.map((point) => `L${point.x} ${point.y}`).join('')}`
+}
+
+/** 線の `d` を点の並びへ戻す（消しゴムの当たり判定で使う）。 */
+function pointsOf(d: string): Point[] {
+  return d
+    .slice(1)
+    .split('L')
+    .map((part) => {
+      const [x, y] = part.trim().split(/\s+/).map(Number)
+      return { x: x ?? 0, y: y ?? 0 }
+    })
+}
+
+/** 消しゴムの 1 点が線に触れているか。線分との距離で見る（点だけ見ると隙間をすり抜ける）。 */
+function touches(item: HandwrittenStroke, point: Point): boolean {
+  const points = pointsOf(item.d)
+  const reach = ERASER_REACH + item.stroke / 2
+  const head = points[0]
+  if (head === undefined) return false
+  if (points.length === 1) return distance(head, point) <= reach
+  return points.some((from, index) => {
+    const to = points[index + 1]
+    return to !== undefined && distanceToSegment(point, from, to) <= reach
+  })
+}
+
+function distance(a: Point, b: Point): number {
+  return Math.hypot(a.x - b.x, a.y - b.y)
+}
+
+function distanceToSegment(point: Point, from: Point, to: Point): number {
+  const dx = to.x - from.x
+  const dy = to.y - from.y
+  const lengthSquared = dx * dx + dy * dy
+  if (lengthSquared === 0) return distance(point, from)
+  const t = Math.min(
+    1,
+    Math.max(0, ((point.x - from.x) * dx + (point.y - from.y) * dy) / lengthSquared),
+  )
+  return distance(point, { x: from.x + t * dx, y: from.y + t * dy })
 }

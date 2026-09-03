@@ -507,3 +507,26 @@ describe('開いた瞬間の選択', () => {
     expect(onSelect).toHaveBeenLastCalledWith(ROWS[1]?.id)
   })
 })
+
+describe('右ペインの置き場所', () => {
+  it('読み込み中は灰色の帯を置く（文字を読まなくても空と見分けられる）', async () => {
+    render(<Harness />)
+    await waitFor(() => expect(screen.getAllByRole('option').length).toBeGreaterThan(0))
+    // 先頭が自動で選ばれ、要約が届くまでは骨組みが出る。
+    const pane = screen.getByRole('complementary', { name: '選んだお客様の要約' })
+    expect(pane.querySelectorAll('[data-skeleton-row]').length).toBeGreaterThan(0)
+    expect(pane.querySelector('[data-empty-state]')).not.toBeInTheDocument()
+  })
+
+  it('当てはまる方が 0 名になったら選択を外し、右も待ちの面に戻る', async () => {
+    render(<Harness />)
+    await waitFor(() => expect(screen.getAllByRole('option').length).toBeGreaterThan(0))
+    await search('9999')
+    const pane = screen.getByRole('complementary', { name: '選んだお客様の要約' })
+    expect(
+      within(pane).getByRole('heading', { name: 'お客様を選んでください' }),
+    ).toBeInTheDocument()
+    // 待ちの面は読み上げに割り込まない（左の「いません」のほうを読ませる）。
+    expect(within(pane).queryByRole('status')).not.toBeInTheDocument()
+  })
+})

@@ -169,3 +169,79 @@ describe('手書きの道具', () => {
     expect(screen.getByRole('button', { name: 'ペン' })).toHaveAttribute('aria-pressed', 'false')
   })
 })
+
+/** 用紙の実寸を測れるようにする（jsdom は既定で 0×0 を返す）。 */
+function measurePaper(width: number, height: number): void {
+  paper().getBoundingClientRect = () =>
+    ({ left: 0, top: 0, width, height, right: width, bottom: height, x: 0, y: 0 }) as DOMRect
+}
+
+describe('手書きの筆跡', () => {
+  it('指を離す前から、なぞった線がそのまま用紙に出ている', () => {
+    render(<Handwriting writer={WRITER} now={NOW} onSave={() => {}} onCancel={() => {}} />)
+    fireEvent.pointerDown(paper(), { pointerId: 1, pointerType: 'pen', clientX: 40, clientY: 40 })
+    fireEvent.pointerMove(paper(), { pointerId: 1, pointerType: 'pen', clientX: 120, clientY: 44 })
+    // ここで離していない。離すまで何も出ないと「書けていない」と思って二度なぞることになる。
+    expect(paper().querySelector('[data-testid="handwriting-live"]')).toBeInTheDocument()
+    fireEvent.pointerUp(paper(), { pointerId: 1, pointerType: 'pen', clientX: 120, clientY: 44 })
+    // 離したら下書きは消えて、確定した 1 本に入れ替わる。
+    expect(paper().querySelector('[data-testid="handwriting-live"]')).not.toBeInTheDocument()
+    expect(paper().querySelectorAll('[data-testid="handwriting-stroke"]')).toHaveLength(1)
+  })
+
+  it('用紙が縮んで表示されていても、線が指の位置からずれない', () => {
+    render(<Handwriting writer={WRITER} now={NOW} onSave={() => {}} onCancel={() => {}} />)
+    // 用紙の枠が 397×420 のとき、`meet` は 0.5 倍で左上に寄せる。
+    // 縦横を別々に割ると y だけ 2 倍ずれる。
+    measurePaper(397, 420)
+    fireEvent.pointerDown(paper(), { pointerId: 1, pointerType: 'pen', clientX: 100, clientY: 50 })
+    fireEvent.pointerMove(paper(), { pointerId: 1, pointerType: 'pen', clientX: 150, clientY: 60 })
+    fireEvent.pointerUp(paper(), { pointerId: 1, pointerType: 'pen', clientX: 150, clientY: 60 })
+    const drawn = paper().querySelector('[data-testid="handwriting-stroke"]')
+    expect(drawn?.getAttribute('d')).toBe('M200 100L300 120')
+  })
+})
+
+describe('消しゴム', () => {
+  function line(fromX: number, toX: number, y: number): void {
+    fireEvent.pointerDown(paper(), { pointerId: 1, pointerType: 'pen', clientX: fromX, clientY: y })
+    fireEvent.pointerMove(paper(), { pointerId: 1, pointerType: 'pen', clientX: toX, clientY: y })
+    fireEvent.pointerUp(paper(), { pointerId: 1, pointerType: 'pen', clientX: toX, clientY: y })
+  }
+
+  it('なぞったところの線だけを消す（最後の 1 本を取り下げるのではない）', async () => {
+    render(<Handwriting writer={WRITER} now={NOW} onSave={() => {}} onCancel={() => {}} />)
+    measurePaper(794, 420)
+    line(100, 300, 100) // 1 本目
+    line(100, 300, 300) // 2 本目（最後に書いたもの）
+    expect(paper().querySelectorAll('[data-testid="handwriting-stroke"]')).toHaveLength(2)
+
+    await userEvent.click(screen.getByRole('button', { name: '消しゴム' }))
+    // 1 本目の上をなぞる。最後の 1 本ではなく、触れたほうが消える。
+    fireEvent.pointerDown(paper(), { pointerId: 2, pointerType: 'pen', clientX: 200, clientY: 100 })
+    fireEvent.pointerUp(paper(), { pointerId: 2, pointerType: 'pen', clientX: 200, clientY: 100 })
+
+    const left = paper().querySelectorAll('[data-testid="handwriting-stroke"]')
+    expect(left).toHaveLength(1)
+    expect(left[0]?.getAttribute('d')).toBe('M100 300L300 300')
+  })
+
+  it('線から離れたところをなぞっても、何も消えない', async () => {
+    render(<Handwriting writer={WRITER} now={NOW} onSave={() => {}} onCancel={() => {}} />)
+    measurePaper(794, 420)
+    line(100, 300, 100)
+    await userEvent.click(screen.getByRole('button', { name: '消しゴム' }))
+    fireEvent.pointerDown(paper(), { pointerId: 2, pointerType: 'pen', clientX: 200, clientY: 260 })
+    fireEvent.pointerMove(paper(), { pointerId: 2, pointerType: 'pen', clientX: 240, clientY: 260 })
+    fireEvent.pointerUp(paper(), { pointerId: 2, pointerType: 'pen', clientX: 240, clientY: 260 })
+    expect(paper().querySelectorAll('[data-testid="handwriting-stroke"]')).toHaveLength(1)
+  })
+
+  it('消しゴムを選んでいる間は、なぞっても新しい線が増えない', async () => {
+    render(<Handwriting writer={WRITER} now={NOW} onSave={() => {}} onCancel={() => {}} />)
+    measurePaper(794, 420)
+    await userEvent.click(screen.getByRole('button', { name: '消しゴム' }))
+    line(100, 300, 100)
+    expect(paper().querySelectorAll('[data-testid="handwriting-stroke"]')).toHaveLength(0)
+  })
+})
