@@ -47,12 +47,10 @@ export type DateTimeStepProps = {
 /** 暦に出す日数。モック BOOK-01 は本日を含む週の月曜から 2 週ぶんを描く。 */
 const CALENDAR_DAYS = 14
 /**
- * 1 画面に出す時刻の札の数。承認済みモック BOOK-01 は 8 枚で、
- * `design/05-screen-flow.md` §2.0 の「選択の札は 8 つまで」もここを指す。
- * サーバが返す格子はこれより多いので、残りは「ほかの時刻も見る」で開く。
- * 読み込み中に出す札の枠もこの数だけ場所を取る。
+ * 読み込み中に場所を取っておく札の枠の数。承認済みモック BOOK-01 の 1 画面ぶん。
+ * 読み終えたら、サーバが返した枠を全部出す（上のコメント）。
  */
-const SLOT_WINDOW = 8
+const SLOT_PLACEHOLDERS = 8
 
 /** `YYYY-MM-DD` の曜日（0=日 … 6=土）。時差の影響を受けないよう UTC で読む。 */
 function weekdayOf(date: LocalDate): number {
@@ -98,7 +96,6 @@ export function DateTimeStep({
   const [answer, setAnswer] = useState<AvailabilityResponse | null>(null)
   const [failed, setFailed] = useState(false)
   const [reload, setReload] = useState(0)
-  const [showAllSlots, setShowAllSlots] = useState(false)
 
   /*
    * 営業時間は**店舗ごと 1 度だけ**読む。暦の札に「定休」と書く手立てがほかに無い
@@ -167,7 +164,6 @@ export function DateTimeStep({
       setDate(next)
       // 日を変えたら時刻は選び直す（前の日の 11:00 が残ると別の日を押さえてしまう）。
       if (next !== date) {
-        setShowAllSlots(false)
         onDraftChange({ ...draft, startsAt: null })
       }
     },
@@ -180,18 +176,7 @@ export function DateTimeStep({
   const closedWeekdays = new Set(
     (hours?.rows ?? []).filter((row) => row.isClosed).map((row) => row.weekday),
   )
-  /*
-   * 時刻の札は 1 画面 8 枚まで。サーバは営業時間ぶんの格子を全部返すので、
-   * そのまま並べると 18 枚になり、下の行が帯に切られる（選択の札は 8 つまで）。
-   * 選んでいる時刻が窓の外にあるときは、選んだ札が見えなくなるので初めから全部出す。
-   */
-  const allSlots = answer?.slots ?? []
-  const chosenIsHidden =
-    draft.startsAt !== null &&
-    allSlots.findIndex((slot) => slot.startsAt === draft.startsAt) >= SLOT_WINDOW
-  const expanded = showAllSlots || chosenIsHidden
-  const shownSlots = expanded ? allSlots : allSlots.slice(0, SLOT_WINDOW)
-  const hiddenSlots = allSlots.length - shownSlots.length
+  const shownSlots = answer?.slots ?? []
 
   const closedNote =
     closedWeekdays.size === 0
@@ -279,7 +264,7 @@ export function DateTimeStep({
                 受け付けられる時刻を読み込んでいます…
               </p>
               <div className="grid grid-cols-4 gap-3.5">
-                {Array.from({ length: SLOT_WINDOW }, (_, index) => (
+                {Array.from({ length: SLOT_PLACEHOLDERS }, (_, index) => (
                   <div
                     key={index}
                     data-booking-slot-frame
@@ -298,30 +283,16 @@ export function DateTimeStep({
               この日は受け付けられる時刻がありません。ほかの日をお選びください。
             </p>
           ) : (
-            <>
-              <div className="grid grid-cols-4 gap-3.5">
-                {shownSlots.map((slot) => (
-                  <SlotCard
-                    key={slot.startsAt}
-                    slot={slot}
-                    chosen={slot.startsAt === draft.startsAt}
-                    onPick={() => onDraftChange({ ...draft, startsAt: slot.startsAt })}
-                  />
-                ))}
-              </div>
-              {hiddenSlots > 0 && (
-                <button
-                  type="button"
-                  onClick={() => setShowAllSlots(true)}
-                  className={cn(
-                    'mt-3.5 min-h-12 w-full rounded-card border border-line-strong bg-surface px-4 text-body font-semibold text-ink',
-                    focusRing,
-                  )}
-                >
-                  {`ほかの時刻も見る（あと${hiddenSlots}件）`}
-                </button>
-              )}
-            </>
+            <div className="grid grid-cols-4 gap-3.5">
+              {shownSlots.map((slot) => (
+                <SlotCard
+                  key={slot.startsAt}
+                  slot={slot}
+                  chosen={slot.startsAt === draft.startsAt}
+                  onPick={() => onDraftChange({ ...draft, startsAt: slot.startsAt })}
+                />
+              ))}
+            </div>
           )}
         </section>
       </main>
@@ -368,9 +339,35 @@ function Ask({ question, note }: { question: string; note: string }) {
 }
 
 /**
- * 時刻の札 1 つ。受け付けられない枠は理由を問わず「満席」と書く —— 工程 1 に理由を
- * 置く場所は無く、理由は工程 2 の警告の箱が受け持つ。
+ * 受け付けられない札に書く一言。**「満席」に丸めない。**
+ *
+ * 札は 30 分幅で文字が数字ぶんしか入らないので、`slot-drag.ts` の `blockedText` のような
+ * 一文ではなく、同じ語彙の短い名詞にする。丸めてしまうと、この画面を読み上げる
+ * アルバイトが休憩の時間を「満席です」とお客様に伝えることになる（UX 監査 BOOK-06）。
  */
+function blockedNote(reason: AvailabilitySlot['reason']): string {
+  switch (reason) {
+    case 'closed':
+      return 'お休み'
+    case 'outside_hours':
+      return '時間外'
+    case 'break':
+      return '休憩'
+    case 'maintenance':
+      return '点検'
+    case 'no_skill':
+    case 'no_equipment':
+      return '受けられません'
+    case 'web_window':
+    case 'lead_time':
+      return '受付前'
+    // staff_busy / staff_off / equipment_busy / max_parallel は「先約で埋まっている」。
+    default:
+      return '満席'
+  }
+}
+
+/** 時刻の札 1 つ。 */
 function SlotCard({
   slot,
   chosen,
@@ -382,7 +379,7 @@ function SlotCard({
 }) {
   const free = slot.isAvailable && slot.remaining > 0
   const clock = jstClock(slot.startsAt)
-  const note = free ? `あと${slot.remaining}枠` : '満席'
+  const note = free ? `あと${slot.remaining}枠` : blockedNote(slot.reason)
   return (
     <button
       type="button"

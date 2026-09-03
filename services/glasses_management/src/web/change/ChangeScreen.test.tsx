@@ -529,3 +529,33 @@ describe('版の競合の解き方', () => {
     })
   })
 })
+
+/*
+ * 台帳の詳細から「変更する」「取り消す」を押して来たとき、押した予約をそのまま開く。
+ * 予約 id を持ってこないと、受話器を持ったままの利用者がまっさらな検索画面に降ろされ、
+ * いま画面に出ていたお名前を打ち直すことになる（UX 監査 NEW-02）。
+ */
+describe('台帳から予約を持って開く', () => {
+  it('initialReservationId を渡すと、検索を通らずその予約の日時変更から始まる', async () => {
+    show({ initialReservationId: RESERVATION_ID, initialStep: 'datetime' })
+    expect(
+      await screen.findByRole('heading', { name: 'お日にちはこのままでよろしいですか？' }),
+    ).toBeInTheDocument()
+    // 押した予約がそのまま対象になっている。
+    expect(screen.getByText('田中 花子 様')).toBeInTheDocument()
+  })
+
+  it('initialStep に cancel を渡すと、その予約の取り消しから始まる', async () => {
+    show({ initialReservationId: RESERVATION_ID, initialStep: 'cancel' })
+    expect(
+      await screen.findByRole('heading', { name: 'この予約を取り消します' }),
+    ).toBeInTheDocument()
+  })
+
+  it('何も渡さなければ、これまでどおり検索から始まる', async () => {
+    show()
+    expect(
+      await screen.findByRole('heading', { name: 'お客様を伺って探します' }),
+    ).toBeInTheDocument()
+  })
+})

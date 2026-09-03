@@ -6,7 +6,9 @@
     ".agents/skills/design-select/scripts/**",
     // モックは製品のコードではなく、発注元へ見せる静止画とその撮影道具である。
     // 依存の監査に混ぜると、モックを増やすたびに「使われていない」と言われる。
-    "docs/frontend/mockups/**"
+    "docs/frontend/mockups/**",
+    // UX 監査を測り直すための足場。製品からは呼ばれず、人が台本から import して使う。
+    "docs/audit/**"
   ],
   "workspaces": {
     "packages/contracts": {

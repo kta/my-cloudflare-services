@@ -371,11 +371,11 @@ describe('録音の例外の面', () => {
     expect(within(how).getAllByRole('listitem')).toHaveLength(3)
     // 工程の帯は出さない（承認済みモックのとおり全面差し替え）。
     expect(screen.queryByRole('list', { name: '予約の工程　全5工程' })).toBeNull()
-    // 録音の印は 1 か所きり。灰色の「録音していません　--:--」が右下に残る。
+    // 録音の印は 1 か所きり。灰色の「録音していません」が右下に残る（時計は出さない）。
     const printed = screen.getAllByRole('status').filter((node) => node.dataset.bookingRecording)
     expect(printed).toHaveLength(1)
     expect(printed[0]).toHaveTextContent('録音していません')
-    expect(printed[0]).toHaveTextContent('--:--')
+    expect(printed[0]).not.toHaveTextContent('--:--')
   })
 
   it('「録音せずに続ける」で、同じ受付の工程へそのまま戻る', async () => {

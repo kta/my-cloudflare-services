@@ -73,7 +73,13 @@ export type LedgerScreenProps = {
    * 予約リストの「ご来店」を押したとき。ご予約のお客様を受け付ける入口はここ 1 つで、
    * 器（`App`）が来店受付の面をその 1 件で開く。
    */
-  onOpenCheckin?: (reservationId: string) => void
+  onOpenCheckin: (reservationId: string) => void
+  /**
+   * 詳細の「変更する」「取り消す」。**`onOpenCheckin` と同じく必須**にしてある ——
+   * 任意にしていたときは器が 1 つも渡さず、押しても何も起きないボタンが 3 つ並んでいた。
+   */
+  onOpenChange: (reservationId: string) => void
+  onOpenCancel: (reservationId: string) => void
   /**
    * 業務の期限が切れた（401）とき。台帳を開いたまま切れると、そのままでは
    * 通信断の帯が出て「再接続を試す」を押し続ける行き止まりになるので、外へ知らせる。
@@ -92,6 +98,8 @@ export function LedgerScreen({
   onBarCenter,
   onOpenSettings,
   onOpenCheckin,
+  onOpenChange,
+  onOpenCancel,
   onSessionExpired,
   isOffline: shellOffline = false,
 }: LedgerScreenProps) {
@@ -419,7 +427,7 @@ export function LedgerScreen({
                 filter={filter}
                 onFilterChange={setFilter}
                 isOffline={offline}
-                {...(onOpenCheckin === undefined ? {} : { onCheckin: onOpenCheckin })}
+                onCheckin={onOpenCheckin}
               />
             ))
           ) : (
@@ -454,6 +462,9 @@ export function LedgerScreen({
               anchor={anchor}
               isOffline={offline}
               onClose={() => setOpenId(null)}
+              onCheckIn={() => onOpenCheckin(openId)}
+              onChange={() => onOpenChange(openId)}
+              onCancel={() => onOpenCancel(openId)}
             />
           )}
         </div>

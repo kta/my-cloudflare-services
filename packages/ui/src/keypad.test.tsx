@@ -162,3 +162,37 @@ describe('TryMeter', () => {
     expect(screen.getByRole('img')).toHaveAccessibleName('あと0回お試しいただけます')
   })
 })
+
+/*
+ * `cn()` は tailwind-merge を持たない単純な結合なので、
+ * 同じ種類のユーティリティを 2 つ載せると、勝つのはクラス列の順ではなく
+ * Tailwind が CSS を書き出す順になる。
+ *
+ * 実際に「確定」キーは `bg-surface`（白）と `bg-pine`（緑）の両方を載せており、
+ * 計算後の背景は白、文字色は `text-on-pine`（白）—— **白地に白文字でラベルが見えず、
+ * 空のボタンに見えていた**（UX 監査で「確定のラベルが消える」と観測されたものの正体）。
+ * 打ち消しに頼らず、地の色は 1 つだけ載せる。
+ */
+describe('確定キーの見た目', () => {
+  function confirmKey(): HTMLElement {
+    render(<Keypad value="2580" onChange={() => {}} onConfirm={() => {}} />)
+    return screen.getByRole('button', { name: '確定' })
+  }
+
+  it('地の色のユーティリティを 1 つしか載せない', () => {
+    const classes = confirmKey().className.split(/\s+/)
+    expect(classes.filter((name) => /^bg-/.test(name))).toEqual(['bg-pine'])
+  })
+
+  it('文字色のユーティリティも 1 つしか載せない', () => {
+    const classes = confirmKey().className.split(/\s+/)
+    expect(classes.filter((name) => /^text-(on-pine|ink)/.test(name))).toEqual(['text-on-pine'])
+  })
+
+  it('数字キーは白地・地の文字色のまま', () => {
+    render(<Keypad value="" onChange={() => {}} onConfirm={() => {}} />)
+    const classes = screen.getByRole('button', { name: '7' }).className.split(/\s+/)
+    expect(classes.filter((name) => /^bg-/.test(name))).toEqual(['bg-surface'])
+    expect(classes).toContain('text-ink')
+  })
+})

@@ -99,12 +99,19 @@ function Key({
   return (
     <button
       type="button"
+      /*
+       * `cn()` は tailwind-merge を持たない単純な結合なので、**同じ種類のユーティリティを
+       * 2 つ載せてはならない**。どちらが勝つかはクラス列の順ではなく Tailwind が CSS を
+       * 書き出す順で決まる。以前は地の色に `bg-surface` と `bg-pine` の両方を載せており、
+       * 確定キーが白地・白文字（`text-on-pine`）になってラベルが見えなくなっていた。
+       * 地の色・縁の色・文字の色は、confirm の有無でどちらか一方だけを選ぶ。
+       */
       className={cn(
-        'h-18 w-24 rounded-ctl border bg-surface text-hero font-normal',
+        'h-18 w-24 rounded-ctl border text-hero font-normal',
         wide && 'text-body font-semibold',
         confirm
           ? cn('border-pine bg-pine text-on-pine font-bold', focusRingOnPine)
-          : cn('border-line-strong text-ink', focusRing),
+          : cn('border-line-strong bg-surface text-ink', focusRing),
         className,
       )}
       {...props}

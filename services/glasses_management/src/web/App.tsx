@@ -1,4 +1,11 @@
-import type { StaffMember, StaffShift, Store, Terminal, TerminalSession } from '@app/contracts'
+import type {
+  BusinessHoursRow,
+  StaffMember,
+  StaffShift,
+  Store,
+  Terminal,
+  TerminalSession,
+} from '@app/contracts'
 import { auth, toJstDateString } from '@app/shared'
 import { Button, Field, focusRing, focusRingOnPine, Notice, TextInput } from '@app/ui'
 import { type FormEvent, type ReactNode, useCallback, useEffect, useState } from 'react'
@@ -25,6 +32,7 @@ import { ReceptionScreen } from './reception/ReceptionScreen'
 import { SettingsScreen } from './settings/SettingsScreen'
 import { AppShell } from './shell/AppShell'
 import { DESTINATIONS, RAIL_BY_DEFAULT } from './shell/destinations'
+import { openStateLabel } from './shell/hours'
 import { LockVeil } from './shell/LockVeil'
 import { OfflineBand } from './shell/OfflineBand'
 import { useIdle } from './shell/useIdle'
@@ -72,6 +80,24 @@ function StartWork({ onStarted }: { onStarted: (org: string) => void }) {
     setError(null)
     try {
       await auth.login(orgId.trim())
+      /*
+       * **入るまえに、そのコードのお店が本当にあるかを確かめる。**
+       * dev グラントは知らない組織にもトークンを出すので、ここを見ないと
+       * 端末モードも置き場所も暗証番号も飛ばしてアプリ本体に入れてしまい、
+       * 上のバーに実在しない店の営業時間まで出る（UX 監査 SHELL-03）。
+       * 同期がまだ届いていない（503）のは「コードが違う」とは別なので、そのまま通す
+       * —— その先の面が「お店の情報がまだ届いていません」を出す。
+       */
+      const res = await auth.authFetch('/api/staff/stores')
+      if (res.ok) {
+        const rows: Store[] = await res.json()
+        if (rows.length === 0) {
+          setError(
+            'このコードのお店が見つかりませんでした。お店のコードをお確かめのうえ、もう一度お試しください。',
+          )
+          return
+        }
+      }
       onStarted(orgId.trim())
     } catch {
       setError('業務を始められませんでした。コードを確かめて、もう一度お試しください。')
@@ -118,6 +144,14 @@ function Workspace({
   // 個人トップの 1 行から来たとき、台帳のその帯の詳細を開いた状態で出す。
   const [openReservation, setOpenReservation] = useState<string | null>(null)
   const [stores, setStores] = useState<Store[] | null>(null)
+  /**
+   * いま見ているお店。トップの「◯◯へ切り替える」で変える。
+   * `null` の間は既定（`isActive` の 1 店目）を見る。
+   * **横断で見るのではなく、切り替えてから操作する設計**（`services/.../AGENTS.md`）。
+   */
+  const [selectedStoreId, setSelectedStoreId] = useState<string | null>(null)
+  /** 上のバーの営業状態を出すための、この店舗の曜日ごとの営業時間。 */
+  const [businessHours, setBusinessHours] = useState<BusinessHoursRow[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   // 顧客台帳の「この方のご予約を取る」（AC-CUST-26）から来たときの、その方。
   // 工程 4 のお名前・ふりがな・お電話番号をこれで埋める。
@@ -159,6 +193,8 @@ function Workspace({
   const [lastSyncedLabel, setLastSyncedLabel] = useState<string | null>(null)
   const [nextRetryLabel, setNextRetryLabel] = useState<string | null>(null)
   const [personalModeSubject, setPersonalModeSubject] = useState<string | null>(null)
+  /** 変更の面をどの工程から開くか（台帳の「変更する」／「取り消す」で分かれる）。 */
+  const [changeIntent, setChangeIntent] = useState<'datetime' | 'cancel'>('datetime')
   const [lockSnapshot, setLockSnapshot] = useState<{
     customerName: string
     customerPhone: string
@@ -329,13 +365,24 @@ function Workspace({
     setRail(RAIL_BY_DEFAULT.has(key))
   }
 
+  /**
+   * 台帳の詳細から「変更する」「取り消す」。
+   * **押した予約をそのまま持っていく。** 予約 id を渡さないと、受話器を持ったまま
+   * まっさらな検索画面に降ろされ、いま画面に出ていたお名前を打ち直すことになる。
+   */
+  function openChange(reservationId: string, intent: 'datetime' | 'cancel') {
+    setChangeIntent(intent)
+    navigate('search', reservationId)
+  }
+
   /** 顧客台帳から「ご予約を取る」（AC-CUST-26）。渡さなければ、いつもの白紙の受付になる。 */
   function startBooking(customer?: { name: string; kana: string; phone: string | null }) {
     setBookingCustomer(customer ?? null)
     navigate('book')
   }
 
-  const store = stores?.find((s) => s.isActive) ?? stores?.[0]
+  const store =
+    stores?.find((s) => s.id === selectedStoreId) ?? stores?.find((s) => s.isActive) ?? stores?.[0]
 
   useEffect(() => {
     if (!store) return
@@ -346,46 +393,53 @@ function Workspace({
       auth.authFetch(`/api/staff/stores/${store.id}/staff`),
       auth.authFetch(`/api/staff/stores/${store.id}/staff-shifts?from=${today}&to=${today}`),
       auth.authFetch(`/api/staff/alerts?storeId=${encodeURIComponent(store.id)}&kind=all&limit=1`),
+      auth.authFetch(`/api/staff/stores/${store.id}/business-hours`),
     ])
-      .then(async ([terminalResponse, staffResponse, shiftResponse, alertResponse]) => {
-        if (!live) return
-        if (alertResponse.ok) {
-          const alerts = (await alertResponse.json()) as { counts?: { all?: number } }
-          setAlertCount(alerts.counts?.all ?? 0)
-        }
-        if (!terminalResponse.ok) {
-          setStartPhase('ready')
-          return
-        }
-        const foundTerminals = (await terminalResponse.json()) as Terminal[]
-        if (foundTerminals.length === 0) {
-          setStartPhase('ready')
-          return
-        }
-        const foundStaff = staffResponse.ok ? ((await staffResponse.json()) as StaffMember[]) : []
-        const foundShifts = shiftResponse.ok ? ((await shiftResponse.json()) as StaffShift[]) : []
-        setTerminals(foundTerminals)
-        setStaffMembers(foundStaff)
-        setOffIds(
-          new Set(
-            foundStaff
-              .filter(
-                (member) =>
-                  !foundShifts.some(
-                    (shift) => shift.staffId === member.id && shift.kind === 'work',
-                  ),
-              )
-              .map((member) => member.id),
-          ),
-        )
-        const saved = localStorage.getItem(`eyex.terminal-mode.${org}`)
-        if (saved === 'personal' || saved === 'shared') {
-          setTerminalMode(saved)
-          setStartPhase(saved === 'personal' ? 'staff' : 'place')
-        } else {
-          setStartPhase('device')
-        }
-      })
+      .then(
+        async ([terminalResponse, staffResponse, shiftResponse, alertResponse, hoursResponse]) => {
+          if (!live) return
+          if (hoursResponse.ok) {
+            const hours = (await hoursResponse.json()) as { rows?: BusinessHoursRow[] }
+            setBusinessHours(hours.rows ?? null)
+          }
+          if (alertResponse.ok) {
+            const alerts = (await alertResponse.json()) as { counts?: { all?: number } }
+            setAlertCount(alerts.counts?.all ?? 0)
+          }
+          if (!terminalResponse.ok) {
+            setStartPhase('ready')
+            return
+          }
+          const foundTerminals = (await terminalResponse.json()) as Terminal[]
+          if (foundTerminals.length === 0) {
+            setStartPhase('ready')
+            return
+          }
+          const foundStaff = staffResponse.ok ? ((await staffResponse.json()) as StaffMember[]) : []
+          const foundShifts = shiftResponse.ok ? ((await shiftResponse.json()) as StaffShift[]) : []
+          setTerminals(foundTerminals)
+          setStaffMembers(foundStaff)
+          setOffIds(
+            new Set(
+              foundStaff
+                .filter(
+                  (member) =>
+                    !foundShifts.some(
+                      (shift) => shift.staffId === member.id && shift.kind === 'work',
+                    ),
+                )
+                .map((member) => member.id),
+            ),
+          )
+          const saved = localStorage.getItem(`eyex.terminal-mode.${org}`)
+          if (saved === 'personal' || saved === 'shared') {
+            setTerminalMode(saved)
+            setStartPhase(saved === 'personal' ? 'staff' : 'place')
+          } else {
+            setStartPhase('device')
+          }
+        },
+      )
       .catch(() => {
         if (live) setStartPhase('ready')
       })
@@ -612,12 +666,13 @@ function Workspace({
 
   return (
     <AppShell
-      storeName={store ? store.name : 'EYEX'}
+      // 店舗が分からないときに屋号を作らない。利用者が入れたコードをそのまま出す。
+      storeName={store ? store.name : org}
       storeSubline={
         current === 'home'
           ? idle.isMasked && selectedTerminal
             ? `${selectedTerminal.name}（みんなで使う端末）`
-            : '営業中　10:00–19:00'
+            : (openStateLabel(businessHours, now()) ?? '')
           : current === 'alerts'
             ? 'お知らせとアラート'
             : current === 'search'
@@ -680,6 +735,7 @@ function Workspace({
             <Home
               stores={stores}
               currentStoreId={store?.id}
+              onSwitchStore={setSelectedStoreId}
               showSharedReservations={idle.isMasked}
               sharedTerminal={terminalSession?.mode === 'shared'}
               onSharedSnapshot={setLockSnapshot}
@@ -697,6 +753,8 @@ function Workspace({
                 onBarCenter={setBarCenter}
                 onOpenSettings={() => navigate('settings')}
                 onOpenCheckin={(reservationId) => navigate('reception', reservationId)}
+                onOpenChange={(reservationId) => openChange(reservationId, 'datetime')}
+                onOpenCancel={(reservationId) => openChange(reservationId, 'cancel')}
                 onSessionExpired={onSignOut}
                 isOffline={!online}
               />
@@ -744,6 +802,8 @@ function Workspace({
               <ChangeScreen
                 storeId={store.id}
                 storeName={store.name}
+                initialReservationId={openReservation ?? undefined}
+                initialStep={changeIntent}
                 onSubline={setChangeSubline}
                 onOpenCustomers={(name) => {
                   navigate('customers')
@@ -810,6 +870,7 @@ function Workspace({
 function Home({
   stores,
   currentStoreId,
+  onSwitchStore,
   showSharedReservations,
   sharedTerminal,
   onSharedSnapshot,
@@ -819,6 +880,8 @@ function Home({
   onOpenSearch,
 }: {
   stores: Store[] | null
+  /** ほかのお店へ切り替える。**押して何も起きないチップを置かない。** */
+  onSwitchStore: (storeId: string) => void
   currentStoreId?: string
   showSharedReservations: boolean
   sharedTerminal: boolean
@@ -864,6 +927,7 @@ function Home({
                 <li key={s.id}>
                   <button
                     type="button"
+                    onClick={() => onSwitchStore(s.id)}
                     className={`min-h-11 rounded-full border border-line-strong bg-surface px-4 text-note font-semibold text-ink-muted ${focusRing}`}
                   >
                     {s.name}へ切り替える

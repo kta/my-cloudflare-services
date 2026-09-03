@@ -36,7 +36,12 @@ function at(clock: string, date: LocalDate = DATE): string {
   return new Date(Date.parse(`${date}T${clock}:00.000Z`) - 9 * 60 * 60 * 1000).toISOString()
 }
 
-function slot(clock: string, remaining: number, date: LocalDate = DATE): AvailabilitySlot {
+function slot(
+  clock: string,
+  remaining: number,
+  date: LocalDate = DATE,
+  reason: AvailabilitySlot['reason'] = null,
+): AvailabilitySlot {
   const hours = Number(clock.slice(0, 2))
   const minutes = Number(clock.slice(3, 5))
   const end = `${String(hours + (minutes === 30 ? 1 : 0)).padStart(2, '0')}:${minutes === 30 ? '00' : '30'}`
@@ -47,7 +52,7 @@ function slot(clock: string, remaining: number, date: LocalDate = DATE): Availab
     isAvailable: remaining > 0,
     staffIds: [],
     equipmentIds: [],
-    reason: remaining > 0 ? null : 'staff_busy',
+    reason: remaining > 0 ? null : (reason ?? 'staff_busy'),
   }
 }
 
@@ -172,12 +177,35 @@ describe('工程 1', () => {
     expect(closed).toHaveTextContent('定休')
   })
 
-  it('埋まっている時刻の札に「満席」と書いてあり、押せない', async () => {
+  it('先約で埋まっている時刻の札に「満席」と書いてあり、押せない', async () => {
     await openStep()
     await userEvent.click(screen.getByRole('button', { name: '8月27日（木）　本日' }))
     const full = await screen.findByRole('button', { name: '11:30　満席' })
     expect(full).toBeDisabled()
     expect(full).toHaveTextContent('満席')
+  })
+
+  /*
+   * 受け付けられない理由を「満席」に丸めると、アルバイトはそれをそのまま読み上げ、
+   * 休憩の時間を「満席です」とお客様に伝えることになる（UX 監査 BOOK-06）。
+   * 事実と違うことを画面に書かない。
+   */
+  it.each([
+    ['break', '休憩'],
+    ['outside_hours', '時間外'],
+    ['closed', 'お休み'],
+    ['maintenance', '点検'],
+    ['no_skill', '受けられません'],
+  ] as const)('受け付けられない理由が %s の札は「満席」と書かない', async (reason, label) => {
+    serve = async (url) => {
+      if (url.pathname.endsWith('/business-hours')) return json(HOURS)
+      return json(availability(DATE, [slot('10:00', 2), slot('11:30', 0, DATE, reason)]))
+    }
+    await openStep()
+    await userEvent.click(screen.getByRole('button', { name: '8月27日（木）　本日' }))
+    const card = await screen.findByRole('button', { name: `11:30　${label}` })
+    expect(card).toBeDisabled()
+    expect(card).not.toHaveTextContent('満席')
   })
 
   it('空いている時刻の札に残り枠数（あと2枠）が出る', async () => {
@@ -227,8 +255,13 @@ describe('工程 1', () => {
     expect(screen.queryByText(/あと\d+枠/)).toBeNull()
   })
 
-  it('時刻の札は 1 画面 8 枚まで。残りは「ほかの時刻も見る」で開く', async () => {
-    // サーバは営業時間ぶんの格子を全部返す（10:00–14:30 の 10 枠）。
+  /*
+   * 以前は 1 画面 8 枚に切って残りを折りたたんでいた。
+   * その 8 枚に入らないのは営業時間の後ろ半分、つまり **午後と夕方**で、
+   * 電話口で読み上げるとき一番埋めたい時間帯を一度も案内しないことになる（UX 監査 BOOK-05）。
+   * サーバが返した枠は全部出し、入りきらないぶんは縦に流す。
+   */
+  it('サーバが返した時刻の札を、折りたたまずに全部出す', async () => {
     serve = async (url) => {
       if (url.pathname.endsWith('/business-hours')) return json(HOURS)
       return json(availability(DATE, [...MOCK_SLOTS(DATE), slot('15:00', 2), slot('15:30', 1)]))
@@ -236,12 +269,10 @@ describe('工程 1', () => {
     await openStep()
     await userEvent.click(screen.getByRole('button', { name: '8月27日（木）　本日' }))
     await screen.findByRole('button', { name: '10:00　あと2枠' })
-    expect(screen.queryByRole('button', { name: '15:00　あと2枠' })).not.toBeInTheDocument()
-
-    const more = screen.getByRole('button', { name: 'ほかの時刻も見る（あと2件）' })
-    expect(more.className).toContain('min-h-12')
-    await userEvent.click(more)
+    // 9 枚目・10 枚目（夕方）も最初から見えている。
     expect(screen.getByRole('button', { name: '15:00　あと2枠' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '15:30　あと1枠' })).toBeInTheDocument()
+    // 折りたたみのボタンそのものが無い。
     expect(screen.queryByRole('button', { name: /^ほかの時刻も見る/ })).not.toBeInTheDocument()
   })
 

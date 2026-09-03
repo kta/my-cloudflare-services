@@ -47,9 +47,13 @@ const LABEL: Record<RecordingBadgeState, string> = {
   buffered: '録音は端末に保管中',
 }
 
-/** 経過時間。数えていない間は「--:--」を出し、0 秒と取り違えさせない。 */
-function elapsedLabel(seconds: number | null): string {
-  if (seconds === null) return '--:--'
+/**
+ * 経過時間。**数えていないときは時計そのものを出さない。**
+ *
+ * 以前は `--:--` を置いていたが、利用者には「出るはずの数字が出ていない＝壊れている」と
+ * 読まれる（UX 監査 REC-04）。数えていないなら文言だけで足りる。
+ */
+function elapsedLabel(seconds: number): string {
   const whole = Math.max(0, Math.floor(seconds))
   return `${String(Math.floor(whole / 60)).padStart(2, '0')}:${String(whole % 60).padStart(2, '0')}`
 }
@@ -73,13 +77,14 @@ export function RecordingBadge({
    * モックの `.float` は `<b>` が地の色を継ぎ、時間だけに色を指しているからで、
    * **薄いのは時間のほうであって文言ではない**（文言まで薄めると読みづらくなる）。
    */
-  const time = (
-    <span
-      className={cn('font-mono text-body', !on && placement === 'floating' && 'text-ink-muted')}
-    >
-      {elapsedLabel(counting ? elapsedSeconds : null)}
-    </span>
-  )
+  const time =
+    counting && elapsedSeconds !== null ? (
+      <span
+        className={cn('font-mono text-body', !on && placement === 'floating' && 'text-ink-muted')}
+      >
+        {elapsedLabel(elapsedSeconds)}
+      </span>
+    ) : null
   const meter = on ? (
     <span
       data-recording-meter

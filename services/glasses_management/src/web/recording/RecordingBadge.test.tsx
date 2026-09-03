@@ -30,11 +30,12 @@ describe('RecordingBadge', () => {
     expect(badge).toHaveTextContent('01:08')
   })
 
-  it('止まっているときは「録音していません」と「--:--」を出す', () => {
+  it('止まっているときは「録音していません」だけを出し、時計の枠を出さない', () => {
     render(<RecordingBadge state="off" elapsedSeconds={null} placement="bar" />)
     const badge = screen.getByRole('status')
     expect(badge).toHaveTextContent('録音していません')
-    expect(badge).toHaveTextContent('--:--')
+    // 数えていないのに時計の枠だけ置くと、「出るはずの数字が出ていない＝壊れている」と読まれる。
+    expect(badge).not.toHaveTextContent('--:--')
     // 止まっているのに時間だけ残っていると「まだ録れている」に見える。
     expect(badge).not.toHaveTextContent('録音中')
   })
@@ -43,7 +44,7 @@ describe('RecordingBadge', () => {
     render(<RecordingBadge state="asking" elapsedSeconds={null} placement="bar" />)
     const badge = screen.getByRole('status')
     expect(badge).toHaveTextContent('マイクの許可を確かめています')
-    expect(badge).toHaveTextContent('--:--')
+    expect(badge).not.toHaveTextContent('--:--')
   })
 
   it('端末に保管中は「録音は端末に保管中」と経過時間を出す', () => {
@@ -62,7 +63,7 @@ describe('RecordingBadge', () => {
     rerender(<RecordingBadge state="off" elapsedSeconds={null} placement="floating" />)
     expect(screen.getByRole('status')).toBe(badge)
     expect(badge).toHaveTextContent('録音していません')
-    expect(badge).toHaveTextContent('--:--')
+    expect(badge).not.toHaveTextContent('--:--')
   })
 
   it('色だけで状態を伝えない（どの状態でも文字が 1 つ以上ある）', () => {
@@ -102,10 +103,20 @@ describe('RecordingBadge', () => {
     const classes = badge.className.split(/\s+/)
     // モックの `.float` は 1px の罫だけを持ち、影は録音中の `.rec-float` だけが持つ。
     expect(classes.some((name) => name.startsWith('shadow'))).toBe(false)
-    // 文言は地の色のまま。薄めるのは経過時間だけである（`.float b` は色を継ぐ）。
+    // 文言は地の色のまま。
     expect(classes).toContain('text-ink')
     expect(classes).not.toContain('text-ink-muted')
-    expect(badge.querySelector('.font-mono')?.className).toContain('text-ink-muted')
+    // 数えていないので時計そのものを出さない（薄い `--:--` も置かない）。
+    expect(badge.querySelector('.font-mono')).toBeNull()
+  })
+
+  it('端末に保管中は、右下でも経過時間を薄めて出す', () => {
+    render(<RecordingBadge state="buffered" elapsedSeconds={204} placement="floating" />)
+
+    const time = screen.getByRole('status').querySelector('.font-mono')
+    expect(time?.textContent).toBe('03:24')
+    // 薄めるのは時間だけで、文言は地の色を継ぐ（`.float b`）。
+    expect(time?.className).toContain('text-ink-muted')
   })
 
   it('右下で録っている間だけ影を落とす', () => {

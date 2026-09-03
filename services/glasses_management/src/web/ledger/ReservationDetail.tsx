@@ -67,9 +67,15 @@ export type ReservationDetailProps = {
    * `RecordingSummary` を別に持つ）、欄が生えたらここへ 1 行で繋ぎ替える。
    */
   recording?: RecordingSummary | null
-  onCheckIn?: () => void
-  onChange?: () => void
-  onCancel?: () => void
+  /*
+   * この面が描く 3 つの操作。**任意にしない。**
+   * 任意プロパティにしていたとき `LedgerScreen` が 1 つも渡しておらず、
+   * 3 つとも `onClick={undefined}` で描かれていた（UX 監査 RECEP-01）。
+   * ボタンを描くのにハンドラが無い状態を、型のうえで作れなくする。
+   */
+  onCheckIn: () => void
+  onChange: () => void
+  onCancel: () => void
 }
 
 /**

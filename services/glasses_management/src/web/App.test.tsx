@@ -21,7 +21,28 @@ const stores = [
     isActive: true,
     createdAt: '2026-08-01T00:00:00.000Z',
   },
+  {
+    id: '22222222-2222-4333-8444-555555555555',
+    organizationId: 'eyex',
+    name: 'EYEX 丸の内店',
+    slug: 'marunouchi',
+    phone: '',
+    address: '',
+    accessNote: '',
+    isActive: false,
+    createdAt: '2026-08-01T00:00:00.000Z',
+  },
 ]
+
+/** 木曜は 10:00–19:00、火曜は定休。 */
+const businessHours = [0, 1, 2, 3, 4, 5, 6].map((weekday) => ({
+  weekday,
+  isClosed: weekday === 2,
+  opensAt: weekday === 2 ? null : '10:00',
+  closesAt: weekday === 2 ? null : '19:00',
+  breakStart: null,
+  breakEnd: null,
+}))
 
 function mockFetch(handler: (url: string) => Response) {
   vi.stubGlobal(
@@ -35,6 +56,12 @@ beforeEach(() => {
   mockFetch((url) => {
     if (url.includes('/api/auth/token')) {
       return new Response(JSON.stringify({ token: 'test-token' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+    if (url.includes('/business-hours')) {
+      return new Response(JSON.stringify({ rows: businessHours }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
       })
@@ -69,7 +96,22 @@ describe('業務開始', () => {
   it('始めると店舗名が上のバーに出る', async () => {
     await startWork()
     await waitFor(() => expect(screen.getByText('EYEX 銀座店')).toBeInTheDocument())
-    expect(screen.getByText(/営業中\s+10:00–19:00/)).toBeInTheDocument()
+  })
+
+  /*
+   * 上のバーの営業状態は、以前 `'営業中　10:00–19:00'` という文字列リテラルだった。
+   * 店舗が変わっても、曜日が変わっても、定休日でも、真夜中でも同じ 1 行を出していた。
+   * いまは保存された営業時間から出す（判定は `shell/hours.ts` の純関数で、
+   * 曜日ごと・時刻ごとの網羅はそちらの面が持つ）。
+   */
+  it('上のバーの営業状態は、保存された営業時間から出す', async () => {
+    await startWork()
+    await waitFor(() => expect(screen.getByText('EYEX 銀座店')).toBeInTheDocument())
+    await waitFor(() =>
+      expect(screen.getByText(/(営業中|営業時間外|本日は定休日)/)).toBeInTheDocument(),
+    )
+    // 時間帯は保存された値そのもの。憶測の数字を書かない。
+    expect(screen.queryByText(/10:00–19:00/)).not.toBeNull()
   })
 })
 
@@ -188,6 +230,23 @@ describe('トップ', () => {
     )
   })
 
+  /*
+   * 「◯◯へ切り替える」のチップは、以前 `onClick` を持っていなかった。
+   * トップの 5 つの操作のうち 2 つが飾りになっていた（UX 監査 SHELL-07）。
+   */
+  it('ほかのお店のチップを押すと、その店舗に切り替わる', async () => {
+    await startWork()
+    await waitFor(() => expect(screen.getByText('新しい予約を取る')).toBeInTheDocument())
+    // いまは銀座店。丸の内店のチップだけが出ている。
+    expect(screen.getByRole('button', { name: 'EYEX 丸の内店へ切り替える' })).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'EYEX 丸の内店へ切り替える' }))
+    // 切り替わると、上のバーの店名が変わり、チップは銀座店のほうに入れ替わる。
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'EYEX 銀座店へ切り替える' })).toBeInTheDocument(),
+    )
+    expect(screen.queryByRole('button', { name: 'EYEX 丸の内店へ切り替える' })).toBeNull()
+  })
+
   it('お店が届いていないときは、その理由と次の行動を出す', async () => {
     mockFetch((url) =>
       url.includes('/api/auth/token')
@@ -206,8 +265,16 @@ describe('トップ', () => {
       ).toBeInTheDocument(),
     )
   })
+})
 
-  it('お店が 1 つも無ければ、その事実だけを出す', async () => {
+/*
+ * 存在しないお店のコードでも、以前はアプリ本体に入れてしまっていた。
+ * 端末モードの選択も置き場所も暗証番号も飛ばし、上のバーには実在しない店の
+ * 「営業中 10:00–19:00」まで出ていた（UX 監査 SHELL-03）。
+ * **入口で止めて、コードを直す道を示す。**
+ */
+describe('知らないお店のコード', () => {
+  function noStores() {
     mockFetch((url) =>
       url.includes('/api/auth/token')
         ? new Response(JSON.stringify({ token: 't' }), {
@@ -219,10 +286,31 @@ describe('トップ', () => {
             headers: { 'content-type': 'application/json' },
           }),
     )
-    await startWork()
+  }
+
+  it('お店が 1 つも見つからないコードでは、入口で止めて理由を言う', async () => {
+    noStores()
+    render(<App />)
+    await userEvent.type(screen.getByLabelText('お店のコード'), 'nonexistent')
+    await userEvent.click(screen.getByRole('button', { name: '業務を始める' }))
     await waitFor(() =>
-      expect(screen.getByText('お店がまだ登録されていません。')).toBeInTheDocument(),
+      expect(
+        screen.getByText(
+          'このコードのお店が見つかりませんでした。お店のコードをお確かめのうえ、もう一度お試しください。',
+        ),
+      ).toBeInTheDocument(),
     )
+  })
+
+  it('止めたあとも入口に留まり、アプリ本体には入らない', async () => {
+    noStores()
+    render(<App />)
+    await userEvent.type(screen.getByLabelText('お店のコード'), 'nonexistent')
+    await userEvent.click(screen.getByRole('button', { name: '業務を始める' }))
+    await waitFor(() => expect(screen.getByLabelText('お店のコード')).toBeInTheDocument())
+    // 左サイドバーも、偽の営業時間も出さない。
+    expect(screen.queryByRole('navigation', { name: '画面の切り替え' })).toBeNull()
+    expect(screen.queryByText(/営業中/)).toBeNull()
   })
 })
 

@@ -353,6 +353,9 @@ describe('予約詳細（LEDGER-DETAIL）の「録音を聞く」', () => {
     return render(
       <div className="relative">
         <ReservationDetail
+          onCheckIn={() => {}}
+          onChange={() => {}}
+          onCancel={() => {}}
           detail={RESERVATION}
           staffName="佐藤 美咲"
           equipmentNames={['視力測定機 A']}

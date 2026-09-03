@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { closedView, resourceView, STORE_ID, staffView } from './fixtures'
+import { closedView, RESERVATION_IDS, resourceView, STORE_ID, staffView } from './fixtures'
 import { LedgerScreen } from './LedgerScreen'
 
 /*
@@ -63,8 +63,15 @@ function devToken(sub: string): string {
   return `header.${btoa(JSON.stringify({ sub, org: 'eyex' }))}.signature`
 }
 
-async function openLedger(date = '2026-08-27') {
-  render(<LedgerScreen storeId={STORE_ID} initialDate={date} />)
+/** 詳細の 3 操作。既定は何もしない関数（型で必須なので省略できない）。 */
+const NO_OP_ACTIONS = {
+  onOpenCheckin: () => {},
+  onOpenChange: () => {},
+  onOpenCancel: () => {},
+}
+
+async function openLedger(date = '2026-08-27', props: Record<string, unknown> = {}) {
+  render(<LedgerScreen storeId={STORE_ID} initialDate={date} {...NO_OP_ACTIONS} {...props} />)
   await screen.findByRole('button', { name: '本日' })
 }
 
@@ -90,7 +97,9 @@ describe('日付の帯', () => {
   })
 
   it('本日でない日を出している間は現在時刻の線と「現在 11:08」の札を出さない', async () => {
-    const { container } = render(<LedgerScreen storeId={STORE_ID} initialDate="2026-08-27" />)
+    const { container } = render(
+      <LedgerScreen storeId={STORE_ID} initialDate="2026-08-27" {...NO_OP_ACTIONS} />,
+    )
     await screen.findByRole('button', { name: '本日' })
     await userEvent.click(screen.getByRole('button', { name: '次の日' }))
     await screen.findByText('2026年8月28日（金）')
@@ -99,7 +108,9 @@ describe('日付の帯', () => {
   })
 
   it('「本日」を押すと 2026年8月27日（木）へ戻り、線と札が戻る', async () => {
-    const { container } = render(<LedgerScreen storeId={STORE_ID} initialDate="2026-08-27" />)
+    const { container } = render(
+      <LedgerScreen storeId={STORE_ID} initialDate="2026-08-27" {...NO_OP_ACTIONS} />,
+    )
     await screen.findByRole('button', { name: '本日' })
     await userEvent.click(screen.getByRole('button', { name: '次の日' }))
     await screen.findByText('2026年8月28日（金）')
@@ -171,7 +182,7 @@ describe('定休日と読み込み', () => {
   })
 
   it('読み込んでいる間は台帳のかわりに「読み込んでいます…」を出す', () => {
-    render(<LedgerScreen storeId={STORE_ID} initialDate="2026-08-27" />)
+    render(<LedgerScreen storeId={STORE_ID} initialDate="2026-08-27" {...NO_OP_ACTIONS} />)
     expect(screen.getByText('読み込んでいます…')).toBeInTheDocument()
   })
 
@@ -180,7 +191,7 @@ describe('定休日と読み込み', () => {
       'fetch',
       vi.fn(async () => json({ error: 'forbidden' }, 403)),
     )
-    render(<LedgerScreen storeId={STORE_ID} initialDate="2026-08-27" />)
+    render(<LedgerScreen storeId={STORE_ID} initialDate="2026-08-27" {...NO_OP_ACTIONS} />)
     expect(
       await screen.findByText('このお店の予約台帳を見る権限がありません。'),
     ).toBeInTheDocument()
@@ -200,6 +211,7 @@ describe('定休日と読み込み', () => {
       <LedgerScreen
         storeId={STORE_ID}
         initialDate="2026-08-27"
+        {...NO_OP_ACTIONS}
         onSessionExpired={onSessionExpired}
       />,
     )
@@ -214,7 +226,7 @@ describe('定休日と読み込み', () => {
       'fetch',
       vi.fn(async () => json({ error: 'not_found' }, 404)),
     )
-    render(<LedgerScreen storeId={STORE_ID} initialDate="2026-08-27" />)
+    render(<LedgerScreen storeId={STORE_ID} initialDate="2026-08-27" {...NO_OP_ACTIONS} />)
     expect(
       await screen.findByText('台帳を読み込めませんでした。もう一度お試しください。'),
     ).toBeInTheDocument()
@@ -274,7 +286,7 @@ describe('自動の取り直し', () => {
   it('60 秒ごとに台帳を取り直す（開いたままの iPad の線と札が朝で止まらない）', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     try {
-      render(<LedgerScreen storeId={STORE_ID} initialDate="2026-08-27" />)
+      render(<LedgerScreen storeId={STORE_ID} initialDate="2026-08-27" {...NO_OP_ACTIONS} />)
       await screen.findByRole('button', { name: '本日' })
       const before = ledgerCalls()
       await act(async () => {
@@ -295,7 +307,14 @@ describe('店頭のお客様の受付パネル', () => {
       new URL(String(input), 'https://example.test').pathname === '/api/staff/purposes'
         ? json([])
         : ledger(input)
-    render(<LedgerScreen storeId={STORE_ID} initialDate="2026-08-27" initialWalkinOpen />)
+    render(
+      <LedgerScreen
+        storeId={STORE_ID}
+        initialDate="2026-08-27"
+        {...NO_OP_ACTIONS}
+        initialWalkinOpen
+      />,
+    )
     const panel = await screen.findByRole('complementary', { name: '店頭のお客様の受け付け' })
     expect(panel).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'やめる' }))
@@ -305,5 +324,72 @@ describe('店頭のお客様の受付パネル', () => {
     // 受付パネルは来店受付ボードから開くので、この面に開いた要素が無い。
     // それでも body へ落とさず、台帳そのものへ焦点を返す。
     expect(document.activeElement).not.toBe(document.body)
+  })
+})
+
+/*
+ * 詳細の 3 操作は、**器が必ずハンドラを渡す**。任意プロパティにしていたときは
+ * `LedgerScreen` が 1 つも渡しておらず、営業時間中にいちばん押されるボタンが
+ * 3 つとも `onClick={undefined}` で描かれていた（UX 監査 RECEP-01）。
+ * 押しても何も起きないボタンを二度と作らないための面である。
+ */
+describe('予約詳細の 3 操作', () => {
+  async function openDetail(props: Record<string, unknown>) {
+    const base = serve
+    serve = async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'https://example.test')
+      if (url.pathname === `/api/staff/reservations/${RESERVATION_IDS.sato1100}`) {
+        return json({
+          id: RESERVATION_IDS.sato1100,
+          code: 'EY-2608-0003',
+          storeId: STORE_ID,
+          source: 'phone',
+          status: 'confirmed',
+          startsAt: '2026-08-27T02:00:00.000Z',
+          endsAt: '2026-08-27T03:00:00.000Z',
+          durationMinutes: 60,
+          purposes: [],
+          assignments: [],
+          webBookingCode: null,
+          purposeLabel: '新調相談・視力測定',
+          purposeLabelInternal: '新調相談・視力測定',
+          noteCustomer: '',
+          noteInternal: '',
+          version: 1,
+          createdAt: '2026-08-27T00:10:00.000Z',
+          updatedAt: '2026-08-27T00:10:00.000Z',
+          createdBy: null,
+          cancelledAt: null,
+          cancelReason: null,
+        })
+      }
+      return base(input)
+    }
+    await openLedger('2026-08-27', props)
+    await userEvent.click(
+      await screen.findByRole('gridcell', { name: /11:00から12:00　新調相談・視力測定/ }),
+    )
+    await screen.findByRole('dialog', { name: '予約の詳細' })
+  }
+
+  it('「ご来店を受け付ける」を押すと、器へ予約 id が届く', async () => {
+    const onOpenCheckin = vi.fn()
+    await openDetail({ onOpenCheckin })
+    await userEvent.click(screen.getByRole('button', { name: 'ご来店を受け付ける' }))
+    expect(onOpenCheckin).toHaveBeenCalledWith(RESERVATION_IDS.sato1100)
+  })
+
+  it('「変更する」を押すと、器へ予約 id が届く', async () => {
+    const onOpenChange = vi.fn()
+    await openDetail({ onOpenChange })
+    await userEvent.click(screen.getByRole('button', { name: '変更する' }))
+    expect(onOpenChange).toHaveBeenCalledWith(RESERVATION_IDS.sato1100)
+  })
+
+  it('「取り消す」を押すと、器へ予約 id が届く', async () => {
+    const onOpenCancel = vi.fn()
+    await openDetail({ onOpenCancel })
+    await userEvent.click(screen.getByRole('button', { name: '取り消す' }))
+    expect(onOpenCancel).toHaveBeenCalledWith(RESERVATION_IDS.sato1100)
   })
 })

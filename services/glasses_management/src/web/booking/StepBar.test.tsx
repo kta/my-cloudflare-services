@@ -107,6 +107,7 @@ describe('録音の表示', () => {
     open('datetime')
     const badge = within(screen.getByRole('contentinfo')).getByRole('status')
     expect(badge).toHaveTextContent('録音していません')
-    expect(badge).toHaveTextContent('--:--')
+    // 数えていないのに時計の枠だけ置くと、壊れているように読まれる（UX 監査 REC-04）。
+    expect(badge).not.toHaveTextContent('--:--')
   })
 })

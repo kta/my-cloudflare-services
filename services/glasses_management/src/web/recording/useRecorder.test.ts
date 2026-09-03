@@ -351,14 +351,38 @@ describe('useRecorder', () => {
     // 端末の時計ではなく、注いだ時刻だけが経過時間を決める。
     h.clock.ms = T0 + 68_000
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(30_000)
+      await vi.advanceTimersByTimeAsync(1_000)
     })
     expect(view.result.current.elapsedSeconds).toBe(68)
     h.clock.ms = T0 + 192_000
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(30_000)
+      await vi.advanceTimersByTimeAsync(1_000)
     })
     expect(view.result.current.elapsedSeconds).toBe(192)
+  })
+
+  /*
+   * 画面は `mm:ss` と秒まで出す（`RecordingBadge` の `elapsedLabel`）。
+   * 数え直しを 30 秒おきにすると、30 秒のうち 29 秒は秒の桁が凍り、
+   * 利用者には「止まっている」としか見えない。**表示の粒度と更新の粒度を揃える。**
+   */
+  it('秒まで表示するので、1 秒ごとに数え直す', async () => {
+    vi.useFakeTimers()
+    const h = harness()
+    const view = mount(h)
+    await act(async () => {
+      view.result.current.start()
+      await Promise.resolve()
+    })
+    const seen: (number | null)[] = []
+    for (let second = 1; second <= 5; second += 1) {
+      h.clock.ms = T0 + second * 1_000
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000)
+      })
+      seen.push(view.result.current.elapsedSeconds)
+    }
+    expect(seen).toEqual([1, 2, 3, 4, 5])
   })
 
   it('録音が途中で止まったら off に落ち、受付の操作は続けられる', async () => {

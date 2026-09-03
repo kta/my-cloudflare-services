@@ -39,8 +39,10 @@ export function PlacePick({
                 onClick={() => setSelected(terminal.id)}
                 aria-label={`${terminal.name} ${status}`}
                 className={cn(
-                  'min-h-29 rounded-card border bg-surface p-5 text-left',
-                  current ? 'border-3 border-pine bg-pine-soft' : 'border-line-strong',
+                  // `cn()` は tailwind-merge を持たないので、地の色は片方だけ載せる
+                  // （両方載せると勝つのは CSS の書き出し順で、選択中の塗りが消える）。
+                  'min-h-29 rounded-card border p-5 text-left',
+                  current ? 'border-3 border-pine bg-pine-soft' : 'border-line-strong bg-surface',
                   focusRing,
                 )}
               >

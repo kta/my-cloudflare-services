@@ -67,6 +67,9 @@ function open(props: Partial<Parameters<typeof ReservationDetail>[0]> = {}) {
         equipmentNames={PLACES}
         anchor={{ left: 260, top: 172 }}
         onClose={() => {}}
+        onCheckIn={() => {}}
+        onChange={() => {}}
+        onCancel={() => {}}
         {...props}
       />
     </div>,
@@ -109,6 +112,9 @@ function Ledger({
         </button>
         {openId !== null && (
           <ReservationDetail
+            onCheckIn={() => {}}
+            onChange={() => {}}
+            onCancel={() => {}}
             detail={DETAIL}
             staffName="佐藤 美咲"
             equipmentNames={PLACES}
@@ -291,12 +297,23 @@ describe('予約の詳細', () => {
 
   it('読み込み中と、見つからないときを持つ', () => {
     const { rerender } = render(
-      <ReservationDetail detail={null} staffName={null} equipmentNames={[]} onClose={() => {}} />,
+      <ReservationDetail
+        detail={null}
+        staffName={null}
+        equipmentNames={[]}
+        onClose={() => {}}
+        onCheckIn={() => {}}
+        onChange={() => {}}
+        onCancel={() => {}}
+      />,
     )
     expect(screen.getByRole('status').textContent).toBe('ご予約を読み込んでいます…')
 
     rerender(
       <ReservationDetail
+        onCheckIn={() => {}}
+        onChange={() => {}}
+        onCancel={() => {}}
         detail={null}
         staffName={null}
         equipmentNames={[]}
@@ -351,6 +368,9 @@ describe('台帳の中に収める', () => {
     render(
       <div data-stage className="relative">
         <ReservationDetail
+          onCheckIn={() => {}}
+          onChange={() => {}}
+          onCancel={() => {}}
           detail={DETAIL}
           staffName="佐藤 美咲"
           equipmentNames={PLACES}

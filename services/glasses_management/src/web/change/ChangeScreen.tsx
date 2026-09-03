@@ -204,6 +204,8 @@ export function ChangeScreen({
   onOpenLedger,
   onGoHome,
   onSubline,
+  initialReservationId,
+  initialStep = 'datetime',
   onChangeSlot,
   onSessionExpired,
   isOffline = false,
@@ -225,6 +227,13 @@ export function ChangeScreen({
   onGoHome: () => void
   /** 上のバーの小見出し（「予約を変更する」／「予約の変更　EY-2608-0142」）。 */
   onSubline?: (subline: string) => void
+  /**
+   * 台帳の詳細から「変更する」「取り消す」で来たときの予約。
+   * **押した予約をそのまま開く。** 渡さなければ、これまでどおり検索から始まる。
+   */
+  initialReservationId?: string
+  /** 上と対で、日時変更と取り消しのどちらから始めるか。 */
+  initialStep?: 'datetime' | 'cancel'
   /** 担当・場所を変える（BOOK-03-SLOT-STAFF の再利用）。渡されないと 1 行で断る。 */
   onChangeSlot?: (detail: ReservationDetail) => void
   onSessionExpired?: () => void
@@ -240,7 +249,9 @@ export function ChangeScreen({
   const [clock, setClock] = useState(opened)
   useEffect(() => setClock(opened), [opened])
 
-  const [step, setStep] = useState<'search' | 'datetime' | 'diff' | 'cancel' | 'done'>('search')
+  const [step, setStep] = useState<'search' | 'datetime' | 'diff' | 'cancel' | 'done'>(
+    initialReservationId === undefined ? 'search' : initialStep,
+  )
   const [conditions, setConditions] = useState<SearchConditions>(BLANK)
   const [reload, setReload] = useState(0)
   const [items, setItems] = useState<readonly ReservationSummary[]>([])
@@ -248,7 +259,7 @@ export function ChangeScreen({
   const [relaxations, setRelaxations] = useState<readonly SearchRelaxation[]>([])
   const [phase, setPhase] = useState<SearchPhase>('loading')
 
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(initialReservationId ?? null)
   const [detail, setDetail] = useState<ReservationDetail | null>(null)
   const [detailReload, setDetailReload] = useState(0)
   const [detailPhase, setDetailPhase] = useState<'loading' | 'ready' | 'error' | 'not_found'>(
