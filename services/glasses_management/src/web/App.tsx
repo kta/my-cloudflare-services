@@ -8,7 +8,7 @@ import type {
 } from '@app/contracts'
 import { auth, toJstDateString } from '@app/shared'
 import { Button, Field, focusRing, focusRingOnPine, Notice, TextInput } from '@app/ui'
-import { type FormEvent, type ReactNode, useCallback, useEffect, useState } from 'react'
+import { type FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { AlertScreen } from './alerts/AlertScreen'
 import { AnalyticsPane } from './analytics/AnalyticsPane'
 import { BookingScreen } from './booking/BookingScreen'
@@ -195,6 +195,10 @@ function Workspace({
   const [personalModeSubject, setPersonalModeSubject] = useState<string | null>(null)
   /** 変更の面をどの工程から開くか（台帳の「変更する」／「取り消す」で分かれる）。 */
   const [changeIntent, setChangeIntent] = useState<'datetime' | 'cancel'>('datetime')
+  /** 利用者が自分でサイドバーの幅を決めたか。決めたあとは画面ごとの既定を当てない。 */
+  const [railTouched, setRailTouched] = useState(false)
+  /** この業務のあいだに一度でも開いた画面。既定の幅は初回だけ当てる。 */
+  const visitedRef = useRef<Set<string>>(new Set(['home']))
   const [lockSnapshot, setLockSnapshot] = useState<{
     customerName: string
     customerPhone: string
@@ -362,7 +366,14 @@ function Workspace({
     setCurrent(key)
     setOpenReservation(reservationId)
     setWalkinPanel(walkin)
-    setRail(RAIL_BY_DEFAULT.has(key))
+    /*
+     * サイドバーの幅は**その画面を初めて開いたときだけ**既定を当てる。
+     * 以前は移動のたびに当てていたので、操作していないのに 216px と 76px を
+     * 行き来し、本文が 140px 横に飛んでいた（UX 監査 UI-04）。
+     * 一度でも利用者が自分でたたむ／ひらいたら、以後は既定を当てない。
+     */
+    if (!railTouched && !visitedRef.current.has(key)) setRail(RAIL_BY_DEFAULT.has(key))
+    visitedRef.current.add(key)
   }
 
   /**
@@ -682,7 +693,10 @@ function Workspace({
       current={current}
       onNavigate={(key) => navigate(key)}
       rail={rail}
-      onToggleRail={() => setRail((v) => !v)}
+      onToggleRail={() => {
+        setRailTouched(true)
+        setRail((v) => !v)
+      }}
       isLocked={idle.isMasked}
       alertCount={alertCount}
       terminalNote={

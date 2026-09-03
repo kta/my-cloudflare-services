@@ -15,6 +15,7 @@ import { client } from '../client'
 import { dateLabel, jstClock, shiftDate } from '../ledger/metrics'
 import { VisitBadge } from '../ledger/Timetable'
 import { hasPlayableRecording, RecordingPlayer } from '../recording/RecordingPlayer'
+import { LoadFailed } from '../shell/LoadFailed'
 
 /*
  * 受付履歴の一覧・詳細・0 件（承認済みモック
@@ -290,6 +291,8 @@ export function ReceptionHistory({
   const [nextCursor, setNextCursor] = useState<string | null>(null)
   const [relaxations, setRelaxations] = useState<readonly SearchRelaxation[]>([])
   const [phase, setPhase] = useState<ListPhase>('loading')
+  // 読み直しの合図（LoadFailed の「もう一度読み込む」から上げる）。
+  const [reloadCount, setReloadCount] = useState(0)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [detail, setDetail] = useState<ReceptionHistoryDetail | null>(null)
   const [detailFailed, setDetailFailed] = useState(false)
@@ -338,7 +341,7 @@ export function ReceptionHistory({
     return () => {
       live = false
     }
-  }, [load])
+  }, [load, reloadCount])
 
   function select(entry: ReceptionHistoryEntry) {
     setSelectedId(entry.entryId)
@@ -484,9 +487,14 @@ export function ReceptionHistory({
         </p>
       )}
       {phase === 'error' && (
-        <p role="alert" className="px-8 py-6 text-body text-ink-muted">
-          受付履歴を読み込めませんでした。通信が切れているかもしれません。
-        </p>
+        <LoadFailed
+          what="受付履歴"
+          hint="通信が切れているかもしれません。"
+          onRetry={() => {
+            setPhase('loading')
+            setReloadCount((n) => n + 1)
+          }}
+        />
       )}
 
       {phase === 'ready' && total === 0 && (

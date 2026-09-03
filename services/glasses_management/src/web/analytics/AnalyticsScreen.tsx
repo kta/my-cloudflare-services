@@ -1,5 +1,6 @@
 import { cn, focusRing } from '@app/ui'
 import { type KeyboardEvent, useEffect, useRef, useState } from 'react'
+import { LoadFailed } from '../shell/LoadFailed'
 import type { ChartSeries } from './charts'
 import { type OfficialAnalyticsReport, OfficialTab } from './OfficialTab'
 import { type AnalyticsSummaryItem, SimpleTab } from './SimpleTab'
@@ -84,6 +85,8 @@ export function AnalyticsScreen({
   const [report, setReport] = useState<AnalyticsPresentationReport | undefined>(reports[initialTab])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<false | 'failed' | 'forbidden'>(false)
+  // 読み直しの合図（LoadFailed の「もう一度読み込む」から上げる）。
+  const [reloadCount, setReloadCount] = useState(0)
   const tabRefs = useRef<Partial<Record<AnalyticsTabKey, HTMLButtonElement | null>>>({})
   const latestRequest = useRef(0)
 
@@ -117,7 +120,7 @@ export function AnalyticsScreen({
   useEffect(() => {
     if (loadReport && !reports[initialTab])
       void apply({ tab: initialTab, month: initialMonth, storeId })
-  }, [])
+  }, [reloadCount])
 
   function onTabKeyDown(event: KeyboardEvent<HTMLButtonElement>, current: AnalyticsTabKey) {
     const index = ANALYTICS_TABS.findIndex((tab) => tab.key === current)
@@ -237,14 +240,22 @@ export function AnalyticsScreen({
           </p>
         ) : error ? (
           <div className="px-10 py-8">
-            <p
-              role="alert"
-              className="rounded-panel border border-danger bg-danger-soft px-5 py-4 text-body text-danger"
-            >
-              {error === 'forbidden'
-                ? 'この店舗の分析を見る権限がありません。'
-                : '分析を読み込めませんでした。もう一度読み込んでください。'}
-            </p>
+            {error === 'forbidden' ? (
+              <p
+                role="alert"
+                className="rounded-panel border border-danger bg-danger-soft px-5 py-4 text-body text-danger"
+              >
+                この店舗の分析を見る権限がありません。店長に権限をお願いしてください。
+              </p>
+            ) : (
+              <LoadFailed
+                what="分析"
+                onRetry={() => {
+                  setError(false)
+                  setReloadCount((n) => n + 1)
+                }}
+              />
+            )}
             {error === 'forbidden' && onBack ? (
               <button
                 type="button"

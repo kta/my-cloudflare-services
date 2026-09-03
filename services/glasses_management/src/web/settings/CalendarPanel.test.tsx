@@ -294,14 +294,14 @@ describe('読み込みと失敗', () => {
     )
   })
 
-  it('読み込めなかったら理由と次の行動を出す', async () => {
+  it('読み込めなかったら理由と、その場でやり直す手立てを出す', async () => {
     mockApi({ readStatus: 500 })
     renderPanel()
     await waitFor(() =>
-      expect(
-        screen.getByText('営業日を読み込めませんでした。画面を開き直してください。'),
-      ).toBeInTheDocument(),
+      expect(screen.getByText('営業日を読み込めませんでした。')).toBeInTheDocument(),
     )
+    // 読み直す手立てをその場に置く（画面ごとの URL が無いので「開き直す」は実行できない）。
+    expect(screen.getByRole('button', { name: 'もう一度読み込む' })).toBeInTheDocument()
   })
 
   it('保存が落ちたら「保存できませんでした。入力はそのまま残っています。」を出し、押した丸は残る', async () => {

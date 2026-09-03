@@ -10,6 +10,7 @@ import { auth } from '@app/shared'
 import { Button, focusRing, Notice, TextInput } from '@app/ui'
 import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { client } from '../client'
+import { LoadFailed } from '../shell/LoadFailed'
 import { addJstDays, ImpactCard } from './ImpactCard'
 import type { PanelDraft, SaveOutcome, SettingsPanelProps } from './sections'
 import { toJstDay } from './sections'
@@ -117,6 +118,8 @@ export function PurposePanel({ storeId, now, onDraftChange }: SettingsPanelProps
   const today = toJstDay(at)
 
   const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading')
+  // 読み直しの合図。読み込みの useEffect の依存に入れる。
+  const [reloadCount, setReloadCount] = useState(0)
   const [saved, setSaved] = useState<Purpose[]>([])
   const [drafts, setDrafts] = useState<Record<string, PurposeDraft>>({})
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -146,7 +149,7 @@ export function PurposePanel({ storeId, now, onDraftChange }: SettingsPanelProps
 
   useEffect(() => {
     load().catch(() => setPhase('error'))
-  }, [load])
+  }, [load, reloadCount])
 
   const selected = saved.find((purpose) => purpose.id === selectedId) ?? null
   const selectedDraft = selectedId ? drafts[selectedId] : undefined
@@ -389,7 +392,15 @@ export function PurposePanel({ storeId, now, onDraftChange }: SettingsPanelProps
       </p>
     )
   if (phase === 'error') {
-    return <Notice>ご来店の目的を読み込めませんでした。画面を開き直してください。</Notice>
+    return (
+      <LoadFailed
+        what="ご来店の目的"
+        onRetry={() => {
+          setPhase('loading')
+          setReloadCount((n) => n + 1)
+        }}
+      />
+    )
   }
 
   return (

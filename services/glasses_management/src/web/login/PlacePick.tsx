@@ -18,7 +18,7 @@ export function PlacePick({
   const selectedTerminal = terminals.find((terminal) => terminal.id === selected) ?? null
   return (
     <div className="flex h-dvh flex-col bg-paper text-ink">
-      <StartBar mode="みんなで使う端末" action="設定" />
+      <StartBar mode="みんなで使う端末" />
       <main className="flex-1 overflow-auto px-11 py-10">
         <h1 className="text-title font-bold">この端末はどこに置きますか？</h1>
         <p className="mt-1 text-body text-ink-muted">

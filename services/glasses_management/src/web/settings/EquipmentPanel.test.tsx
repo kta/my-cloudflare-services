@@ -454,15 +454,15 @@ describe('読み込みと失敗', () => {
     expect(screen.getByText('設備と点検を読み込んでいます…')).toBeInTheDocument()
   })
 
-  it('読み込めなかったら理由と次の行動を出す', async () => {
+  it('読み込めなかったら理由と、その場でやり直す手立てを出す', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => new Response('boom', { status: 500 })),
     )
     render(<EquipmentPanel storeId={STORE_ID} now={NOW} onDraftChange={() => {}} />)
-    expect(
-      await screen.findByText('設備と点検を読み込めませんでした。画面を開き直してください。'),
-    ).toBeInTheDocument()
+    expect(await screen.findByText('設備と点検を読み込めませんでした。')).toBeInTheDocument()
+    // 読み直す手立てをその場に置く（画面ごとの URL が無いので「開き直す」は実行できない）。
+    expect(screen.getByRole('button', { name: 'もう一度読み込む' })).toBeInTheDocument()
   })
 
   it('1 台も無ければ、その事実だけを出す', async () => {

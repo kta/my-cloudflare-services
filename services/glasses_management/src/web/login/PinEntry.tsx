@@ -26,8 +26,7 @@ export function PinEntry({
     <div className="flex h-dvh flex-col bg-paper text-ink">
       <StartBar
         mode={kind === 'personal' ? '個人の端末' : 'みんなで使う端末'}
-        action="やめる"
-        onAction={onBack}
+        action={{ label: 'やめる', onPress: onBack }}
       />
       <main className="flex min-h-0 flex-1">
         <section className="flex min-h-0 min-w-0 flex-1 flex-col px-11 py-10">

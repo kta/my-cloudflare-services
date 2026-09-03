@@ -2,6 +2,7 @@ import type { BusinessHoursRow, BusinessHoursView } from '@app/contracts'
 import { cn, focusRing } from '@app/ui'
 import { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import { client } from '../client'
+import { LoadFailed } from '../shell/LoadFailed'
 import {
   jstWeekday,
   type SaveOutcome,
@@ -59,6 +60,8 @@ export function HoursPanel({ storeId, now, onDraftChange }: SettingsPanelProps) 
   const [loaded, setLoaded] = useState<Loaded | null>(null)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [failed, setFailed] = useState(false)
+  // 読み直しの合図。読み込みの useEffect の依存に入れる。
+  const [reloadCount, setReloadCount] = useState(0)
   const [adding, setAdding] = useState<{ label: string; startsAt: string; endsAt: string } | null>(
     null,
   )
@@ -87,7 +90,7 @@ export function HoursPanel({ storeId, now, onDraftChange }: SettingsPanelProps) 
     return () => {
       alive = false
     }
-  }, [storeId])
+  }, [storeId, reloadCount])
 
   const base = useMemo(() => (loaded ? toDraft(loaded) : null), [loaded])
 
@@ -188,9 +191,13 @@ export function HoursPanel({ storeId, now, onDraftChange }: SettingsPanelProps) 
 
   if (failed)
     return (
-      <p role="alert" className="text-body text-ink-muted">
-        営業時間を読み込めませんでした。画面を開き直してください。
-      </p>
+      <LoadFailed
+        what="営業時間"
+        onRetry={() => {
+          setFailed(false)
+          setReloadCount((n) => n + 1)
+        }}
+      />
     )
   if (!loaded || !draft)
     return (

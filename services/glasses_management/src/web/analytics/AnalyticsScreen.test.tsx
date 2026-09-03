@@ -196,9 +196,7 @@ describe('AnalyticsScreen', () => {
     expect(screen.queryByRole('img')).not.toBeInTheDocument()
 
     reject?.(new Error('offline'))
-    expect(
-      await screen.findByText('分析を読み込めませんでした。もう一度読み込んでください。'),
-    ).toBeInTheDocument()
+    expect(await screen.findByText('分析を読み込めませんでした。')).toBeInTheDocument()
     expect(screen.queryByRole('img')).not.toBeInTheDocument()
   })
 

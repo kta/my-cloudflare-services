@@ -1,14 +1,21 @@
 import { focusRingOnPine } from '@app/ui'
 
+/*
+ * 業務を始めるまでの上のバー。
+ *
+ * 右の操作は **名前と押したときの動きを 1 つの組で受け取る**。
+ * 以前は `action?: string` と `onAction?: () => void` を別々の任意プロパティにしており、
+ * 置き場所選択とスタッフ選択が名前だけを渡していた。結果、両方の画面の右上に
+ * 押しても何も起きない「設定」が出ていた（UX 監査 UI-ERR-02）。
+ * 組にすれば、名前だけを渡すことが型のうえで書けなくなる。
+ */
 export function StartBar({
   mode,
   action,
-  onAction,
   showWorkPrefix = true,
 }: {
   mode: string
-  action?: string
-  onAction?: () => void
+  action?: { label: string; onPress: () => void }
   showWorkPrefix?: boolean
 }) {
   return (
@@ -17,13 +24,13 @@ export function StartBar({
         <p className="text-bar font-bold">EYEX 銀座店</p>
         <p className="text-note opacity-90">{showWorkPrefix ? `業務を始める　${mode}` : mode}</p>
       </div>
-      {action && (
+      {action !== undefined && (
         <button
           type="button"
-          onClick={onAction}
+          onClick={action.onPress}
           className={`ml-auto min-h-12 rounded-card px-3 text-lead font-semibold ${focusRingOnPine}`}
         >
-          {action}
+          {action.label}
         </button>
       )}
     </header>

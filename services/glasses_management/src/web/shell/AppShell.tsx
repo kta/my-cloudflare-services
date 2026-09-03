@@ -4,7 +4,13 @@ import { DESTINATIONS, type Destination, HOME_DESTINATION } from './destinations
 import { Icon } from './icons'
 
 const ALERT_DESTINATION: Destination = { key: 'alerts', label: 'お知らせ', icon: 'alerts' }
-const HEADER_ALERT_DESTINATIONS = new Set(['home', 'ledger', 'customers', 'settings'])
+/*
+ * 上のバーのお知らせは、**お知らせの面そのもの以外のどこにでも出す**。
+ * 以前は home / ledger / customers / settings の 4 画面だけに出しており、
+ * 来店受付・予約を探す・受付履歴・分析では「録音の保存に3回失敗しました（対応が必要）」が
+ * 画面から消えていた。未読を隠す場所を作らない（UX 監査 UI-05）。
+ */
+const HEADER_ALERT_HIDDEN = new Set(['alerts'])
 
 /*
  * 業務画面の骨格。承認済みモック（docs/frontend/mockups/eyex）の実測に合わせる。
@@ -79,7 +85,7 @@ export function AppShell({
         </div>
         {barCenter}
         <div className="ml-auto flex items-center gap-2">
-          {HEADER_ALERT_DESTINATIONS.has(current) && alertCount > 0 && (
+          {!HEADER_ALERT_HIDDEN.has(current) && alertCount > 0 && (
             <button
               type="button"
               onClick={() => onNavigate('alerts')}

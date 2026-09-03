@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from './App'
@@ -59,6 +59,15 @@ beforeEach(() => {
         status: 200,
         headers: { 'content-type': 'application/json' },
       })
+    }
+    if (url.includes('/api/staff/alerts')) {
+      return new Response(
+        JSON.stringify({ items: [], counts: { all: 3, alert: 1, info: 2, done: 0 } }),
+        {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        },
+      )
     }
     if (url.includes('/business-hours')) {
       return new Response(JSON.stringify({ rows: businessHours }), {
@@ -323,4 +332,56 @@ describe('業務を終える', () => {
     await userEvent.click(screen.getByRole('button', { name: '業務を終える' }))
     expect(screen.getByLabelText('お店のコード')).toBeInTheDocument()
   })
+})
+
+/*
+ * 器は、画面を移っただけで勝手に姿を変えない。
+ *
+ * 以前は左サイドバーの幅が画面ごとの既定（RAIL_BY_DEFAULT）で上書きされ、
+ * 操作していないのに 216px と 76px を行き来していた（実測: トップ216 → 台帳76 →
+ * 受付76 → 探す216 → 履歴216 → 顧客76 → 分析76 → 設定76）。
+ * 本文の左端がそのたび 140px 横に飛ぶ。UX 監査 UI-04。
+ */
+describe('器の安定', () => {
+  it('サイドバーを一度たたんだら、画面を移ってもたたんだまま', async () => {
+    await startWork()
+    const nav = await screen.findByRole('navigation', { name: '画面の切り替え' })
+    await userEvent.click(screen.getByRole('button', { name: 'サイドバーをたたむ' }))
+    expect(screen.getByRole('button', { name: 'サイドバーをひらく' })).toBeInTheDocument()
+
+    await userEvent.click(within(nav).getByRole('button', { name: '受付履歴' }))
+    // 画面を移っても、たたんだ状態が勝手に戻らない。
+    expect(screen.getByRole('button', { name: 'サイドバーをひらく' })).toBeInTheDocument()
+  })
+
+  it('画面ごとの既定は初回だけ。行き来しても幅が往復しない', async () => {
+    await startWork()
+    const nav = await screen.findByRole('navigation', { name: '画面の切り替え' })
+    // 台帳は時間軸を広く見たいので、初めて開くときだけ細い柱になる。
+    await userEvent.click(within(nav).getByRole('button', { name: '予約台帳' }))
+    expect(screen.getByRole('button', { name: 'サイドバーをひらく' })).toBeInTheDocument()
+    // 自分でひらいたら、その意思が残る。
+    await userEvent.click(screen.getByRole('button', { name: 'サイドバーをひらく' }))
+    await userEvent.click(within(nav).getByRole('button', { name: 'トップ' }))
+    await userEvent.click(within(nav).getByRole('button', { name: '予約台帳' }))
+    expect(screen.getByRole('button', { name: 'サイドバーをたたむ' })).toBeInTheDocument()
+  })
+})
+
+/*
+ * 未読のお知らせは、どの画面からでも見える。
+ * 以前は home / ledger / customers / settings の 4 画面にしかベルが出ず、
+ * 来店受付・予約を探す・受付履歴・分析では「録音の保存に3回失敗しました」が
+ * 画面から消えていた。UX 監査 UI-05。
+ */
+describe('お知らせのベル', () => {
+  it.each(['予約台帳', '来店受付', '予約を探す', '受付履歴', '顧客台帳', '分析', '設定'])(
+    '%s でも未読の件数が見える',
+    async (label) => {
+      await startWork()
+      const nav = await screen.findByRole('navigation', { name: '画面の切り替え' })
+      await userEvent.click(within(nav).getByRole('button', { name: label }))
+      expect(screen.getByRole('button', { name: /^お知らせ/ })).toBeInTheDocument()
+    },
+  )
 })

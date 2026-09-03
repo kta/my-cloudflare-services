@@ -44,8 +44,7 @@ export function DeviceMode({
     <div className="flex h-dvh flex-col bg-paper text-ink">
       <StartBar
         mode="端末のはじめの設定"
-        action="ヘルプ"
-        onAction={() => setHelpOpen(true)}
+        action={{ label: 'ヘルプ', onPress: () => setHelpOpen(true) }}
         showWorkPrefix={false}
       />
       <main className="flex-1 overflow-auto px-11 py-9">

@@ -2,6 +2,7 @@ import type { StoreDetail } from '@app/contracts'
 import { cn, focusRing } from '@app/ui'
 import { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import { client } from '../client'
+import { LoadFailed } from '../shell/LoadFailed'
 import { formatJstDate, ROLE_LABELS, type SaveOutcome, type SettingsPanelProps } from './sections'
 
 /*
@@ -75,6 +76,8 @@ export function StoreInfoPanel({ storeId, staff, onDraftChange }: SettingsPanelP
   const [store, setStore] = useState<StoreDetail | null>(null)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [failed, setFailed] = useState(false)
+  // 読み直しの合図。読み込みの useEffect の依存に入れる。
+  const [reloadCount, setReloadCount] = useState(0)
   const [editingIntro, setEditingIntro] = useState(false)
 
   useEffect(() => {
@@ -96,7 +99,7 @@ export function StoreInfoPanel({ storeId, staff, onDraftChange }: SettingsPanelP
     return () => {
       alive = false
     }
-  }, [storeId])
+  }, [storeId, reloadCount])
 
   const changes = useMemo(() => {
     if (!store || !draft) return []
@@ -152,9 +155,13 @@ export function StoreInfoPanel({ storeId, staff, onDraftChange }: SettingsPanelP
 
   if (failed)
     return (
-      <p role="alert" className="text-body text-ink-muted">
-        店舗の情報を読み込めませんでした。画面を開き直してください。
-      </p>
+      <LoadFailed
+        what="店舗の情報"
+        onRetry={() => {
+          setFailed(false)
+          setReloadCount((n) => n + 1)
+        }}
+      />
     )
   if (!store || !draft)
     return (
