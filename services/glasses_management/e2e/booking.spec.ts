@@ -64,7 +64,13 @@ const STAFF_BY_NAME: Record<string, string> = {
 
 /** モック 13 面が描いている瞬間（JST 2026年8月27日（木）11:08）。 */
 const NOW = '2026-08-27T02:08:00.000Z'
-/** ご予約を書く日。台帳の e2e が見る 8月27日・28日 を避ける（同じ木曜の顔）。 */
+/*
+ * ご予約を書く日。台帳の e2e が見る 8月27日・28日 を避ける（同じ木曜の顔）。
+ *
+ * **先へずらせない。**この面は工程 1 で日付の札を押して歩くが、札に出るのは
+ * 当日を含む近い日だけで、1 週先の 9月10日 にすると押す札がどこにも無く、
+ * ファイルのほぼ全部が落ちる（実測: 2026-09-10 で 1 本を残して全滅）。
+ */
 const DAY = '2026-09-03'
 const DAY_LABEL = '9月3日（木）'
 /** 店舗の刻みは 30 分、片付けは 10 分、同時受付の上限は 3 件（`seed.mjs`）。 */
@@ -304,14 +310,17 @@ async function reservationsAt(request: APIRequestContext, hhmm: string): Promise
 /* ========================================================================= */
 
 // @e2e-covers UC-BOOK-01 AC-BOOK-01
-test('工程 1 は日付と時刻をどちらも選ぶまで進めず、定休と満席は押せない', async ({ page }) => {
+test('工程 1 はお時間を選ぶまで進めず、定休と休憩は押せない', async ({ page }) => {
   await startBooking(page)
 
-  // 何も選んでいない間は押せず、何が足りないかを名前で言う。
+  /*
+   * 開いた時点で本日が選ばれている（UX 監査 UI-06。以前は何も選ばれずに開き、
+   * 時刻の札が 1 枚も出ていなかった）。だから足りないのはお時間だけである。
+   */
   await expect(barNext(page)).toBeDisabled()
   await expect(barNext(page)).toHaveAttribute(
     'aria-label',
-    '次へ進む　お日にちとお時間をお選びになると進めます',
+    '次へ進む　お時間をお選びになると進めます',
   )
 
   // 火曜は定休。札に「定休」と書いてあり、押せない。
@@ -328,10 +337,14 @@ test('工程 1 は日付と時刻をどちらも選ぶまで進めず、定休�
     '次へ進む　お時間をお選びになると進めます',
   )
 
-  // お昼（12:00–13:00）は受付を止める帯なので「満席」。押せない。
+  /*
+   * お昼（12:00–13:00）は受付を止める帯。**「満席」とは書かない**（UX 監査 BOOK-06。
+   * 満席だと「あと少し粘れば空くかもしれない」と読めるが、休憩はそもそも受けない）。
+   */
   const noon = timeButton(page, '12:00')
   await expect(noon).toBeDisabled()
-  await expect(noon).toContainText('満席')
+  await expect(noon).toContainText('休憩')
+  await expect(noon).not.toContainText('満席')
   // 空いている札には残りの枠数が出る。
   await expect(timeButton(page, '11:00')).toContainText(/^11:00\s*あと\d枠$/)
 

@@ -287,8 +287,9 @@ test('小標本の再来率は伏せて件数を残す', async ({ page, request 
 // @e2e-covers UC-ANA-08 AC-ANA-15
 test('定休の0件と集計中の欠測を分ける', async ({ page, request }) => {
   await openAnalytics(page, request)
-  await expect(page.getByText('8/25', { exact: true }).locator('..')).toContainText('定休')
-  await expect(page.getByText('9/2', { exact: true })).toHaveCount(0)
+  // 軸の札は 1 つの文字列。UI-08 で値ラベルを捨てて「定休」を軸へ添えた形に合わせる。
+  await expect(page.getByText('8/25 定休', { exact: true })).toBeVisible()
+  await expect(page.getByText('9/2 定休', { exact: true })).toHaveCount(0)
   await expect(page.getByText('2日ぶんはまだ集計中です')).toBeVisible()
 })
 

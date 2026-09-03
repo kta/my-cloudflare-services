@@ -381,16 +381,43 @@ async function addVisit(request: APIRequestContext, body: Record<string, unknown
   expect(res.status(), await res.text()).toBe(200)
 }
 
+/*
+ * 前提づくりのご予約を 1 件書く。
+ *
+ * **枠が埋まっていたら、サーバが返した空きへ寄せて取り直す。**この面が使うのは
+ * 実時刻の当日で、同じ日を予約フローの e2e も歩くため、通しで走らせると
+ * 同時受付の上限（`seed.mjs` の 3 件）を先に使い切られて 409 slot_taken になる。
+ * 時刻そのものはこの面の主題ではないので、**取れた時刻を呼び出し側へ返す**
+ * （行を探す文字列もそこから作る）。
+ */
 async function createReservation(
   request: APIRequestContext,
   body: Record<string, unknown>,
-): Promise<{ id: string }> {
-  const res = await request.post('/api/staff/reservations', {
-    ...(await authed(request)),
-    data: { storeId: GINZA, source: 'phone', ...body },
-  })
-  expect(res.status(), await res.text()).toBe(200)
-  return (await res.json()) as { id: string }
+): Promise<{ id: string; startsAt: string; clock: string }> {
+  const wanted = String(body.startsAt)
+  let startsAt = wanted
+  let last = ''
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const res = await request.post('/api/staff/reservations', {
+      ...(await authed(request)),
+      data: { storeId: GINZA, source: 'phone', ...body, startsAt },
+    })
+    if (res.status() === 200) {
+      const created = (await res.json()) as { id: string }
+      return { id: created.id, startsAt, clock: jstClock(startsAt) }
+    }
+    last = `${startsAt} / ${await res.text()}`
+    if (res.status() !== 409) break
+    const alternatives = (
+      JSON.parse(last.slice(last.indexOf('{'))) as {
+        alternatives?: { startsAt: string }[]
+      }
+    ).alternatives
+    const next = alternatives?.find((slot) => slot.startsAt !== startsAt)?.startsAt
+    if (next === undefined) break
+    startsAt = next
+  }
+  throw new Error(`ご予約を書けなかった（希望 ${wanted}）: ${last}`)
 }
 
 type BoardRow = {
@@ -728,7 +755,7 @@ test('「ご来店を受け付ける」を押すと盤面へ戻り、その行�
   request,
 }) => {
   await clearBoard(request)
-  await createReservation(request, {
+  const booked = await createReservation(request, {
     startsAt: atJst(TODAY, '14:30'),
     purposeIds: [ADJUST],
     staffId: SATO,
@@ -740,7 +767,7 @@ test('「ご来店を受け付ける」を押すと盤面へ戻り、その行�
    * 14:30 を回ってからこの e2e を走らせると 0 件になって行が見つからない
    * （上の `clearBoard` が今日のご予約を空にしてあるので、「すべて」でも 1 行しか出ない）。
    */
-  await openCheckin(page, '14:30')
+  await openCheckin(page, booked.clock)
   await page.getByRole('button', { name: 'ご来店を受け付ける', exact: true }).click()
 
   await expect(board(page)).toBeVisible()
@@ -779,14 +806,14 @@ test('「お待ちいただく」を押すと盤面に行が残り、受け付�
   request,
 }) => {
   await clearBoard(request)
-  await createReservation(request, {
+  const booked = await createReservation(request, {
     startsAt: atJst(TODAY, '15:30'),
     purposeIds: [ADJUST],
     staffId: SATO,
   })
 
   await pinLedgerToBeforeOpening(page)
-  await openCheckin(page, '15:30', 'upcoming')
+  await openCheckin(page, booked.clock, 'upcoming')
   await page.getByRole('button', { name: 'お待ちいただく' }).click()
 
   await expect(board(page)).toBeVisible()
@@ -1338,7 +1365,7 @@ test('台帳リストの行にも「ご来店」の入口があり、来店受�
   request,
 }) => {
   await clearBoard(request)
-  await createReservation(request, {
+  const booked = await createReservation(request, {
     startsAt: atJst(TODAY, '17:00'),
     purposeIds: [ADJUST],
     staffId: SATO,
@@ -1363,7 +1390,7 @@ test('台帳リストの行にも「ご来店」の入口があり、来店受�
   await expect(list.getByRole('button', { name: 'ご来店' }).first()).toBeVisible()
   await list
     .getByRole('row')
-    .filter({ hasText: '17:00' })
+    .filter({ hasText: booked.clock })
     .getByRole('button', { name: 'ご来店' })
     .first()
     .click()

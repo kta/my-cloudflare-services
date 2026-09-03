@@ -629,9 +629,11 @@ test('マイクが切られていると、直し方が 3 手順で出る', async
     '2一覧から「EYEX予約」を選ぶ',
     '3「マイク」をオンにする',
   ])
-  // 右下は灰色の「録音していません　--:--」1 か所きり。工程の帯は出さない。
+  // 右下は灰色の「録音していません」1 か所きり。工程の帯は出さない。
+  // 数えていないので時計そのものを出さない（UX 監査 REC-04。動かない `--:--` は
+  // 「止まった時計」に見えて、録れているのかどうかがかえって分からない）。
   await expect(badgeAt(page, 'floating')).toContainText('録音していません')
-  await expect(badgeAt(page, 'floating')).toContainText('--:--')
+  await expect(badgeAt(page, 'floating')).not.toContainText(':')
   await expect(badge(page)).toHaveCount(1)
   await expect(stepBar(page)).toHaveCount(0)
 
@@ -726,10 +728,10 @@ test('途中で止まると「録音していません」に変わる', async ({
   await walkToConfirm(page, '15:30')
   await expect(badgeAt(page, 'floating')).toContainText('録音中')
 
-  // 入力が絶えた。印は「録音していません」「--:--」に変わる。
+  // 入力が絶えた。印は「録音していません」に変わり、時計は消える（数えていないため）。
   await page.evaluate('window.__loseRecording()')
   await expect(badgeAt(page, 'floating')).toContainText('録音していません')
-  await expect(badgeAt(page, 'floating')).toContainText('--:--')
+  await expect(badgeAt(page, 'floating')).not.toContainText(':')
 
   // 確定の操作はそのまま押せる（受付を止めない）。
   await expect(page.getByRole('button', { name: '復唱を終えて予約を確定する' })).toBeEnabled()
