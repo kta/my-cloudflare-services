@@ -1345,6 +1345,12 @@ const TABLE: Row[] = [
     expected: BOOKING,
   },
   {
+    name: '受けかけの受付の下書きは店舗の誰でも読み直せる',
+    method: 'GET',
+    path: () => `/api/staff/reception-sessions/${fixture.receptionSessionId}/draft`,
+    expected: BOOKING,
+  },
+  {
     name: '受付履歴の 1 件は店舗の誰でも読める',
     method: 'GET',
     path: () => `/api/staff/reception-sessions/${fixture.visitReservationId}`,

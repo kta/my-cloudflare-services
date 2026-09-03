@@ -8,12 +8,15 @@
  * 「始まった行が進行中で残る」「下書きが打ちかけの文字ごと戻る」「終わった受付は
  * もう動かない」の 3 つが崩れると、受けかけのご予約へ戻る道がその場で無くなる。
  *
- * 読み直しは D1 を直に引く。受付を**読む** API（`GET /api/staff/reception-sessions/:sessionId`）は
- * 履歴の面（`04-api.md` §3.7 の `ReceptionHistoryDetail`）の持ちもので、このフェーズには無い。
+ * 読み直しは D1 を直に引くほか、端末が実際に叩く `GET /api/staff/reception-sessions/:sessionId/draft`
+ * からも確かめる。`/draft` を落とした `GET /api/staff/reception-sessions/:sessionId` は
+ * 履歴の面（`04-api.md` §3.7 の `ReceptionHistoryDetail`）の持ちもので、下書きを持たない。
  *
  * 組織 id は毎回 `orgId()` で作る（D1 はテストファイル内で共有される）。
  */
+
 import { env, SELF } from 'cloudflare:test'
+import { ReceptionSession } from '@app/contracts'
 import { describe, expect, it } from 'vitest'
 import {
   authed,
@@ -83,6 +86,17 @@ async function patchDraft(token: string, sessionId: string, draft: Record<string
     method: 'PATCH',
     headers: authed(token),
     body: JSON.stringify({ draft }),
+  })
+  return {
+    status: res.status,
+    body: (await res.json().catch(() => null)) as Record<string, unknown> | null,
+  }
+}
+
+/** 端末が受けかけの受付へ戻るときに叩く口。履歴の詳細とは別の `/draft` である。 */
+async function readDraft(token: string, sessionId: string) {
+  const res = await SELF.fetch(`${BASE}/api/staff/reception-sessions/${sessionId}/draft`, {
+    headers: authed(token),
   })
   return {
     status: res.status,
@@ -187,6 +201,35 @@ describe('受付セッション', () => {
     expect(row?.draft_json).not.toBeNull()
     expect(JSON.parse(String(row?.draft_json))).toMatchObject(draft)
     expect(row?.outcome).toBeNull()
+
+    /*
+     * 端末が実際に叩く口から、その形のまま読めること。
+     * 隣の `GET /api/staff/reception-sessions/:sessionId` は受付履歴の詳細を返す
+     * 別の口で、下書きを持たない。そちらを読んでいたころは端末側の `safeParse` が
+     * 必ず落ち、タブが捨てられて戻るたびに工程 1 からやり直しになっていた。
+     */
+    const resumed = await readDraft(t.token, sessionId)
+    expect(resumed.status).toBe(200)
+    expect(ReceptionSession.safeParse(resumed.body).success).toBe(true)
+    expect(resumed.body?.draft).toMatchObject(draft)
+    expect(resumed.body?.id).toBe(sessionId)
+    expect(resumed.body?.outcome).toBeNull()
+  })
+
+  it('受けかけの受付を読む口は、履歴の詳細ではなく下書きそのものを返す', async () => {
+    const t = await receptionTenant()
+    const started = await startSession(t.token, t.storeId)
+    const sessionId = String(started.body.id)
+
+    // まだ何も伺っていない受付でも、始めた形のまま読める（draft は null）。
+    const fresh = await readDraft(t.token, sessionId)
+    expect(fresh.status).toBe(200)
+    expect(ReceptionSession.safeParse(fresh.body).success).toBe(true)
+    expect(fresh.body?.draft).toBeNull()
+
+    // 知らない id は 404。端末はこれを見て新しい受付を始める。
+    const missing = await readDraft(t.token, crypto.randomUUID())
+    expect(missing.status).toBe(404)
   })
 
   it('下書きにお客様の氏名・電話番号そのものを入れて送ると 400 で落ちる', async () => {

@@ -700,22 +700,22 @@ test('直したので、もう一度確かめる', async ({ page, request }) => 
     page.getByRole('heading', { name: 'マイクが使えないため、録音できません' }),
   ).toHaveCount(0)
 
-  // 伺ったことは消えない。前の受付セッションは開いたまま残っている。
-  expect(await recordingsOf(request, before)).toHaveLength(0)
+  /*
+   * 読み込み直しても**同じ受付の続き**へ戻る。新しい受付が立ってしまうと、
+   * 伺った日時・ご用件・お名前がその場で消えて工程 1 からやり直しになる。
+   * 以前は続きを読む口が受付履歴の詳細（`ReceptionHistoryDetail`）を返していて
+   * 端末側が読めず、毎回ここで新しい受付が立っていた。
+   */
+  const after = (await page.evaluate('sessionStorage.getItem("eyex.booking.session")')) as string
+  expect(after).toBe(before)
+  // 録り直した音も同じ受付にぶら下がる（受付が 2 つに割れていない証拠）。
+  expect(await recordingsOf(request, before)).toHaveLength(1)
+
   const still = await request.post(`/api/staff/reception-sessions/${before}/close`, {
     ...(await authed(request)),
     data: { outcome: 'discarded' },
   })
   expect(still.status(), await still.text()).toBe(200)
-
-  /*
-   * **下書きを引き直すところはまだ噛み合っていない。**読み込み直したあとの受付は
-   * `sessionStorage` の受付セッション id から続きへ戻る作りだが、その読み出しが叩く
-   * `GET /api/staff/reception-sessions/:id` は P5 が受付履歴の詳細
-   * （`ReceptionHistoryDetail`）を返す経路に変わっていて、`ReceptionSession` として
-   * 読めないため新しい受付が立つ。ここは P7 の担当（`MicDeniedPanel` と器）ではなく、
-   * 受付セッションを 1 件読む経路そのものの食い違いである。
-   */
 })
 
 // @e2e-covers AC-REC-05

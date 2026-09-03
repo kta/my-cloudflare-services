@@ -244,7 +244,8 @@ beforeEach(() => {
           receptionSessionId: SESSION_ID,
         })
       }
-      if (url.pathname === `/api/staff/reception-sessions/${SESSION_ID}`) {
+      // 実サーバと同じ口を叩く。`/draft` を落とすと受付履歴の詳細が返ってきて下書きが読めない。
+      if (url.pathname === `/api/staff/reception-sessions/${SESSION_ID}/draft`) {
         return resume === null ? json({ error: 'not_found' }, 404) : json(resume)
       }
       if (url.pathname === '/api/staff/reception-sessions') return json(session())

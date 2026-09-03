@@ -6814,6 +6814,23 @@ const routes = app
   )
 
   /**
+   * 受けかけの受付を読み直す（端末が下書きから続きを伺うため）。
+   *
+   * 隣の `GET /api/staff/reception-sessions/:sessionId` と分けているのは、
+   * **あちらが受付履歴の詳細（`ReceptionHistoryDetail`）を返すから**である。
+   * 受付の面が欲しいのは伺った内容そのもの（`draft`）で、履歴の詳細は下書きを持たない。
+   * 1 本にまとめようとして片方の形で返していたため、端末側の `safeParse` が必ず落ち、
+   * iPadOS の Safari がタブを捨てて戻るたびに工程 1 からやり直しになっていた。
+   */
+  .get('/api/staff/reception-sessions/:sessionId/draft', async (c) => {
+    const db = drizzle(c.env.DB)
+    const org = c.get('auth').org
+    const row = await findReceptionSession(db, org, c.req.param('sessionId'))
+    if (row === null) return c.json({ error: 'not_found' }, 404)
+    return c.json(ReceptionSession.parse(toReceptionSession(row)))
+  })
+
+  /**
    * 受付をやめる（BOOK の「入力をやめる」）。**受ける結果は `discarded` だけ**である。
    * 成立（`booked`）は確定の 1 バッチが書く値なので、端末から送れると予約の無い受付を
    * 成立として残せてしまう。破棄でも行は残す（録音も捨てない）。

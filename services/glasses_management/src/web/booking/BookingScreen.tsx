@@ -102,9 +102,14 @@ const CONFLICT_DONE_STEPS = ['customer'] as const
 /**
  * 受けかけの受付を読む。**`hc<AppType>` にこの読み口がまだ無い**ので、
  * 契約のスキーマで受け取り直す。読めない・形が違うときは新しい受付を始める。
+ *
+ * 末尾の `/draft` を落とさない —— `/api/staff/reception-sessions/:id` は
+ * 受付履歴の詳細（`ReceptionHistoryDetail`）を返す別の口で、下書きを持たない。
+ * そちらを叩いていたころは `safeParse` が必ず落ち、タブが捨てられて戻るたびに
+ * 伺った内容が消えて工程 1 からやり直しになっていた。
  */
 async function readReceptionSession(sessionId: string): Promise<ReceptionSession | null> {
-  const res = await auth.authFetch(`/api/staff/reception-sessions/${sessionId}`)
+  const res = await auth.authFetch(`/api/staff/reception-sessions/${sessionId}/draft`)
   if (!res.ok) return null
   const parsed = ReceptionSession.safeParse(await res.json())
   return parsed.success ? parsed.data : null
