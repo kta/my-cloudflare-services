@@ -256,6 +256,29 @@ describe('トップ', () => {
     expect(screen.queryByRole('button', { name: 'EYEX 丸の内店へ切り替える' })).toBeNull()
   })
 
+  it('切り替えても業務画面に留まる（暗証番号からやり直させない）', async () => {
+    /*
+     * この面はお店が変わるたびに端末とスタッフを読み直すが、以前はそのたびに
+     * 入口（端末の選び直しと暗証番号）へ引き戻していた。チップを押しただけで
+     * 業務画面から追い出され、店舗の切り替えが実質使えなかった
+     * （実装不足の洗い出し foundation-07。US-FOUND-06 / T-016）。
+     */
+    await startWork()
+    await waitFor(() => expect(screen.getByText('新しい予約を取る')).toBeInTheDocument())
+    await userEvent.click(screen.getByRole('button', { name: 'EYEX 丸の内店へ切り替える' }))
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'EYEX 銀座店へ切り替える' })).toBeInTheDocument(),
+    )
+    // 左の柱も主操作もそのまま。入口の見出しは 1 つも出ない。
+    expect(screen.getByRole('navigation', { name: '画面の切り替え' })).toBeInTheDocument()
+    expect(screen.getByText('新しい予約を取る')).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'この端末はどこに置きますか？' })).toBeNull()
+    expect(
+      screen.queryByRole('heading', { name: '業務を始めるスタッフを選んでください' }),
+    ).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'この iPad の使い方を決めてください' })).toBeNull()
+  })
+
   it('お店が届いていないときは、その理由と次の行動を出す', async () => {
     mockFetch((url) =>
       url.includes('/api/auth/token')

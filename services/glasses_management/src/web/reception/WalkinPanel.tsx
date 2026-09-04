@@ -1,5 +1,5 @@
-import type { CustomerCandidate, VisitPurpose, Walkin } from '@app/contracts'
-import { auth } from '@app/shared'
+import type { AvailabilityResponse, CustomerCandidate, VisitPurpose, Walkin } from '@app/contracts'
+import { auth, toJstDateString } from '@app/shared'
 import { cn, focusRing, focusRingOnPine } from '@app/ui'
 import { type RefObject, useEffect, useRef, useState } from 'react'
 import { normalizePhone, searchMode, visitLabel } from '../../worker/domain/customers'
@@ -65,6 +65,33 @@ export type WalkinPanelProps = {
 type SendPhase = 'idle' | 'sending' | 'done'
 
 /** 「約60分」。 */
+/** 1 分。 */
+const MS_PER_MINUTE = 60_000
+
+/*
+ * 「目安 15分」。**待ち人数の掛け算では出さない。**
+ * 空き枠エンジンが返す「選んだご用件を受けられる担当が次に空く時刻 − いま」を
+ * 5 分単位に丸める（`008-reception-and-walkin/spec.md` の「決めたこと」）。
+ * お客様に口で伝える約束になるので、担当の空きを見ない数字はこの欄に載せない。
+ *
+ * すでに空いているとき（次の枠がいまより前）は 0 分。空きが 1 つも無ければ null で、
+ * そのときは欄そのものを出さない —— 「目安 —分」と書くより黙るほうがよい。
+ */
+export function estimateWaitMinutes(
+  slots: readonly { startsAt: string; isAvailable: boolean }[],
+  serverNow: string,
+): number | null {
+  const now = Date.parse(serverNow)
+  if (Number.isNaN(now)) return null
+  const next = slots
+    .filter((slot) => slot.isAvailable)
+    .map((slot) => Date.parse(slot.startsAt))
+    .filter((at) => !Number.isNaN(at) && at >= now)
+    .sort((a, b) => a - b)[0]
+  if (next === undefined) return null
+  return Math.round((next - now) / MS_PER_MINUTE / 5) * 5
+}
+
 function durationLabel(minutes: number): string {
   return `約${minutes}分`
 }
@@ -109,6 +136,40 @@ export function WalkinPanel({
   const [customer, setCustomer] = useState<CustomerCandidate | null>(null)
   const [phase, setPhase] = useState<SendPhase>('idle')
   const [failure, setFailure] = useState<string | null>(null)
+  /*
+   * ご用件を選んだあとの目安。選ぶまでは器から渡る値をそのまま出す
+   * （台帳を開いた時点ではご用件が決まらないので、器の値は必ず null）。
+   */
+  const [fetched, setFetched] = useState<number | null>(null)
+
+  /*
+   * ご用件が決まったら、その用件を受けられる担当が次に空く時刻を空き枠へ聞く。
+   * 台帳を開いた時点ではご用件が決まっていないので、この欄はここでしか埋まらない
+   * （実装不足の洗い出し reception-02。AC-RECEP-06）。
+   */
+  useEffect(() => {
+    if (purposeId === null) {
+      setFetched(null)
+      return
+    }
+    let live = true
+    client.api.staff.availability
+      .$get({
+        query: { storeId, date: toJstDateString(new Date()), purposeIds: purposeId },
+      })
+      .then(async (res) => {
+        if (!live || !res.ok) return
+        const board: AvailabilityResponse = await res.json()
+        if (live) setFetched(estimateWaitMinutes(board.slots, board.serverNow))
+      })
+      .catch(() => {
+        // 聞けなかったら黙る。憶測の数字をお客様への約束にしない。
+        if (live) setFetched(null)
+      })
+    return () => {
+      live = false
+    }
+  }, [purposeId, storeId])
 
   // 面が差し替わったら見出しへフォーカスを移す（読み上げがどこに来たかを言える）。
   useEffect(() => {
@@ -143,6 +204,9 @@ export function WalkinPanel({
       live = false
     }
   }, [typedPhone])
+
+  // ご用件が決まっていれば空き枠から出した値、決まっていなければ器から渡る値。
+  const estimated = purposeId === null ? estimatedWaitMinutes : fetched
 
   const chosen = purposes.slice(0, PURPOSE_CHOICES)
   const hasPurpose = purposeId !== null || note.trim() !== ''
@@ -243,8 +307,8 @@ export function WalkinPanel({
           className="flex min-h-11 items-center gap-2.5 rounded-card border border-walkin bg-walkin-soft px-3"
         >
           <b className="text-body font-semibold text-walkin">{`いまお待ち ${walkinWaitingCount}名`}</b>
-          {estimatedWaitMinutes !== null && (
-            <span className="text-grid text-ink-muted">{`目安 ${estimatedWaitMinutes}分`}</span>
+          {estimated !== null && (
+            <span className="text-grid text-ink-muted">{`目安 ${estimated}分`}</span>
           )}
           <span className="ml-auto inline-flex min-h-5.5 items-center rounded-ctl border border-walkin bg-walkin-soft px-2 font-mono text-note font-semibold text-walkin">
             {formatTicket(nextTicketNo)}

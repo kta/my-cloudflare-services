@@ -11,6 +11,7 @@
  */
 import { env, SELF } from 'cloudflare:test'
 import { describe, expect, it } from 'vitest'
+import { expandShiftWindow } from '../src/worker/index'
 import { authed, BASE, INTERNAL_HEADERS, orgId, tokenFor } from './helpers'
 
 const NOW = '2026-08-27T02:08:00.000Z'
@@ -1156,5 +1157,69 @@ describe('影響の試算', () => {
       maintenance: await countRows('equipment_maintenance', org),
       reservations: await countRows('reservations', org),
     }).toEqual(before)
+  })
+})
+
+describe('勤務の窓を日次で前へ出す', () => {
+  /*
+   * 曜日テンプレートが正本で、日付の行はその展開結果である
+   * （`004-store-settings/spec.md`「62 日先までを展開した結果で、保存時と日次 Cron の
+   * 両方で展開する」）。保存時しか展開していなかったので、設定を触らないまま
+   * 62 日が過ぎると勤務の行が尽き、台帳に担当者の行が出ず空き枠も出せなくなっていた
+   * （実装不足の洗い出し settings-07）。
+   */
+  async function savedShifts() {
+    const { org, token, storeId } = await manager()
+    const call = api(token)
+    const { id } = await addStaff(token, storeId, '佐藤 美咲')
+    const saved = await call('PUT', `/api/staff/stores/${storeId}/staff-shifts`, {
+      staffId: id,
+      weekly: weeklyShifts(),
+      effectiveFrom: '2026-08-27',
+      version: await settingsVersion(org, storeId),
+    })
+    expect(saved.status).toBe(200)
+    return { org, storeId, staffId: id }
+  }
+
+  async function shiftsOn(org: string, date: string): Promise<number> {
+    const row = await env.DB.prepare(
+      'SELECT COUNT(*) AS n FROM staff_shifts WHERE organization_id = ? AND date = ?',
+    )
+      .bind(org, date)
+      .first<{ n: number }>()
+    return row?.n ?? 0
+  }
+
+  it('窓の先端の 1 日を足す（保存の窓が切れる先まで前へ出る）', async () => {
+    const { org } = await savedShifts()
+    // 保存は 2026-08-27 から 62 日ぶん。その最後は 2026-10-27。
+    expect(await shiftsOn(org, '2026-10-27')).toBeGreaterThan(0)
+    expect(await shiftsOn(org, '2026-10-28')).toBe(0)
+
+    // 翌日に Cron が回ると、先端が 1 日ぶん前へ出る。
+    const result = await expandShiftWindow(env.DB, new Date('2026-08-28T02:00:00.000Z'))
+    expect(result.date).toBe('2026-10-28')
+    expect(result.inserted).toBeGreaterThan(0)
+    expect(await shiftsOn(org, '2026-10-28')).toBeGreaterThan(0)
+  })
+
+  it('すでに行がある日は触らない（日付ごとの手直しを塗り潰さない）', async () => {
+    const { org } = await savedShifts()
+    const before = await shiftsOn(org, '2026-10-27')
+    // 2026-08-27 + 61 = 2026-10-27。すでに保存時の展開が入っている日。
+    // JST の暦日で 2026-08-27（Cron は JST 0 時に動くが、ここは日だけが要る）。
+    const result = await expandShiftWindow(env.DB, new Date('2026-08-27T02:00:00.000Z'))
+    expect(result.date).toBe('2026-10-27')
+    expect(result.inserted).toBe(0)
+    expect(await shiftsOn(org, '2026-10-27')).toBe(before)
+  })
+
+  it('お休みの曜日は行を作らない', async () => {
+    const { org } = await savedShifts()
+    // `weeklyShifts()` の火曜は定休。2026-11-03 は火曜。
+    await expandShiftWindow(env.DB, new Date('2026-09-03T15:10:00.000Z'))
+    expect(new Date('2026-11-03T00:00:00.000Z').getUTCDay()).toBe(2)
+    expect(await shiftsOn(org, '2026-11-03')).toBe(0)
   })
 })

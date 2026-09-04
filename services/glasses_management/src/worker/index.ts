@@ -10738,6 +10738,88 @@ type ScheduledMaintenanceTasks = {
   writeRollupCursor: (cursor: string | null) => Promise<unknown>
   purgeRecordings: (now: Date) => Promise<unknown>
   purgeAuditAndSessions?: (now: Date) => Promise<unknown>
+  expandShiftWindow?: (now: Date) => Promise<unknown>
+}
+
+/**
+ * 勤務の曜日テンプレートを、窓の先端の 1 日ぶんだけ日付の行へ展開する。
+ *
+ * `staff_weekly_shifts` が正本で、`staff_shifts` はその展開結果である
+ * （`004-store-settings/spec.md`「62 日先までを展開した結果で、**保存時と日次 Cron の
+ * 両方で展開する**」）。保存時しか展開していなかったので、設定を触らないまま
+ * 62 日が過ぎると勤務の行が尽き、台帳に担当者の行が出ず空き枠も出せなくなっていた
+ * （実装不足の洗い出し settings-07）。
+ *
+ * **その日にすでに行があれば触らない。**日付ごとの手直し（臨時の早上がりなど）を
+ * Cron が毎晩塗り潰すと、直した本人の知らないうちに元へ戻る。
+ * 1 回で足すのは先端の 1 日だけでよい —— 毎晩動くので窓は 1 日ずつ前へ出る。
+ */
+export async function expandShiftWindow(
+  db: D1Database,
+  now: Date,
+): Promise<{ inserted: number; date: string }> {
+  const date = addJstDays(toJstDateString(now), SHIFT_WINDOW_DAYS - 1)
+  const weekday = new Date(`${date}T00:00:00.000Z`).getUTCDay()
+  const template = await db
+    .prepare(
+      'SELECT w.organization_id AS org, w.store_id AS storeId, w.staff_id AS staffId, ' +
+        'w.starts_at AS startsAt, w.ends_at AS endsAt, w.break_start AS breakStart, w.break_end AS breakEnd ' +
+        "FROM staff_weekly_shifts w WHERE w.weekday = ? AND w.is_off = '0' " +
+        'AND w.starts_at IS NOT NULL AND w.ends_at IS NOT NULL AND w.effective_from <= ? ' +
+        'AND NOT EXISTS (SELECT 1 FROM staff_shifts s WHERE s.organization_id = w.organization_id ' +
+        'AND s.staff_id = w.staff_id AND s.date = ?)',
+    )
+    .bind(weekday, date, date)
+    .all<{
+      org: string
+      storeId: string
+      staffId: string
+      startsAt: string
+      endsAt: string
+      breakStart: string | null
+      breakEnd: string | null
+    }>()
+
+  const nowIso = now.toISOString()
+  const insert =
+    'INSERT INTO staff_shifts (id, organization_id, store_id, staff_id, date, starts_at, ends_at, kind, created_at) VALUES (?,?,?,?,?,?,?,?,?)'
+  const writes: Statement[] = []
+  for (const row of template.results) {
+    writes.push(
+      db
+        .prepare(insert)
+        .bind(
+          crypto.randomUUID(),
+          row.org,
+          row.storeId,
+          row.staffId,
+          date,
+          row.startsAt,
+          row.endsAt,
+          'work',
+          nowIso,
+        ),
+    )
+    if (row.breakStart !== null && row.breakEnd !== null) {
+      writes.push(
+        db
+          .prepare(insert)
+          .bind(
+            crypto.randomUUID(),
+            row.org,
+            row.storeId,
+            row.staffId,
+            date,
+            row.breakStart,
+            row.breakEnd,
+            'break',
+            nowIso,
+          ),
+      )
+    }
+  }
+  if (writes.length > 0) await db.batch(writes)
+  return { inserted: writes.length, date }
 }
 
 export async function purgeAuditAndSessions(db: D1Database, now: Date): Promise<void> {
@@ -10793,6 +10875,11 @@ export async function runScheduledMaintenance(
   } catch (err) {
     console.error('scheduled audit and terminal session purge failed', err)
   }
+  try {
+    await tasks.expandShiftWindow?.(now)
+  } catch (err) {
+    console.error('scheduled staff shift expansion failed', err)
+  }
 }
 
 async function scheduled(controller: ScheduledController, env: Bindings): Promise<void> {
@@ -10811,6 +10898,7 @@ async function scheduled(controller: ScheduledController, env: Bindings): Promis
           }),
     purgeRecordings: (clock) => purgeRecordings(env, { now: clock, limit: 100 }),
     purgeAuditAndSessions: (clock) => purgeAuditAndSessions(env.DB, clock),
+    expandShiftWindow: (clock) => expandShiftWindow(env.DB, clock),
   })
 }
 

@@ -198,6 +198,12 @@ function Workspace({
   const [selectedTerminal, setSelectedTerminal] = useState<Terminal | null>(null)
   const [selectedStaff, setSelectedStaff] = useState<StaffMember | null>(null)
   const [terminalSession, setTerminalSession] = useState<TerminalSession | null>(null)
+  /*
+   * いま業務が始まっているか。お店を読み直す effect から読むが、**依存には入れない** ——
+   * 入れると業務を始めた瞬間に読み直しが走り、開いたばかりの面が作り直される。
+   */
+  const sessionRef = useRef<TerminalSession | null>(null)
+  sessionRef.current = terminalSession
   const [pinFailure, setPinFailure] = useState<{
     remainingAttempts?: number
     retryAfterSeconds?: number
@@ -461,6 +467,19 @@ function Workspace({
                 .map((member) => member.id),
             ),
           )
+          /*
+           * **すでに業務が始まっているなら、入口へ戻さない。**
+           * この面はお店が変わるたびに読み直すが、以前はそのたびに端末の選び直しと
+           * 暗証番号の入力へ引き戻していた。トップの「◯◯へ切り替える」を押しただけで
+           * 業務画面から追い出され、店舗の切り替えが実質使えなかった
+           * （実装不足の洗い出し foundation-07。US-FOUND-06 / T-016）。
+           * 端末の一覧とスタッフはこの下で入れ替わっているので、切り替えた先の
+           * お店のものがそのまま効く。
+           */
+          if (sessionRef.current !== null) {
+            setStartPhase('ready')
+            return
+          }
           const saved = localStorage.getItem(`eyex.terminal-mode.${org}`)
           if (saved === 'personal' || saved === 'shared') {
             setTerminalMode(saved)

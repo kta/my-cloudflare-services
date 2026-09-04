@@ -3,7 +3,7 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useRef } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { WalkinPanel } from './WalkinPanel'
+import { estimateWaitMinutes, WalkinPanel } from './WalkinPanel'
 
 /*
  * 台帳に重なる受付パネル（承認済みモック
@@ -293,5 +293,54 @@ describe('受付パネル', () => {
     expect(document.activeElement).toBe(
       screen.getByRole('button', { name: '店頭のお客様を受け付ける' }),
     )
+  })
+})
+
+describe('目安の待ち時間', () => {
+  /*
+   * 待ち人数の掛け算では出さない。空き枠エンジンが返す「選んだご用件を受けられる
+   * 担当が次に空く時刻 − いま」を 5 分単位に丸める（`008` の「決めたこと」）。
+   * ご用件を選ぶまでは担当の空きが決まらないので、台帳を開いた時点では出せない
+   * （実装不足の洗い出し reception-02。AC-RECEP-06）。
+   */
+  const NOW = '2026-08-27T02:00:00.000Z'
+
+  it('次に空く枠までの分を 5 分単位に丸める', () => {
+    expect(
+      estimateWaitMinutes(
+        [
+          { startsAt: '2026-08-27T01:30:00.000Z', isAvailable: true },
+          { startsAt: '2026-08-27T02:13:00.000Z', isAvailable: true },
+          { startsAt: '2026-08-27T02:30:00.000Z', isAvailable: true },
+        ],
+        NOW,
+      ),
+    ).toBe(15)
+  })
+
+  it('もう空いていれば 0 分（過ぎた枠は数えない）', () => {
+    expect(estimateWaitMinutes([{ startsAt: NOW, isAvailable: true }], NOW)).toBe(0)
+  })
+
+  it('塞がっている枠は数えない', () => {
+    expect(
+      estimateWaitMinutes(
+        [
+          { startsAt: '2026-08-27T02:10:00.000Z', isAvailable: false },
+          { startsAt: '2026-08-27T03:00:00.000Z', isAvailable: true },
+        ],
+        NOW,
+      ),
+    ).toBe(60)
+  })
+
+  it('空きが 1 つも無ければ null（「目安 —分」と書くより黙る）', () => {
+    expect(
+      estimateWaitMinutes([{ startsAt: '2026-08-27T03:00:00.000Z', isAvailable: false }], NOW),
+    ).toBeNull()
+  })
+
+  it('サーバの時刻が読めなければ null', () => {
+    expect(estimateWaitMinutes([{ startsAt: NOW, isAvailable: true }], 'いつ')).toBeNull()
   })
 })
