@@ -14,7 +14,6 @@ import {
   gridMinWidth,
   gridTemplateColumns,
   gridTemplateRows,
-  jstClock,
   LABEL_WIDTH_PX,
   type LaneSegment,
   laneSegments,

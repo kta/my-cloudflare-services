@@ -202,7 +202,8 @@ describe('notifier internal send API', () => {
     expect(second.status).toBe(200)
     await expect(second.json()).resolves.toEqual({ status: 'duplicate', id: job.id })
     expect(resend).toHaveBeenCalledTimes(1)
-    const key = new Headers(resend.mock.calls[0]?.[1]?.headers).get('idempotency-key')!
+    const key = new Headers(resend.mock.calls[0]?.[1]?.headers).get('idempotency-key') ?? ''
+    expect(key).not.toBe('')
     await expect(env.DEDUPE.get(key).then((value) => JSON.parse(value ?? ''))).resolves.toEqual({
       status: 'sent',
       payloadHash: expect.any(String),
@@ -243,7 +244,8 @@ describe('notifier internal send API', () => {
     expect(failed.status).toBe(502)
     expect(retried.status).toBe(200)
     expect(resend).toHaveBeenCalledTimes(2)
-    const key = new Headers(resend.mock.calls[1]?.[1]?.headers).get('idempotency-key')!
+    const key = new Headers(resend.mock.calls[1]?.[1]?.headers).get('idempotency-key') ?? ''
+    expect(key).not.toBe('')
     await expect(env.DEDUPE.get(key).then((value) => JSON.parse(value ?? ''))).resolves.toEqual({
       status: 'sent',
       payloadHash: expect.any(String),

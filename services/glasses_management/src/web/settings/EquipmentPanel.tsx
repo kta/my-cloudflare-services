@@ -7,7 +7,7 @@ import {
   StoreDetail,
 } from '@app/contracts'
 import { auth } from '@app/shared'
-import { Button, focusRing, Notice, Select, TextInput } from '@app/ui'
+import { Button, focusRing, Select, TextInput } from '@app/ui'
 import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { client } from '../client'
 import { LoadFailed } from '../shell/LoadFailed'

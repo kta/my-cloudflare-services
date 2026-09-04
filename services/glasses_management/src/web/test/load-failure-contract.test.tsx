@@ -75,7 +75,7 @@ const SCREENS: Array<[string, () => ReactElement]> = [
   ],
 ]
 
-describe.each(SCREENS)('%s が読み込みに失敗したとき', (name, mount) => {
+describe.each(SCREENS)('%s が読み込みに失敗したとき', (_name, mount) => {
   it('何が読めなかったかを名指しする', async () => {
     render(mount())
     const alert = await screen.findByRole('alert', {}, { timeout: 3000 })

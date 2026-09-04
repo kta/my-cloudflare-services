@@ -1,5 +1,5 @@
 import { type VisitPurpose, WebBookingSettings, WebPreviewResult } from '@app/contracts'
-import { cn, focusRing, Notice } from '@app/ui'
+import { cn, focusRing } from '@app/ui'
 import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { client } from '../client'
 import { LoadFailed } from '../shell/LoadFailed'

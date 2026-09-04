@@ -214,9 +214,8 @@ export function SlotBoard({
    * scrollWidth 1732 / clientWidth 864 / scrollLeft 0、映るのは 13:30 まで）。
    *
    * すでに見えているときは動かさない。運んでいる最中に盤が勝手に滑ると、
-   * 指と帯がずれる。
+   * 指と帯がずれる。**列の数と幅が変わったときも測り直す**ので、依存にその 2 つを置く。
    */
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 列の数と幅が変わったときも測り直す
   useEffect(() => {
     const box = scrollerRef.current
     if (box === null) return

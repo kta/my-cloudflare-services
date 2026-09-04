@@ -7,7 +7,7 @@ import {
   VisitPurpose,
 } from '@app/contracts'
 import { auth } from '@app/shared'
-import { Button, focusRing, Notice, TextInput } from '@app/ui'
+import { Button, focusRing, TextInput } from '@app/ui'
 import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { client } from '../client'
 import { LoadFailed } from '../shell/LoadFailed'
