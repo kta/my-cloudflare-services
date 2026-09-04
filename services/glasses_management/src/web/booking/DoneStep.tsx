@@ -47,6 +47,12 @@ export type DoneStepProps = {
   onOpenLedger: () => void
   phase?: DoneStepPhase
   isOffline?: boolean
+  /**
+   * 手書きのご要望のうち、残せなかった枚数。0 なら何も出さない。
+   * **黙って捨てない** —— 書いた本人は残ったと思っているので、残らなかったことは
+   * この面で言う（実装不足の洗い出し booking-02）。
+   */
+  handwritingLeft?: number
 }
 
 /** 「8月27日（木）」。年をまたぐ知らせは出さないので年を落とす。 */
@@ -77,6 +83,7 @@ export function DoneStep({
   onOpenLedger,
   phase = 'ready',
   isOffline = false,
+  handwritingLeft = 0,
 }: DoneStepProps) {
   if (phase === 'loading') {
     return (
@@ -137,6 +144,15 @@ export function DoneStep({
             className="mt-6 rounded-card border border-line-strong bg-surface-2 px-4 py-3 text-body text-ink"
           >
             通信が切れています。ご予約は承っています。
+          </p>
+        )}
+
+        {handwritingLeft > 0 && (
+          <p
+            role="status"
+            className="mt-6 rounded-card border border-amber bg-amber-soft px-4 py-3 text-body text-ink"
+          >
+            {`手書きのご要望 ${handwritingLeft}枚は残せませんでした。お客様が決まっていないと置き場所がありません。顧客台帳でこの方を登録してから、もう一度お書きください。`}
           </p>
         )}
 

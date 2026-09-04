@@ -126,3 +126,22 @@ describe('完了の次の一手', () => {
     expect(within(summary).getByText('あとで決める')).toBeVisible()
   })
 })
+
+describe('残せなかった手書き', () => {
+  /*
+   * 筆跡は R2 の `notes/{org}/{customerId}/{noteId}.svg` に置くので、
+   * **お客様が決まっていないと置き場所が無い**。以前は確定と同時に黙って捨てていて、
+   * 書いた本人は残ったと思ったまま当日を迎えていた（実装不足の洗い出し booking-02）。
+   */
+  it('枚数と、どうすれば残せるかを 1 行で言う', () => {
+    open({ handwritingLeft: 2 })
+    const notice = screen.getByText(/手書きのご要望 2枚は残せませんでした/)
+    expect(notice).toBeVisible()
+    expect(notice).toHaveTextContent('顧客台帳でこの方を登録してから、もう一度お書きください。')
+  })
+
+  it('残せていれば何も言わない', () => {
+    open()
+    expect(screen.queryByText(/残せませんでした/)).not.toBeInTheDocument()
+  })
+})

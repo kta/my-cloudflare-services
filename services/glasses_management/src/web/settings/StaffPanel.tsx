@@ -142,15 +142,15 @@ export function StaffPanel({ storeId, now, today, onDraftChange }: SettingsPanel
   )
 
   const save = useCallback(async (): Promise<SaveOutcome> => {
-    if (!selected || !base || !draft) return 'failed'
-    const outcome = await writeAll(storeId, selected.id, base, draft, day)
+    if (!selected || !base || !draft || !loaded) return 'failed'
+    const outcome = await writeAll(storeId, selected.id, base, draft, day, loaded.hours.version)
     if (outcome !== 'saved') return outcome
     const next = await load()
     if (next === null) return 'failed'
     setLoaded(next)
     forget(selected.id)
     return 'saved'
-  }, [selected, base, draft, storeId, day, load])
+  }, [selected, base, draft, loaded, storeId, day, load])
 
   const discard = useCallback(() => {
     if (selected) forget(selected.id)
@@ -746,43 +746,44 @@ function withInactive(input: RequestInfo | URL, init?: RequestInit): Promise<Res
   return auth.authFetch(`${String(input)}?includeInactive=true`, init)
 }
 
-/**
- * いまの版を取り直す。どの書き込みも store_settings_revision を +1 するので、
- * 1 回の保存で 2 本以上書くときは前の書き込みが上げた版を読んでから次を送る。
- */
-async function readVersion(storeId: string): Promise<number | null> {
-  const res = await client.api.staff.stores[':storeId']['business-hours'].$get({
-    param: { storeId },
-  })
-  if (!res.ok) return null
-  return BusinessHoursView.parse(await res.json()).version
-}
-
 function outcomeOf(status: number): SaveOutcome {
   if (status === 403) return 'forbidden'
   if (status === 409) return 'conflict'
   return 'failed'
 }
 
-/** 技能 → 担当 → 勤務の順に書く。1 本でも落ちたらそこで止める。 */
+/*
+ * 技能 → 担当 → 勤務の順に書く。1 本でも落ちたらそこで止める。
+ *
+ * 版は**この面が読み込んだときのもの**を土台にする。以前は書く直前に版を
+ * 取り直していたので、ほかの端末が先に保存していてもその版をそのまま拾い、
+ * 楽観ロックが一度も効かなかった。2 台の iPad で同時に設定を直すと、
+ * 後から押した側が相手の変更を黙って上書きし、店長は取り消されたことに
+ * 気づけない（実装不足の洗い出し settings-05。`004` の HOW）。
+ *
+ * 1 回の保存で 2 本以上書くときは、**前の書き込みが上げた版を自分で数える** ——
+ * どの書き込みも `store_settings_revision` を +1 するので、読み直さなくても分かる。
+ * 読み直すと、その隙に入った他端末の変更まで飲み込んでしまう。
+ */
 async function writeAll(
   storeId: string,
   staffId: string,
   base: Draft,
   draft: Draft,
   today: string,
+  loadedVersion: number,
 ): Promise<SaveOutcome> {
+  let version = loadedVersion
   if (skillsChanged(base, draft)) {
     const res = await client.api.staff.stores[':storeId'].staff[':staffId'].skills.$put({
       param: { storeId, staffId },
       json: { skills: draft.member.skills },
     })
     if (!res.ok) return outcomeOf(res.status)
+    version += 1
   }
 
   if (memberChanged(base, draft)) {
-    const version = await readVersion(storeId)
-    if (version === null) return 'failed'
     const res = await client.api.staff.stores[':storeId'].staff[':staffId'].$patch({
       param: { storeId, staffId },
       json: {
@@ -793,11 +794,10 @@ async function writeAll(
       },
     })
     if (!res.ok) return outcomeOf(res.status)
+    version += 1
   }
 
   if (weeklyChanged(base, draft)) {
-    const version = await readVersion(storeId)
-    if (version === null) return 'failed'
     const res = await client.api.staff.stores[':storeId']['staff-shifts'].$put({
       param: { storeId },
       json: { staffId, weekly: draft.weekly, effectiveFrom: today, version },
