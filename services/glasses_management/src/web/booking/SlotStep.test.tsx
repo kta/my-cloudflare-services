@@ -763,3 +763,29 @@ describe('盤の横の流れ', () => {
     expect(corner.className).toContain('sticky')
   })
 })
+
+describe('塞がりの描き分け', () => {
+  /*
+   * 先約とお店の都合（休憩・勤務時間外・点検）は、店員にとって意味が違う。
+   * 休憩なら時間をずらす相談ができるが、先約はできない。どちらも同じ灰色の箱だと、
+   * 盤の午前は一面の灰色で、文字を読むまで区別が付かない（UX 監査 J-06）。
+   */
+  function bandNamed(text: string): HTMLElement {
+    const board = screen.getByRole('table', { name: 'ご予約を置く盤' })
+    const label = within(board).getAllByText(text)[0]
+    const band = label?.closest('span[class*="border-l-4"]')
+    if (!(band instanceof HTMLElement)) throw new Error(`${text} の帯が無い`)
+    return band
+  }
+
+  it('先約は塗り、休憩は斜線で、文字を読まなくても見分けられる', () => {
+    renderStep()
+    const booked = bandNamed('先約')
+    const rest = bandNamed('休憩')
+    expect(booked.style.backgroundImage).toBe('')
+    expect(rest.style.backgroundImage).toContain('repeating-linear-gradient')
+    // 地の色そのものは同じままにする（斜線を足しただけで、色をもう 1 つ増やさない）。
+    expect(booked.className).toContain('bg-busy-soft')
+    expect(rest.className).toContain('bg-busy-soft')
+  })
+})

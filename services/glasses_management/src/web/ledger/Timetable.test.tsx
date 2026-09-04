@@ -188,6 +188,23 @@ describe('帯', () => {
     expect(within(band).getByText('担当が未定')).toBeInTheDocument()
   })
 
+  it('担当が未定は amber で、取り消しの赤を使わない', () => {
+    /*
+     * `packages/ui/src/theme.css:83` は danger を「取消・警告・現在時刻の線・
+     * 破壊的操作」と定めている。担当未定は失敗ではなく「これから決めること」なので
+     * そこへは入らない。赤い帯を見た店員は取り消されたご予約と読む
+     * （UX 監査 UI-12 / J-03。承認済みモック LEDGER-STAFF.png のほうが定義に反している）。
+     */
+    render(<Timetable view={staffView()} />)
+    const painted = bandOf(UNASSIGNED_BAND).querySelector('[class*="border-l-4"]')
+    expect(painted?.className).toContain('bg-amber-soft')
+    expect(painted?.className).toContain('border-amber')
+    expect(painted?.className).not.toContain('danger')
+    expect(within(bandOf(UNASSIGNED_BAND)).getByText('担当が未定').className).toContain(
+      'text-amber',
+    )
+  })
+
   it('読み上げの名前にも出どころと「担当が未定」が入る（色に意味を持たせないため）', () => {
     // `aria-label` は帯の中の要素をまるごと覆い隠すので、名前に入れないかぎり
     // 「Web予約」「ウォークイン」「担当が未定」は目で見る人にしか届かない。

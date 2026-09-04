@@ -45,12 +45,21 @@ import {
 /** 名前列の幅を rem で。任意値（`grid-cols-[170px_1fr]`）を書かないための値。 */
 const LABEL_WIDTH_REM = `${LABEL_WIDTH_PX / 16}rem`
 
-/** 帯の地と左の 4px。`--color-*` のトークンだけを指す。 */
+/*
+ * 帯の地と左の 4px。`--color-*` のトークンだけを指す。
+ *
+ * `alert`（担当が未定）は **amber**。`theme.css:83` は `--color-danger` を
+ * 「取消・警告・現在時刻の線・破壊的操作」と定めていて、担当未定は失敗ではなく
+ * 「これから決めること」なので当てはまらない。赤い帯を見た店員は取り消された
+ * ご予約と読む（UX 監査 UI-12 / J-03）。承認済みモック `LEDGER-STAFF.png` も
+ * 同じ赤を使っているが、**モックのほうが定義に反している。**
+ * 取り消しと「ご来店なし」は danger のまま。
+ */
 const BAND_TONE: Record<LedgerBandTone | 'alert', string> = {
   pine: 'bg-pine-soft border-pine',
   web: 'bg-web-soft border-web',
   walkin: 'bg-walkin-soft border-walkin',
-  alert: 'bg-danger-soft border-danger',
+  alert: 'bg-amber-soft border-amber',
 }
 
 const ARROWS = new Set(['ArrowRight', 'ArrowLeft', 'ArrowUp', 'ArrowDown', 'Home', 'End'])
@@ -499,9 +508,7 @@ function Band({ entry, wide }: { entry: LedgerEntry; wide: boolean }) {
       {/* 30分 1 列の文字予算はおよそ 6 字しかない。狭い帯にはご用件を入れない（AC-LEDGER-06）。 */}
       {wide && <span>{entry.purposeLabel}</span>}
       {source !== null && <span className="text-fine text-ink-muted">{source}</span>}
-      {entry.isUnassigned && (
-        <span className="text-fine font-semibold text-danger">担当が未定</span>
-      )}
+      {entry.isUnassigned && <span className="text-fine font-semibold text-amber">担当が未定</span>}
       {entry.status === 'no_show' && (
         <span className="text-fine font-semibold text-danger">ご来店なし</span>
       )}

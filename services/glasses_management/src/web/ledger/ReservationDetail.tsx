@@ -246,7 +246,8 @@ export function ReservationDetail({
 
             <dl className="m-0 px-4 py-3">
               <Row term="ご用件">{detail.purposeLabelInternal}</Row>
-              <Row term="担当">{staffName ?? <span className="text-danger">担当が未定</span>}</Row>
+              {/* 担当未定は失敗ではないので amber（UX 監査 J-03。danger は取消と破壊的操作に限る）。 */}
+              <Row term="担当">{staffName ?? <span className="text-amber">担当が未定</span>}</Row>
               <Row term="場所">
                 {places ?? <span className="font-normal text-ink-muted">場所は決めていません</span>}
               </Row>

@@ -434,7 +434,20 @@ function Row({
             stacked={segment.role !== 'plain'}
           >
             {segment.kind !== 'open' && segment.kind !== 'no_skill' && (
-              <span className="flex h-full min-h-13.5 flex-col overflow-hidden rounded-ctl border-line-strong border-l-4 bg-busy-soft px-2 py-1.5 text-ink-muted">
+              /*
+                塞がりを 2 通りに描き分ける。**先約は塗り、お店の都合は斜線。**
+                どちらも同じ灰色の箱だったころ、盤の午前は一面の灰色で、
+                中の文字を読むまで「ほかのお客様が入っている」のか
+                「休憩でそもそも受けない」のかが分からなかった（UX 監査 J-06）。
+                店員にとってこの 2 つは別物で、休憩なら時間をずらす相談ができる。
+                斜線は「この用件は承れません」と同じ `HATCH` を使う。
+              */
+              <span
+                className={cn(
+                  'flex h-full min-h-13.5 flex-col overflow-hidden rounded-ctl border-line-strong border-l-4 bg-busy-soft px-2 py-1.5 text-ink-muted',
+                )}
+                style={segment.kind === 'booked' ? undefined : { backgroundImage: HATCH }}
+              >
                 <b className="font-semibold">{bandTitle(segment.kind, lane)}</b>
                 <span>{rangeLabel(lane.slots, segment)}</span>
               </span>
