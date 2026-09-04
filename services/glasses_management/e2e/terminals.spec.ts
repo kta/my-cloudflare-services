@@ -53,7 +53,7 @@ async function startPersonal(page: Page): Promise<void> {
   await completeSeededTerminalStart(page, 'personal')
 }
 
-async function enterPin(page: Page, pin = '2580'): Promise<void> {
+async function enterPin(page: Page, pin = '000000'): Promise<void> {
   for (const digit of pin) await page.getByRole('button', { name: digit, exact: true }).click()
   await page.getByRole('button', { name: /^確定/ }).click()
 }
@@ -367,7 +367,7 @@ test('共有端末の設定変更は下書きを残し、店長 PIN で続けら
   await expect(page.getByText('下書きは残っています')).toBeVisible()
   await expect(page.getByText(/自動で伏せるまで：120秒 → 300秒/)).toBeVisible()
   await expect(page.getByRole('button', { name: /この下書きを店長に依頼する/ })).toHaveCount(0)
-  for (const digit of '2580') {
+  for (const digit of '000000') {
     await page
       .getByRole('group', { name: '店長の暗証番号のテンキー' })
       .getByRole('button', {

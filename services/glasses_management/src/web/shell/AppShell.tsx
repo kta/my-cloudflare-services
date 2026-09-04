@@ -15,7 +15,31 @@ const ALERT_DESTINATION: Destination = { key: 'alerts', label: 'お知らせ', i
  * 見えなくなる（UX 監査 UI-05）。ここを変えるなら承認済みモックを変えることになるので、
  * 実装だけを先に動かさない。`docs/audit/2026-09-02-eyex-ux/` の宿題として残す。
  */
-const HEADER_ALERT_DESTINATIONS = new Set(['home', 'ledger', 'customers', 'settings'])
+/*
+ * 上のバーに「お知らせ」を出す面。
+ *
+ * 出さないのは 2 通りだけである。**お客様が目の前に立つ面**（受け付ける面・
+ * 予約の 5 工程）と、**お知らせそのもの**。承認済みモックの上のバーが
+ * 店名だけなのはその判断だと読める（`RECEPTION-CHECKIN.png`）。
+ *
+ * 受付履歴・予約を探すは店員だけが見る面なので出す。ここを外していたころ、
+ * その 2 面には**お知らせへ行く道が 1 つも無かった** —— 左の柱の「お知らせ」は
+ * `current === 'alerts'`、つまり**すでに開いているときだけ**現れる作りで、
+ * 行きたいときには無かった（UX 監査 J-02）。
+ *
+ * 来店受付（`reception`）はまだ出せない。**受け付ける面が同じ行き先の中にある**ので、
+ * ここへ入れるとお客様が目の前に立つ面にも通知が出てしまう（承認済みモック
+ * `RECEPTION-CHECKIN.png` の上のバーは店名だけ）。盤と受け付ける面を器が
+ * 区別できるようにしてから足す。
+ */
+const HEADER_ALERT_DESTINATIONS = new Set([
+  'home',
+  'ledger',
+  'history',
+  'search',
+  'customers',
+  'settings',
+])
 
 /*
  * 業務画面の骨格。承認済みモック（docs/frontend/mockups/eyex）の実測に合わせる。

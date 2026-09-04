@@ -38,6 +38,27 @@ export const ORGANIZATION_SCOPED_TABLES = [
   'web_bookings',
 ]
 
+/**
+ * seed が作る組織。これ以外で **店舗を 1 つも持たない** 組織は、業務開始の画面で
+ * コードを打ち間違えたときに dev グラント（`/api/auth/token`）が作った残骸である。
+ * 実際に `eye` という行が残っていて、`eyex` と並んで見分けが付かなかった。
+ * 掃除しないと `make db/reset/local` を回しても増え続けるので、ローカルだけで消す。
+ */
+export const SEEDED_ORGANIZATIONS = ['eyex', 'org-analytics-other-seed']
+
+/**
+ * 打ち間違いから生まれた空の組織を消す（ローカル限定）。
+ * 店舗が 1 つも無い組織だけを対象にするので、admin から同期された正規の組織を
+ * 巻き込まない —— 同期は組織と店舗を続けて押し込むうえ、消えても再同期で戻る。
+ */
+export function strayOrganizationCleanupStatements(remote) {
+  if (remote) return []
+  const keep = SEEDED_ORGANIZATIONS.map((id) => `'${id}'`).join(', ')
+  return [
+    `DELETE FROM organizations WHERE id NOT IN (${keep}) AND NOT EXISTS (SELECT 1 FROM stores WHERE stores.organization_id = organizations.id);`,
+  ]
+}
+
 /** ローカルだけで旧 seed を移行し、既存の `eyex` 店舗データは保持する。 */
 export function legacySeedMigrationStatements(remote) {
   if (remote) return []

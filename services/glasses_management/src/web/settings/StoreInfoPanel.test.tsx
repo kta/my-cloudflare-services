@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SettingsScreen } from './SettingsScreen'
@@ -95,6 +95,20 @@ describe('店舗の情報', () => {
     expect(screen.getByLabelText('お客様に見せる店名')).toHaveValue('EYEX 銀座店（銀座4丁目）')
     expect(screen.getByLabelText('電話番号')).toHaveValue('03-3571-0001')
     expect(screen.getByLabelText('住所')).toHaveValue('東京都中央区銀座4-5-6　EYEXビル 2階')
+  })
+
+  it('2 群目の見出しは上のカードから離す（余白は器のほうに置く）', async () => {
+    /*
+     * `<legend>` は fieldset の枠の中に据わる要素で、`margin-top` が前の fieldset を
+     * 押しのけない。見出しに `mt-8` を書いていたころ、「行き方のご案内」は上のカードの
+     * 下辺と**余白ゼロで接していた**（実測 428.5px で一致。UX 監査 J-04）。
+     * 承認済みモック SETTINGS-STORE.html の `.groupname` は `margin: 32px 2px 12px`。
+     */
+    await openStoreInfo()
+    const group = screen.getByRole('group', { name: '行き方のご案内' })
+    expect(group.className).toContain('mt-8')
+    const legend = within(group).getByText('行き方のご案内')
+    expect(legend.className).not.toContain('mt-8')
   })
 
   it('行き方のご案内は 最寄り駅・出口と所要時間・駐車場 の 3 行を持つ', async () => {

@@ -44,7 +44,7 @@ export async function completeSeededTerminalStart(
   await expect(
     page.getByRole('heading', { name: '4〜6桁の暗証番号を入力してください' }),
   ).toBeVisible()
-  for (const digit of ['2', '5', '8', '0']) {
+  for (const digit of ['0', '0', '0', '0', '0', '0']) {
     await page.getByRole('button', { name: digit, exact: true }).click()
   }
   const started = page.waitForResponse(

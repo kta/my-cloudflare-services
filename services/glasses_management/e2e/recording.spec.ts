@@ -313,7 +313,7 @@ async function authed(
 /** seed の端末とスタッフ（`seed.mjs` の `uid()` は決め打ちの UUID を配る）。 */
 const RECEPTION_IPAD = 'c0100000-0000-4000-8000-000000000001'
 const SATO_MISAKI = 'c0010000-0000-4000-8000-000000000000'
-const SEED_PIN = '2580'
+const SEED_PIN = '000000'
 
 /**
  * 録音の保全は個人モードを求める（AC-TERM-10）。ヘッダーを持たない呼び出しは、

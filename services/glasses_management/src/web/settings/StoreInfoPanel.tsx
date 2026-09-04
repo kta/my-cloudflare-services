@@ -180,7 +180,7 @@ export function StoreInfoPanel({ storeId, staff, onDraftChange }: SettingsPanelP
       <div className="flex flex-wrap gap-5.5">
         <div className="min-w-0 flex-1">
           <fieldset className="min-w-0">
-            <Legend className="mt-0">お店の基本</Legend>
+            <Legend>お店の基本</Legend>
             <div className="overflow-hidden rounded-card border border-line bg-surface">
               {BASIC_FIELDS.map((field) => (
                 <div
@@ -207,7 +207,7 @@ export function StoreInfoPanel({ storeId, staff, onDraftChange }: SettingsPanelP
             </div>
           </fieldset>
 
-          <fieldset className="min-w-0">
+          <fieldset className="mt-8 min-w-0">
             <Legend>行き方のご案内</Legend>
             {ACCESS_FIELDS.map((field, index) => (
               <div
@@ -302,9 +302,16 @@ function Row({ field, id }: { field: Field; id: string }) {
 }
 
 /** 群の見出し（モックの `.groupname` = margin 32px 2px 12px / 13px 600）。 */
+/*
+ * グループの見出し。**上の余白は `<legend>` に置かない。**
+ * `<legend>` は fieldset の枠の中に据わる要素で、`margin-top` が前の fieldset を
+ * 押しのけない。そのため「行き方のご案内」の見出しは、上のカードの下辺と
+ * **余白ゼロで接していた**（実測 428.5px で一致。UX 監査 J-04）。
+ * 上の余白はグループの器（fieldset）のほうに置く。
+ */
 function Legend({ className, children }: { className?: string; children: string }) {
   return (
-    <legend className={cn('mt-8 mb-3 px-0.5 text-grid font-semibold text-ink-muted', className)}>
+    <legend className={cn('mb-3 px-0.5 text-grid font-semibold text-ink-muted', className)}>
       {children}
     </legend>
   )

@@ -443,29 +443,43 @@ describe('器の安定', () => {
 })
 
 /*
- * 上のバーのお知らせは、承認済みモックが描いている画面にだけ出す。
+ * 上のバーのお知らせを出す面と出さない面。
  *
- * モック `RECEPTION-CHECKIN.png` の上のバーは店名だけで、右端は空である。
- * お客様が目の前に立っている面から通知を外す判断だと読める。
- * その結果「録音の保存に3回失敗しました」が 4 画面で見えなくなるのは
- * UX 監査 UI-05 の宿題で、変えるならモックを変えることになる。
- * この面は**いまの約束を固定して、黙って動かないようにする**ためにある。
+ * 出さないのは**お客様が目の前に立つ面**（受け付ける面・予約の 5 工程）と、
+ * お知らせそのものだけである。モック `RECEPTION-CHECKIN.png` の上のバーが
+ * 店名だけなのはその判断だと読める。
+ *
+ * 受付履歴と予約を探すは店員だけが見る面なので出す。出していなかったころ、
+ * その 2 面には**お知らせへ行く道が 1 つも無かった** —— 左の柱の「お知らせ」は
+ * `current === 'alerts'`、つまりすでに開いているときだけ現れる作りで、
+ * 行きたいときには無かった（UX 監査 J-02）。
+ *
+ * 来店受付はまだ出せない。受け付ける面が同じ行き先の中にあるので、出すと
+ * お客様の前にも通知が出てしまう。盤と受け付ける面を器が区別できるようにしてから足す。
  */
 describe('お知らせのベル', () => {
-  it.each(['予約台帳', '顧客台帳', '設定'])('%s では未読の件数が見える', async (label) => {
-    await startWork()
-    const nav = await screen.findByRole('navigation', { name: '画面の切り替え' })
-    await userEvent.click(within(nav).getByRole('button', { name: label }))
-    expect(screen.getByRole('button', { name: /^お知らせ/ })).toBeInTheDocument()
-  })
-
-  it.each(['来店受付', '予約を探す', '受付履歴', '分析'])(
-    '%s ではモックのとおり出さない（変えるならモックから）',
+  it.each(['予約台帳', '顧客台帳', '設定', '予約を探す', '受付履歴'])(
+    '%s では未読の件数が見える',
     async (label) => {
       await startWork()
       const nav = await screen.findByRole('navigation', { name: '画面の切り替え' })
       await userEvent.click(within(nav).getByRole('button', { name: label }))
-      expect(screen.queryByRole('button', { name: /^お知らせ/ })).toBeNull()
+      expect(screen.getByRole('button', { name: /^お知らせ/ })).toBeInTheDocument()
     },
   )
+
+  it.each(['来店受付', '分析'])('%s では出さない', async (label) => {
+    await startWork()
+    const nav = await screen.findByRole('navigation', { name: '画面の切り替え' })
+    await userEvent.click(within(nav).getByRole('button', { name: label }))
+    expect(screen.queryByRole('button', { name: /^お知らせ/ })).toBeNull()
+  })
+
+  it('押せば、そのままお知らせの面へ移れる', async () => {
+    await startWork()
+    const nav = await screen.findByRole('navigation', { name: '画面の切り替え' })
+    await userEvent.click(within(nav).getByRole('button', { name: '受付履歴' }))
+    await userEvent.click(screen.getByRole('button', { name: /^お知らせ/ }))
+    expect(await screen.findByRole('region', { name: 'お知らせ一覧' })).toBeInTheDocument()
+  })
 })

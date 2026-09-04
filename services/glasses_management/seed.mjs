@@ -22,7 +22,10 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { dynamicE2eShiftDates } from './seed-e2e.mjs'
-import { legacySeedMigrationStatements } from './seed-migration.mjs'
+import {
+  legacySeedMigrationStatements,
+  strayOrganizationCleanupStatements,
+} from './seed-migration.mjs'
 
 const REMOTE = process.argv.includes('--remote')
 // 端末共有 PIN の pepper は Worker の AUTH_PEPPER と同じ値を使う。local は毎回同じ
@@ -108,7 +111,11 @@ const uid = (group, n) => `${group}-0000-4000-8000-${String(n).padStart(12, '0')
 const GINZA = stores[0].id
 
 /* --- 端末（P10） --------------------------------------------------------- *
- * `2580` はゾロ目でも連番でもない開発用の共有 PIN。平文をSQLへ入れず、端末ごとに
+ * `000000` はテスト用に押しやすさを優先した開発用の共有 PIN。
+ * **本番では必ず別の値にする。**この seed は `--remote` でも走るので、そのまま流すと
+ * ゾロ目の PIN が本番端末に載る。アプリ自身も `isWeakPin`（domain/pin.ts）でゾロ目を
+ * 弱い PIN として拒むが、seed はハッシュを直接書くのでその検証を通らない。
+ * 平文をSQLへ入れず、端末ごとに
  * stretchPin → pepper HMAC を行った hash だけを保存する。実運用のPINは設定画面で更新する。
  */
 const terminals = [
@@ -137,7 +144,7 @@ const terminals = [
 const terminalSeedRows = await Promise.all(
   terminals.map(async (terminal) => ({
     ...terminal,
-    pinHash: await hashStretched(await stretchPin('2580', ORG, terminal.id), PEPPER),
+    pinHash: await hashStretched(await stretchPin('000000', ORG, terminal.id), PEPPER),
   })),
 )
 
@@ -200,7 +207,7 @@ const blackoutWindows = businessHours
  * 木に出るのは 佐藤・高橋・中村 の 3 名（LEDGER-STAFF の行）、
  * 金に山田がいない（SETTINGS-STAFF「本日はお休み」／当日は 2026-08-28 金）。
  * 休憩 13:00–14:00 は佐藤 美咲だけが持つ（台帳の灰帯は佐藤の行にだけある）。
- * 開発用 PIN は共有端末と同じ `2580`。平文は入れず、スタッフIDをsaltにしたhashだけを置く。 */
+ * 開発用 PIN は共有端末と同じ `000000`。平文は入れず、スタッフIDをsaltにしたhashだけを置く。 */
 const staffMembers = [
   {
     name: '佐藤 美咲',
@@ -276,7 +283,7 @@ const staffMembers = [
 const staffSeedRows = await Promise.all(
   staffMembers.map(async (member, index) => ({
     ...member,
-    pinHash: await hashStretched(await stretchPin('2580', ORG, uid('c0010000', index)), PEPPER),
+    pinHash: await hashStretched(await stretchPin('000000', ORG, uid('c0010000', index)), PEPPER),
   })),
 )
 
@@ -1113,6 +1120,7 @@ const fillStore = (id, column, value) =>
 const lines = [
   // `org-eyex-seed` を使っていた既存のローカル D1 を、現在のログイン ID へ収束させる。
   ...legacySeedMigrationStatements(REMOTE),
+  ...strayOrganizationCleanupStatements(REMOTE),
   `INSERT OR IGNORE INTO organizations (id, name, plan, is_disabled, created_at, revision) VALUES (${q(ORG)}, 'EYEX', 'contracted', '0', ${q(NOW)}, '1');`,
   `INSERT OR IGNORE INTO organizations (id, name, plan, is_disabled, created_at, revision) VALUES (${q(ANALYTICS_OTHER_ORG)}, '別組織', 'contracted', '0', ${q(NOW)}, '1');`,
   `INSERT OR IGNORE INTO stores (id, organization_id, name, slug, phone, address, access_note, is_active, created_at) VALUES (${q(ANALYTICS_OTHER_STORE)}, ${q(ANALYTICS_OTHER_ORG)}, '別組織店', 'analytics-other', '', '', '', '1', ${q(NOW)});`,
@@ -1355,4 +1363,18 @@ console.log(
     `田中 花子 様の度数 ${prescriptionSeeds.length} 件・メガネ ${glassesSeeds.length} 本・` +
     `接客のメモ ${noteSeeds.length} 件・過去のご予約 ${pastVisitRows.length} 件`,
 )
-console.log('   業務開始の画面では、お店のコードに eyex を入れる。')
+console.log('   業務開始の画面では、お店のコードに eyex を入れる。暗証番号は 000000。')
+/*
+ * 台帳の中身は承認済みモックが描いている瞬間（2026年8月27日）に固定してある。
+ * e2e が丸ごとこの日付に依存しているので動かせない。**実時間が進むほど「今日」は
+ * 空になる**ので、開けば空に見えるのは壊れているからではない。ここで毎回はっきり言う。
+ */
+{
+  const today = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10)
+  console.log(`   台帳のご予約は ${LEDGER_DATE}（木）に入っている。`)
+  if (today !== LEDGER_DATE) {
+    console.log(
+      `   ⚠️ 今日は ${today} なので、台帳を開くと空に見える。${LEDGER_DATE} まで日付を戻す。`,
+    )
+  }
+}
