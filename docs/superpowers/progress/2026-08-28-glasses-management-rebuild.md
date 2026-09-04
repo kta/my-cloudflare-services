@@ -1,4 +1,4 @@
-# EYEX予約 再構築 — 進捗台帳
+# EYE予約 再構築 — 進捗台帳
 
 計画: [`../plans/2026-08-28-glasses-management-rebuild.md`](../plans/2026-08-28-glasses-management-rebuild.md)
 
@@ -12,8 +12,8 @@
 | P5 来店受付とウォークイン | `008-reception-and-walkin` | **完了（Approved）** | 下記 |
 | P6 変更と取消 | `009-change-and-cancel` | **完了（Approved）** | 下記 |
 | P7 受付の録音 | `010-recording` | **完了（Approved）** | 下記 |
-| P8 お客様向けWeb予約 | `011-web-booking` | 未着手 | — |
-| P9 分析 | `012-analytics` | 未着手 | — |
+| P8 お客様向けWeb予約 | `011-web-booking` | **完了（Approved）** | 下記 |
+| P9 分析 | `012-analytics` | **完了（Approved）** | 下記 |
 | P10 端末と監査 | `013-terminals-and-audit` | 未着手 | — |
 
 ## P0（2026-08-28）
@@ -24,15 +24,15 @@
   （package.json / wrangler.jsonc（D1・KV・R2・NOTIFIER）/ vite / vitest ×2 / drizzle / playwright / tsconfig）
 - `packages/contracts/src/glasses_management.ts` を 0 から書き直した
   （`OrganizationSync` / `StorePermission` / `StoreMembership` / `Store` / `Actor`）
-- `packages/ui/src/theme.css` を承認済みモック `eyex` のトークンへ全面的に書き直した
+- `packages/ui/src/theme.css` を承認済みモック `eye` のトークンへ全面的に書き直した
   （旧モック専用の方言 `terminal-*` / `viz-*` / `sp-*` / `compact-*` は削除）
 - D1: `organizations` / `stores` / `store_memberships`（migration `0000`）
 - Worker: health / dev トークングラント / `POST /api/internal/organizations/sync`（revision で巻き戻さない）/
   `GET /api/internal/organizations` / `POST /api/internal/store-memberships/sync` / `GET /api/staff/stores`
 - web: `AppShell`（上のバー 64px + 左サイドバー 216px、たたむと 76px）と業務開始の画面
 - 旧実装の残骸を削除（`docs/frontend/{diff,overlay,raw,reference,screens,REBUILD.md}`、
-  旧モック `mockups/eyex-reservation/`、旧 spec `features/002-*`、旧 superpowers 文書）
-- 旧 spec が持っていた `UC-EYEX-149` / `UC-EYEX-151` は admin の業務なので
+  旧モック `mockups/eye-reservation/`、旧 spec `features/002-*`、旧 superpowers 文書）
+- 旧 spec が持っていた `UC-EYE-149` / `UC-EYE-151` は admin の業務なので
   `specs/admin/features/003-user-administration/spec.md` へ移し、admin の e2e タグを付け替えた
 
 確かめたこと:
@@ -367,124 +367,107 @@ pnpm --filter @app/glasses_management e2e → 274 passed
 - `publicClient` が外から使われていない export だった（knip）ので export を外した
 - 設定の第2サイドバーが 7 項目になったのに、既存テストが 6 項目のままだった
 
-## P9 分析 8 タブ — 完了
-
-ブランチ `012-analytics`。仕様は `specs/glasses_management/features/012-analytics/spec.md`（Approved）。
+## P9 分析 — 完了（2026-09-01）
 
 作ったもの:
 
-- 契約 6 つ（`AnalyticsQuery` / `AnalyticsMetric` / `AnalyticsPoint` / `AnalyticsSeries` /
-  `AnalyticsReport` / `AnalyticsTargets`）。マイグレーション `0008`（`analytics_daily` 1 表）
-- `domain/analytics.ts` — 期間の解決・中央値・率・小標本抑制・目安の超過判定（純関数。時刻は引数で注入）
-- `domain/analytics-rollup.ts` — 日次 upsert。**定休日は `value=0` の行を作り**、行が無い日を欠測として区別する
-- `domain/analytics-report.ts` — 読み出し時の組み立て
-- 読み出しルート 2 本。**`requireStorePermission('analytics.read')` をサーバで強制する**
-- 画面 8 タブ（モックがあるのは 5 枚、無いのが 3 枚）と、タブ共通の期間・店舗ツールバー
-
-判断したこと（`P9-analytics.md` の「7 つの逸脱」に沿った）:
-
-- **「名」（88名・414名）は出さない。** 同行者を数える列も入力欄も工程も無く、根拠を持てないため。
-  `metric='guests'` の行を書かず、応答に「名」が現れないことをテストで固定した（Q-11）
-- 取消率の分母は「来店予定だった予約の総数（取消・無断を含む）」、予約数には取消を含めない。
-  **分母を同じにすると「取り消しても予約数が減らない」ことになり、現場の感覚と合わない**
-- 小標本抑制は 20 件。**20 件ちょうどは率を出し、19 件は「—」。`unassigned` は分母によらず常に「—」**
-- 取り消しは 5 分類。凡例の文字は CHANGE-CANCEL の 4 択と 1 字も違えない。
-  モックの 3 分類は店舗都合と重複で取り消した件まで「お客様都合」に化けるため採らない
-- **Cron を 2 本目にしない。** P7 が置いた `"55 14 * * *"` と `scheduled` ハンドラへ 1 行足すだけにした
-- **AC-ANA-21 の「26 日」は数え違い**（2026年8月の営業日は暦どおり 27 日。26 はモックのグラフが
-  8/31 を落としていることに由来する）。実装は暦を正とし、spec の具体値を実測値へ直した
-
-レビュー: subagent で **2 巡**（Opus。① backend / frontend ② 受入基準 21 本の 1 本ずつの充足確認と CI 等価検証）。
+- `analytics_daily` 1 表と migration `0008_cool_whizzer.sql`。表示 API は生表を読まず、
+  日次スナップショットだけを読む
+- JST 日次 rollup、最大 31 日・1 回 3 店舗の内部再集計、24か月保持、店舗 cursor、冪等 upsert
+- `GET /api/staff/analytics` / `GET /api/staff/analytics/targets` と、組織・担当店舗の認可
+- 既存 Cron 1 本を JST 00:00 に揃え、Web 公開反映 → 分析集計 → 録音片づけを独立 `try/catch` で実行
+- トップ／予約数／担当者／お待ち時間／取り消しの既存5 mockを基準にした画面
+- mockの無かった3タブは案Bを正式採用。予約の入口・来店回数は縦棒、長い目的名だけ横棒にし、
+  3面とも「グラフ1つ＋定義1行＋まとめ3項目」で統一
+- 期間・店舗は「適用」を押すまで表示値を変えず、4×2の予約数、厳密中央値、20件未満の率抑制、
+  定休日0件と欠測、取消5分類、営業27日で 320 ÷ 27 = 11.9件を実装
+- Web公開反映の条件付き更新が競合したとき、予約取消・枠削除・alert作成へ進まないようTDDで修正
+- 受付履歴の既存integration testが実行月を読んでいたため、`FIXED_NOW` を注入して月替わりでも安定化
+- 使い捨てE2E D1にだけ注入JST日付から45日分の勤務を展開し、将来日でもWeb予約と受付を再現可能にした
+- 旧seedが残した実行日の特別営業IDをローカル再seedで掃除し、Nodeテス6件を通常の品質ゲートへ組み込んだ
+- 予約数・待ち時間・取消グラフのVoiceOver代替文を正本相当へ揃え、追加3タブの実値が正本目盛りを超える場合は縦軸だけを上方拡張
 
 確かめたこと:
 
+```text
+pnpm check
+  → 緑（lint / Knip / 全typecheck / 全unit・integration / coverage / traceability）
+  → seed互換 Node 6 passed、glasses Worker 1,668 passed、web 955 passed
+  → Worker coverage 92.95 / 83.81 / 97.08 / 95.69%
+  → web coverage 83.99 / 79.64 / 83.65 / 87.51%
+pnpm --filter @app/glasses_management exec playwright test e2e/analytics.spec.ts --project=ipad
+  → 21 passed
+pnpm --filter @app/glasses_management exec playwright test e2e/mock-compare.spec.ts --project=mock --grep 'ANALYTICS-'
+  → 5 passed
+pnpm test:traceability
+  → Approved の UC-ANA-01..10 / AC-ANA-01..21 がちょうど1本ずつ対応
+pnpm --filter @app/glasses_management e2e
+  → 300 passed / 0 failed（mock 51本、分析21本、既存機能回帰を含む）
 ```
-（.dev.vars を退避した CI 相当の状態で）
-bash scripts/check-agent-compat.sh   → ok
-pnpm exec biome check .              → 緑
-pnpm run deps:check                  → 緑
-pnpm -r --if-present typecheck       → 緑
-pnpm run test                        → 緑（3,464 テスト + traceability）
-pnpm --filter @app/glasses_management e2e → 300 passed
-```
 
-### E2E に元からあった時刻依存のバグ 5 件（P9 の回帰ではない）
+既存5 mockとの差分率（承認画像は更新していない）:
 
-P9 の検証を **9月1日（火）の深夜**に走らせたことで、**火曜・月初・早朝**の 3 つが同時に噛み合い、
-それまで隠れていた 5 件が一度に露出した（前日 8/31（月）は 274 本すべて緑だった）。
-**毎週火曜に落ちる状態**だったので、この機に直した。
+- TOP 7.7152%（閾値 7.73%）
+- COUNT 8.4850%（閾値 8.49%）
+- STAFF 7.3666%（閾値 7.38%）
+- WAIT 8.8903%（閾値 8.91%）
+- CANCEL 10.9739%（閾値 11.00%）
 
-1. **銀座店の定休（火）に当日の予約が作れない** → `reception.spec.ts` が全滅（`409 store_closed`）。
-   来店受付ボードの API がサーバ側で `new Date()` を使うため、テストは実時刻の暦日で組み立てるしかない
-2. **`clearBoard` の退店をサーバ時刻（＝いま）で書いていた** → 当日の壁時計で仕込んだ来店より前に並び、
-   盤面は `occurred_at` の最後で判定するため行がご来店中のまま残る
-3. **ウォークインの受付時刻を当日の壁時計で決め打ち**（11:02 / 11:05）していた →
-   早朝に走らせると「未来に来店した」行になる
-4. **`bumpVisitCounters` は `starts_at <= いま` の予約しか数えない**のに、補助の `freeSlot` は
-   日の頭から枠を配っていた → 早朝に走らせると枠が未来になり `firstVisitAt` が null
-5. **月初（1日）だけ「絞り込みをすべて外す」候補が出ない** → 当日だけに絞った期間が「今月」と
-   同一クエリになり、重複候補として正しく抑止される（**実装は正しく、テストの前提が月初で崩れていた**）
-
-直し方: seed は、実時刻の JST 当日が定休曜日に当たるときだけ `kind='special'`（臨時営業 10:00–19:00）を
-1 行足し、その日の勤務も展開する（営業日に走らせれば 1 行も増えない）。**世界観データ（定休 火曜）は変えていない。**
-E2E 側は、退店をその行の最後の記録より必ずあとに書く・来店時刻を `minutesAgo(n)` にする・
-初回来店日を見る 1 本にはいまより前の枠を配る、の 3 点に直した。
-**アサーションを緩めた箇所・skip・閾値の変更は無い。**
-
-## P10 端末の使い分けと監査 — 完了（最終フェーズ）
-
-ブランチ `013-terminals-and-audit`。仕様は `specs/glasses_management/features/013-terminals-and-audit/spec.md`（Approved）。
+## P10 端末の使い分けと監査 — 完了（2026-09-01）
 
 作ったもの:
 
-- 契約 2 群（端末・セッション・再認証 / 監査・お知らせ・スタッフ PIN）。
-  **`Terminal` は `pinHash` を持たない**（生の行を parse すると落ちることを型で固定した）
-- `terminals` / `terminal_sessions` を新設。**`terminals.version`** を持たせ、
-  `PATCH` がずれたら `409 version_conflict`（`03-data-model.md` §10.1 の列表には無いが、
-  `04-api.md` の `TerminalPatch` が `version` 必須で楽観ロック表にも挙がっており、列が無いと `PATCH` が成立しない）
-- `domain/pin.ts` / `domain/terminal-session.ts` — 桁数の検査・照合・連続失敗の数え方／
-  自動ロックと個人モードの期限（純関数。時刻は引数で注入）
-- `domain/audit.ts` — 主体（端末か本人か）の決定と追記行の組み立て。**書き込み経路の `db.batch()` へ配った**
-- ルート一式と **`requirePersonalMode()`**。`audit.read` と `terminal.manage` をサーバで強制
-- 画面 10 面（業務開始 6 面・昇格・自動ロックの覆い・通信断の帯・権限不足）＋ ALERTS ＋ 設定 › 端末
-- `@app/ui` にテンキー部品（**1 キー 72pt・右 420px 固定**）
-
-判断したこと（`P10-terminals-and-audit.md` の「決め 6 点」に沿った）:
-
-- **境界は `07-nfr.md` §10.3 を正とする。** 自動ロックは **120 秒ちょうどでは伏せず +1 秒で伏せる**。
-  PIN の 30 秒ロックは **30 秒ちょうどはまだ入力できず +1 秒で入力できる**
-- **`audit_events.target_type` はテーブル名そのまま（snake_case・複数形）**。
-  `03-data-model.md` §10.3 の単数形の列挙は `customer_notes` / `alerts` / `store_business_hours` を
-  表せないので採らない。P3・P5・P7 が単数形で書いた行の綴りも同じ変更で揃えた
-- **`Terminal.name` は 1..60**（`04-api.md` §4.2 を正とする）
-- **EX-PERMISSION の「この下書きを店長に依頼する」を画面に出さない。**
-  依頼を立てるための `AlertCode` が 10 値の許可リストに含まれておらず、押せて何も起きないボタンになるため。
-  spec の AC-TERM-13 から該当の一句を落とした（Q-10 の答えが来たら戻す）
-- **`terminal.masked` の監査行を書かない。** 伏せている間は API を叩かないので書く経路が無い。
-  「伏せても監査は 1 行も増えない」をテストで固定した
-- **`react-router` を入れない・`ADMIN` binding を足さない**（どちらも人間承認事項）。
-  画面は `App.tsx` の状態で出し分け、URL は書き換えない
-
-レビュー: subagent で **2 巡**（Opus。① セキュリティ / frontend ② 受入基準 22 本の 1 本ずつの充足確認と CI 等価検証）。
+- `terminals` / `terminal_sessions` と migration `0009_round_gwen_stacy.sql`。端末の置き場所、
+  共有・個人の使い方、PINの有無、自動で伏せるまでの秒数、楽観ロックの `version` を持つ
+- admin の認証源泉を `ADMIN` service binding から利用する業務開始、個人端末・共有端末の選択、
+  スタッフ／置き場所の選択、4〜6桁PIN、3回失敗後30秒の待ち、端末セッションの開始・終了
+- 平文PINは保存・応答・監査へ出さず、`AUTH_PEPPER` と端末／スタッフごとのsaltでハッシュだけを保持。
+  失敗回数は `SHORT_LIVED` KVへ30秒TTLで置く
+- 共有モードでは日常業務を続け、録音の保全など責任の残る操作だけ本人PINで個人モードへ昇格。
+  個人モードと共有端末の自動ロックは120秒ちょうどでは維持し、+1秒で失効／伏せる
+- 予約・録音・設定などの監査を本処理と同じ `db.batch()` へ追加。条件付き更新では同じ
+  `WHERE EXISTS` を監査INSERTにも付け、409になった操作だけが監査へ残らないようにした
+- お知らせを「対応が必要」「お知らせ」「対応済み」に分け、未読は赤い罫と「未読」の文字で示し、
+  付属操作が成功した1件だけを対応済みにする
+- 自動ロックの覆い、氏名と電話番号だけの伏せ字、`visibilitychange` 復帰時の時刻差判定、
+  通信断の帯と書き込み停止、入力途中の下書き保持、設定の権限不足画面
+- モックの無い「設定 › 端末」は既存設定パネルの型で、端末の新規登録、使い方の変更、
+  PINの作り直し、自動で伏せる時間の変更を実装
 
 確かめたこと:
 
+```text
+pnpm check
+  → 緑（lint / Knip / 全typecheck / 全unit・integration / coverage / traceability）
+  → glasses Worker 1,804 passed、web 980 passed
+  → Worker coverage 91.21 / 80.58 / 96.39 / 93.77%
+  → web coverage 82.27 / 77.74 / 82.23 / 85.65%
+pnpm --filter @app/glasses_management e2e
+  → 333 passed / 0 failed（mock 61本、P10のUC/AC、既存機能回帰を含む）
+pnpm test:traceability
+  → Approved の UC-TERM-01..16 / AC-TERM-01..22 がちょうど1 scenarioずつ対応
+pnpm --filter @app/glasses_management exec playwright test e2e/terminal-mock-compare.spec.ts --project=mock
+  → 正規閾値で10 passed。実測採取時は閾値だけ一時的に厳しくし、直後に戻した
 ```
-（.dev.vars を退避した CI 相当の状態で）
-bash scripts/check-agent-compat.sh   → ok
-pnpm exec biome check .              → 緑
-pnpm run deps:check                  → 緑
-pnpm -r --if-present typecheck       → 緑
-pnpm run test                        → 緑（3,707 テスト + traceability）
-pnpm --filter @app/glasses_management e2e → 333 passed
-```
 
-### 直したフレーキーな E2E 1 本（P9 の分析）
+端末10面の実測差（承認画像は更新していない）:
 
-`analytics.spec.ts` の AC-ANA-18（切り口をキーボードで選び替える）が、3 回に 1 回ほど
-`月別` が `unchecked` のまま落ちていた。**実装の欠陥ではない。**
+- START-DEVICE-MODE 4.7427%
+- LOGIN-STAFF 2.0116%
+- LOGIN-STAFF-PIN 2.9368%
+- LOGIN-SHARED 2.1657%
+- LOGIN-SHARED-PIN 3.1412%
+- LOGIN-PIN-ERROR 4.6655%
+- MODE-PERSONAL 4.8550%
+- HOME-SHARED-LOCKED 2.3801%
+- ALERTS 5.4360%（未読を色だけにせず「未読」の札を追加）
+- EX-PERMISSION 8.1260%（依頼先未定の店長依頼ボタンを出さず、6桁対応テンキーを共通化）
 
-札は読み込みが済んでから描かれるので、`locator.focus()` して `page.keyboard.press()` で打つと、
-その間の描き直しで札が差し替わったときに**打鍵が宙に浮く**。
-打つ直前に札を引き直して焦点を当てる `locator.press()` に替えて解消した（5 回連続で 105 本緑）。
-アサーションは緩めていない。
+既存の EX-OFFLINE は 6.1260%。11面のうち8面が5%以下で、P10計画の基準を満たす。
+
+申し送り:
+
+1. `AuditTargetType` は監査対象のテーブル名そのまま（snake_case・複数形）に確定した。
+2. `terminals.version` を追加し、端末設定の更新を楽観ロックにした。
+3. Q-10の依頼先と承認フローが決まったら、EX-PERMISSIONに「この下書きを店長に依頼する」を戻し、
+   `AlertCode`へ `settings.approval_requested` を追加してAC-TERM-13とE2Eを更新する。

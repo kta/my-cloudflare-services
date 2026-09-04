@@ -21,12 +21,12 @@ describe('組織の同期', () => {
     const org = orgId()
     const { status, body } = await syncOrganization({
       id: org,
-      name: 'EYEX',
+      name: 'EYE',
       plan: 'contracted',
       revision: 1,
     })
     expect(status).toBe(200)
-    expect(body).toMatchObject({ id: org, name: 'EYEX', plan: 'contracted', revision: 1 })
+    expect(body).toMatchObject({ id: org, name: 'EYE', plan: 'contracted', revision: 1 })
   })
 
   it('同じ id への再送で名前とプランが収束する', async () => {
@@ -67,7 +67,7 @@ describe('組織の同期', () => {
       headers: INTERNAL_HEADERS,
       body: JSON.stringify({
         id: orgId(),
-        name: 'EYEX',
+        name: 'EYE',
         plan: 'free',
         isDisabled: false,
         createdAt: NOW,
@@ -131,6 +131,37 @@ describe('担当店舗の同期', () => {
       .bind(id)
       .first<{ permissions: string }>()
     expect(saved?.permissions).toBe('')
+  })
+
+  it('同じ組織・利用者・店舗が別IDで再同期されても1行へ収束する', async () => {
+    const org = orgId()
+    await syncOrganization({ id: org, revision: 1 })
+    const storeId = crypto.randomUUID()
+    const firstId = crypto.randomUUID()
+    const latestId = crypto.randomUUID()
+    const base = {
+      organizationId: org,
+      storeId,
+      userId: 'user-reassigned',
+      createdAt: NOW,
+    }
+    await SELF.fetch(`${BASE}/api/internal/store-memberships/sync`, {
+      method: 'POST',
+      headers: INTERNAL_HEADERS,
+      body: JSON.stringify({ id: firstId, ...base, permissions: ['store.read'] }),
+    })
+    const response = await SELF.fetch(`${BASE}/api/internal/store-memberships/sync`, {
+      method: 'POST',
+      headers: INTERNAL_HEADERS,
+      body: JSON.stringify({ id: latestId, ...base, permissions: ['terminal.manage'] }),
+    })
+    expect(response.status).toBe(200)
+    const rows = await env.DB.prepare(
+      'SELECT id, permissions FROM store_memberships WHERE organization_id = ? AND user_id = ? AND store_id = ?',
+    )
+      .bind(org, base.userId, storeId)
+      .all<{ id: string; permissions: string }>()
+    expect(rows.results).toEqual([{ id: latestId, permissions: 'terminal.manage' }])
   })
 
   it('許可リストに無い権限は 400 で落とす（fail close）', async () => {
@@ -210,7 +241,7 @@ describe('店舗一覧', () => {
       .bind(
         first,
         org,
-        'EYEX 銀座店',
+        'EYE 銀座店',
         'ginza',
         '03-1234-5678',
         '東京都中央区銀座',
@@ -222,7 +253,7 @@ describe('店舗一覧', () => {
     await env.DB.prepare(
       'INSERT INTO stores (id, organization_id, name, slug, phone, address, access_note, is_active, created_at) VALUES (?,?,?,?,?,?,?,?,?)',
     )
-      .bind(second, org, 'EYEX 丸の内店', 'marunouchi', '', '', '', '0', '2026-08-02T00:00:00.000Z')
+      .bind(second, org, 'EYE 丸の内店', 'marunouchi', '', '', '', '0', '2026-08-02T00:00:00.000Z')
       .run()
 
     const res = await SELF.fetch(`${BASE}/api/staff/stores`, { headers: authed(token) })
@@ -230,7 +261,7 @@ describe('店舗一覧', () => {
     const rows = (await res.json()) as Array<Record<string, unknown>>
     expect(rows.map((r) => r.slug)).toEqual(['ginza', 'marunouchi'])
     expect(rows[0]).toMatchObject({
-      name: 'EYEX 銀座店',
+      name: 'EYE 銀座店',
       phone: '03-1234-5678',
       accessNote: '銀座駅 A1 出口',
       isActive: true,

@@ -4,7 +4,7 @@ import { z } from 'zod'
  * Notification contracts shared by the domain Workers and the notifier.
  *
  * The notifier deliberately accepts only the two customer-facing reservation
- * messages required by the EYEX flow. Keeping the payload discriminated by a
+ * messages required by the EYE flow. Keeping the payload discriminated by a
  * small allow-list prevents callers from turning this endpoint into a generic
  * arbitrary-mail relay.
  */

@@ -7,15 +7,16 @@ import {
   VisitPurpose,
 } from '@app/contracts'
 import { auth } from '@app/shared'
-import { Button, focusRing, Notice, TextInput } from '@app/ui'
+import { Button, focusRing, TextInput } from '@app/ui'
 import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { client } from '../client'
+import { LoadFailed } from '../shell/LoadFailed'
 import { addJstDays, ImpactCard } from './ImpactCard'
 import type { PanelDraft, SaveOutcome, SettingsPanelProps } from './sections'
 import { toJstDay } from './sections'
 
 /*
- * 設定 — ご来店の目的（承認済みモック docs/frontend/mockups/eyex/images/SETTINGS-PURPOSE.png）。
+ * 設定 — ご来店の目的（承認済みモック docs/frontend/mockups/eye/images/SETTINGS-PURPOSE.png）。
  *
  * この面の仕事は「所要時間を延ばした瞬間に、受けられなくなる Web 枠を数字で見せる」こと。
  * 試算（POST /api/staff/settings/impact）は何も保存しない。所要時間を変えても、
@@ -117,6 +118,8 @@ export function PurposePanel({ storeId, now, onDraftChange }: SettingsPanelProps
   const today = toJstDay(at)
 
   const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading')
+  // 読み直しの合図。読み込みの useEffect の依存に入れる。
+  const [reloadCount, setReloadCount] = useState(0)
   const [saved, setSaved] = useState<Purpose[]>([])
   const [drafts, setDrafts] = useState<Record<string, PurposeDraft>>({})
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -146,7 +149,7 @@ export function PurposePanel({ storeId, now, onDraftChange }: SettingsPanelProps
 
   useEffect(() => {
     load().catch(() => setPhase('error'))
-  }, [load])
+  }, [load, reloadCount])
 
   const selected = saved.find((purpose) => purpose.id === selectedId) ?? null
   const selectedDraft = selectedId ? drafts[selectedId] : undefined
@@ -389,7 +392,15 @@ export function PurposePanel({ storeId, now, onDraftChange }: SettingsPanelProps
       </p>
     )
   if (phase === 'error') {
-    return <Notice>ご来店の目的を読み込めませんでした。画面を開き直してください。</Notice>
+    return (
+      <LoadFailed
+        what="ご来店の目的"
+        onRetry={() => {
+          setPhase('loading')
+          setReloadCount((n) => n + 1)
+        }}
+      />
+    )
   }
 
   return (

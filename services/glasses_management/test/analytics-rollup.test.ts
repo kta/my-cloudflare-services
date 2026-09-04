@@ -1,455 +1,464 @@
 /**
- * 1 店舗 1 日分の生データを `analytics_daily` の行へ畳む純関数。
- * ここが分析の数字の出どころなので、**何を数え、何を数えないか**を行の形で固定する。
+ * analytics_daily に書く前の、D1 非依存の日次ロールアップ契約。
  *
- * 「名」（人数）は 1 行も書かない（Q-11）。定休日は `value=0` の行を必ず書き、
- * 行が無い状態（欠測）と区別できるようにする。
+ * この層は「どの行を数えるか」だけを決める。DB の join や upsert、Cron の時計は
+ * 呼び出し側の責務とし、ここでは now も入力として注入する。
  */
-
 import { describe, expect, it } from 'vitest'
 import {
-  type AnalyticsRow,
-  type RollupInput,
-  rollupDay,
+  type AnalyticsDailyRow,
+  type AnalyticsReservation,
+  type AnalyticsRollupInput,
+  type AnalyticsVisitEvent,
+  rollupAnalyticsDay,
 } from '../src/worker/domain/analytics-rollup'
 
-const ORG = 'org-1'
-const STORE = 'store-1'
-const DATE = '2026-08-27' // 木曜
+const ORG = 'org-a'
+const STORE = 'store-a'
+const OTHER_STORE = 'store-b'
+const OTHER_ORG = 'org-b'
+const DATE = '2026-08-27'
+const NOW = new Date('2026-08-27T15:00:00.000Z') // JST 2026-08-28 00:00
 
-/** JST の壁時計を UTC の ISO8601 に直す。読み手に +9 時間の暗算をさせない。 */
+/** JST の壁時計を UTC ISO へ直す。 */
 function jst(date: string, time: string): string {
-  const [h, m] = time.split(':').map(Number)
-  const base = Date.parse(`${date}T00:00:00.000Z`)
-  return new Date(base + ((h as number) - 9) * 3_600_000 + (m as number) * 60_000).toISOString()
+  return new Date(Date.parse(`${date}T${time}:00.000Z`) - 9 * 60 * 60_000).toISOString()
 }
 
-function baseInput(over: Partial<RollupInput> = {}): RollupInput {
+function reservation(
+  overrides: Partial<AnalyticsReservation> & { id: string },
+): AnalyticsReservation {
   return {
     organizationId: ORG,
     storeId: STORE,
-    date: DATE,
-    // 木曜（weekday=4）は営業日。
-    businessHours: [{ weekday: 4, isClosed: '0' }],
-    calendarExceptions: [],
-    reservations: [],
-    reservationAssignments: [],
-    reservationPurposes: [],
-    walkIns: [],
-    visitEvents: [],
-    laterVisits: [],
-    ...over,
+    source: 'phone',
+    status: 'confirmed',
+    startsAt: jst(DATE, '10:00'),
+    createdAt: jst(DATE, '09:00'),
+    customerId: null,
+    staffId: null,
+    purposeIds: [],
+    ...overrides,
   }
 }
 
-function pick(rows: readonly AnalyticsRow[], metric: string, dimension: string): AnalyticsRow[] {
-  return rows.filter((row) => row.metric === metric && row.dimension === dimension)
+function event(
+  overrides: Partial<AnalyticsVisitEvent> & { subjectId: string },
+): AnalyticsVisitEvent {
+  return {
+    organizationId: ORG,
+    storeId: STORE,
+    stage: 'received',
+    occurredAt: jst(DATE, '10:00'),
+    ...overrides,
+  }
 }
 
-function valueAt(
-  rows: readonly AnalyticsRow[],
-  metric: string,
-  dimension: string,
-  key = '',
+function rollup(overrides: Partial<AnalyticsRollupInput> = {}) {
+  return rollupAnalyticsDay({
+    organizationId: ORG,
+    storeId: STORE,
+    date: DATE,
+    now: NOW,
+    isClosed: false,
+    reservations: [],
+    visitEvents: [],
+    ...overrides,
+  })
+}
+
+function value(
+  rows: readonly AnalyticsDailyRow[],
+  metric: AnalyticsDailyRow['metric'],
+  dimension: AnalyticsDailyRow['dimension'] = 'total',
+  dimensionKey = '',
 ): number | undefined {
   return rows.find(
-    (r) => r.metric === metric && r.dimension === dimension && r.dimensionKey === key,
+    (row) =>
+      row.metric === metric && row.dimension === dimension && row.dimensionKey === dimensionKey,
   )?.value
 }
 
-function reservation(over: Partial<RollupInput['reservations'][number]> = {}) {
-  return {
-    id: 'r-1',
-    source: 'phone',
-    status: 'done',
-    startsAt: jst(DATE, '11:00'),
-    createdAt: jst(DATE, '09:00'),
-    cancelReason: null,
-    customerId: 'c-1',
-    ...over,
-  }
-}
+describe('rollupAnalyticsDay', () => {
+  it('定休日にはclosed=1、空営業日にはclosed=0を書き、未来日は予約系だけを先に書く', () => {
+    expect(value(rollup({ isClosed: true }).rows, 'closed')).toBe(1)
+    expect(value(rollup().rows, 'closed')).toBe(0)
 
-describe('rollupDay', () => {
-  it('定休日は closed=1 と reservations=0 の 2 行を必ず書く', () => {
-    const { rows } = rollupDay(baseInput({ businessHours: [{ weekday: 4, isClosed: '1' }] }))
-    expect(rows).toHaveLength(2)
-    expect(valueAt(rows, 'closed', 'total')).toBe(1)
-    expect(valueAt(rows, 'reservations', 'total')).toBe(0)
+    const futureDate = '2026-08-29'
+    const future = rollup({
+      date: futureDate,
+      reservations: [
+        reservation({
+          id: 'future-active',
+          startsAt: jst(futureDate, '10:00'),
+          purposeIds: ['p-future'],
+        }),
+        reservation({
+          id: 'future-cancelled',
+          startsAt: jst(futureDate, '11:00'),
+          status: 'cancelled',
+          source: 'web',
+          cancelReason: 'customer',
+        }),
+      ],
+    })
+    expect(value(future.rows, 'closed')).toBeUndefined()
+    expect(value(future.rows, 'reservations')).toBe(1)
+    expect(value(future.rows, 'scheduled_reservations')).toBe(2)
+    expect(value(future.rows, 'reservations', 'purpose', 'p-future')).toBe(1)
+    expect(value(future.rows, 'cancellations', 'cancellation_category', 'web')).toBe(1)
+    expect(future.rows.some((row) => row.metric === 'receptions')).toBe(false)
+    expect(future.dropped).toEqual({ cancellationReservationIds: [] })
   })
 
-  it('臨時休業の日も closed=1 になる（営業曜日でも暦が勝つ）', () => {
-    const { rows } = rollupDay(baseInput({ calendarExceptions: [{ date: DATE, kind: 'closed' }] }))
-    expect(valueAt(rows, 'closed', 'total')).toBe(1)
+  it('休業日でも予約・予定・取消を残し、実績系だけを確定しない', () => {
+    const result = rollup({
+      isClosed: true,
+      reservations: [
+        reservation({ id: 'active' }),
+        reservation({
+          id: 'cancelled',
+          status: 'cancelled',
+          cancelReason: 'customer',
+        }),
+        reservation({ id: 'done', status: 'done', staffId: 'staff-a' }),
+      ],
+      visitEvents: [
+        event({ subjectId: 'done' }),
+        event({ subjectId: 'done', stage: 'consulting', occurredAt: jst(DATE, '10:02') }),
+      ],
+    })
+
+    expect(value(result.rows, 'closed')).toBe(1)
+    expect(value(result.rows, 'scheduled_reservations')).toBe(3)
+    expect(value(result.rows, 'reservations')).toBe(2)
+    expect(value(result.rows, 'reservations_received')).toBe(2)
+    expect(value(result.rows, 'cancellations', 'cancellation_category', 'customer')).toBe(1)
+    expect(value(result.rows, 'receptions')).toBeUndefined()
+    expect(
+      value(result.rows, 'wait_seconds_histogram', 'wait_seconds', 'hour:10:120'),
+    ).toBeUndefined()
+    expect(value(result.rows, 'revisit_eligible', 'staff', 'staff-a')).toBeUndefined()
   })
 
-  it('営業日は closed=0 を書く（行があること自体が「集計済み」の印になる）', () => {
-    const { rows } = rollupDay(baseInput())
-    expect(valueAt(rows, 'closed', 'total')).toBe(0)
+  it('当日を未確定forecastとして扱い、予約系だけを作る', () => {
+    const result = rollup({
+      date: '2026-08-28',
+      completedThrough: '2026-08-27',
+      reservations: [reservation({ id: 'today', startsAt: jst('2026-08-28', '10:00') })],
+    })
+
+    expect(value(result.rows, 'closed')).toBeUndefined()
+    expect(value(result.rows, 'scheduled_reservations')).toBe(1)
+    expect(value(result.rows, 'receptions')).toBeUndefined()
   })
 
-  it('reservations は status が cancelled と no_show の予約を数えない', () => {
-    const { rows } = rollupDay(
-      baseInput({
-        reservations: [
-          reservation({ id: 'r-1', status: 'done' }),
-          reservation({ id: 'r-2', status: 'confirmed' }),
-          reservation({ id: 'r-3', status: 'cancelled', cancelReason: 'customer' }),
-          reservation({ id: 'r-4', status: 'no_show', cancelReason: 'no_show' }),
-        ],
+  it('後続のcatch-upでforecast日をclosed・実績系へ確定し直す', () => {
+    const date = '2026-08-28'
+    const reservations = [
+      reservation({
+        id: 'current',
+        status: 'done',
+        startsAt: jst(date, '10:00'),
+        createdAt: jst(date, '09:00'),
+        customerId: 'customer-a',
+        staffId: 'staff-a',
       }),
-    )
-    expect(valueAt(rows, 'reservations', 'total')).toBe(2)
-  })
-
-  it('reservations_received は created_at の JST 暦日で数える', () => {
-    const { rows } = rollupDay(
-      baseInput({
-        reservations: [
-          // 来店は当日、受付は前日 → 来店日では数え、受付日では数えない。
-          reservation({ id: 'r-1', createdAt: jst('2026-08-26', '18:00') }),
-          // 来店は先の日、受付が当日 → 受付日でだけ数える。
-          reservation({
-            id: 'r-2',
-            startsAt: jst('2026-09-10', '11:00'),
-            createdAt: jst(DATE, '10:00'),
-          }),
-        ],
+      reservation({
+        id: 'prior',
+        status: 'done',
+        startsAt: jst('2026-08-01', '10:00'),
+        customerId: 'customer-a',
       }),
-    )
-    expect(valueAt(rows, 'reservations', 'total')).toBe(1)
-    expect(valueAt(rows, 'reservations_received', 'total')).toBe(1)
-  })
-
-  it('reservations_received も取消・無断の予約を数えない（来店日と同じ数え方）', () => {
-    const { rows } = rollupDay(
-      baseInput({
-        reservations: [
-          reservation({
-            id: 'r-1',
-            startsAt: jst('2026-09-10', '11:00'),
-            createdAt: jst(DATE, '10:00'),
-          }),
-          reservation({
-            id: 'r-2',
-            startsAt: jst('2026-09-10', '11:00'),
-            createdAt: jst(DATE, '10:30'),
-            status: 'cancelled',
-            cancelReason: 'customer',
-          }),
-          reservation({
-            id: 'r-3',
-            startsAt: jst('2026-09-10', '11:00'),
-            createdAt: jst(DATE, '10:40'),
-            status: 'no_show',
-          }),
-        ],
-      }),
-    )
-    // 受付日でも「予約数」は取消を含まない（含めると取消率の分母と二重に数える）。
-    expect(valueAt(rows, 'reservations_received', 'total')).toBe(1)
-  })
-
-  it('receptions は予約の受付とウォークインの両方を数える', () => {
-    const { rows } = rollupDay(
-      baseInput({
-        reservations: [reservation({ id: 'r-1' })],
-        walkIns: [{ id: 'w-1', reservationId: 'r-9', arrivedAt: jst(DATE, '14:20') }],
-        visitEvents: [
-          {
-            subjectType: 'reservation',
-            subjectId: 'r-1',
-            stage: 'received',
-            occurredAt: jst(DATE, '10:55'),
-            staffId: 's-1',
-          },
-          {
-            subjectType: 'walkin',
-            subjectId: 'w-1',
-            stage: 'received',
-            occurredAt: jst(DATE, '14:20'),
-            staffId: 's-1',
-          },
-        ],
-      }),
-    )
-    expect(valueAt(rows, 'receptions', 'total')).toBe(2)
-  })
-
-  it('receptions は dimension=staff / hour / total の 3 通りを書く', () => {
-    const { rows } = rollupDay(
-      baseInput({
-        reservations: [reservation({ id: 'r-1' })],
-        reservationAssignments: [{ reservationId: 'r-1', kind: 'staff', targetId: 's-1' }],
-        walkIns: [{ id: 'w-1', reservationId: 'r-9', arrivedAt: jst(DATE, '14:20') }],
-        visitEvents: [
-          {
-            subjectType: 'reservation',
-            subjectId: 'r-1',
-            stage: 'received',
-            occurredAt: jst(DATE, '10:55'),
-            staffId: 's-1',
-          },
-          {
-            subjectType: 'walkin',
-            subjectId: 'w-1',
-            stage: 'received',
-            occurredAt: jst(DATE, '14:20'),
-            staffId: null,
-          },
-        ],
-      }),
-    )
-    expect(valueAt(rows, 'receptions', 'staff', 's-1')).toBe(1)
-    expect(valueAt(rows, 'receptions', 'staff', 'unassigned')).toBe(1)
-    // 時間帯はゼロ埋めしない。
-    expect(valueAt(rows, 'receptions', 'hour', '10')).toBe(1)
-    expect(valueAt(rows, 'receptions', 'hour', '14')).toBe(1)
-    expect(pick(rows, 'receptions', 'total')).toHaveLength(1)
-  })
-
-  it('cancellations を 5 層へ排他に割る（no_show → web → customer → store → duplicate の順で当てる）', () => {
-    const { rows, dropped } = rollupDay(
-      baseInput({
-        reservations: [
-          reservation({ id: 'r-1', status: 'no_show', cancelReason: 'no_show' }),
-          // web の取消は cancel_reason='customer' でも web 層へ寄せる（先に当たる）。
-          reservation({ id: 'r-2', status: 'cancelled', source: 'web', cancelReason: 'customer' }),
-          reservation({ id: 'r-3', status: 'cancelled', cancelReason: 'customer' }),
-          reservation({ id: 'r-4', status: 'cancelled', cancelReason: 'store' }),
-          reservation({ id: 'r-5', status: 'cancelled', cancelReason: 'duplicate' }),
-          // どれにも当たらない壊れた行は customer に寄せず、落として数える。
-          reservation({ id: 'r-6', status: 'cancelled', cancelReason: null }),
-        ],
-      }),
-    )
-    expect(valueAt(rows, 'cancellations', 'cancel_reason', 'no_show')).toBe(1)
-    expect(valueAt(rows, 'cancellations', 'cancel_reason', 'web')).toBe(1)
-    expect(valueAt(rows, 'cancellations', 'cancel_reason', 'customer')).toBe(1)
-    expect(valueAt(rows, 'cancellations', 'cancel_reason', 'store')).toBe(1)
-    expect(valueAt(rows, 'cancellations', 'cancel_reason', 'duplicate')).toBe(1)
-    expect(pick(rows, 'cancellations', 'cancel_reason')).toHaveLength(5)
-    // 層の合計はその日の取消件数と一致する。
-    expect(valueAt(rows, 'cancellations', 'total')).toBe(5)
-    expect(dropped).toBe(1)
-  })
-
-  it('no_shows の total は cancellations の no_show 層と必ず一致する', () => {
-    const { rows } = rollupDay(
-      baseInput({
-        reservations: [
-          reservation({ id: 'r-1', status: 'no_show', cancelReason: 'no_show' }),
-          reservation({ id: 'r-2', status: 'no_show', cancelReason: null }),
-        ],
-      }),
-    )
-    expect(valueAt(rows, 'no_shows', 'total')).toBe(2)
-    expect(valueAt(rows, 'cancellations', 'cancel_reason', 'no_show')).toBe(2)
-  })
-
-  it('wait_seconds_median は received から最初の consulting までの差で、consulting が無い人を数えない', () => {
-    const { rows } = rollupDay(
-      baseInput({
-        walkIns: [
-          { id: 'w-1', reservationId: 'r-1', arrivedAt: jst(DATE, '10:00') },
-          { id: 'w-2', reservationId: 'r-2', arrivedAt: jst(DATE, '10:10') },
-          { id: 'w-3', reservationId: 'r-3', arrivedAt: jst(DATE, '10:20') },
-        ],
-        visitEvents: [
-          {
-            subjectType: 'walkin',
-            subjectId: 'w-1',
-            stage: 'received',
-            occurredAt: jst(DATE, '10:00'),
-            staffId: null,
-          },
-          {
-            subjectType: 'walkin',
-            subjectId: 'w-1',
-            stage: 'consulting',
-            occurredAt: jst(DATE, '10:05'),
-            staffId: null,
-          },
-          // 2 度目の consulting は最初の 1 つだけを見る。
-          {
-            subjectType: 'walkin',
-            subjectId: 'w-1',
-            stage: 'consulting',
-            occurredAt: jst(DATE, '10:40'),
-            staffId: null,
-          },
-          {
-            subjectType: 'walkin',
-            subjectId: 'w-2',
-            stage: 'received',
-            occurredAt: jst(DATE, '10:10'),
-            staffId: null,
-          },
-          {
-            subjectType: 'walkin',
-            subjectId: 'w-2',
-            stage: 'consulting',
-            occurredAt: jst(DATE, '10:18'),
-            staffId: null,
-          },
-          // w-3 は consulting へ進んでいない → 標本に入れない。
-          {
-            subjectType: 'walkin',
-            subjectId: 'w-3',
-            stage: 'received',
-            occurredAt: jst(DATE, '10:20'),
-            staffId: null,
-          },
-        ],
-      }),
-    )
-    expect(valueAt(rows, 'wait_seconds_median', 'total')).toBe(390)
-  })
-
-  it('wait_seconds_median は中央値であって平均ではない（外れ値 1 件で動かない）', () => {
-    const events = (id: string, receivedAt: string, consultingAt: string) => [
-      {
-        subjectType: 'walkin',
-        subjectId: id,
-        stage: 'received',
-        occurredAt: receivedAt,
-        staffId: null,
-      },
-      {
-        subjectType: 'walkin',
-        subjectId: id,
-        stage: 'consulting',
-        occurredAt: consultingAt,
-        staffId: null,
-      },
     ]
-    const { rows } = rollupDay(
-      baseInput({
-        walkIns: [
-          { id: 'w-1', reservationId: 'r-1', arrivedAt: jst(DATE, '10:00') },
-          { id: 'w-2', reservationId: 'r-2', arrivedAt: jst(DATE, '10:00') },
-          { id: 'w-3', reservationId: 'r-3', arrivedAt: jst(DATE, '10:00') },
-        ],
-        visitEvents: [
-          ...events('w-1', jst(DATE, '10:00'), jst(DATE, '10:05')),
-          ...events('w-2', jst(DATE, '10:00'), jst(DATE, '10:06')),
-          ...events('w-3', jst(DATE, '10:00'), jst(DATE, '12:00')),
-        ],
-      }),
-    )
-    expect(valueAt(rows, 'wait_seconds_median', 'total')).toBe(360)
-  })
-
-  it('wait_seconds_median は dimension=hour（受付した時間帯）にも書く', () => {
-    const events = (id: string, receivedAt: string, consultingAt: string) => [
-      {
-        subjectType: 'walkin',
-        subjectId: id,
-        stage: 'received',
-        occurredAt: receivedAt,
-        staffId: null,
-      },
-      {
-        subjectType: 'walkin',
-        subjectId: id,
-        stage: 'consulting',
-        occurredAt: consultingAt,
-        staffId: null,
-      },
+    const visitEvents = [
+      event({ subjectId: 'current', occurredAt: jst(date, '10:00') }),
+      event({ subjectId: 'current', stage: 'consulting', occurredAt: jst(date, '10:02') }),
     ]
-    const { rows } = rollupDay(
-      baseInput({
-        walkIns: [
-          { id: 'w-1', reservationId: 'r-1', arrivedAt: jst(DATE, '10:00') },
-          { id: 'w-2', reservationId: 'r-2', arrivedAt: jst(DATE, '14:00') },
-        ],
-        visitEvents: [
-          ...events('w-1', jst(DATE, '10:00'), jst(DATE, '10:05')),
-          ...events('w-2', jst(DATE, '14:00'), jst(DATE, '14:10')),
-        ],
-      }),
-    )
-    expect(valueAt(rows, 'wait_seconds_median', 'hour', '10')).toBe(300)
-    expect(valueAt(rows, 'wait_seconds_median', 'hour', '14')).toBe(600)
+    const forecast = rollup({ date, completedThrough: '2026-08-27', reservations, visitEvents })
+    const confirmed = rollup({ date, completedThrough: date, reservations, visitEvents })
+
+    expect(value(forecast.rows, 'closed')).toBeUndefined()
+    expect(value(forecast.rows, 'receptions')).toBeUndefined()
+    expect(
+      value(forecast.rows, 'wait_seconds_histogram', 'wait_seconds', 'hour:10:120'),
+    ).toBeUndefined()
+    expect(value(forecast.rows, 'revisit_eligible', 'staff', 'staff-a')).toBeUndefined()
+    expect(value(confirmed.rows, 'closed')).toBe(0)
+    expect(value(confirmed.rows, 'receptions')).toBe(1)
+    expect(value(confirmed.rows, 'wait_seconds_histogram', 'wait_seconds', 'hour:10:120')).toBe(1)
+    expect(value(confirmed.rows, 'revisit_eligible', 'staff', 'staff-a')).toBe(1)
+    expect(value(confirmed.rows, 'revisit_returning_90d', 'staff', 'staff-a')).toBe(1)
   })
 
-  it('revisits_90d は「その日の来店客のうち 90 日以内に再来した人数」を担当ごとに書く', () => {
-    const { rows } = rollupDay(
-      baseInput({
-        reservations: [
-          reservation({ id: 'r-1', customerId: 'c-1' }),
-          reservation({ id: 'r-2', customerId: 'c-2' }),
-        ],
-        reservationAssignments: [
-          { reservationId: 'r-1', kind: 'staff', targetId: 's-1' },
-          { reservationId: 'r-2', kind: 'staff', targetId: 's-1' },
-        ],
-        visitEvents: [
-          {
-            subjectType: 'reservation',
-            subjectId: 'r-1',
-            stage: 'received',
-            occurredAt: jst(DATE, '11:00'),
-            staffId: 's-1',
-          },
-          {
-            subjectType: 'reservation',
-            subjectId: 'r-2',
-            stage: 'received',
-            occurredAt: jst(DATE, '13:00'),
-            staffId: 's-1',
-          },
-        ],
-        laterVisits: [
-          // 90 日ちょうどは数える。
-          { customerId: 'c-1', date: '2026-11-25' },
-          // 91 日目は数えない。
-          { customerId: 'c-2', date: '2026-11-26' },
-        ],
-      }),
-    )
-    expect(valueAt(rows, 'revisits_90d', 'staff', 's-1')).toBe(1)
-    expect(valueAt(rows, 'revisits_90d', 'total')).toBe(1)
+  it('来店日・受付日の予約指標をJSTで分け、取消/no_showは有効来店予定から除く', () => {
+    const result = rollup({
+      reservations: [
+        reservation({ id: 'active', purposeIds: ['p-a'], source: 'phone' }),
+        reservation({
+          id: 'cancelled',
+          status: 'cancelled',
+          cancelReason: 'customer',
+          source: 'web',
+        }),
+        reservation({ id: 'no-show', status: 'no_show', source: 'counter' }),
+        reservation({
+          id: 'received-today',
+          startsAt: jst('2026-08-28', '00:01'),
+          createdAt: jst(DATE, '23:59'),
+          source: 'counter',
+          purposeIds: ['p-b'],
+        }),
+        reservation({
+          id: 'foreign-store',
+          storeId: OTHER_STORE,
+          source: 'walkin',
+          startsAt: jst(DATE, '11:00'),
+        }),
+      ],
+    })
+
+    expect(value(result.rows, 'reservations')).toBe(1)
+    expect(value(result.rows, 'scheduled_reservations')).toBe(3)
+    expect(value(result.rows, 'reservations_received')).toBe(2)
+    expect(value(result.rows, 'reservations', 'purpose', 'p-a')).toBe(1)
+    expect(value(result.rows, 'reservations_received', 'purpose', 'p-b')).toBe(1)
   })
 
-  it('guests の行を 1 つも作らない', () => {
-    const { rows } = rollupDay(
-      baseInput({
-        reservations: [reservation({ id: 'r-1' })],
-        walkIns: [{ id: 'w-1', reservationId: 'r-9', arrivedAt: jst(DATE, '14:20') }],
-        visitEvents: [
-          {
-            subjectType: 'walkin',
-            subjectId: 'w-1',
-            stage: 'received',
-            occurredAt: jst(DATE, '14:20'),
-            staffId: null,
-          },
-        ],
-      }),
+  it('完了来店を予約とwalkinで合算し、staff/hour/source/来店回数を排他的に出す', () => {
+    const result = rollup({
+      reservations: [
+        reservation({
+          id: 'reserved-done',
+          status: 'done',
+          source: 'web',
+          startsAt: jst(DATE, '10:30'),
+          customerId: 'customer-returning',
+          staffId: 'staff-a',
+          visitCountBefore: 0,
+        }),
+        reservation({
+          id: 'walkin-done',
+          status: 'done',
+          source: 'walkin',
+          startsAt: jst(DATE, '11:30'),
+          customerId: 'customer-second',
+          staffId: null,
+          visitCountBefore: 1,
+        }),
+        reservation({
+          id: 'not-done',
+          status: 'arrived',
+          source: 'phone',
+          startsAt: jst(DATE, '12:00'),
+          customerId: 'customer-not-done',
+          staffId: 'staff-b',
+          visitCountBefore: 5,
+        }),
+      ],
+    })
+
+    expect(value(result.rows, 'receptions')).toBe(2)
+    expect(value(result.rows, 'receptions', 'staff', 'staff-a')).toBe(1)
+    expect(value(result.rows, 'receptions', 'staff', 'unassigned')).toBe(1)
+    expect(result.rows.some((row) => row.metric === 'receptions' && row.dimension === 'hour')).toBe(
+      false,
     )
-    expect(rows.some((row) => String(row.metric) === 'guests')).toBe(false)
-    expect(JSON.stringify(rows)).not.toContain('名')
+    expect(value(result.rows, 'receptions', 'source', 'web')).toBe(1)
+    expect(value(result.rows, 'receptions', 'source', 'walkin')).toBe(1)
+    expect(
+      ['first', 'second', 'third_to_fifth', 'sixth_or_more'].map((key) =>
+        value(result.rows, 'receptions', 'visit_frequency', key),
+      ),
+    ).toEqual([1, 1, 0, 0])
   })
 
-  it('1 件も無い日でも closed の行だけは書く（欠測にしない）', () => {
-    const { rows } = rollupDay(baseInput())
-    expect(rows.some((row) => row.metric === 'closed')).toBe(true)
-    expect(rows.every((row) => row.date === DATE && row.organizationId === ORG)).toBe(true)
+  it('purpose、4入口、4来店回数を合計と混同せず固定語彙で出す', () => {
+    const result = rollup({
+      reservations: [
+        reservation({
+          id: 'one',
+          status: 'done',
+          source: 'phone',
+          purposeIds: ['p-a', 'p-b'],
+          customerId: 'customer-1',
+          visitCountBefore: 2,
+        }),
+        reservation({
+          id: 'two',
+          status: 'done',
+          source: 'counter',
+          customerId: 'customer-2',
+          visitCountBefore: 5,
+        }),
+      ],
+    })
+
+    expect(value(result.rows, 'reservations')).toBe(2)
+    expect(value(result.rows, 'reservations', 'purpose', 'p-a')).toBe(1)
+    expect(value(result.rows, 'reservations', 'purpose', 'p-b')).toBe(1)
+    expect(
+      ['phone', 'counter', 'web', 'walkin'].map((key) =>
+        value(result.rows, 'reservations', 'source', key),
+      ),
+    ).toEqual([1, 1, 0, 0])
+    expect(
+      ['first', 'second', 'third_to_fifth', 'sixth_or_more'].map((key) =>
+        value(result.rows, 'receptions', 'visit_frequency', key),
+      ),
+    ).toEqual([0, 0, 1, 1])
+    expect(result.rows.some((row) => row.metric === ('guests' as never))).toBe(false)
   })
 
-  it('reservations は total / staff / purpose / hour / source を書く', () => {
-    const { rows } = rollupDay(
-      baseInput({
-        reservations: [reservation({ id: 'r-1', source: 'web' })],
-        reservationAssignments: [{ reservationId: 'r-1', kind: 'staff', targetId: 's-1' }],
-        reservationPurposes: [{ reservationId: 'r-1', purposeId: 'p-1' }],
-      }),
-    )
-    expect(valueAt(rows, 'reservations', 'total')).toBe(1)
-    expect(valueAt(rows, 'reservations', 'staff', 's-1')).toBe(1)
-    expect(valueAt(rows, 'reservations', 'purpose', 'p-1')).toBe(1)
-    expect(valueAt(rows, 'reservations', 'hour', '11')).toBe(1)
-    expect(valueAt(rows, 'reservations', 'source', 'web')).toBe(1)
+  it('active staff の0件行と、日次へ残す日本語snapshot labelを作る', () => {
+    const result = rollup({
+      staff: [
+        { id: 'staff-a', label: '佐藤 美咲', isActive: true },
+        { id: 'staff-b', label: '鈴木 健', isActive: true },
+      ],
+      reservations: [
+        reservation({
+          id: 'done',
+          status: 'done',
+          source: 'web',
+          staffId: 'staff-a',
+          purposeIds: ['purpose-a'],
+          purposeLabels: { 'purpose-a': '視力測定' },
+          customerId: 'customer-a',
+          visitCountBefore: 0,
+        }),
+      ],
+    })
+    const find = (
+      metric: AnalyticsDailyRow['metric'],
+      dimension: AnalyticsDailyRow['dimension'],
+      key: string,
+    ) =>
+      result.rows.find(
+        (row) => row.metric === metric && row.dimension === dimension && row.dimensionKey === key,
+      )
+
+    expect(find('receptions', 'staff', 'staff-a')).toMatchObject({
+      value: 1,
+      dimensionLabel: '佐藤 美咲',
+    })
+    expect(find('receptions', 'staff', 'staff-b')).toMatchObject({
+      value: 0,
+      dimensionLabel: '鈴木 健',
+    })
+    expect(find('reservations', 'purpose', 'purpose-a')).toMatchObject({
+      dimensionLabel: '視力測定',
+    })
+    expect(find('reservations', 'source', 'web')).toMatchObject({ dimensionLabel: 'Web予約' })
+    expect(find('receptions', 'visit_frequency', 'first')).toMatchObject({
+      dimensionLabel: '初めて',
+    })
+  })
+
+  it('取消を5分類へ排他的にし、未知の取消はdroppedとして観測可能にする', () => {
+    const result = rollup({
+      reservations: [
+        reservation({
+          id: 'no-show-wins',
+          status: 'no_show',
+          source: 'web',
+          cancelReason: 'customer',
+        }),
+        reservation({ id: 'web-wins', status: 'cancelled', source: 'web', cancelReason: 'store' }),
+        reservation({ id: 'customer', status: 'cancelled', cancelReason: 'customer' }),
+        reservation({ id: 'store', status: 'cancelled', cancelReason: 'store' }),
+        reservation({ id: 'duplicate', status: 'cancelled', cancelReason: 'duplicate' }),
+        reservation({ id: 'unknown', status: 'cancelled', cancelReason: null }),
+      ],
+    })
+
+    expect(
+      ['customer', 'store', 'duplicate', 'no_show', 'web'].map((key) =>
+        value(result.rows, 'cancellations', 'cancellation_category', key),
+      ),
+    ).toEqual([1, 1, 1, 1, 1])
+    expect(result.dropped).toEqual({ cancellationReservationIds: ['unknown'] })
+  })
+
+  it('受付から最初のconsultingだけをexact histogramへ入れ、相談開始なしと他org/storeを混ぜない', () => {
+    const result = rollup({
+      visitEvents: [
+        event({ subjectId: 'a', occurredAt: jst(DATE, '10:00') }),
+        event({ subjectId: 'a', stage: 'consulting', occurredAt: jst(DATE, '10:02') }),
+        event({ subjectId: 'a', stage: 'consulting', occurredAt: jst(DATE, '10:07') }),
+        event({ subjectId: 'b', occurredAt: jst(DATE, '11:00') }),
+        event({ subjectId: 'foreign-store', storeId: OTHER_STORE, occurredAt: jst(DATE, '12:00') }),
+        event({
+          subjectId: 'foreign-org',
+          organizationId: OTHER_ORG,
+          occurredAt: jst(DATE, '13:00'),
+        }),
+      ],
+    })
+
+    expect(value(result.rows, 'wait_seconds_histogram', 'wait_seconds', 'hour:10:120')).toBe(1)
+    expect(result.rows.filter((row) => row.metric === 'wait_seconds_histogram')).toHaveLength(1)
+  })
+
+  it('後方1〜90日の完了来店だけを再来にし、担当が未定は率の分母・分子へ書かない', () => {
+    const result = rollup({
+      reservations: [
+        reservation({
+          id: 'returning-at-90',
+          status: 'done',
+          customerId: 'customer-a',
+          staffId: 'staff-a',
+          startsAt: jst(DATE, '10:00'),
+        }),
+        reservation({
+          id: 'prior-at-90',
+          status: 'done',
+          customerId: 'customer-a',
+          startsAt: jst('2026-05-29', '12:00'),
+        }),
+        reservation({
+          id: 'outside-91',
+          status: 'done',
+          customerId: 'customer-b',
+          staffId: null,
+          startsAt: jst(DATE, '11:00'),
+        }),
+        reservation({
+          id: 'prior-at-91',
+          status: 'done',
+          customerId: 'customer-b',
+          startsAt: jst('2026-05-28', '12:00'),
+        }),
+        reservation({
+          id: 'anonymous',
+          status: 'done',
+          customerId: null,
+          startsAt: jst(DATE, '12:00'),
+        }),
+      ],
+    })
+
+    expect(value(result.rows, 'revisit_eligible')).toBeUndefined()
+    expect(value(result.rows, 'revisit_returning_90d')).toBeUndefined()
+    expect(value(result.rows, 'revisit_eligible', 'staff', 'staff-a')).toBe(1)
+    expect(value(result.rows, 'revisit_returning_90d', 'staff', 'staff-a')).toBe(1)
+    expect(value(result.rows, 'revisit_eligible', 'staff', 'unassigned')).toBeUndefined()
+    expect(value(result.rows, 'revisit_returning_90d', 'staff', 'unassigned')).toBeUndefined()
+  })
+
+  it('顧客未特定でも担当済みの完了来店は再来率の分母へ入れ、分子は0にする', () => {
+    const result = rollup({
+      reservations: [
+        reservation({
+          id: 'anonymous-assigned',
+          status: 'done',
+          customerId: null,
+          staffId: 'staff-a',
+        }),
+      ],
+    })
+
+    expect(value(result.rows, 'revisit_eligible', 'staff', 'staff-a')).toBe(1)
+    expect(value(result.rows, 'revisit_returning_90d', 'staff', 'staff-a')).toBe(0)
   })
 })

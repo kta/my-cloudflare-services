@@ -152,7 +152,7 @@ function slotAt(slots: readonly SlotResult[], time: string): SlotResult {
 
 /* --- 期間の絞り込み ------------------------------------------------------- */
 
-const ORG = 'org-eyex'
+const ORG = 'org-eye'
 const GINZA = 'store-ginza'
 
 function query(from: string, to: string): ReservationSearchInput {

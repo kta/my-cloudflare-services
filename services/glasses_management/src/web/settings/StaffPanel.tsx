@@ -4,6 +4,7 @@ import { cn, focusRing } from '@app/ui'
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import { addJstDays, warnShiftOutsideHours, weekdayOf } from '../../worker/domain/store-settings'
 import { client } from '../client'
+import { LoadFailed } from '../shell/LoadFailed'
 import {
   type SaveOutcome,
   type SettingsPanelProps,
@@ -13,7 +14,7 @@ import {
 } from './sections'
 
 /*
- * スタッフと技能（承認済みモック docs/frontend/mockups/eyex/images/SETTINGS-STAFF.png）。
+ * スタッフと技能（承認済みモック docs/frontend/mockups/eye/images/SETTINGS-STAFF.png）。
  *
  * 実測: .staff = 250px + 1fr / gap 30px。一覧の行は名前 16px 600 ＋ 技能 13px
  * （margin-top 2px）、選択中は左端に 4px の緑（inset 4px 0 0）＋ padding-left 14px。
@@ -31,7 +32,6 @@ import {
  */
 
 const SECTION_NAME = 'スタッフと技能'
-const LOAD_FAILED = `${SECTION_NAME}を読み込めませんでした。画面を開き直してください。`
 const ADD_FAILED = 'スタッフを足せませんでした。入力はそのまま残っています。'
 const ADD_FORBIDDEN = 'スタッフを足せるのは 店長 だけです。入力はそのまま残っています。'
 
@@ -73,6 +73,8 @@ export function StaffPanel({ storeId, now, today, onDraftChange }: SettingsPanel
   const day = today ?? toJstDay(now ?? new Date().toISOString())
   const [loaded, setLoaded] = useState<Loaded | null>(null)
   const [failed, setFailed] = useState(false)
+  // 読み直しの合図。読み込みの useEffect の依存に入れる。
+  const [reloadCount, setReloadCount] = useState(0)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   // 担当ごとの下書き。描画のたびに引き直すので、一覧だけ出て右側がまだ無い瞬間ができない。
   const [drafts, setDrafts] = useState<Record<string, Draft>>({})
@@ -123,7 +125,7 @@ export function StaffPanel({ storeId, now, today, onDraftChange }: SettingsPanel
     return () => {
       alive = false
     }
-  }, [load])
+  }, [load, reloadCount])
 
   const selected = loaded?.staff.find((row) => row.id === selectedId) ?? loaded?.staff[0] ?? null
   const base = useMemo(
@@ -230,9 +232,13 @@ export function StaffPanel({ storeId, now, today, onDraftChange }: SettingsPanel
 
   if (failed)
     return (
-      <p role="alert" className="text-body text-ink-muted">
-        {LOAD_FAILED}
-      </p>
+      <LoadFailed
+        what="スタッフと技能"
+        onRetry={() => {
+          setFailed(false)
+          setReloadCount((n) => n + 1)
+        }}
+      />
     )
   if (!loaded)
     return (

@@ -6,14 +6,14 @@ import { MyReservations } from './MyReservations'
 
 /*
  * 個人端末のトップの「本日わたしが担当するご予約」
- * （承認済みモック docs/frontend/mockups/eyex/images/HOME-PERSONAL.png の右の一覧）。
+ * （承認済みモック docs/frontend/mockups/eye/images/HOME-PERSONAL.png の右の一覧）。
  *
  * 「わたし」は JWT の `sub` と `staff.adminUserId` を突き合わせて引き当てる。
  * **誰にも当たらない端末（共有端末）にはこの面を出さない**。
  */
 
 const SATO = 'b0000000-0000-4000-8000-000000000001'
-const ME = 'dev:eyex'
+const ME = 'dev:eye'
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -24,7 +24,7 @@ function json(body: unknown, status = 200): Response {
 
 /** dev グラントが載せる `sub` だけを持つ、署名を確かめない見せかけの JWT。 */
 function devToken(sub: string): string {
-  return `header.${btoa(JSON.stringify({ sub, org: 'eyex' }))}.signature`
+  return `header.${btoa(JSON.stringify({ sub, org: 'eye' }))}.signature`
 }
 
 function staffRow(id: string, displayName: string, adminUserId: string | null) {
@@ -138,6 +138,33 @@ describe('本日わたしが担当するご予約', () => {
     await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2))
     expect(screen.queryByRole('region')).not.toBeInTheDocument()
     expect(container).toBeEmptyDOMElement()
+  })
+
+  it('共有端末のロックsnapshotにはmaskCustomerIdentityで変換した値だけを渡す', async () => {
+    const lanes = staffView().lanes.map((lane) => ({
+      ...lane,
+      entries: lane.entries.map((entry) => ({ ...entry, customerName: '田中 花子' })),
+    }))
+    stub(null, lanes)
+    const onSharedSnapshot = vi.fn()
+    render(
+      <MyReservations
+        storeId={STORE_ID}
+        showShared
+        onOpen={vi.fn()}
+        onOpenLedger={vi.fn()}
+        onSharedSnapshot={onSharedSnapshot}
+      />,
+    )
+
+    await screen.findByRole('region', { name: '本日のご予約' })
+    expect(onSharedSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customerName: '●●●● 様',
+        customerPhone: '090-●●●●-●●●●',
+      }),
+    )
+    expect(JSON.stringify(onSharedSnapshot.mock.calls)).not.toContain('田中 花子')
   })
 
   it('名簿も台帳も読めなかった端末には何も出さない（トップを壊さない）', async () => {

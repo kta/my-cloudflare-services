@@ -1,11 +1,11 @@
-# EYEX予約（glasses_management）0ベース再構築 — マスタープラン
+# EYE予約（glasses_management）0ベース再構築 — マスタープラン
 
 - 起票: 2026-08-28
 - 対象: `services/glasses_management`（`@app/glasses_management` / Worker `glasses-management`）
 - 状態: P0 完了 / P1 以降 未着手
 
 旧実装は**削除済み**。`services/example_service` の雛形から作り直す。
-見た目の正本は `docs/frontend/mockups/eyex/`（68画面）、意味の正本は `packages/ui/src/theme.css`。
+見た目の正本は `docs/frontend/mockups/eye/`（68画面）、意味の正本は `packages/ui/src/theme.css`。
 
 ## 0. この文書の使い方
 
@@ -55,7 +55,7 @@ P7 と P8 と P9 と P10 は互いに独立なので、P6 以降は並行でき�
 8. **E2E** — `e2e/<領域>.spec.ts`。spec の AC 1 本につき Playwright test 1 本、直前の行に
    `// @e2e-covers AC-<TAG>-NN`。**書けたら spec の `- ステータス:` を `Draft` → `Approved` に上げる。**
 9. **モックとの突き合わせ** — `e2e/mock-compare.spec.ts` で、実装画面と
-   `docs/frontend/mockups/eyex/images/<ID>.png` を並べて撮り、差分の割合を記録する。
+   `docs/frontend/mockups/eye/images/<ID>.png` を並べて撮り、差分の割合を記録する。
 10. **緑にする** — `pnpm --filter @app/glasses_management test:all` → `e2e` → `pnpm check`。
 
 ## 3. 完了の定義（毎フェーズ）
@@ -87,7 +87,7 @@ P7 と P8 と P9 と P10 は互いに独立なので、P6 以降は並行でき�
 
 | 項目 | 値 |
 |---|---|
-| 組織 | EYEX（`eyex`） |
+| 組織 | EYE（`eye`） |
 | 店舗 | 銀座店（`ginza` / 10:00–19:00 / 定休 火）・丸の内店（`marunouchi`）・新宿店（`shinjuku`） |
 | 基準日時 | 2026年8月27日（木）11:08 JST |
 | 担当 | 佐藤 美咲（視力測定・加工）／高橋 健（フィッティング）／中村 彩（販売・受付）／小林 学（視力測定）／渡辺 由紀（販売）／高橋 慎輔（店長） |
@@ -99,7 +99,7 @@ P7 と P8 と P9 と P10 は互いに独立なので、P6 以降は並行でき�
 
 - **モックに無い機能を発明しない。** 足りないと思ったら spec に `[要確認: ...]` を残して人に聞く。
 - **空いた場所を埋めるために要素を足さない。** 下や右が空いているのは正しい状態
-  （`docs/frontend/mockups/eyex/README.md` の引き算の表）。
+  （`docs/frontend/mockups/eye/README.md` の引き算の表）。
 - **1 画面の主役は 1 つ。** 白い箱は 3 枚まで、説明文は 2 つまで、一覧の行は 8 つまで、状態の札は 3 つまで。
 - モックは 1 状態しか描いていない。**読み込み中 / 空 / エラー / 375px / 200%文字拡大 / VoiceOver は
   DESIGN_RULE の品質フロアで補う**（モックに無いから作らない、は誤り）。

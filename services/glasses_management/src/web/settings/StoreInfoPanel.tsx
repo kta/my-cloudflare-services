@@ -2,10 +2,11 @@ import type { StoreDetail } from '@app/contracts'
 import { cn, focusRing } from '@app/ui'
 import { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import { client } from '../client'
+import { LoadFailed } from '../shell/LoadFailed'
 import { formatJstDate, ROLE_LABELS, type SaveOutcome, type SettingsPanelProps } from './sections'
 
 /*
- * 店舗の情報（承認済みモック docs/frontend/mockups/eyex/images/SETTINGS-STORE.png）。
+ * 店舗の情報（承認済みモック docs/frontend/mockups/eye/images/SETTINGS-STORE.png）。
  *
  * 実測: .cols = 1fr + 344px / gap 22px。群の見出しは margin 32px 2px 12px。
  * グループ表の行は min-height 56px。「行き方のご案内」は白い箱ではなく罫だけの行
@@ -75,6 +76,8 @@ export function StoreInfoPanel({ storeId, staff, onDraftChange }: SettingsPanelP
   const [store, setStore] = useState<StoreDetail | null>(null)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [failed, setFailed] = useState(false)
+  // 読み直しの合図。読み込みの useEffect の依存に入れる。
+  const [reloadCount, setReloadCount] = useState(0)
   const [editingIntro, setEditingIntro] = useState(false)
 
   useEffect(() => {
@@ -96,7 +99,7 @@ export function StoreInfoPanel({ storeId, staff, onDraftChange }: SettingsPanelP
     return () => {
       alive = false
     }
-  }, [storeId])
+  }, [storeId, reloadCount])
 
   const changes = useMemo(() => {
     if (!store || !draft) return []
@@ -152,9 +155,13 @@ export function StoreInfoPanel({ storeId, staff, onDraftChange }: SettingsPanelP
 
   if (failed)
     return (
-      <p role="alert" className="text-body text-ink-muted">
-        店舗の情報を読み込めませんでした。画面を開き直してください。
-      </p>
+      <LoadFailed
+        what="店舗の情報"
+        onRetry={() => {
+          setFailed(false)
+          setReloadCount((n) => n + 1)
+        }}
+      />
     )
   if (!store || !draft)
     return (
@@ -173,7 +180,7 @@ export function StoreInfoPanel({ storeId, staff, onDraftChange }: SettingsPanelP
       <div className="flex flex-wrap gap-5.5">
         <div className="min-w-0 flex-1">
           <fieldset className="min-w-0">
-            <Legend className="mt-0">お店の基本</Legend>
+            <Legend>お店の基本</Legend>
             <div className="overflow-hidden rounded-card border border-line bg-surface">
               {BASIC_FIELDS.map((field) => (
                 <div
@@ -200,7 +207,7 @@ export function StoreInfoPanel({ storeId, staff, onDraftChange }: SettingsPanelP
             </div>
           </fieldset>
 
-          <fieldset className="min-w-0">
+          <fieldset className="mt-8 min-w-0">
             <Legend>行き方のご案内</Legend>
             {ACCESS_FIELDS.map((field, index) => (
               <div
@@ -295,9 +302,16 @@ function Row({ field, id }: { field: Field; id: string }) {
 }
 
 /** 群の見出し（モックの `.groupname` = margin 32px 2px 12px / 13px 600）。 */
+/*
+ * グループの見出し。**上の余白は `<legend>` に置かない。**
+ * `<legend>` は fieldset の枠の中に据わる要素で、`margin-top` が前の fieldset を
+ * 押しのけない。そのため「行き方のご案内」の見出しは、上のカードの下辺と
+ * **余白ゼロで接していた**（実測 428.5px で一致。UX 監査 J-04）。
+ * 上の余白はグループの器（fieldset）のほうに置く。
+ */
 function Legend({ className, children }: { className?: string; children: string }) {
   return (
-    <legend className={cn('mt-8 mb-3 px-0.5 text-grid font-semibold text-ink-muted', className)}>
+    <legend className={cn('mb-3 px-0.5 text-grid font-semibold text-ink-muted', className)}>
       {children}
     </legend>
   )

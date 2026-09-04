@@ -3,7 +3,7 @@ import { ReceptionSessionDraft } from '@app/contracts'
 /*
  * 受付の 5 工程の目次と、器（BookingScreen）と工程（*Step）のあいだの約束。
  *
- * 承認済みモック docs/frontend/mockups/eyex/images/BOOK-01-DATETIME.png ほか 12 面の
+ * 承認済みモック docs/frontend/mockups/eye/images/BOOK-01-DATETIME.png ほか 12 面の
  * 下端の帯（`.stepbar`）が「1 日時 › 2 ご来店の目的 › 3 担当と場所 › 4 お客様 › 5 ご確認」を
  * 常に同じ順で持つ。番号は帯が付けるので、ここには名前だけを置く。
  *

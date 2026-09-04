@@ -463,7 +463,7 @@
     「対応中」の縦線と「次にやること」の地だけ、赤（`--color-danger` / `--color-danger-soft`）は
     「お待たせ中」だけに使う。状態は **4 語**（済みました／対応中／次にやること／お待たせ中）に限る。
   - シグネチャ: **待たせている行が赤地と文字の両方で真っ先に目に入り、空の欄は空のまま置くこと。**
-- **見るモック**: `docs/frontend/mockups/eyex/images/RECEPTION-JOURNEY.png`（1194×834）— **Read で実際に見る**
+- **見るモック**: `docs/frontend/mockups/eye/images/RECEPTION-JOURNEY.png`（1194×834）— **Read で実際に見る**
   - サイドバーは **rail 76px が既定**。上のバー 64px、`.toolbar` 56px。
   - 盤面の外枠 `.board` は padding **28px 36px**。
   - 格子は `grid-template-columns: 220px repeat(6, 1fr)` / `grid-template-rows: 40px repeat(4, 1fr)`、
@@ -519,7 +519,7 @@
     茶（`--color-walkin` / `--color-walkin-soft`）は「要確認」の札だけに使う（モックの
     `.tag.walkin` に合わせる。`--color-amber` を使わない）。主操作は 1 つ（緑の大ボタン）。
   - シグネチャ: **左に確かめること、右に前回のご来店。確かめ終えなくても受け付けられること。**
-- **見るモック**: `docs/frontend/mockups/eyex/images/RECEPTION-CHECKIN.png`（1194×834）— **Read で実際に見る**
+- **見るモック**: `docs/frontend/mockups/eye/images/RECEPTION-CHECKIN.png`（1194×834）— **Read で実際に見る**
   - サイドバーは **ひらく 216px が既定**。`.toolbar` 56px の中に戻るボタン（min-height **40px** / padding 0 14px）と `h2` 18px。
   - 本文は `1fr 320px` の 2 段。左 padding **28px 32px** / 段の間 24px、右は左罫 1px `--color-line`・地は白・padding **28px 24px**。
   - 見出しの 1 行「11:00 のご予約　5分早くお着きです」は 13px `--color-pine-deep`、下に 10px。
@@ -571,7 +571,7 @@
   - トークン計画: 台帳を隠しきらない右 **400px** のパネル 1 枚。茶（`--color-walkin` / `--color-walkin-soft`）は
     待ち状況の帯と整理番号の札だけ、緑は選んだご用件と主操作だけに使う。
   - シグネチャ: **お客様を後回しにできること**（「あとで登録する」のまま主操作が押せる）。
-- **見るモック**: `docs/frontend/mockups/eyex/images/LEDGER-WALKIN.png`（1194×834）— **Read で実際に見る**
+- **見るモック**: `docs/frontend/mockups/eye/images/LEDGER-WALKIN.png`（1194×834）— **Read で実際に見る**
   - パネルは `position: absolute` で `top/right/bottom: 0`、幅 **400px**、左罫 1px `--color-line-strong`、地は白。
   - 見出し帯 padding **12px 22px**（`h2` 18px ＋ 右に「やめる」min-height 44px / padding 0 10px）、下罫 1px。
   - 本文 padding **22px 22px 0**、節の間 24px。足元 padding **20px 22px**。
@@ -623,7 +623,7 @@
   - トークン計画: 左で選び右で読む 2 段。緑は選択中の行の地（`--color-pine-soft`）と「成立」の札だけ。
     時刻は等幅（`--font-mono`）で桁を揃える。
   - シグネチャ: **左 288px の細い一覧と、右の「そのあとの変更」の時系列。**
-- **見るモック**: `docs/frontend/mockups/eyex/images/HISTORY-LIST.png`（1194×834）— **Read で実際に見る**
+- **見るモック**: `docs/frontend/mockups/eye/images/HISTORY-LIST.png`（1194×834）— **Read で実際に見る**
   - サイドバーは **ひらく 216px が既定**。`.toolbar` 56px に絞り込み 3 つ（min-height **40px** / padding 0 12px /
     角 8px / 13px・600、値は 400 の `--color-ink-muted`。選択中は枠 2px `--color-pine` ＋ 地 `--color-pine-soft`）と、
     右に「お客様名で探す」（min-height 40px / padding 0 14px）。
@@ -674,7 +674,7 @@
   - トークン計画: 中央 **640px** の 1 枚。件数だけを緑（`--color-pine-deep`）の等幅で強め、
     それ以外に色を足さない。主操作は 1 つ（全解除）。
   - シグネチャ: **候補の右に件数が先に出ていて、押す前に何件見つかるか分かること。**
-- **見るモック**: `docs/frontend/mockups/eyex/images/HISTORY-EMPTY.png`（1194×834）— **Read で実際に見る**
+- **見るモック**: `docs/frontend/mockups/eye/images/HISTORY-EMPTY.png`（1194×834）— **Read で実際に見る**
   - `.toolbar` は HISTORY-LIST と同じで、絞り込み 3 つがすべて選択中の見た目、右に small muted「該当 0件」。
   - 本文は中央寄せ（`place-items: center` / padding **36px**）、幅 **640px**。
   - 見出し **24px** 中央、副文 15px `--color-ink-muted` 中央（上に 12px）。

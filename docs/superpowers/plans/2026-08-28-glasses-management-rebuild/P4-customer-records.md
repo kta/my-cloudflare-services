@@ -383,7 +383,7 @@
   - トークン計画: 面は白（一覧）と薄い緑灰（見出し行）の 2 段。選択は `--color-pine-soft` の地と左 4px の緑帯だけで示し、
     回数と日付の文字を必ず添える。角は 8/12 の 2 段。書体は 1 つで、ウェイトだけで段を作る。
   - シグネチャ: **選んだ 1 名の要約が、一覧を閉じずに右に出続けること。**
-- **見るモック**: `docs/frontend/mockups/eyex/images/CUSTOMER-LIST.png`（端末 1194×834 / 実装の描画領域 1194×810）
+- **見るモック**: `docs/frontend/mockups/eye/images/CUSTOMER-LIST.png`（端末 1194×834 / 実装の描画領域 1194×810）
   - 本文は 2 ペイン `1fr 360px`。サイドバーは**たたんだ細い柱（76px）が既定**。
   - ツールバー: segmented（ボタン min-height 38px / padding 0 16px / 14px 600 / 選択は白地に緑字）＋
     「絞り込み」（min-height 40px / padding 0 14px）＋ 札「ご来店 2〜4回」（min-height 22px / padding 1px 8px / 12px 600 / 角 8px）＋
@@ -440,7 +440,7 @@
   - トークン計画: 白い箱は 3 枚まで（度数の表 1 枚・注意ごと 1 枚・次のご予約 1 枚）。
     注意ごとは `--color-danger` 系、次のご予約は `--color-pine` 系。基本情報は箱で囲まず間隔だけで束ねる。
   - シグネチャ: **左の「度数の移り変わり」1 枚が主役で、いま有効な 1 行に「いま使っています」の札が付くこと。**
-- **見るモック**: `docs/frontend/mockups/eyex/images/CUSTOMER-DETAIL.png`
+- **見るモック**: `docs/frontend/mockups/eye/images/CUSTOMER-DETAIL.png`
   - 本文は padding 32px 40px・行は `auto minmax(0,1fr)`・gap 28px。中は 2 列 `1fr 300px`・gap 28px。
     サイドバーは**ひらいた 216px が既定**。
   - 見出し: お名前 26px/700、ふりがな＋お客様番号 13px。右へ お電話 / ご来店 / 最後のご来店 / よくご担当した者 を
@@ -481,7 +481,7 @@
   - トークン計画: 入力欄は 1 列。重複の警告は `--color-danger-soft` の箱 1 枚だけで、入力欄のすぐ下に置く。
     テンキーは右の柱（白地・左に 1px の罫）に固定する。
   - シグネチャ: **警告が入力欄と同じ視線の上にあり、進む前に必ず 2 択を通ること。**
-- **見るモック**: `docs/frontend/mockups/eyex/images/CUSTOMER-NEW.png`
+- **見るモック**: `docs/frontend/mockups/eye/images/CUSTOMER-NEW.png`
   - 本文は 2 列 `1fr 356px`。左は padding 32px 36px・gap 26px、右の柱は padding 32px 22px・見出し 15px（下に margin 20px）。
   - お電話番号の欄は幅 320px。入力中の値は 21px 等幅・字間 0.04em、キャレットは 2px×24px の緑。
   - 重複の箱: padding 20px 22px・幅 550px まで・`role="status"`。見出し 18px、補足はその下 1 行。
@@ -529,7 +529,7 @@
   - トークン計画: 白い吹き出し 1 枚。強い一致は `--color-pine-soft` の地＋2px の緑枠、
     確かめが必要なほうは白地＋1px の罫。札の文字（「よく一致しています」「確かめが必要です」）を必ず添える。
   - シグネチャ: **候補が開いている間も、電話番号の欄と右下の「録音中」が生きていること（モーダルにしない）。**
-- **見るモック**: `docs/frontend/mockups/eyex/images/BOOK-04b-CUSTOMER-MATCH.png`
+- **見るモック**: `docs/frontend/mockups/eye/images/BOOK-04b-CUSTOMER-MATCH.png`
   - 吹き出しは幅 420px・角 16px・1px の `--color-line-strong`・影 `0 12px 32px rgba(20,40,33,.22)`。
     番号欄の右（上 68px / 左 436px）から出て、左辺 84px の位置に 18px の三角を付ける。
   - 見出し部 padding 18px 20px（h3 20px ＋ 補足 1 行）、本体 padding 18px 20px、足 padding 14px 20px。
@@ -576,7 +576,7 @@
   - トークン計画: 見比べ表は罫だけで組む（箱にしない）。残す側だけ 2px の緑枠と `--color-pine-soft` の地、
     残さない側は取り消し線と `--color-ink-faint`。右は結果（緑の箱）と警告（赤の箱）の 2 枚だけ。
   - シグネチャ: **「まとめると元に戻せません」と実行ボタンが同じ視線の上にあること。**
-- **見るモック**: `docs/frontend/mockups/eyex/images/CUSTOMER-MERGE.png`
+- **見るモック**: `docs/frontend/mockups/eye/images/CUSTOMER-MERGE.png`
   - 本文は padding 28px 32px・2 列 `1fr 300px`・gap 28px。サイドバーは**ひらいた 216px が既定**。
   - 見比べ表は 3 列 `108px 1fr 1fr`。見出し行は下に padding 14px ＋ 1px の `--color-line-strong`
     （A / B の見出し 16px、その下に「2024年3月15日 ご登録／銀座店」13px）。
@@ -619,7 +619,7 @@
   - トークン計画: 左はサムネの柱（`--color-surface-2` の地）、右は白い用紙 1 枚。
     読み取った文字の欄は用紙の**下**に置き、2px の緑枠で「ここは直せる」と示す。
   - シグネチャ: **筆跡がいちばん大きく、読み取った文字がその下に従うこと（逆にしない）。**
-- **見るモック**: `docs/frontend/mockups/eyex/images/CUSTOMER-HANDWRITE.png`
+- **見るモック**: `docs/frontend/mockups/eye/images/CUSTOMER-HANDWRITE.png`
   - 本文は 2 列 `260px 1fr`。左は padding 28px 20px。サムネは 1px の `--color-line-strong`・角 8px・
     SVG の高さ 118px、下の帯は `--color-surface-2`・padding 10px 12px（日付 14px/600 ＋ 店舗と記入者 13px）。
     サムネ間は margin-top 18px。選択中は **3px の緑枠**＋帯が薄い緑。
@@ -719,8 +719,8 @@
 - **先に書くテスト**: なし（`toHaveScreenshot` そのものが検証。基準は `reference/` の画像）。
 - **触るファイル**: `services/glasses_management/e2e/mock-compare.spec.ts`（追記）
 - **やること**
-  - 基準画像は `docs/frontend/mockups/eyex/reference/` 側（端末のステータスバーを外した派生物）。
-    無ければ `node docs/frontend/mockups/eyex/reference.mjs` で作り直す。
+  - 基準画像は `docs/frontend/mockups/eye/reference/` 側（端末のステータスバーを外した派生物）。
+    無ければ `node docs/frontend/mockups/eye/reference.mjs` で作り直す。
   - `mock` project（1194×810 / `deviceScaleFactor: 2`）で 6 枚撮る。
     `toHaveScreenshot('<画面ID>.png', { scale: 'device' })` に `scale: 'device'` を必ず付ける。
 

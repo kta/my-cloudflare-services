@@ -164,7 +164,7 @@ seed として投入し、台帳がその 12 件を描くところまでを緑�
 - [ ] T-017: 台帳を隠さず開く詳細（ポップオーバー）を実装する。押した帯の左端に矢印が付くこと、台帳の空いているところを押す・もう一度帯を押す・Esc のいずれでも閉じ、閉じたらフォーカスが元の帯へ戻り、閉じるためのその 1 回が新規予約にならないことまで含める。
 - [ ] T-018: 通信断の帯を実装し、書き込みの操作を止める。
 - [ ] T-019: `e2e/ledger.spec.ts` に `// @e2e-covers` を付けて AC と 1 対 1 で対応させる。
-- [ ] T-020: モックの PNG（`docs/frontend/mockups/eyex/images/LEDGER-*.png`）と実装画面を突き合わせ、差分を `e2e/mock-compare.spec.ts` に記録する。
+- [ ] T-020: モックの PNG（`docs/frontend/mockups/eye/images/LEDGER-*.png`）と実装画面を突き合わせ、差分を `e2e/mock-compare.spec.ts` に記録する。
 - [ ] T-021: `pnpm check` を緑にし、ステータスを Approved に上げてよいか人に確認する。
 - [ ] T-022: 決定ブリーフ §11 の世界観データを seed として書く（`services/glasses_management/seed/`）。台帳の 12 件・担当が未定の 1 件・Web 由来の 1 件を含める。モック同士で食い違う値は LEDGER-STAFF を予約の正本として寄せる（佐藤 美咲の本日の担当 2 件、山口 真央 様は 8/27 10:30・中村 彩、相川 みどり 様は 13:00 の 20 分、ウォークイン 004 のご用件は「フレームの相談」）。
 - [ ] T-023: `test/slot-locks.integration.test.ts` を書く。実 D1（vitest-pool-workers）に対して、上限つきの条件付き INSERT が上限ちょうどまで発火し、上限を越える 1 本目で `meta.changes === 0` になること、`target_key='unassigned'` のレーンが `store_slot_rules.max_parallel`（3）まで取れること、`equipment.capacity = 2` の設備が同じ枠で 2 件まで取れること、`(organization_id, store_id, kind, target_key, slot_start)` に一意制約が張られていないことを確かめる。この表へ書く経路そのものは `006-booking-flow` だが、上限の数え方は空き枠エンジンと同じなのでここで固定する。

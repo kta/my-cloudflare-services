@@ -1,55 +1,65 @@
-/**
- * 端末の業務（`terminal_sessions`）と自動ロックの純関数。
- * **時刻は必ず引数で受ける**（`Date.now()` も引数なしの `new Date()` も呼ばない）。
- *
- * 自動ロックは**経過を数えるタイマーに頼らない** — 裏タブでは時間の進みが絞られるので、
- * 「最後にさわった時刻」と「いまの時刻」の差だけで決める（`07-nfr.md` §10.3）。
- */
-import type { TerminalKind } from '@app/contracts'
+/** 端末の自動ロック・セッション寿命。時刻はすべて呼出元から注入する。 */
 
-/** つながっていると見なす最終通信の古さ（秒）。列に状態を持たない。 */
-const ONLINE_THRESHOLD_SECONDS = 300
+export type TerminalKind = 'shared' | 'personal'
 
-/** 業務の期限。開始（またはさわり直した時刻）+ `autoLockSeconds`。 */
+/** 業務開始時刻から端末ごとの自動ロック秒数後をセッション期限にする。 */
 export function expiresAtFrom(startedAt: Date, autoLockSeconds: number): string {
   return new Date(startedAt.getTime() + autoLockSeconds * 1000).toISOString()
 }
 
-/**
- * まだ生きている業務か。**期限ちょうどはまだ生きていて**、+1 秒で切れる
- * （伏せるのも共有モードへ戻るのも +1 秒から）。失効済みは期限内でも生きていない。
- */
+/** 共有業務は自動ロックで終えない。日をまたぐ置き忘れだけ24時間で失効させる。 */
+export function sharedExpiresAtFrom(startedAt: Date): string {
+  return new Date(startedAt.getTime() + 24 * 60 * 60 * 1000).toISOString()
+}
+
+/** revoked でなく、期限より厳密に後の時刻だけを有効なセッションとする。 */
 export function isSessionLive(
   session: { expiresAt: string; revokedAt: string | null },
   now: Date,
 ): boolean {
-  return session.revokedAt === null && Date.parse(session.expiresAt) >= now.getTime()
-}
-
-/** 自動ロックの材料。伏せるのは画面だけで、セッションごと終わらせない。 */
-export type MaskInput = {
-  kind: TerminalKind
-  autoLockSeconds: number
-  lastTouchedAt: Date
-  recordingActive: boolean
+  return session.revokedAt === null && Date.parse(session.expiresAt) > now.getTime()
 }
 
 /**
- * お客様のお名前とお電話番号を伏せるか。
- * 個人の端末は伏せない。録音中の受付があるあいだも伏せない（`07-nfr.md` §6.4）。
- * **`autoLockSeconds` ちょうどでは伏せず、+1 秒で伏せる。**
+ * 個人モードの権限は expires_at で終わるが、同じ資格情報は開始24時間まで共有主体として使う。
+ * 明示終了・takeover は期限に関係なく即時失効する。
  */
-export function shouldMask(input: MaskInput, now: Date): boolean {
+export function sessionAuthorizationAt(
+  session: {
+    mode: 'shared' | 'personal'
+    startedAt: string
+    expiresAt: string
+    revokedAt: string | null
+  },
+  now: Date,
+): 'personal' | 'shared' | null {
+  if (session.revokedAt !== null) return null
+  const nowMs = now.getTime()
+  if (session.mode === 'shared') {
+    return Date.parse(session.expiresAt) > nowMs ? 'shared' : null
+  }
+  if (Date.parse(session.expiresAt) > nowMs) return 'personal'
+  return Date.parse(session.startedAt) + 24 * 60 * 60 * 1000 > nowMs ? 'shared' : null
+}
+
+/**
+ * 共有端末は最後の操作から設定秒数を厳密に超えると伏せる。
+ * 個人端末と録音中の受付は伏せない。
+ */
+export function shouldMask(
+  input: {
+    kind: TerminalKind
+    autoLockSeconds: number
+    lastTouchedAt: Date
+    recordingActive: boolean
+  },
+  now: Date,
+): boolean {
   if (input.kind === 'personal' || input.recordingActive) return false
   return now.getTime() - input.lastTouchedAt.getTime() > input.autoLockSeconds * 1000
 }
 
-/** つながっているか。一度もつながっていない端末（`null`）はつながっていない。 */
-export function isOnline(
-  lastSeenAt: string | null,
-  now: Date,
-  thresholdSeconds = ONLINE_THRESHOLD_SECONDS,
-): boolean {
-  if (lastSeenAt === null) return false
-  return now.getTime() - Date.parse(lastSeenAt) <= thresholdSeconds * 1000
+/** 最終通信から閾値秒数ちょうどまではオンライン、超えたらオフライン。 */
+export function isOnline(lastSeenAt: string | null, now: Date, thresholdSeconds = 300): boolean {
+  return lastSeenAt !== null && now.getTime() - Date.parse(lastSeenAt) <= thresholdSeconds * 1000
 }

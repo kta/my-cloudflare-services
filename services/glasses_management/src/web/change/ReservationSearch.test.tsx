@@ -5,10 +5,10 @@ import { describe, expect, it, vi } from 'vitest'
 import { ReservationSearch, type SearchConditions } from './ReservationSearch'
 
 /*
- * 予約を探す面（承認済みモック docs/frontend/mockups/eyex/images/CHANGE-SEARCH.png ／
+ * 予約を探す面（承認済みモック docs/frontend/mockups/eye/images/CHANGE-SEARCH.png ／
  * EX-EMPTY-SEARCH.png）。
  *
- * 実測（screens/CHANGE-SEARCH.html ／ EX-EMPTY-SEARCH.html と assets/eyex.css）:
+ * 実測（screens/CHANGE-SEARCH.html ／ EX-EMPTY-SEARCH.html と assets/eye.css）:
  *   2 段組みは 340px 1fr（0 件の面は 300px 1fr で、左が白地＋右に 1px の罫）。
  *   左ペイン padding 32px 24px・見出し 17px（0 件は 16px）・欄の間 16px（0 件は 14px）。
  *   絞り込みの札 min-height 44px・padding 0 14px・ピル・14px/600（選択中は緑地・白文字）。

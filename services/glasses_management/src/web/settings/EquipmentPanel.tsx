@@ -7,15 +7,16 @@ import {
   StoreDetail,
 } from '@app/contracts'
 import { auth } from '@app/shared'
-import { Button, focusRing, Notice, Select, TextInput } from '@app/ui'
+import { Button, focusRing, Select, TextInput } from '@app/ui'
 import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { client } from '../client'
+import { LoadFailed } from '../shell/LoadFailed'
 import { addJstDays, formatJstRange, ImpactCard, jstInstant, jstTimeOf } from './ImpactCard'
 import type { PanelDraft, SaveOutcome, SettingsPanelProps } from './sections'
 import { toJstDay } from './sections'
 
 /*
- * 設定 — 設備と点検（承認済みモック docs/frontend/mockups/eyex/images/SETTINGS-EQUIPMENT.png）。
+ * 設定 — 設備と点検（承認済みモック docs/frontend/mockups/eye/images/SETTINGS-EQUIPMENT.png）。
  *
  * この面の仕事は「1 台を止める前に、止めると困るご予約を数えて見せる」こと。
  * 試算（POST /api/staff/settings/impact）は何も保存しない。保存しても担当・設備の
@@ -134,6 +135,8 @@ export function EquipmentPanel({ storeId, now, onDraftChange }: SettingsPanelPro
   const today = toJstDay(at)
 
   const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading')
+  // 読み直しの合図。読み込みの useEffect の依存に入れる。
+  const [reloadCount, setReloadCount] = useState(0)
   const [saved, setSaved] = useState<Unit[]>([])
   const [windows, setWindows] = useState<Record<string, Window[]>>({})
   const [version, setVersion] = useState(0)
@@ -188,7 +191,7 @@ export function EquipmentPanel({ storeId, now, onDraftChange }: SettingsPanelPro
 
   useEffect(() => {
     load().catch(() => setPhase('error'))
-  }, [load])
+  }, [load, reloadCount])
 
   const rows = useMemo(() => groupUnits(saved), [saved])
   const selected = saved.find((unit) => unit.id === selectedId) ?? null
@@ -431,7 +434,15 @@ export function EquipmentPanel({ storeId, now, onDraftChange }: SettingsPanelPro
       </p>
     )
   if (phase === 'error') {
-    return <Notice>設備と点検を読み込めませんでした。画面を開き直してください。</Notice>
+    return (
+      <LoadFailed
+        what="設備と点検"
+        onRetry={() => {
+          setPhase('loading')
+          setReloadCount((n) => n + 1)
+        }}
+      />
+    )
   }
 
   return (

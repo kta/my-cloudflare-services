@@ -1,11 +1,11 @@
 import type { APIRequestContext, Locator, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
-import { enterSharedWorkspace } from './terminal-start'
+import { completeSeededTerminalStart } from './support/terminal'
 
 /**
  * 空き枠と予約台帳（005-availability-and-ledger）の受け入れ基準を、実ブラウザと
  * 実 Worker で確かめる。`vite preview` が実 workerd を動かし、D1 は `seed.mjs` が入れた
- * EYEX 銀座店（2026年8月27日（木）のご予約 12 件）である。
+ * EYE 銀座店（2026年8月27日（木）のご予約 12 件）である。
  *
  * 1 本の test の直前の行に `// @e2e-covers <ID> ...` を置く。UC は対になる AC の test に
  * 相乗りさせ、33 件（UC-LEDGER-01..11 / AC-LEDGER-01..22）をちょうど 1 回ずつ並べる。
@@ -37,8 +37,8 @@ declare function getComputedStyle(node: unknown): {
   outlineWidth: string
 }
 
-const ORG = 'org-eyex-seed'
-/** seed.mjs が固定 id で入れる EYEX 銀座店。 */
+const ORG = 'eye'
+/** seed.mjs が固定 id で入れる EYE 銀座店。 */
 const GINZA = '11111111-1111-4111-8111-111111111111'
 /** dev グラントが載せる `sub`。 */
 const VIEWER = `dev:${ORG}`
@@ -54,8 +54,6 @@ const MANAGER_PERMISSIONS = [
   'customer.read',
   'customer.write',
   'settings.read',
-  // 分析は seed の盤面をそのまま読むので、配り直しでも `analytics.read` を落とさない。
-  'analytics.read',
   'settings.manage',
 ]
 
@@ -133,20 +131,25 @@ async function pinServerNow(page: Page, at = SERVER_NOW): Promise<void> {
 
 /* --- 画面を開く ---------------------------------------------------------- */
 
-async function startWork(page: Page, at = SERVER_NOW): Promise<void> {
+async function startWork(
+  page: Page,
+  at = SERVER_NOW,
+  mode: 'shared' | 'personal' = 'shared',
+): Promise<void> {
   await pinDeviceClock(page, at)
   await pinServerNow(page)
   await page.goto('/')
   await page.getByLabel('お店のコード').fill(ORG)
   await page.getByRole('button', { name: '業務を始める' }).click()
-  await enterSharedWorkspace(page)
-  await expect(page.locator('header').first()).toContainText('EYEX 銀座店')
+  await completeSeededTerminalStart(page, mode)
+  await expect(page.locator('header').first()).toContainText('EYE 銀座店')
 }
 
 /** 同じ端末で画面を開き直す。すでに業務を始めているので名乗り直さない。 */
-async function reopen(page: Page): Promise<void> {
+async function reopen(page: Page, mode: 'shared' | 'personal' = 'shared'): Promise<void> {
   await page.goto('/')
-  await expect(page.locator('header').first()).toContainText('EYEX 銀座店')
+  await completeSeededTerminalStart(page, mode)
+  await expect(page.locator('header').first()).toContainText('EYE 銀座店')
 }
 
 async function openLedger(page: Page): Promise<void> {
@@ -848,13 +851,13 @@ test('トップに本日わたしが担当するご予約が時間順に並び�
   await membership()
   await beMe(VIEWER)
   try {
-    // 担当のご予約が 0 件の日（佐藤 美咲 は金曜がお休み）は行き止まりにしない。
-    await startWork(page, '2026-08-28T02:08:00.000Z')
+    // 佐藤 美咲が勤務していて担当予約が0件の土曜も、行き止まりにしない。
+    await startWork(page, '2026-08-29T02:08:00.000Z', 'personal')
     await expect(page.getByText('本日ご担当のご予約はありません。')).toBeVisible()
     await expect(page.getByRole('button', { name: '店全体の台帳を見る' })).toBeVisible()
 
     await pinDeviceClock(page)
-    await reopen(page)
+    await reopen(page, 'personal')
     const mine = page.getByRole('region', { name: '本日わたしが担当するご予約' })
     await expect(mine).toContainText('4件')
     const rows = mine.getByRole('listitem')
@@ -876,17 +879,13 @@ test('トップに本日わたしが担当するご予約が時間順に並び�
 
 // @e2e-covers AC-LEDGER-22
 test('定休日は目盛りだけの空の格子を出さず、事実と「本日」だけを出す', async ({ page }) => {
-  /*
-   * 台帳は 2026年8月27日（木）から開く。次の火曜（定休）は 9月1日 だが、
-   * **実時刻の当日が定休に当たる日は seed が臨時営業を 1 行入れる**（`seed.mjs`。
-   * 来店受付の e2e が当日の暦日でしか組み立てられないため）ので、その日は避けて
-   * 次の火曜を開く。定休の事実そのものは動かない。
-   */
+  // 来店受付の実日付E2Eが定休日には臨時営業をseedする。固定の次の火曜と実行日が
+  // 重なったときだけ、その次の火曜を開いて定休そのものを観測する。
   const jstToday = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10)
   const addDays = (date: string, days: number) =>
     new Date(Date.parse(`${date}T00:00:00.000Z`) + days * 86_400_000).toISOString().slice(0, 10)
-  const steps = addDays('2026-08-27', 5) === jstToday ? 12 : 5
-  const closed = addDays('2026-08-27', steps)
+  const steps = addDays(LEDGER_DATE, 5) === jstToday ? 12 : 5
+  const closed = addDays(LEDGER_DATE, steps)
   const month = Number(closed.slice(5, 7))
   const day = Number(closed.slice(8, 10))
 
@@ -899,4 +898,23 @@ test('定休日は目盛りだけの空の格子を出さず、事実と「本�
   await expect(page.getByText(`${month}月${day}日（火）は定休日です。`)).toBeVisible()
   await expect(page.getByRole('grid', { name: '予約台帳' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: '本日' })).toBeVisible()
+})
+
+test('確認待ちの「内容を確認」から、担当を決める面へそのまま入れる', async ({ page }) => {
+  /*
+   * Web から入って担当が空のご予約は、受信日の 24:00 JST を越えると日次 Cron が
+   * 黙って取り消す（お客様へメールは送らない）。この札は長いあいだ押しても何も
+   * 起きず、店が気づく手立てがどこにも無かった（UX 監査 NEW-05）。
+   */
+  await openLedger(page)
+  await modeButton(page, '予約リスト').click()
+
+  const review = page.getByRole('button', { name: '内容を確認' }).first()
+  await expect(review).toBeVisible()
+  await review.click()
+
+  await expect(page.getByRole('table', { name: 'ご予約を置く盤' })).toBeVisible()
+  await expect(page.getByRole('list', { name: /予約の変更の工程/ })).toContainText(
+    '担当と場所を変える',
+  )
 })

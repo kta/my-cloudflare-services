@@ -4,11 +4,11 @@ import { jstClock } from '../ledger/metrics'
 import { formatPhoneDigits } from './CustomerStep'
 
 /*
- * 工程 5 ご確認（承認済みモック docs/frontend/mockups/eyex/images/BOOK-05-CONFIRM.png）。
+ * 工程 5 ご確認（承認済みモック docs/frontend/mockups/eye/images/BOOK-05-CONFIRM.png）。
  *
  * この面の仕事は「声に出す文をそのまま大きく置き、言い直しがあった箇所だけへ戻す」こと。
  *
- * 実測値（screens/BOOK-05-CONFIRM.html と assets/eyex.css）:
+ * 実測値（screens/BOOK-05-CONFIRM.html と assets/eye.css）:
  *   本文 1fr ／ 右の柱 372px（`w-93`）、本文の余白 36px 44px・柱 36px 28px。
  *   復唱の箱は内側 30px 32px・上に 24px、文 24px / 行間 2、強い語は 700 + `--color-pine-deep`。
  *   戻り口は 4 列・間 12px・文字 15px。確定は `.btn.primary.big`（最小高 56px）。

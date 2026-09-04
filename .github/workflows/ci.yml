@@ -10,7 +10,7 @@ on:
   # with `pnpm --filter <pkg> e2e`.
   workflow_dispatch:
     inputs:
-      deploy_eyex_stack:
+      deploy_eye_stack:
         description: Deploy notifier → glasses_management → admin after Cloudflare IDs/secrets are configured
         required: true
         type: boolean
@@ -84,10 +84,10 @@ jobs:
           retention-days: 7
 
   # Service bindings require the referenced Worker to exist before the caller
-  # can deploy. Keep this full EYEX dependency chain manual and serialized so
+  # can deploy. Keep this full EYE dependency chain manual and serialized so
   # a main push never attempts admin before glasses-management exists.
-  deploy-eyex-stack:
-    if: github.event_name == 'workflow_dispatch' && inputs.deploy_eyex_stack == true
+  deploy-eye-stack:
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy_eye_stack == true
     needs: [verify]
     runs-on: ubuntu-latest
     environment: production

@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 /**
- * UC-EYEX-149 の画面。一覧・検索・権限差分の提示と、標準ロール/担当店舗の変更、
+ * UC-EYE-149 の画面。一覧・検索・権限差分の提示と、標準ロール/担当店舗の変更、
  * PIN 再設定の開始(PIN 自体は決して表示しない)。
  */
 

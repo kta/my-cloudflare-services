@@ -1,10 +1,10 @@
 import type { APIRequestContext, Locator, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
-import { enterSharedWorkspace } from './terminal-start'
+import { completeSeededTerminalStart } from './support/terminal'
 
 /**
  * 電話・店頭からの予約受付（006-booking-flow）の受け入れ基準を、実ブラウザと実 Worker で
- * 確かめる。`vite preview` が実 workerd を動かし、D1 は `seed.mjs` が入れた EYEX 銀座店
+ * 確かめる。`vite preview` が実 workerd を動かし、D1 は `seed.mjs` が入れた EYE 銀座店
  * （2026年8月27日（木）のご予約 12 件）である。
  *
  * 1 本の test の直前の行に `// @e2e-covers <ID> ...` を置く。UC は対になる AC の test に
@@ -40,8 +40,8 @@ declare const CompositionEvent: new (
   init?: { bubbles?: boolean; data?: string },
 ) => unknown
 
-const ORG = 'org-eyex-seed'
-/** seed.mjs が固定 id で入れる EYEX 銀座店。 */
+const ORG = 'eye'
+/** seed.mjs が固定 id で入れる EYE 銀座店。 */
 const GINZA = '11111111-1111-4111-8111-111111111111'
 
 /** seed の id は `${区分}-0000-4000-8000-${連番}`（`seed.mjs` の `uid`）。 */
@@ -64,7 +64,13 @@ const STAFF_BY_NAME: Record<string, string> = {
 
 /** モック 13 面が描いている瞬間（JST 2026年8月27日（木）11:08）。 */
 const NOW = '2026-08-27T02:08:00.000Z'
-/** ご予約を書く日。台帳の e2e が見る 8月27日・28日 を避ける（同じ木曜の顔）。 */
+/*
+ * ご予約を書く日。台帳の e2e が見る 8月27日・28日 を避ける（同じ木曜の顔）。
+ *
+ * **先へずらせない。**この面は工程 1 で日付の札を押して歩くが、札に出るのは
+ * 当日を含む近い日だけで、1 週先の 9月10日 にすると押す札がどこにも無く、
+ * ファイルのほぼ全部が落ちる（実測: 2026-09-10 で 1 本を残して全滅）。
+ */
 const DAY = '2026-09-03'
 const DAY_LABEL = '9月3日（木）'
 /** 店舗の刻みは 30 分、片付けは 10 分、同時受付の上限は 3 件（`seed.mjs`）。 */
@@ -81,8 +87,8 @@ async function startWork(page: Page): Promise<void> {
   await page.goto('/')
   await page.getByLabel('お店のコード').fill(ORG)
   await page.getByRole('button', { name: '業務を始める' }).click()
-  await enterSharedWorkspace(page)
-  await expect(page.locator('header').first()).toContainText('EYEX 銀座店')
+  await completeSeededTerminalStart(page)
+  await expect(page.locator('header').first()).toContainText('EYE 銀座店')
 }
 
 /** 「新しい予約を取る」を押して工程 1 に着く。 */
@@ -178,14 +184,9 @@ const dayButton = (page: Page, label: string): Locator =>
 const timeButton = (page: Page, hhmm: string): Locator =>
   page.getByRole('button', { name: new RegExp(`^${hhmm} `) })
 
-/** 時刻の窓（1 画面 8 枚）の外に隠れている時刻を開く。 */
-const moreTimes = (page: Page): Locator => page.getByRole('button', { name: /^ほかの時刻も見る/ })
-
-/** 工程 1。お日にちとお時間を選ぶ。窓の外の時刻は「ほかの時刻も見る」を開いてから押す。 */
+/** 工程 1。お日にちとお時間を選ぶ。時刻の札は営業時間ぶんが全部出る（UX 監査 BOOK-05）。 */
 async function pickDateTime(page: Page, hhmm: string): Promise<void> {
   await dayButton(page, DAY_LABEL).click()
-  await expect(timeButton(page, hhmm).or(moreTimes(page)).first()).toBeVisible()
-  if ((await timeButton(page, hhmm).count()) === 0) await moreTimes(page).click()
   await expect(timeButton(page, hhmm)).toBeEnabled()
   await timeButton(page, hhmm).click()
   await expect(timeButton(page, hhmm)).toHaveAttribute('aria-pressed', 'true')
@@ -309,14 +310,17 @@ async function reservationsAt(request: APIRequestContext, hhmm: string): Promise
 /* ========================================================================= */
 
 // @e2e-covers UC-BOOK-01 AC-BOOK-01
-test('工程 1 は日付と時刻をどちらも選ぶまで進めず、定休と満席は押せない', async ({ page }) => {
+test('工程 1 はお時間を選ぶまで進めず、定休と休憩は押せない', async ({ page }) => {
   await startBooking(page)
 
-  // 何も選んでいない間は押せず、何が足りないかを名前で言う。
+  /*
+   * 開いた時点で本日が選ばれている（UX 監査 UI-06。以前は何も選ばれずに開き、
+   * 時刻の札が 1 枚も出ていなかった）。だから足りないのはお時間だけである。
+   */
   await expect(barNext(page)).toBeDisabled()
   await expect(barNext(page)).toHaveAttribute(
     'aria-label',
-    '次へ進む　お日にちとお時間をお選びになると進めます',
+    '次へ進む　お時間をお選びになると進めます',
   )
 
   // 火曜は定休。札に「定休」と書いてあり、押せない。
@@ -333,10 +337,14 @@ test('工程 1 は日付と時刻をどちらも選ぶまで進めず、定休�
     '次へ進む　お時間をお選びになると進めます',
   )
 
-  // お昼（12:00–13:00）は受付を止める帯なので「満席」。押せない。
+  /*
+   * お昼（12:00–13:00）は受付を止める帯。**「満席」とは書かない**（UX 監査 BOOK-06。
+   * 満席だと「あと少し粘れば空くかもしれない」と読めるが、休憩はそもそも受けない）。
+   */
   const noon = timeButton(page, '12:00')
   await expect(noon).toBeDisabled()
-  await expect(noon).toContainText('満席')
+  await expect(noon).toContainText('休憩')
+  await expect(noon).not.toContainText('満席')
   // 空いている札には残りの枠数が出る。
   await expect(timeButton(page, '11:00')).toContainText(/^11:00\s*あと\d枠$/)
 
@@ -419,6 +427,24 @@ test('工程 3 で先約に重なると帯が重なり、右に先約のお名�
   const next = page.getByRole('button', { name: /^次へ進む/ }).last()
   await expect(next).toBeDisabled()
   await expect(next).toHaveAttribute('aria-label', '次へ進む　重なりを解くと進めます')
+
+  /*
+   * 重なりを解くのがこの面の仕事なので、**解く対象が画面に映っていること**。
+   * 盤は 1 日ぶんの列を持ち、窓に入るのは 8 列だけなので、放っておくと
+   * 15:00 は流れた先にある（UX 監査 J-05。それでも右の柱は「15:00 の先約があります」
+   * 「指でつかんで動かせます」と言うので、言われたものが 1 つも見えない）。
+   */
+  const board = page.getByRole('table', { name: 'ご予約を置く盤' })
+  const scroller = board.locator('xpath=ancestor::div[contains(@class,"overflow-auto")][1]')
+  const window = await scroller.boundingBox()
+  const placed = await page.getByText('重なっています').first().boundingBox()
+  expect(placed).not.toBeNull()
+  expect(placed?.x ?? 0).toBeGreaterThanOrEqual(window?.x ?? 0)
+  expect((placed?.x ?? 0) + (placed?.width ?? 0)).toBeLessThanOrEqual(
+    (window?.x ?? 0) + (window?.width ?? 0),
+  )
+  // 流したあとも、誰の行なのかが分かる（名前の列は左に貼り付く）。
+  await expect(page.getByRole('rowheader', { name: /佐藤 美咲/ })).toBeVisible()
 })
 
 // @e2e-covers AC-BOOK-06
@@ -630,8 +656,25 @@ test('ご要望を手書きのまま残し、文字に変換するボタンは�
   await page.mouse.move((box?.x ?? 0) + 60, (box?.y ?? 0) + 60)
   await page.mouse.down()
   await page.mouse.move((box?.x ?? 0) + 220, (box?.y ?? 0) + 130, { steps: 10 })
+  // まだ離していない。離すまで用紙が白いままだと「書けていない」と思って二度なぞることになる。
+  await expect(page.getByTestId('handwriting-live')).toBeVisible()
+  await page.mouse.up()
+  await expect(page.getByTestId('handwriting-live')).toHaveCount(0)
+  await expect(page.getByTestId('handwriting-stroke')).toHaveCount(1)
+
+  // 消しゴムは「なぞったところを消す」道具。触れていない線は残る。
+  await page.mouse.move((box?.x ?? 0) + 60, (box?.y ?? 0) + 260)
+  await page.mouse.down()
+  await page.mouse.move((box?.x ?? 0) + 220, (box?.y ?? 0) + 260, { steps: 10 })
+  await page.mouse.up()
+  await expect(page.getByTestId('handwriting-stroke')).toHaveCount(2)
+  await page.getByRole('button', { name: '消しゴム' }).click()
+  await page.mouse.move((box?.x ?? 0) + 140, (box?.y ?? 0) + 260)
+  await page.mouse.down()
+  await page.mouse.move((box?.x ?? 0) + 160, (box?.y ?? 0) + 260, { steps: 5 })
   await page.mouse.up()
   await expect(page.getByTestId('handwriting-stroke')).toHaveCount(1)
+  await page.getByRole('button', { name: 'ペン' }).click()
 
   await page.getByRole('button', { name: '手書きのまま残す' }).click()
   const kept = page.getByRole('group', { name: '残したご要望' })
@@ -653,7 +696,7 @@ test('復唱の文を読み上げて確定すると、予約番号と控えの�
   await expect(script).toContainText('9月3日')
   // 復唱は声に出す形（「午後2時30分」）で読む。時計の表記は右の要約が持つ。
   await expect(script).toContainText('午後2時30分')
-  await expect(script).toContainText('EYEX 銀座店')
+  await expect(script).toContainText('EYE 銀座店')
   // 目的は工程 2 で押した札と同じ店内の名前（`name_internal`）で読み上げる。
   await expect(script).toContainText('今のメガネを調整したい')
   await expect(script).toContainText('田中 花子')
@@ -789,24 +832,42 @@ test('録音の置き場所は工程 1 から 4 まで動かず、工程 5 で�
   const badge = page.locator('[data-booking-recording="bar"]')
   await expect(stepBar(page).locator('[data-booking-recording="bar"]')).toBeVisible()
   const first = await badge.boundingBox()
+  expect(first).not.toBeNull()
+  // 録音状態の文言は「許可を確かめています」→「録音していません」と縮み得る。
+  // そのため幅・左端ではなく、帯の右端に留まることを工程ごとに測る。
+  const rightEdge = (box: { x: number; width: number } | null) => (box?.x ?? 0) + (box?.width ?? 0)
+  const firstRight = rightEdge(first)
 
   await pickDateTime(page, '11:00')
   await proceed(page)
   await pickPurpose(page, '今のメガネを調整したい')
-  expect(await badge.boundingBox()).toEqual(first)
+  expect(rightEdge(await badge.boundingBox())).toBe(firstRight)
 
   await proceed(page)
   await expect(page.getByRole('table', { name: 'ご予約を置く盤' })).toBeVisible()
-  expect(await badge.boundingBox()).toEqual(first)
+  expect(rightEdge(await badge.boundingBox())).toBe(firstRight)
 
   await clearClash(page)
   await proceed(page)
   await page.getByLabel('お名前').fill('田中 花子')
-  expect(await badge.boundingBox()).toEqual(first)
+  expect(rightEdge(await badge.boundingBox())).toBe(firstRight)
 
   await proceed(page)
   await expect(page.getByRole('heading', { name: 'この文をそのまま読み上げます' })).toBeVisible()
-  await expect(page.locator('[data-booking-recording="floating"]')).toBeVisible()
+  const floating = page.locator('[data-booking-recording="floating"]')
+  await expect(floating).toBeVisible()
+  const floatingBox = await floating.boundingBox()
+  const viewport = page.viewportSize()
+  expect(floatingBox).not.toBeNull()
+  expect(viewport).not.toBeNull()
+  expect((viewport?.width ?? 0) - ((floatingBox?.x ?? 0) + (floatingBox?.width ?? 0))).toBeCloseTo(
+    20,
+    0,
+  )
+  // 確認画面のフローティング表示は、画面下端ではなく固定工程帯の直上に置く。
+  const footer = await stepBar(page).boundingBox()
+  expect(footer).not.toBeNull()
+  expect((footer?.y ?? 0) - ((floatingBox?.y ?? 0) + (floatingBox?.height ?? 0))).toBeCloseTo(20, 0)
   await expect(badge).toHaveCount(0)
 })
 

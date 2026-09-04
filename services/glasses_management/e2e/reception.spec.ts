@@ -1,11 +1,11 @@
 import type { APIRequestContext, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
-import { enterSharedWorkspace } from './terminal-start'
+import { completeSeededTerminalStart } from './support/terminal'
 
 /**
  * 来店受付とウォークイン（008-reception-and-walkin）の受け入れ基準を、実ブラウザと
  * 実 Worker で確かめる。`vite preview` が実 workerd を動かし、D1 は `seed.mjs` が入れた
- * EYEX 銀座店である（`playwright test` を叩くたびに使い捨ての D1 が作り直される）。
+ * EYE 銀座店である（`playwright test` を叩くたびに使い捨ての D1 が作り直される）。
  *
  * 1 本の test の直前の行に `// @e2e-covers <ID> ...` を置く。UC は対になる AC の test に
  * 相乗りさせ、45 件（UC-RECEP-01..16 / AC-RECEP-01..29）をちょうど 1 回ずつ並べる。
@@ -20,8 +20,8 @@ import { enterSharedWorkspace } from './terminal-start'
  *     （ブラウザの時計を進めない）
  * という形にしてある。
  *
- * **走らせる条件**: 火曜は店舗の定休で、当日のご予約を 1 件も作れない（`POST
- * /api/staff/reservations` が `store_closed` を返す）。この面の e2e は営業日に走らせる。
+ * **火曜の扱い**: 定休のままでは当日予約を作れないため、suite開始時に限って
+ * 当日を特別営業にし、受付に必要な勤務を展開する。suite終了時に元の例外と勤務へ戻す。
  *
  * **D1 を書き換える**: この面は盤面へ行を足す唯一の e2e である。件数を数える test は
  * 先に `clearBoard` で当日の盤面を空にしてから始める（D1 は 1 本しか無く、前の test が
@@ -37,9 +37,15 @@ import { enterSharedWorkspace } from './terminal-start'
  *     断るので実データで作れない。AC-RECEP-14 / 15 だけ盤面の応答を差し替える）
  */
 
-const ORG = 'org-eyex-seed'
-/** seed.mjs が固定 id で入れる EYEX 銀座店。 */
+const ORG = 'eye'
+/** seed.mjs が固定 id で入れる EYE 銀座店。 */
 const GINZA = '11111111-1111-4111-8111-111111111111'
+const INTERNAL_KEY = 'dev-internal-key'
+/**
+ * dev grant の担当店舗は全 E2E で同じ行を配り直す。別 id を使うと
+ * `(organization_id, user_id, store_id)` の一意制約に衝突する。
+ */
+const RECEPTION_E2E_MEMBERSHIP = '0f0f0f0f-0f0f-4f0f-8f0f-0f0f0f0f0f0f'
 
 /** seed の id は `${区分}-0000-4000-8000-${連番}`（`seed.mjs` の `uid`）。 */
 const uid = (group: string, n: number) => `${group}-0000-4000-8000-${String(n).padStart(12, '0')}`
@@ -85,19 +91,13 @@ const dayLabel = (date: string) => `${Number(date.slice(5, 7))}月${Number(date.
 
 /** 実時刻の JST 暦日。盤面はこの日の上で組み立てる。 */
 const TODAY = jstDate(Date.now())
-
-/** 当日（JST）の 00:00 の瞬間。 */
 const DAY_START = Date.parse(`${TODAY}T00:00:00.000+09:00`)
 
-/**
- * いまから n 分前の瞬間（当日の 00:00 より前にはしない。前後の順は n の大小で保たれる）。
- *
- * **お着きになった時刻を当日の壁時計で決め打ちしない。**11:02 と書くと、その時刻より前に
- * この面を走らせたときに「未来にお着きになった」行ができ、サーバ時刻で書く退店の記録が
- * 先に並んで、その行がご来店中のまま残る（盤面は `occurred_at` の並びの最後で決める）。
- */
-const minutesAgo = (n: number) =>
-  new Date(Math.max(Date.now() - n * MS_PER_MINUTE, DAY_START + (60 - n) * 1_000)).toISOString()
+/** 早朝でも未来の受付を作らず、当日の範囲に収める。 */
+const minutesAgo = (minutes: number) =>
+  new Date(
+    Math.max(Date.now() - minutes * MS_PER_MINUTE, DAY_START + (60 - minutes) * 1_000),
+  ).toISOString()
 
 /**
  * seed が 12 件のご予約を置いている日（モックが描いている 2026年8月27日（木））。
@@ -120,6 +120,181 @@ async function authed(request: APIRequestContext): Promise<{ headers: Record<str
   expect(res.status()).toBe(200)
   const { token } = (await res.json()) as { token: string }
   return { headers: { authorization: `Bearer ${token}` } }
+}
+
+type CalendarExceptionSnapshot = {
+  id: string
+  date: string
+  kind: 'closed' | 'special'
+  opensAt: string | null
+  closesAt: string | null
+  note: string | null
+}
+
+type WeeklyShiftSnapshot = {
+  weekday: number
+  isOff: boolean
+  startsAt: string | null
+  endsAt: string | null
+  breaks: { startsAt: string; endsAt: string }[]
+}
+
+type ReceptionFixture = {
+  calendarException: CalendarExceptionSnapshot | undefined
+  weekly: WeeklyShiftSnapshot[]
+  insertedExceptionId: string
+}
+
+async function grantReceptionPermission(request: APIRequestContext): Promise<void> {
+  const membership = await request.post('/api/internal/store-memberships/sync', {
+    headers: { 'x-internal-key': INTERNAL_KEY },
+    data: {
+      id: RECEPTION_E2E_MEMBERSHIP,
+      organizationId: ORG,
+      storeId: GINZA,
+      userId: `dev:${ORG}`,
+      permissions: ['settings.manage'],
+      createdAt: '2026-08-27T00:00:00.000Z',
+    },
+  })
+  expect(membership.status()).toBe(200)
+}
+
+/**
+ * seed を暦日へ依存させず、使い捨てE2E状態の火曜だけを特別営業へ上書きする。
+ * 当日例外と勤務の実効値を残すので、suite終了時に正確に戻せる。
+ */
+async function installReceptionFixture(
+  request: APIRequestContext,
+): Promise<ReceptionFixture | undefined> {
+  if (new Date(`${TODAY}T00:00:00.000Z`).getUTCDay() !== 2) return undefined
+  await grantReceptionPermission(request)
+  const headers = await authed(request)
+  const exceptions = await request.get(`/api/staff/stores/${GINZA}/calendar-exceptions`, {
+    ...headers,
+    params: { from: TODAY, to: TODAY },
+  })
+  expect(exceptions.status()).toBe(200)
+  const [calendarException] = (await exceptions.json()) as CalendarExceptionSnapshot[]
+  const shiftResponse = await request.get(`/api/staff/stores/${GINZA}/staff-shifts`, {
+    ...headers,
+    params: { from: TODAY, to: shiftDate(TODAY, 6), staffId: SATO },
+  })
+  expect(shiftResponse.status()).toBe(200)
+  const savedShifts = (await shiftResponse.json()) as {
+    date: string
+    startsAt: string
+    endsAt: string
+    kind: 'work' | 'break'
+  }[]
+  const weekly = Array.from({ length: 7 }, (_, index) => {
+    const date = shiftDate(TODAY, index)
+    const rows = savedShifts.filter((row) => row.date === date)
+    const work = rows.find((row) => row.kind === 'work')
+    const rest = rows.find((row) => row.kind === 'break')
+    return {
+      weekday: new Date(`${date}T00:00:00.000Z`).getUTCDay(),
+      isOff: work === undefined,
+      startsAt: work?.startsAt ?? null,
+      endsAt: work?.endsAt ?? null,
+      breaks: rest === undefined ? [] : [{ startsAt: rest.startsAt, endsAt: rest.endsAt }],
+    }
+  })
+  const response = await request.post(`/api/staff/stores/${GINZA}/calendar-exceptions`, {
+    ...headers,
+    data: {
+      date: TODAY,
+      kind: 'special',
+      opensAt: '10:00',
+      closesAt: '19:00',
+      note: '受付 E2E の当日特別営業',
+    },
+  })
+  expect(response.status(), await response.text()).toBe(200)
+  const insertedException = (await response.json()) as CalendarExceptionSnapshot
+
+  const hours = await request.get(`/api/staff/stores/${GINZA}/business-hours`, {
+    ...headers,
+  })
+  expect(hours.status()).toBe(200)
+  const { version } = (await hours.json()) as { version: number }
+  const shifts = await request.put(`/api/staff/stores/${GINZA}/staff-shifts`, {
+    ...headers,
+    data: {
+      staffId: SATO,
+      effectiveFrom: TODAY,
+      version,
+      weekly: [
+        { weekday: 0, isOff: false, startsAt: '12:00', endsAt: '19:00', breaks: [] },
+        { weekday: 1, isOff: false, startsAt: '10:00', endsAt: '19:00', breaks: [] },
+        { weekday: 2, isOff: false, startsAt: '10:00', endsAt: '19:00', breaks: [] },
+        { weekday: 3, isOff: false, startsAt: '10:00', endsAt: '19:00', breaks: [] },
+        { weekday: 4, isOff: false, startsAt: '10:00', endsAt: '19:00', breaks: [] },
+        { weekday: 5, isOff: true, startsAt: null, endsAt: null, breaks: [] },
+        { weekday: 6, isOff: false, startsAt: '10:00', endsAt: '19:00', breaks: [] },
+      ],
+    },
+  })
+  expect(shifts.status(), await shifts.text()).toBe(200)
+  await revokeReceptionPermission(request)
+  return { calendarException, weekly, insertedExceptionId: insertedException.id }
+}
+
+/** 受付用の settings.manage は fixture の設置／撤去以外へ持ち越さない。 */
+async function revokeReceptionPermission(request: APIRequestContext): Promise<void> {
+  if (new Date(`${TODAY}T00:00:00.000Z`).getUTCDay() !== 2) return
+  const membership = await request.post('/api/internal/store-memberships/sync', {
+    headers: { 'x-internal-key': INTERNAL_KEY },
+    data: {
+      id: RECEPTION_E2E_MEMBERSHIP,
+      organizationId: ORG,
+      storeId: GINZA,
+      userId: `dev:${ORG}`,
+      permissions: [],
+      createdAt: '2026-08-27T00:00:00.000Z',
+    },
+  })
+  expect(membership.status()).toBe(200)
+}
+
+async function removeReceptionFixture(
+  request: APIRequestContext,
+  fixture: ReceptionFixture | undefined,
+): Promise<void> {
+  if (fixture === undefined) return
+  await grantReceptionPermission(request)
+  const headers = await authed(request)
+  try {
+    const hours = await request.get(`/api/staff/stores/${GINZA}/business-hours`, { ...headers })
+    expect(hours.status()).toBe(200)
+    const { version } = (await hours.json()) as { version: number }
+    const shifts = await request.put(`/api/staff/stores/${GINZA}/staff-shifts`, {
+      ...headers,
+      data: { staffId: SATO, effectiveFrom: TODAY, version, weekly: fixture.weekly },
+    })
+    expect(shifts.status(), await shifts.text()).toBe(200)
+    if (fixture.calendarException === undefined) {
+      const removed = await request.delete(
+        `/api/staff/stores/${GINZA}/calendar-exceptions/${fixture.insertedExceptionId}`,
+        { ...headers },
+      )
+      expect(removed.status(), await removed.text()).toBe(200)
+    } else {
+      const restored = await request.post(`/api/staff/stores/${GINZA}/calendar-exceptions`, {
+        ...headers,
+        data: {
+          date: fixture.calendarException.date,
+          kind: fixture.calendarException.kind,
+          opensAt: fixture.calendarException.opensAt,
+          closesAt: fixture.calendarException.closesAt,
+          note: fixture.calendarException.note,
+        },
+      })
+      expect(restored.status(), await restored.text()).toBe(200)
+    }
+  } finally {
+    await revokeReceptionPermission(request)
+  }
 }
 
 type Walkin = {
@@ -154,18 +329,13 @@ function freeSlot(date: string): string {
 /** 1 日ぶんの枠の本数（30 分刻み）。これを配り切ったら諦める。 */
 const SLOTS_PER_DAY = 48
 
-/**
- * **いまより前**の枠を 1 分ずつずらして配る。
- *
- * 来店回数と初回来店日は `starts_at <= いま` のご予約だけを数える（`bumpVisitCounters`）。
- * 日の頭から配る `freeSlot` の枠は、この面を朝早くに走らせると未来になり、退店を記録しても
- * 初回来店日が入らない。初回来店日を見る test だけはここから枠を取る。
- */
+/** 来店回数に数えられる、いま以前の枠を使う。 */
 let pastSlotIndex = 0
 function pastSlot(): string {
   pastSlotIndex += 1
-  const at = Date.now() - pastSlotIndex * 30 * MS_PER_MINUTE
-  return new Date(Math.max(at, DAY_START)).toISOString()
+  return new Date(
+    Math.max(Date.now() - pastSlotIndex * 30 * MS_PER_MINUTE, DAY_START),
+  ).toISOString()
 }
 
 async function createWalkin(
@@ -211,23 +381,49 @@ async function addVisit(request: APIRequestContext, body: Record<string, unknown
   expect(res.status(), await res.text()).toBe(200)
 }
 
+/*
+ * 前提づくりのご予約を 1 件書く。
+ *
+ * **枠が埋まっていたら、サーバが返した空きへ寄せて取り直す。**この面が使うのは
+ * 実時刻の当日で、同じ日を予約フローの e2e も歩くため、通しで走らせると
+ * 同時受付の上限（`seed.mjs` の 3 件）を先に使い切られて 409 slot_taken になる。
+ * 時刻そのものはこの面の主題ではないので、**取れた時刻を呼び出し側へ返す**
+ * （行を探す文字列もそこから作る）。
+ */
 async function createReservation(
   request: APIRequestContext,
   body: Record<string, unknown>,
-): Promise<{ id: string }> {
-  const res = await request.post('/api/staff/reservations', {
-    ...(await authed(request)),
-    data: { storeId: GINZA, source: 'phone', ...body },
-  })
-  expect(res.status(), await res.text()).toBe(200)
-  return (await res.json()) as { id: string }
+): Promise<{ id: string; startsAt: string; clock: string }> {
+  const wanted = String(body.startsAt)
+  let startsAt = wanted
+  let last = ''
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const res = await request.post('/api/staff/reservations', {
+      ...(await authed(request)),
+      data: { storeId: GINZA, source: 'phone', ...body, startsAt },
+    })
+    if (res.status() === 200) {
+      const created = (await res.json()) as { id: string }
+      return { id: created.id, startsAt, clock: jstClock(startsAt) }
+    }
+    last = `${startsAt} / ${await res.text()}`
+    if (res.status() !== 409) break
+    const alternatives = (
+      JSON.parse(last.slice(last.indexOf('{'))) as {
+        alternatives?: { startsAt: string }[]
+      }
+    ).alternatives
+    const next = alternatives?.find((slot) => slot.startsAt !== startsAt)?.startsAt
+    if (next === undefined) break
+    startsAt = next
+  }
+  throw new Error(`ご予約を書けなかった（希望 ${wanted}）: ${last}`)
 }
 
 type BoardRow = {
   subjectType: string
   subjectId: string
   displayName: string
-  /** 工程 6 欄。`at` はその工程を記録した瞬間（まだなら null）。 */
   cells: { at: string | null }[]
 }
 type Board = { date: string; activeCount: number; rows: BoardRow[]; serverNow: string }
@@ -283,11 +479,6 @@ async function linkCustomer(
 /**
  * その日の盤面を空にする。**件数を数える test の前に必ず呼ぶ** —— D1 は 1 本しか無く、
  * 前の test が残した行がそのまま「ご来店中 N名」に混ざるからである。
- *
- * **退店は行の最後の記録より必ずあとの時刻で書く。**盤面は `occurred_at` の並びの
- * 最後の工程でご来店中かどうかを決めるので、退店をサーバ時刻（＝いま）に任せると、
- * 当日の壁時計で先に仕込んだ記録（11:02 のご来店など）より前に入ってしまい、
- * その行がご来店中のまま残る。この e2e を午前の早い時刻に走らせたときだけ起きる。
  */
 async function clearBoard(request: APIRequestContext, date = TODAY): Promise<void> {
   const board = await readBoard(request, date)
@@ -332,8 +523,8 @@ async function startWork(page: Page): Promise<void> {
   await page.goto('/')
   await page.getByLabel('お店のコード').fill(ORG)
   await page.getByRole('button', { name: '業務を始める' }).click()
-  await enterSharedWorkspace(page)
-  await expect(page.locator('header').first()).toContainText('EYEX 銀座店')
+  await completeSeededTerminalStart(page)
+  await expect(page.locator('header').first()).toContainText('EYE 銀座店')
 }
 
 const destination = (page: Page, label: string) =>
@@ -518,6 +709,16 @@ async function stubBoard(
 
 /* ========================================================================= */
 
+let receptionFixture: ReceptionFixture | undefined
+
+test.beforeAll(async ({ request }) => {
+  receptionFixture = await installReceptionFixture(request)
+})
+
+test.afterAll(async ({ request }) => {
+  await removeReceptionFixture(request, receptionFixture)
+})
+
 // @e2e-covers AC-RECEP-01 UC-RECEP-01
 test('来店受付の画面は「11:00 のご予約　5分早くお着きです」と、お名前ひとまとめのカードを出す', async ({
   page,
@@ -554,7 +755,7 @@ test('「ご来店を受け付ける」を押すと盤面へ戻り、その行�
   request,
 }) => {
   await clearBoard(request)
-  await createReservation(request, {
+  const booked = await createReservation(request, {
     startsAt: atJst(TODAY, '14:30'),
     purposeIds: [ADJUST],
     staffId: SATO,
@@ -566,7 +767,7 @@ test('「ご来店を受け付ける」を押すと盤面へ戻り、その行�
    * 14:30 を回ってからこの e2e を走らせると 0 件になって行が見つからない
    * （上の `clearBoard` が今日のご予約を空にしてあるので、「すべて」でも 1 行しか出ない）。
    */
-  await openCheckin(page, '14:30')
+  await openCheckin(page, booked.clock)
   await page.getByRole('button', { name: 'ご来店を受け付ける', exact: true }).click()
 
   await expect(board(page)).toBeVisible()
@@ -605,14 +806,14 @@ test('「お待ちいただく」を押すと盤面に行が残り、受け付�
   request,
 }) => {
   await clearBoard(request)
-  await createReservation(request, {
+  const booked = await createReservation(request, {
     startsAt: atJst(TODAY, '15:30'),
     purposeIds: [ADJUST],
     staffId: SATO,
   })
 
   await pinLedgerToBeforeOpening(page)
-  await openCheckin(page, '15:30', 'upcoming')
+  await openCheckin(page, booked.clock, 'upcoming')
   await page.getByRole('button', { name: 'お待ちいただく' }).click()
 
   await expect(board(page)).toBeVisible()
@@ -730,7 +931,7 @@ test('受け付けたあとのウォークインを今までのお客様へ結�
   request,
 }) => {
   await clearBoard(request)
-  const walkin = await createWalkin(request, { purposeId: ADJUST })
+  const walkin = await createWalkin(request, { purposeId: ADJUST }, pastSlot)
   await openBoard(page)
   await expect(
     board(page).getByRole('rowheader', { name: new RegExp(`^${ticketName(walkin.ticketNo)}`) }),
@@ -763,8 +964,7 @@ test('新しく登録したお客様へ結びつけると、その来店がそ�
   request,
 }) => {
   await clearBoard(request)
-  // 初回来店日は `starts_at <= いま` のご予約からしか入らないので、枠を過去に取る。
-  const walkin = await createWalkin(request, { purposeId: ADJUST }, pastSlot)
+  const walkin = await createWalkin(request, { purposeId: ADJUST })
   await openBoard(page)
 
   // 盤面のその行から、お名前とふりがなを入れて新しいお客様を作り、そのまま結びつける。
@@ -888,6 +1088,45 @@ test('「次にやること　視力測定機 A」を押すと対応中になり
   )
   await expect(cell(page, 'お客様', 'フレーム選び')).toHaveAccessibleName(
     /^お客様\s+フレーム選び\s+済みました\s+\d{2}:\d{2}$/,
+  )
+})
+
+test('工程を進めた直後に「元に戻す」が出て、押すと前の工程へ戻る', async ({ page, request }) => {
+  /*
+   * 押す前に確認を挟むと、1 日に何十回も押す操作が毎回止まる。だから押させてから
+   * 数秒だけ戻せる形にした（UX 監査 NEW-04。それまで製品には元に戻す手立てが
+   * 1 つも無かった）。
+   */
+  await clearBoard(request)
+  const reservation = await createReservation(request, {
+    startsAt: atJst(TODAY, '18:00'),
+    purposeIds: [ADJUST],
+    staffId: SATO,
+    equipmentIds: [MEASURE_A],
+  })
+  await addVisit(request, {
+    subjectType: 'reservation',
+    subjectId: reservation.id,
+    stage: 'received',
+  })
+  await addVisit(request, {
+    subjectType: 'reservation',
+    subjectId: reservation.id,
+    stage: 'fitting',
+  })
+
+  await openBoard(page)
+  await cell(page, 'お客様', '視力測定').click()
+  await expect(cell(page, 'お客様', '視力測定')).toHaveAccessibleName(
+    /^お客様\s+視力測定\s+対応中\s+\d{2}:\d{2}から$/,
+  )
+
+  await page.getByRole('button', { name: '元に戻す' }).click()
+  await expect(cell(page, 'お客様', 'フレーム選び')).toHaveAccessibleName(
+    /^お客様\s+フレーム選び\s+対応中/,
+  )
+  await expect(cell(page, 'お客様', '視力測定')).toHaveAccessibleName(
+    /^お客様\s+視力測定\s+次にやること\s+視力測定機 A/,
   )
 })
 
@@ -1029,14 +1268,9 @@ test('絞りすぎて 0 件になると、条件を 1 つ緩めた候補が件�
   await createWalkin(request, { purposeId: ADJUST })
 
   await openHistory(page)
-  /*
-   * **期間は前日に絞る。**「絞り込みをすべて外す」は今月ぜんぶへ戻す候補なので、
-   * 当日だけに絞ると月初（1日）にはその 2 つが同じ問い合わせになり、重ねて出さない。
-   * 前日に絞れば「期間を今月まで広げる」と「すべて外す」がどの日でも別の候補になる。
-   */
   const yesterday = shiftDate(TODAY, -1)
   await pickSpan(page, yesterday, yesterday)
-  // 取り消したご予約は 1 件も無いので、この 2 つで 0 件になる。
+  // 取り消したご予約は前日に 1 件も無いので、この 2 つで 0 件になる。
   await pickResult(page, '取消')
 
   await expect(page.getByText('条件に合う受付履歴はありませんでした')).toBeVisible()
@@ -1131,7 +1365,7 @@ test('台帳リストの行にも「ご来店」の入口があり、来店受�
   request,
 }) => {
   await clearBoard(request)
-  await createReservation(request, {
+  const booked = await createReservation(request, {
     startsAt: atJst(TODAY, '17:00'),
     purposeIds: [ADJUST],
     staffId: SATO,
@@ -1156,7 +1390,7 @@ test('台帳リストの行にも「ご来店」の入口があり、来店受�
   await expect(list.getByRole('button', { name: 'ご来店' }).first()).toBeVisible()
   await list
     .getByRole('row')
-    .filter({ hasText: '17:00' })
+    .filter({ hasText: booked.clock })
     .getByRole('button', { name: 'ご来店' })
     .first()
     .click()

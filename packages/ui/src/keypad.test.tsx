@@ -2,135 +2,197 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
-import { Keypad, type KeypadProps, PinField, TryMeter } from './keypad'
+import { Keypad, PinField, TryMeter } from './index'
 
-/*
- * 暗証番号のテンキー（LOGIN-STAFF-PIN / LOGIN-PIN-ERROR / LOGIN-SHARED-PIN / EX-PERMISSION）。
- * 見た目の寸法は e2e の突き合わせで見るので、ここでは
- * 「何が読めて、何が押せるか」と「入力した値が DOM に漏れないか」を見る。
- */
-
-/** 値を持つ器。テンキーは値を持たない（打ちかけを画面の側に残すため）。 */
-function Harness({ onSubmit, ...props }: Partial<KeypadProps> & { onSubmit?: () => void } = {}) {
+function PinControls({ onConfirm = vi.fn() }: { onConfirm?: () => void }) {
   const [value, setValue] = useState('')
   return (
     <>
-      <PinField label="暗証番号" filled={value.length} />
-      <Keypad
-        value={value}
-        onChange={setValue}
-        onSubmit={onSubmit ?? (() => undefined)}
-        {...props}
-      />
+      <PinField value={value} onChange={setValue} onConfirm={onConfirm} />
+      <Keypad value={value} onChange={setValue} onConfirm={onConfirm} />
     </>
   )
 }
 
-const digits = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
-
-async function type(text: string) {
-  for (const ch of text) await userEvent.click(screen.getByRole('button', { name: ch }))
-}
-
 describe('Keypad', () => {
-  it('0〜9 と 削除 と 確定 の 12 個を持つ', () => {
-    render(<Harness />)
-    for (const name of [...digits, '削除', '確定']) {
+  it('has 12 keys: digits 0 through 9, delete, and confirm', () => {
+    render(<PinControls />)
+
+    for (const name of ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '削除', '確定']) {
       expect(screen.getByRole('button', { name })).toBeInTheDocument()
     }
     expect(screen.getAllByRole('button')).toHaveLength(12)
   })
 
-  it('キーは 1 つずつ名前を持ち、押すと 1 文字ずつ増える', async () => {
-    render(<Harness />)
-    await type('102')
-    expect(screen.getByRole('group', { name: /3桁まで入力しました/ })).toBeInTheDocument()
+  it('names every digit key and adds one character per press', async () => {
+    const user = userEvent.setup()
+    render(<PinControls />)
+
+    await user.click(screen.getByRole('button', { name: '2' }))
+    await user.click(screen.getByRole('button', { name: '5' }))
+
+    expect(screen.getByRole('textbox', { name: '暗証番号 6桁のうち2桁を入力済み' })).toHaveValue(
+      '●●',
+    )
   })
 
-  it('削除は末尾を 1 文字だけ消し、空のときは何もしない', async () => {
-    const onChange = vi.fn()
-    render(<Keypad value="" onChange={onChange} onSubmit={() => undefined} />)
-    await userEvent.click(screen.getByRole('button', { name: '削除' }))
-    expect(onChange).not.toHaveBeenCalled()
-    render(<Keypad value="123" onChange={onChange} onSubmit={() => undefined} />)
-    await userEvent.click(screen.getAllByRole('button', { name: '削除' })[1] as HTMLElement)
-    expect(onChange).toHaveBeenCalledWith('12')
+  it('accepts zero and ignores non-PIN physical keys', async () => {
+    const user = userEvent.setup()
+    render(<PinControls />)
+
+    await user.click(screen.getByRole('button', { name: '0' }))
+    await user.click(screen.getByRole('textbox'))
+    await user.keyboard('x')
+
+    expect(screen.getByRole('textbox')).toHaveValue('●')
   })
 
-  it('3 桁では確定を押せず、押せない理由が読み上げに乗る', async () => {
-    const onSubmit = vi.fn()
-    render(<Harness onSubmit={onSubmit} />)
-    await type('123')
+  it('removes only the last digit and does nothing when empty', async () => {
+    const user = userEvent.setup()
+    render(<PinControls />)
+
+    await user.click(screen.getByRole('button', { name: '削除' }))
+    expect(screen.getByRole('textbox')).toHaveValue('')
+    await user.click(screen.getByRole('button', { name: '1' }))
+    await user.click(screen.getByRole('button', { name: '2' }))
+    await user.click(screen.getByRole('button', { name: '削除' }))
+
+    expect(screen.getByRole('textbox', { name: '暗証番号 6桁のうち1桁を入力済み' })).toHaveValue(
+      '●',
+    )
+  })
+
+  it('disables confirmation after three digits and describes why', async () => {
+    const user = userEvent.setup()
+    render(<PinControls />)
+
+    await user.click(screen.getByRole('button', { name: '1' }))
+    await user.click(screen.getByRole('button', { name: '2' }))
+    await user.click(screen.getByRole('button', { name: '3' }))
+
     const confirm = screen.getByRole('button', { name: '確定' })
     expect(confirm).toBeDisabled()
-    expect(confirm).toHaveAccessibleDescription('あと1桁で「確定」を押せます')
-    await userEvent.click(confirm)
-    expect(onSubmit).not.toHaveBeenCalled()
+    expect(confirm).toHaveAccessibleDescription('あと1桁で「確定」を押せます。')
   })
 
-  it('4 桁で確定を押せるようになる', async () => {
-    const onSubmit = vi.fn()
-    render(<Harness onSubmit={onSubmit} />)
-    await type('1234')
-    const confirm = screen.getByRole('button', { name: '確定' })
-    expect(confirm).toBeEnabled()
-    expect(confirm).toHaveAccessibleDescription('「確定」で業務が始まります')
-    await userEvent.click(confirm)
-    expect(onSubmit).toHaveBeenCalledTimes(1)
+  it('enables confirmation at four digits', async () => {
+    const user = userEvent.setup()
+    const onConfirm = vi.fn()
+    render(<PinControls onConfirm={onConfirm} />)
+
+    for (const digit of ['1', '2', '3', '4'])
+      await user.click(screen.getByRole('button', { name: digit }))
+    await user.click(screen.getByRole('button', { name: '確定' }))
+
+    expect(screen.getByRole('button', { name: '確定' })).toBeEnabled()
+    expect(onConfirm).toHaveBeenCalledOnce()
   })
 
-  it('外から止められているあいだは、桁が足りていても押せず理由が読める', async () => {
-    const onSubmit = vi.fn()
-    render(<Harness onSubmit={onSubmit} blockedReason="30秒お待ちください" />)
-    await type('1234')
-    const confirm = screen.getByRole('button', { name: '確定' })
-    expect(confirm).toBeDisabled()
-    expect(confirm).toHaveAccessibleDescription('30秒お待ちください')
+  it('does not accept more than six digits', async () => {
+    const user = userEvent.setup()
+    render(<PinControls />)
+
+    for (const digit of ['1', '2', '3', '4', '5', '6', '7'])
+      await user.click(screen.getByRole('button', { name: digit }))
+
+    expect(screen.getByRole('textbox', { name: '暗証番号 6桁のうち6桁を入力済み' })).toHaveValue(
+      '●●●●●●',
+    )
   })
 
-  it('6 桁を超えて入力できない', async () => {
-    render(<Harness />)
-    await type('1234567')
-    expect(screen.getByRole('group', { name: /6桁まで入力しました/ })).toBeInTheDocument()
-  })
+  it('treats physical digit, Backspace, and Enter keys like the visible keys', async () => {
+    const user = userEvent.setup()
+    const onConfirm = vi.fn()
+    render(<PinControls onConfirm={onConfirm} />)
 
-  it('物理キーボードの数字・Backspace・Enter が画面のキーと同じ結果になる', async () => {
-    const onSubmit = vi.fn()
-    render(<Harness onSubmit={onSubmit} />)
-    await userEvent.keyboard('12345')
-    expect(screen.getByRole('group', { name: /5桁まで入力しました/ })).toBeInTheDocument()
-    await userEvent.keyboard('{Backspace}')
-    expect(screen.getByRole('group', { name: /4桁まで入力しました/ })).toBeInTheDocument()
-    await userEvent.keyboard('{Enter}')
-    expect(onSubmit).toHaveBeenCalledTimes(1)
-    await userEvent.keyboard('a')
-    expect(screen.getByRole('group', { name: /4桁まで入力しました/ })).toBeInTheDocument()
+    const input = screen.getByRole('textbox')
+    await user.click(input)
+    await user.keyboard('1234{Backspace}4{Enter}')
+
+    expect(input).toHaveValue('●●●●')
+    expect(onConfirm).toHaveBeenCalledOnce()
   })
 })
 
 describe('PinField', () => {
-  it('常に 6 枠で、何桁入力したかを文字でも伝える', () => {
-    const { container } = render(<PinField label="暗証番号" filled={3} />)
-    expect(screen.getByText(/暗証番号\s+3桁まで入力しました/)).toBeInTheDocument()
-    expect(container.querySelectorAll('fieldset > span')).toHaveLength(6)
+  it('always renders six slots and says how many digits have been entered', () => {
+    render(<PinField value="12" onChange={vi.fn()} />)
+
+    expect(screen.getAllByTestId('pin-slot')).toHaveLength(6)
+    expect(screen.getByText('6桁のうち2桁を入力済み')).toBeInTheDocument()
   })
 
-  it('入力値そのものを DOM に出さない（value は ● だけ）', () => {
-    const { container } = render(<PinField label="暗証番号" filled={4} />)
-    expect(container.querySelector('input')).toBeNull()
-    expect(container.textContent).not.toMatch(/\d(?!桁)/)
+  it('never places the entered PIN in the DOM and displays only bullets', () => {
+    const { container } = render(<PinField value="2580" onChange={vi.fn()} />)
+
+    expect(container).not.toHaveTextContent('2580')
+    expect(screen.getByRole('textbox')).toHaveValue('●●●●')
+    expect(screen.getAllByText('●')).toHaveLength(4)
   })
 
-  it('違っていたときは、色ではなく文字で打ち直しを伝える', () => {
-    render(<PinField label="暗証番号" filled={0} invalid />)
-    expect(screen.getByText(/暗証番号\s+はじめから打ち直してください/)).toBeInTheDocument()
+  it('keeps a rejected PIN visibly invalid without requiring a confirmation callback', async () => {
+    const user = userEvent.setup()
+    render(<PinField value="2580" onChange={vi.fn()} invalid />)
+
+    await user.click(screen.getByRole('textbox'))
+    await user.keyboard('{Enter}')
+
+    expect(screen.getAllByTestId('pin-slot')[0]).toHaveClass('border-danger')
+  })
+
+  it('keeps a visible token-based focus indicator for the transparent keyboard input', () => {
+    render(<PinField value="" onChange={vi.fn()} />)
+
+    expect(screen.getByRole('textbox').parentElement).toHaveClass('focus-within:outline-focus')
   })
 })
 
 describe('TryMeter', () => {
-  it('残り回数を role="img" と aria-label の両方で伝える', () => {
-    render(<TryMeter used={1} />)
-    const meter = screen.getByRole('img', { name: '残り2回お試しいただけます' })
-    expect(meter.childElementCount).toBe(3)
+  it('exposes the remaining attempts with both role img and an accessible name', () => {
+    render(<TryMeter remainingAttempts={2} />)
+
+    expect(screen.getByRole('img', { name: 'あと2回お試しいただけます' })).toBeInTheDocument()
+  })
+
+  it('clamps the visual meter to its three attempts', () => {
+    const { rerender } = render(<TryMeter remainingAttempts={9} />)
+    expect(screen.getByRole('img')).toHaveAccessibleName('あと3回お試しいただけます')
+
+    rerender(<TryMeter remainingAttempts={-1} />)
+    expect(screen.getByRole('img')).toHaveAccessibleName('あと0回お試しいただけます')
+  })
+})
+
+/*
+ * `cn()` は tailwind-merge を持たない単純な結合なので、
+ * 同じ種類のユーティリティを 2 つ載せると、勝つのはクラス列の順ではなく
+ * Tailwind が CSS を書き出す順になる。
+ *
+ * 実際に「確定」キーは `bg-surface`（白）と `bg-pine`（緑）の両方を載せており、
+ * 計算後の背景は白、文字色は `text-on-pine`（白）—— **白地に白文字でラベルが見えず、
+ * 空のボタンに見えていた**（UX 監査で「確定のラベルが消える」と観測されたものの正体）。
+ * 打ち消しに頼らず、地の色は 1 つだけ載せる。
+ */
+describe('確定キーの見た目', () => {
+  function confirmKey(): HTMLElement {
+    render(<Keypad value="2580" onChange={() => {}} onConfirm={() => {}} />)
+    return screen.getByRole('button', { name: '確定' })
+  }
+
+  it('地の色のユーティリティを 1 つしか載せない', () => {
+    const classes = confirmKey().className.split(/\s+/)
+    expect(classes.filter((name) => /^bg-/.test(name))).toEqual(['bg-pine'])
+  })
+
+  it('文字色のユーティリティも 1 つしか載せない', () => {
+    const classes = confirmKey().className.split(/\s+/)
+    expect(classes.filter((name) => /^text-(on-pine|ink)/.test(name))).toEqual(['text-on-pine'])
+  })
+
+  it('数字キーは白地・地の文字色のまま', () => {
+    render(<Keypad value="" onChange={() => {}} onConfirm={() => {}} />)
+    const classes = screen.getByRole('button', { name: '7' }).className.split(/\s+/)
+    expect(classes.filter((name) => /^bg-/.test(name))).toEqual(['bg-surface'])
+    expect(classes).toContain('text-ink')
   })
 })

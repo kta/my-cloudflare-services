@@ -13,7 +13,7 @@
 
 ## 目的・責務
 
-眼鏡店チェーン **EYEX** の予約管理を担う。1 Worker が業務用 SPA（iPad 11 インチ 横向き 1194×834pt）と
+眼鏡店チェーン **EYE** の予約管理を担う。1 Worker が業務用 SPA（iPad 11 インチ 横向き 1194×834pt）と
 お客様向け Web 予約 SPA（iPhone 390×844pt）と Hono API を同一オリジンで配信する。
 
 **所有するもの**（このサービスの D1 が正本）:
@@ -40,8 +40,8 @@
 | デザイントークンの定義 | `packages/ui/src/theme.css` | 参照のみ。モックの生 hex を SPA に書かない |
 | API 契約（Zod）の定義 | `packages/contracts/src/glasses_management.ts` | 参照のみ。手書き型を書かない |
 
-見た目の正本は `docs/frontend/mockups/eyex/`（68 画面の HTML + PNG + `assets/eyex.css`）。
-`docs/frontend/mockups/eyex/assets/eyex.css` の値は `packages/ui/src/theme.css` のセマンティックトークンへ翻訳して使う。
+見た目の正本は `docs/frontend/mockups/eye/`（68 画面の HTML + PNG + `assets/eye.css`）。
+`docs/frontend/mockups/eye/assets/eye.css` の値は `packages/ui/src/theme.css` のセマンティックトークンへ翻訳して使う。
 
 ## エンティティ（所有データ）
 
@@ -402,7 +402,7 @@ DLQ・リトライキューは存在しない前提で設計する。失敗の�
 
 | # | spec | 内容 | UC/AC タグ |
 |---|---|---|---|
-| — | `features/002-eyex-reservation-product/spec.md` | 旧 spec。**削除のままにする**（本文は git 履歴に残る）。traceability は既に admin 側へ移設済みで、UC-EYEX-149 / UC-EYEX-151 は `specs/admin/features/003-user-administration/spec.md` の UC-ADMIN-USERS-01 / UC-ADMIN-USERS-02 として Approved になっている | かつて `UC-EYEX-*` / `AC-EYEX-*`（現在は admin 側の `UC-ADMIN-USERS-*`） |
+| — | `features/002-eye-reservation-product/spec.md` | 旧 spec。**削除のままにする**（本文は git 履歴に残る）。traceability は既に admin 側へ移設済みで、UC-EYE-149 / UC-EYE-151 は `specs/admin/features/003-user-administration/spec.md` の UC-ADMIN-USERS-01 / UC-ADMIN-USERS-02 として Approved になっている | かつて `UC-EYE-*` / `AC-EYE-*`（現在は admin 側の `UC-ADMIN-USERS-*`） |
 | P0 | [`003-service-foundation`](./features/003-service-foundation/spec.md) | 雛形・契約の骨・組織同期・認証・テナント分離・デザイントークン | `UC-FOUND-NN` / `AC-FOUND-NN` |
 | P1 | [`004-store-settings`](./features/004-store-settings/spec.md) | 店舗・営業時間・カレンダー・スタッフ・技能・設備・来店目的（設定 7 画面） | `UC-SET-NN` / `AC-SET-NN` |
 | P2 | [`005-availability-and-ledger`](./features/005-availability-and-ledger/spec.md) | 空き枠エンジン・予約台帳（担当軸 / 設備軸 / リスト / 詳細） | `UC-LEDGER-NN` / `AC-LEDGER-NN` |
@@ -449,7 +449,7 @@ Worker のコードと binding は Wrangler 所有、stateful な substrate は 
 **admin 側 binding とデプロイ順**
 
 - `services/admin/wrangler.jsonc` の `services[]` に `GLASSES_MANAGEMENT` → Worker `glasses-management` がある。**この Worker が存在しない状態で admin をデプロイすると失敗する。**
-- デプロイ順は `notifier` → `glasses_management`（migrate → deploy）→ `admin`（`docs/howto/deploy.md`）。同文書は末尾に `ops` を足しているが、その Worker は本リポジトリに無く、CI の `deploy-eyex-stack` job も notifier / glasses_management / admin の 3 本しか実行しない。
+- デプロイ順は `notifier` → `glasses_management`（migrate → deploy）→ `admin`（`docs/howto/deploy.md`）。同文書は末尾に `ops` を足しているが、その Worker は本リポジトリに無く、CI の `deploy-eye-stack` job も notifier / glasses_management / admin の 3 本しか実行しない。
 - admin は service binding を `https://glasses-management.internal/api/internal/...` という固定ホスト名で叩く。dev の Vite サーバはこのホスト名を明示的に許可しないと拒否するため、`services/glasses_management/vite.config.ts` に `server: { port: 5175, allowedHosts: ['glasses-management.internal'] }` が要る。**現状は `server: { port: 5175 }` だけで `allowedHosts` が無い**（実測: `Host: glasses-management.internal` を付けた `POST /api/internal/organizations/sync` が 403 `Blocked request.` で落ちる）。組織も担当店舗も届かないと業務 API は `requireActiveOrg` が 503 `not_synced` を返すので、**この 1 行が無いと P1 以降の E2E が 1 本も緑にならない**。`features/003-service-foundation` の TASKS で塞ぐ。admin 側は `services/admin/vite.config.ts` が `allowedHosts: ['admin.internal']` を宣言済み。
 - admin のテストは `services/admin/vitest.config.ts` の `miniflare.serviceBindings.GLASSES_MANAGEMENT` echo スタブ（送った body をそのまま 200 で返す）に依存している。**このスタブを消すと admin の 4 テストファイルが落ちる**ので残す。
 
@@ -461,12 +461,12 @@ Worker のコードと binding は Wrangler 所有、stateful な substrate は 
 |---|---|---|
 | `package.json` の `test` | `pnpm --filter @app/glasses_management test:all &&` を admin / example_service の後に置く | pnpm は no-match でも exit 0 を返すので**無言で素通り**する。テスト件数で実行を確かめる |
 | `Makefile` | `dev/glasses_management`（:5175）/ `dev/all` の併走行 / `.PHONY` | `make dev/glasses_management` が無いターゲットで落ちる |
-| `.github/workflows/ci.yml` | e2e matrix の `glasses_management` 行 / `deploy-eyex-stack` の migrate + deploy ステップ | e2e が手動実行の対象から外れ、デプロイ順が admin より先にならない |
+| `.github/workflows/ci.yml` | e2e matrix の `glasses_management` 行 / `deploy-eye-stack` の migrate + deploy ステップ | e2e が手動実行の対象から外れ、デプロイ順が admin より先にならない |
 | `knip.jsonc` | `services/glasses_management` の workspace 定義 | `pnpm run deps:check` が未使用依存を誤検出する |
 
 **不明点**
 
-発注元（EYEX）への確認事項の**正本は `design/09-open-questions.md`（全 12 件）**である。件数と暫定案はそちらだけで数え、
+発注元（EYE）への確認事項の**正本は `design/09-open-questions.md`（全 12 件）**である。件数と暫定案はそちらだけで数え、
 本書に別の一覧を持たない。**暫定案のもとで実装を進めてよい**（答え待ちを理由に着手を止めない）。
 本書に直接効くのは次の 3 件で、いずれも 09 の「いまの前提（暫定）」がそのまま本書の記述の根拠になっている。
 

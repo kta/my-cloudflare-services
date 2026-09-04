@@ -56,9 +56,9 @@ echo -n "<d1-read-token>" | pnpm --filter @app/ops exec wrangler secret put D1_E
 ## 4. リモート D1 マイグレーション → デプロイ
 デプロイ順は **binding の参照先を先に**する: `notifier → glasses_management → admin → ops`。`admin` は `glasses_management` を service binding するため、初回を含めて必ず domain Worker の後にデプロイする。ops は notifier/admin（+ドメインサービス）を binding するため最後。
 
-`wrangler.jsonc` の新サービスには、Terraform の実リソース ID を反映するまで意図的に placeholder が残る。したがって **main push ではデプロイを行わず**、notifier / glasses_management / admin は GitHub Actions の `workflow_dispatch` で `deploy_eyex_stack=true` を明示したときだけ順番に実行する。手動実行の直前に、Terraform apply、D1/KV/R2 の ID反映、secrets設定、`pnpm -r cf-typegen` を完了させること。
+`wrangler.jsonc` の新サービスには、Terraform の実リソース ID を反映するまで意図的に placeholder が残る。したがって **main push ではデプロイを行わず**、notifier / glasses_management / admin は GitHub Actions の `workflow_dispatch` で `deploy_eye_stack=true` を明示したときだけ順番に実行する。手動実行の直前に、Terraform apply、D1/KV/R2 の ID反映、secrets設定、`pnpm -r cf-typegen` を完了させること。
 
-> `example_service` は雛形で**本番には決してデプロイされない**。EYEX の実サービスは
+> `example_service` は雛形で**本番には決してデプロイされない**。EYE の実サービスは
 > `glasses_management` であり、admin の `GLASSES_MANAGEMENT` service binding は
 > この Worker を参照する。
 ```sh
@@ -71,7 +71,7 @@ pnpm --filter @app/admin run db:migrate:remote && pnpm --filter @app/admin run d
 pnpm --filter @app/ops run deploy
 ```
 `example_service` はテンプレの雛形（`new-service` のコピー元）であり、**本番にはデプロイしない**（CI の deploy matrix からも除外）。検証/e2e のみ対象とする。
-CI（`.github/workflows/ci.yml` の `deploy-eyex-stack` job）は Actions から手動実行し、`deploy_eyex_stack` を true にした場合だけ notifier → glasses_management → admin の順で migrate→deploy する。placeholder のままこの入力を true にしてはならない。Cron（admin の日次照合 / ops のバックアップ・監視）は各 `wrangler.jsonc` の `triggers.crons` から deploy 時に構成される。
+CI（`.github/workflows/ci.yml` の `deploy-eye-stack` job）は Actions から手動実行し、`deploy_eye_stack` を true にした場合だけ notifier → glasses_management → admin の順で migrate→deploy する。placeholder のままこの入力を true にしてはならない。Cron（admin の日次照合 / ops のバックアップ・監視）は各 `wrangler.jsonc` の `triggers.crons` から deploy 時に構成される。
 
 ## ⚠️ 本番前に必ず潰すこと（テンプレの意図的な dev 設定）
 - **`AUTH_DEV_GRANT` を本番 secrets/vars に入れない**（未設定 = dev グラント 404 fail close。`true` を入れると任意 org の JWT 発行 = 認証バイパスが開く）。実運用は `/api/auth/login` を使う。

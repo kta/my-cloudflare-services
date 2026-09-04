@@ -3,7 +3,7 @@ import { cn } from '@app/ui'
 import { PublicNotice, StickyAction } from './PublicBookingApp'
 
 /*
- * 工程 1「店舗を選ぶ」（承認済みモック docs/frontend/mockups/eyex/images/WEB-01-STORE.png）。
+ * 工程 1「店舗を選ぶ」（承認済みモック docs/frontend/mockups/eye/images/WEB-01-STORE.png）。
  *
  * 実測（screens/WEB-01-STORE.html の <style>）:
  *   並び 間 12px・上 28px、1 件は最小高 76px・padding 16px・角 12px・縁 1px --line-strong
@@ -25,7 +25,7 @@ export type StoreStepProps = {
   onNext: () => void
 }
 
-/** 主操作に入れる呼び名。「EYEX 銀座店」→「銀座店」（屋号を二度読ませない）。 */
+/** 主操作に入れる呼び名。「EYE 銀座店」→「銀座店」（屋号を二度読ませない）。 */
 function shortStoreName(name: string): string {
   const parts = name.trim().split(/\s+/)
   return parts[parts.length - 1] ?? name

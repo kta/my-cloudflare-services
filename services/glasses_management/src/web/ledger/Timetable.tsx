@@ -3,7 +3,6 @@ import { cn, focusRing } from '@app/ui'
 import { type KeyboardEvent, useEffect, useRef, useState } from 'react'
 import { visitLabel } from '../../worker/domain/customers'
 import { bandSourceLabel, type LedgerBandTone } from '../../worker/domain/ledger'
-import { maskLane } from '../shell/mask'
 import {
   bandName,
   bandToneOf,
@@ -15,7 +14,6 @@ import {
   gridMinWidth,
   gridTemplateColumns,
   gridTemplateRows,
-  jstClock,
   LABEL_WIDTH_PX,
   type LaneSegment,
   laneSegments,
@@ -24,7 +22,7 @@ import {
 } from './metrics'
 
 /*
- * 予約台帳のタイムテーブル（承認済みモック docs/frontend/mockups/eyex/images/LEDGER-STAFF.png
+ * 予約台帳のタイムテーブル（承認済みモック docs/frontend/mockups/eye/images/LEDGER-STAFF.png
  * と LEDGER-RESOURCE.png）。
  *
  * 題材: 受付スタッフが電話を取りながら「いまお店がどこまで埋まっているか」を一目で読む面。
@@ -37,7 +35,7 @@ import {
  *
  * お名前と来店回数（`007-customer-records`。AC-CUST-24）: 60分以上（2 列）の帯は
  * お名前フルネーム＋来店回数の印を出し、30分（1 列）の帯は印を持たずお名前を
- * **姓だけ**に落とす（`docs/frontend/mockups/eyex/images/LEDGER-STAFF.png` の
+ * **姓だけ**に落とす（`docs/frontend/mockups/eye/images/LEDGER-STAFF.png` の
  * 「田中 花子 様／4回目」「松本 様」）。読み上げ名は省略しない（`metrics.ts` の `bandName`）。
  *
  * この面が描かないもの: お待ちのお客様の人数（`walk_ins` は 008。いまは 0名 の器）。
@@ -46,12 +44,21 @@ import {
 /** 名前列の幅を rem で。任意値（`grid-cols-[170px_1fr]`）を書かないための値。 */
 const LABEL_WIDTH_REM = `${LABEL_WIDTH_PX / 16}rem`
 
-/** 帯の地と左の 4px。`--color-*` のトークンだけを指す。 */
+/*
+ * 帯の地と左の 4px。`--color-*` のトークンだけを指す。
+ *
+ * `alert`（担当が未定）は **amber**。`theme.css:83` は `--color-danger` を
+ * 「取消・警告・現在時刻の線・破壊的操作」と定めていて、担当未定は失敗ではなく
+ * 「これから決めること」なので当てはまらない。赤い帯を見た店員は取り消された
+ * ご予約と読む（UX 監査 UI-12 / J-03）。承認済みモック `LEDGER-STAFF.png` も
+ * 同じ赤を使っているが、**モックのほうが定義に反している。**
+ * 取り消しと「ご来店なし」は danger のまま。
+ */
 const BAND_TONE: Record<LedgerBandTone | 'alert', string> = {
   pine: 'bg-pine-soft border-pine',
   web: 'bg-web-soft border-web',
   walkin: 'bg-walkin-soft border-walkin',
-  alert: 'bg-danger-soft border-danger',
+  alert: 'bg-amber-soft border-amber',
 }
 
 const ARROWS = new Set(['ArrowRight', 'ArrowLeft', 'ArrowUp', 'ArrowDown', 'Home', 'End'])
@@ -67,11 +74,6 @@ export type TimetableProps = {
    * 渡さない器では行き先が無いので、押せて何も起きないボタンを置かない。
    */
   onOpenSettings?: () => void
-  /**
-   * 自動で伏せているあいだ（P10 / AC-TERM-12）。**お名前だけ**を `●●●●` に置き換える。
-   * 時刻・件数・ご用件・担当は読めたままにする。
-   */
-  masked?: boolean
 }
 
 export function Timetable({
@@ -79,7 +81,6 @@ export function Timetable({
   selectedReservationId,
   onSelectEntry,
   onOpenSettings,
-  masked = false,
 }: TimetableProps) {
   const [held, setHeld] = useState<string | null>(null)
   const [active, setActive] = useState({ row: 0, column: 0 })
@@ -135,10 +136,7 @@ export function Timetable({
   }
 
   const columns = columnCount(view.closesAt)
-  // 伏せるのはここ 1 か所。読み上げ名（`bandName`）も帯の文字も同じ値から出るので、
-  // 伏せ字にした値が DOM のどこにも残らない。
-  const lanes = masked ? view.lanes.map(maskLane) : view.lanes
-  const rows = lanes.map((lane) => laneSegments(lane, view.date, columns))
+  const rows = view.lanes.map((lane) => laneSegments(lane, view.date, columns))
   // 行が減ったときに焦点の行番号を丸める。並べ方を戻した直後に `active.row` が
   // 行数を越えたままだと、どの枠にも `tabIndex=0` が当たらず台帳へ Tab で入れなくなる。
   const activeRow = Math.min(active.row, rows.length - 1)
@@ -213,7 +211,7 @@ export function Timetable({
           role="grid"
           aria-label="予約台帳"
           aria-colcount={columns + 1}
-          aria-rowcount={lanes.length + 1}
+          aria-rowcount={view.lanes.length + 1}
           onKeyDown={onKeyDown}
           /* 目盛りは 1 枚うしろ。位置指定した要素は静的な要素より**あとに**描かれるので、
              格子の側も位置指定にしないと、線が帯の文字と焦点の輪を横切ってしまう
@@ -221,7 +219,7 @@ export function Timetable({
           className="relative grid h-full text-grid"
           style={{
             gridTemplateColumns: gridTemplateColumns(columns),
-            gridTemplateRows: gridTemplateRows(lanes),
+            gridTemplateRows: gridTemplateRows(view.lanes),
           }}
         >
           {/* biome-ignore lint/a11y/useSemanticElements: 上の grid と同じ理由（行は display:contents） */}
@@ -250,7 +248,7 @@ export function Timetable({
             ))}
           </div>
 
-          {lanes.map((lane, rowIndex) => (
+          {view.lanes.map((lane, rowIndex) => (
             <Lane
               key={`${lane.kind}:${lane.id ?? lane.name}`}
               lane={lane}
@@ -458,7 +456,7 @@ function surnameOf(name: string): string {
  * 来店回数の印。**数字の文字を必ず出す**（色だけで区別しない）。
  * はじめての方は薄い橙、3 回目以上は薄い緑、1〜2 回目は罫だけ。
  * **この印はお名前の右に添えるものだけ**にしてある —— 回数の列をすでに持つ面
- * （顧客台帳の一覧）には入れない（`docs/frontend/mockups/eyex/README.md` の決め）ので、
+ * （顧客台帳の一覧）には入れない（`docs/frontend/mockups/eye/README.md` の決め）ので、
  * 印の綴りはこの 1 か所しか無い（来店受付ボード・受け付ける面・受付履歴もこれを呼ぶ）。
  */
 export function VisitBadge({ count }: { count: number }) {
@@ -485,34 +483,31 @@ function Band({ entry, wide }: { entry: LedgerEntry; wide: boolean }) {
         BAND_TONE[bandToneOf(entry)],
       )}
     >
-      <span className="font-mono font-bold">
-        {jstClock(entry.startsAt)}
-        {/* 区切りだけ等幅から外す。13px の等幅では「–」が 2 本の短い線に割れて
-            「11:00--12:00」と読めてしまう（22px では 1 本に見えるので気づきにくい）。 */}
-        {wide && (
-          <>
-            <span className="font-sans font-normal">–</span>
-            {jstClock(entry.endsAt)}
-          </>
-        )}
-      </span>
-      {/* お名前と来店回数（AC-CUST-24）。60分以上（2 列）はフルネーム＋印、
-          30分（1 列）は姓だけに落とし印を持たない（文字予算がおよそ 6 字しかない）。 */}
+      {/*
+        帯の中はお名前がいちばん強い。**時刻は書かない** —— 帯の x の位置が既に時刻を
+        表しているので、書けば同じ情報を 2 度描くことになり、しかも以前は等幅太字の
+        時刻がお名前より強く刷られていた（UX 監査 UI-01）。承認済みモック
+        LEDGER-STAFF.png も帯に時刻を持たない。耳で聞く人のために、時刻は
+        セルの `aria-label` のほうに残してある。
+
+        60分以上（2 列）はフルネーム＋来店回数の印、30分（1 列）は姓だけに落とす
+        （文字予算がおよそ 6 字しかない。AC-CUST-24 / AC-LEDGER-06）。
+      */}
       {entry.customerName !== null &&
         (wide ? (
           <>
-            <span className="truncate font-semibold">{`${entry.customerName} 様`}</span>
+            <span className="truncate text-lead font-semibold">{`${entry.customerName} 様`}</span>
             {entry.visitCount !== null && <VisitBadge count={entry.visitCount} />}
           </>
         ) : (
-          <span className="font-semibold">{`${surnameOf(entry.customerName)} 様`}</span>
+          /* 30分（1 列 68px）は 17px の姓が 1 行に入らない。切り落とすと「松…」に
+             なって誰か分からなくなるので、2 行へ折り返す（モックも同じ）。 */
+          <span className="text-lead font-semibold leading-tight">{`${surnameOf(entry.customerName)} 様`}</span>
         ))}
       {/* 30分 1 列の文字予算はおよそ 6 字しかない。狭い帯にはご用件を入れない（AC-LEDGER-06）。 */}
       {wide && <span>{entry.purposeLabel}</span>}
       {source !== null && <span className="text-fine text-ink-muted">{source}</span>}
-      {entry.isUnassigned && (
-        <span className="text-fine font-semibold text-danger">担当が未定</span>
-      )}
+      {entry.isUnassigned && <span className="text-fine font-semibold text-amber">担当が未定</span>}
       {entry.status === 'no_show' && (
         <span className="text-fine font-semibold text-danger">ご来店なし</span>
       )}

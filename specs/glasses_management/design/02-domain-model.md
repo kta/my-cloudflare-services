@@ -1,9 +1,9 @@
-# 02 ドメインモデル — glasses_management（EYEX予約）
+# 02 ドメインモデル — glasses_management（EYE予約）
 
 - サービス: `services/glasses_management` (`@app/glasses_management`)
 - 位置づけ: 決定ブリーフ §2「ドメインの言葉」と §3「データモデル」を、実装が迷わない粒度まで展開した文書。
 - 上流: `design/01-requirements.md` / 下流: `design/03-data-model.md`（テーブル定義）・`design/04-api.md`（エンドポイントとエラー）・`design/06-use-cases.md`。
-- 見た目の根拠: `docs/frontend/mockups/eyex/screens/*.html` と `docs/frontend/mockups/eyex/images/*.png`。本文で「モック」と言うときはこれを指す。
+- 見た目の根拠: `docs/frontend/mockups/eye/screens/*.html` と `docs/frontend/mockups/eye/images/*.png`。本文で「モック」と言うときはこれを指す。
 - UC/AC の**定義**は各 `spec.md` にのみ置く。本書に定義形の bullet（`- UC-XXX-01: ...`）を書かない。参照するときは `UC-XXX-01（本文中で参照）` の形にする。
 
 ---
@@ -81,7 +81,7 @@ graph TB
 
 | 用語 | 対応するデータ | 定義（実装が守る条件） | 画面での出方 |
 |---|---|---|---|
-| 選択中店舗 | `stores.id`（端末セッションが保持） | 予約・台帳・検索・設定・分析の操作対象となる1店舗。切り替えはヘッダーの明示操作のみで、画面遷移では変わらない。 | ヘッダー「EYEX 銀座店」 |
+| 選択中店舗 | `stores.id`（端末セッションが保持） | 予約・台帳・検索・設定・分析の操作対象となる1店舗。切り替えはヘッダーの明示操作のみで、画面遷移では変わらない。 | ヘッダー「EYE 銀座店」 |
 | ご来店の目的 | `visit_purposes` | 予約の用件。`duration_minutes` と `purpose_requirements`（必要な技能・必要な設備種別）を持つ。名前を 3 つ持つ — 社内名 `name_internal`／お客様向け名 `name_public`／台帳の帯に出す短い名前 `name_short`。**`name_public` の正本は SETTINGS-PURPOSE の「お客様に見せる名前」列**（新しいメガネを作る／かけ具合の調整／できあがりの受け取り／修理・部品の交換／コンタクトのご相談／視力測定）。初期セットは 6 件で、「フィッティング」は目的ではなく技能である。 | LEDGER-DETAIL「ご用件 メガネを新しく作る」／SETTINGS-PURPOSE |
 | 担当 | `staff` ＋ `reservation_assignments(kind='staff')` | 接客するスタッフ。`staff_skills` で技能を持つ。`target_id IS NULL` は「あとで決める」を表し、これも枠を消費する。 | LEDGER-DETAIL「担当が未定」「あとで決める」／LEDGER-LIST の担当列「決めてください」 |
 | 設備・場所 | `equipment` ＋ `reservation_assignments(kind='equipment')` | 視力測定機 A・視力測定機 B・検査室 1（`kind='measure'`）／相談カウンター 1・相談カウンター 2・フィッティング台（`kind='counter'`）／加工室（`kind='workbench'`）の 7 件が初期セット（決定ブリーフ §12.3 が正。§11 の 5 件は誤り）。1予約が0本以上を同時に押さえる。 | LEDGER-DETAIL「場所 視力測定機 A ／ 相談カウンター 2」 |
@@ -850,7 +850,7 @@ Web予約の**承認**（`pending` → `confirmed`、LEDGER-LIST「内容を確�
 | Q-16 | §4 I-03c | 1予約に目的を2件以上持たせるときの配分 | **決着**。1 行を必須にする（複数目的の画面が起きたときに決め直す） |
 
 未決の 2 件の問いと暫定案は、それぞれ §3.7 の末尾と §3.9 の末尾に置いてある。
-どちらも発注元（EYEX）に聞かないと決まらないが、**暫定案のもとで実装を進めてよい**（答え待ちを理由に着手を止めない）。
+どちらも発注元（EYE）に聞かないと決まらないが、**暫定案のもとで実装を進めてよい**（答え待ちを理由に着手を止めない）。
 
 | フェーズ | 解いておくべき確認事項（09 の番号） |
 |---|---|

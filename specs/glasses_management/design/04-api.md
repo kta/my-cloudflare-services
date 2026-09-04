@@ -7,7 +7,7 @@
 
 この文書は「誰が実装しても同じ URL・同じ入出力・同じエラーになる」ことを目的にする。
 画面が要求しない項目は足さない。モックに描かれていない値のうち、モックとブリーフから読み取れるもの・設計判断で決まるものは
-**この文書で決める**。**発注元（EYEX）の運用・法務・機材の実情を知らないと決められないものだけ** `[要確認: ...]` を残す（§8）。
+**この文書で決める**。**発注元（EYE）の運用・法務・機材の実情を知らないと決められないものだけ** `[要確認: ...]` を残す（§8）。
 
 ---
 
@@ -140,10 +140,11 @@ GET が 403 で跳ねられた場面には下書きが無いので、この形�
 | 端末の登録・更新（PIN と自動ロック） | `terminal.manage` |
 | 録音の削除 | `recording.manage` |
 | 監査の閲覧 | `audit.read` |
+| 分析の閲覧 | `analytics.read` |
 
 設定の書き込みは**権限と個人モードの両方**を要求する（上の 1 行目と 2 行目が重なる）。
 
-**閲覧の権限（5 値）は、いま `audit.read` の 1 つしか使っていない。**
+**閲覧の権限は、監査と分析でサーバ側に付ける。**
 `StorePermission` の 19 値のうち `store.read` / `reservation.read` / `customer.read` / `attention.read` /
 `settings.read` は「その画面を開ける」ことを表し、`customer.history` / `recording.read` / `analytics.read` /
 `audit.read` は**より狭い閲覧**を表す。しかし §3 で `requireStorePermission` を付けた**読み取り**は
@@ -152,12 +153,17 @@ GET が 403 で跳ねられた場面には下書きが無いので、この形�
 | 閲覧の権限 | 付ける候補 | いまの状態 |
 |---|---|---|
 | `audit.read` | `GET /api/staff/audit` | **付けている**（§3.10） |
-| `analytics.read` | `GET /api/staff/analytics` / `GET /api/staff/analytics/targets` | 付けていない |
+| `analytics.read` | `GET /api/staff/analytics` / `GET /api/staff/analytics/targets` | **付ける**（§3.10） |
 | `customer.history` | `GET /api/staff/customers/:customerId`（他店で書かれた来店履歴を含む） | 付けていない |
 | `recording.read` | `GET /api/staff/recordings` / `POST /api/staff/recordings/:id/playback` | 付けていない（下の `[要確認]` と同じ論点） |
 | `attention.publish` | `POST /api/staff/customers/:customerId/notes/:noteId/publish` | 付けていない（個人モードだけを要求している） |
 
 `[要確認: Q-03 — いまの前提で進める]`（`design/09-open-questions.md`）。いまの前提: 上表の 4 つ（`analytics.read` / `customer.history` / `recording.read` / `attention.publish`）を**サーバ側で強制する**。録音の再生とお客様のおまとめは個人モード（本人の PIN）を必須にする。強制する以上、403 は §2.1 の「閲覧」側の面になり、サイドバーからその行き先も隠す。`03-data-model.md` §16 #1 と同じ問い。
+
+`requireStorePermission` は**実装上 `services/glasses_management/src/worker/index.ts` にある関数**を拡張して使う。
+`AnalyticsQuery.storeId` と `StoreIdQuery.storeId` はクエリ値から渡す。先に同一組織の store を解決するため、別組織の store は
+**404 `not_found`**、同じ組織だが membership に要求権限が無い場合は **403** とする。クライアント入力の org を信用せず、
+JWT の org と store membership の両方でスコープする。
 
 **個人モードだけを要求する操作**（権限は要求しない）: 顧客の統合実行、注意ごとの公開、録音の保全・再生。
 根拠は「操作した者が名前で残る必要がある」こと — START-DEVICE-MODE が共有端末の「記録される名前」を
@@ -186,7 +192,7 @@ GET が 403 で跳ねられた場面には下書きが無いので、この形�
 
 `POST /api/auth/token` はルートのチェーンに**含めない**（RPC 型に載せない）。本番で `AUTH_DEV_GRANT` を設定しない。
 
-### 3.2 internal（他 Worker から。5 本）
+### 3.2 internal（他 Worker から。6 本）
 
 | メソッド | パス | 認証 | 入力 | 出力 | 主なエラー | 呼び出し元 |
 |---|---|---|---|---|---|---|
@@ -195,6 +201,7 @@ GET が 403 で跳ねられた場面には下書きが無いので、この形�
 | POST | `/api/internal/store-memberships/sync` | key | `StoreMembership` | `StoreMembership` | 400（未知の権限語） | admin（`services/admin/src/worker/sync.ts` が `https://glasses-management.internal/api/internal/store-memberships/sync` を固定で持つ。1 件ずつ送る。`permissions: []` は担当解除の墓標） |
 | POST | `/api/internal/maintenance/recordings/purge` | key | `RecordingPurgeRequest` | `RecordingPurgeResult` | — | 保守。保持期限を過ぎた録音の掃除 |
 | POST | `/api/internal/maintenance/web-publications/apply` | key | `WebPublicationApplyRequest` | `WebPublicationApplyResult` | — | 保守。①`web_booking_settings` の公開予定の反映 ②**受信日（`web_bookings.created_at` の JST 暦日）の 24:00 JST を過ぎても `pending` のままの `web_bookings` を `cancelled` にする**（ALERTS「本日中に確認しないと自動で取り消されます。」。起算日は**受信日**であって来店日ではない。`02-domain-model.md` §3 の W4 と `03-data-model.md` §11.2 に揃える） |
+| POST | `/api/internal/maintenance/analytics/rollup` | key | `AnalyticsRollupRequest` | `AnalyticsRollupResult` | 400（範囲・`storeCursor` 不正） | 手動再集計と scheduled。`from` / `to` は JST 日付で最大 31 日、`storeCursor` から最大 3 店舗だけを処理する。scheduled は cursor を KV に持ち越し、1回の起動では1ページだけ処理する |
 
 **organizations の upsert 規則**（admin の実装に合わせる）:
 
@@ -220,12 +227,13 @@ admin（`services/admin/src/worker/sync.ts` の `matchesCanonicalSnapshot`）は
 `revision` の比較は**アプリ層で `Number()` に通して**行う（列は `text`。`03-data-model.md` §3.1）。
 `WHERE revision <= ?` という SQL を書くと文字列比較になり、`'10' < '2'` が真になって revision 10 以降の配信が全部無視される。
 
-**保守 2 本は `glasses-management` に割り当てた Cron 枠 1 本から呼ぶ。**アカウント全体の Cron 枠は 5 本あり、
-**現時点で `triggers.crons` を持つ Worker は 0 本である**（実測。`services/ops` はこのリポジトリに存在しない）。
-このサービスが**1 本目**を使う。`services/glasses_management/wrangler.jsonc` には `triggers.crons` も
-`export default { scheduled }` も無いので、**Cron を最初に必要とするフェーズの TASKS で足す**。1 本の `scheduled` の中で
-録音の掃除・公開予定の反映と pending 自動取消・勤務の窓送り・`analytics_daily` の再計算・前日の `waiting` の後始末を
-順に呼ぶ（`03-data-model.md` の各節が挙げた日次処理はすべてこの 1 本に乗せる）。運用者が手で叩く経路も残す。
+**保守は `glasses-management` の既存 Cron 1 本で行う。**`triggers.crons` は **`0 15 * * *`**（UTC、JST 00:00）とし、
+`scheduled(controller, env, ctx)` は `controller.scheduledTime` を各処理へ注入する。順序は Web 公開反映と pending 自動取消 →
+analytics rollup → 録音掃除であり、各処理を**独立した `try/catch`** に置く。先行処理が失敗しても後続を実行し、失敗はログ・
+alert に残す。勤務の窓送り等、既存の日次処理も同じ scheduled から呼ぶ。運用者用には上表の bounded な internal rollup API を残す。
+
+`applyWebPublications` は条件付き `pending` 更新の結果が 0 件なら、その予約を取消扱いにしてはならない。並行した承認後に
+ロック削除・予約取消・`web_booking.auto_cancelled` alert 作成を行わないことを先に再現する TDD を置き、更新件数で分岐する。
 
 `POST /api/internal/store-memberships/sync`（入力スキーマは `StoreMembership`）が受け取った `permissions` は
 **`store_memberships`（`03-data-model.md` §3.2）の `permissions` 列に空白区切りの文字列として**丸ごと置き換えで保存する（決定ブリーフ §12.4 で正式表として確定済み）。`requireStorePermission()` はこの表だけを読む。
@@ -525,8 +533,8 @@ EX-OFFLINE の「いまご覧の内容は 11:02 現在 のものです。」は�
 | GET | `/api/staff/alerts` | JWT | query `AlertListQuery` | `AlertList` | — | ALERTS／サイドバーの「お知らせ 3」バッジ |
 | PATCH | `/api/staff/alerts/:alertId` | JWT | `AlertPatch` | `Alert` | 404 `not_found` | ALERTS の 1 件を既読・対応済みにする |
 | POST | `/api/staff/alerts/read-all` | JWT | `AlertReadAllInput` | `AlertReadAllResult` | — | ALERTS「すべて既読にする」 |
-| GET | `/api/staff/analytics` | JWT | query `AnalyticsQuery` | `AnalyticsReport` | — | ANALYTICS-TOP／COUNT／STAFF／WAIT／CANCEL |
-| GET | `/api/staff/analytics/targets` | JWT | query `StoreIdQuery` | `AnalyticsTargets` | — | ANALYTICS-WAIT「目安 8分」／ANALYTICS-CANCEL「目安 10%以内」／ANALYTICS-STAFF「90日以内の再来」 |
+| GET | `/api/staff/analytics` | JWT+店長（`analytics.read`） | query `AnalyticsQuery` | `AnalyticsReport` | 404 `not_found` / 403 | ANALYTICS の 8 タブ |
+| GET | `/api/staff/analytics/targets` | JWT+店長（`analytics.read`） | query `StoreIdQuery` | `AnalyticsTargets` | 404 `not_found` / 403 | ANALYTICS-WAIT「目安 8分」／ANALYTICS-CANCEL「目安 10%以内」／ANALYTICS-STAFF「90日以内の再来」 |
 
 **PIN の扱い**:
 
@@ -549,7 +557,7 @@ EX-OFFLINE の「いまご覧の内容は 11:02 現在 のものです。」は�
 
 | クエリ | 値 | 根拠 |
 |---|---|---|
-| `metric` | `reservation_count` / `reservation_source` / `cancellation` / `visit_frequency` / `staff` / `purpose` / `wait_time` | ANALYTICS の 8 タブ（トップは複数 metric の束ね） |
+| `metric` | `overview` / `reservation_count` / `reservation_source` / `cancellation` / `visit_frequency` / `staff` / `purpose` / `wait_time` | ANALYTICS の 8 タブ |
 | `granularity` | `day` / `month` / `hour` / `weekday` | ANALYTICS-COUNT「集計の種類　日別 / 月別 / 時間帯別 / 曜日別」 |
 | `countBy` | `visit_date` / `received_date` | ANALYTICS-COUNT「かぞえる日　ご来店日 / 受付日」 |
 | 期間 | `from` / `to`（`YYYY-MM-DD`。単月は同月の 1 日と末日を入れる） | ANALYTICS-CANCEL だけが 2026年3月 − 2026年8月 のレンジ |
@@ -643,7 +651,7 @@ RPC チェーンに載るのは `POST /api/auth/token` を除く 99 本。
 | `Walkin.waitedMinutes` | `serverNow - walk_ins.arrived_at` を分へ切り捨て（LEDGER-STAFF「お待ち 6分」） |
 | `LedgerView.estimatedWaitMinutes` | **空き枠エンジンの結果から出す** —「選んだご用件を受けられる担当が次に空く時刻 − `serverNow`」を分に切り上げ（LEDGER-WALKIN「目安 15分」）。待ち人数だけで決めない（空いている担当が 3 人いても待ちが 2 名なら同じ数字を出してしまい、モックの「いまお待ち 2名／目安 15分」も再現できない。最短のご用件でも 20 分なので、件数 × 平均接客分数では 15 分にならない）。数えるウォークインは `visit_date = 本日（JST）` かつ `status='waiting'` に限る |
 | `LedgerView.nextTicketNo` | その店舗・その日の `ticket_no` の最大値 + 1（LEDGER-WALKIN「ウォークイン 005」） |
-| `WebBookingSettings.landingPath` | 公開ドメイン（`wrangler.jsonc` の `vars`）+ `stores.slug`（SETTINGS-WEB「eyex.jp/ginza」） |
+| `WebBookingSettings.landingPath` | 公開ドメイン（`wrangler.jsonc` の `vars`）+ `stores.slug`（SETTINGS-WEB「eye.jp/ginza」） |
 | `WebBookingSettings.publishedPurposeIds` | `visit_purposes.is_web_published='1'` かつ `is_active='1'` の行（銀座店は 5 件） |
 | `SlotRulesView.lastAcceptableAt` | **空き枠エンジンがその曜日に返す枠のうち、最後の枠の開始時刻**（SETTINGS-HOURS「木曜日に最後にお受けできるのは 18:20 です。」）。式で算出しない — 式で出すと 30 分の格子に載らない時刻を案内して「押せる枠が無い時刻」を読ませてしまう |
 | `StaffMember.skills` | `staff_skills` の行を `skill_code` の配列にしたもの |
@@ -656,7 +664,7 @@ RPC チェーンに載るのは `POST /api/auth/token` を除く 99 本。
 
 | スキーマ.フィールド | 必要な列 | モックの根拠 |
 |---|---|---|
-| `StoreDetail.namePublic` | `stores.name_public` | SETTINGS-STORE「お客様に見せる店名　EYEX 銀座店（銀座4丁目）」 |
+| `StoreDetail.namePublic` | `stores.name_public` | SETTINGS-STORE「お客様に見せる店名　EYE 銀座店（銀座4丁目）」 |
 | `StoreDetail.introText` | `stores.intro_text` | SETTINGS-STORE「お客様に見せる紹介文　78文字／200文字まで」 |
 | `StoreDetail.accessNote` の 3 分割 | `stores.access_note` 1 列では足りない | SETTINGS-STORE の「最寄り駅」「出口と所要時間」「駐車場」の 3 行 |
 | 楽観ロックの `version` | `stores` / `store_business_hours` / `staff` / `staff_shifts` / `equipment` / `walk_ins` / `terminals` に `version` | 各設定画面の「保存」と EX-CONFLICT。決定ブリーフ §3 で `version` を持つのは `store_slot_rules` / `visit_purposes` / `reservations` / `customers` / `web_booking_settings` だけ |
@@ -882,20 +890,22 @@ RPC チェーンに載るのは `POST /api/auth/token` を除く 99 本。
 | `AlertPatch` | 更新 | `readAt?: IsoDateTime \| null` / `resolved?: boolean` |
 | `AlertReadAllInput` / `AlertReadAllResult` | 一括既読 | `storeId?` → `{ updated: int }` |
 | `AnalyticsQuery` | 分析 | `storeId: Uuid` / `metric: AnalyticsMetric` / `from`・`to: LocalDate`（**最大 400 日**） / `granularity: 'day'\|'month'\|'hour'\|'weekday' (既定 'day')` / `countBy: 'visit_date'\|'received_date' (既定 'visit_date')` |
-| `AnalyticsMetric` | 指標 | `z.enum(['reservation_count','reservation_source','cancellation','visit_frequency','staff','purpose','wait_time'])` |
-| `AnalyticsPoint` | 点 1 つ | `key: string`（`2026-08-27` / `14` / `mon`） / `label: 1..30` / `value: number` / `secondaryValue: number \| null`（件数に対する人数） / `isClosed: boolean`（定休日は 0 件で描く） / `isOverTarget: boolean` |
-| `AnalyticsSeries` | 系列 | `name: 1..30` / `points: AnalyticsPoint[]` / `pattern: 'solid'\|'hatch'\|'dot'`（色以外でも見分けられるようにする地模様）。ANALYTICS-CANCEL の凡例は **`cancel_reason` を基準に 5 本**（「ご来店がなかった」「Webからの取消」「お客様のご都合」「店舗の都合」「予約の重複」）で、CHANGE-CANCEL の 4 択と 1 字も違えない（`03-data-model.md` §11.4） |
-| `AnalyticsReport` | 応答 | `metric` / `from`・`to` / `granularity` / `countBy` / `series: AnalyticsSeries[]` / `summary: { label, value, unit, isOverTarget }[]` / `target: number \| null` / `suppressed: boolean`（**分母が 20 件未満のとき率を `null` にして「—」で描かせる**） / `businessDays: int`（「1日あたり」の分母。定休日・臨時休業を除いた営業日数） / `pendingDays: int`（まだ集計できていない日数。「〜日ぶんはまだ集計中です」を出す） |
-| `AnalyticsTargets` | 目安 | `waitMinutes: 8` / `cancellationRatePercent: 10` / `revisitWindowDays: 90`（モックの表示値。**全店共通の固定値**で、店舗ごとの設定を持たない） |
+| `AnalyticsMetric` | 指標 | `z.enum(['overview','reservation_count','reservation_source','cancellation','visit_frequency','staff','purpose','wait_time'])` |
+| `AnalyticsPoint` | 点 1 つ | `key: string`（`2026-08-27` / `14` / `mon`） / `label: 1..60`（`analytics_daily.dimension_label` の集計時点スナップショット。改名後も ID を出さない） / `value: number` / `secondaryValue: number \| null`（率など補助値。人数ではない） / `isClosed: boolean`（定休日は 0 件で描く） / `isOverTarget: boolean` |
+| `AnalyticsSeries` | 系列 | `name: 1..60` / `points: AnalyticsPoint[]` / `pattern: 'solid'\|'hatch'\|'dot'`（色以外でも見分けられるようにする地模様）。ANALYTICS-CANCEL の凡例は **`cancellation_category` を基準に 5 本**（「ご来店がなかった」「Webからの取消」「お客様のご都合」「店舗の都合」「予約の重複」）で、CHANGE-CANCEL の 4 択と 1 字も違えない（`03-data-model.md` §11.4） |
+| `AnalyticsReport` | 応答 | `metric` / `from`・`to` / `granularity` / `countBy` / `series: AnalyticsSeries[]` / `summary: { label: 1..30, value: string 0..40, unit: string 0..8, isOverTarget }[] (max 3)` / `target: number \| null` / `suppressed: boolean`（**分母が 20 件未満のとき率を `null` にして「—」で描かせる**） / `businessDays: int`（「1日あたり」の分母。定休日・臨時休業を除いた営業日数） / `pendingDays: int`（まだ集計できていない日数。「〜日ぶんはまだ集計中です」を出す）。`value` を文字列にするのは「8分40秒」「8月15日」を同じ3項目で返すため。読み取り対象は `analytics_daily` だけで、生表は読まない |
+| `AnalyticsTargets` | 目安 | `waitMinutes: 8` / `cancellationRatePercent: 10` / `revisitWindowDays: 90`（モックの表示値。**全店共通の固定値**で、店舗ごとの設定を持たない）。固定値だけを返し、**analytics_daily 読み取りは 0 件**（認可用 membership の D1 read まで 0 にする意味ではない） |
+| `AnalyticsRollupRequest` | 内部再集計 | `from`・`to: LocalDate`（両端を含め最大 31 日） / `storeCursor?: string` / `limit: int 1..3`（既定3）。1 呼び出しで処理する store は最大 3 件 |
+| `AnalyticsRollupResult` | 内部再集計 | `processedStores: int 0..3` / `failedStores: string[] (max 3)` / `nextStoreCursor: string \| null` / `from` / `to` / `upserted: int` / `dropped: int`。同じ入力の再実行は冪等 |
 
 ### 4.10 Web 予約
 
 | スキーマ名 | 用途 | 主なフィールドと制約 |
 |---|---|---|
-| `WebBookingSettings` | 公開設定 | `storeId` / `isPublished: boolean` / `landingPath: 1..60`（`eyex.jp/ginza`） / `opensAt`・`closesAt: LocalTime`（10:30–18:00） / `acceptFromHours: int 0..168 (**既定 2**)` / `acceptUntilDays: int 1..180`（30） / `requiresApproval: boolean (既定 true。**`false` を選ばせる UI は作らない**)` / `message: 0..120`（「27文字／120文字まで」） / `publishedPurposeIds: Uuid[]`（**0 件のまま `isPublished=true` にはできない**） / `version` / `updatedAt` |
+| `WebBookingSettings` | 公開設定 | `storeId` / `isPublished: boolean` / `landingPath: 1..60`（`eye.jp/ginza`） / `opensAt`・`closesAt: LocalTime`（10:30–18:00） / `acceptFromHours: int 0..168 (**既定 2**)` / `acceptUntilDays: int 1..180`（30） / `requiresApproval: boolean (既定 true。**`false` を選ばせる UI は作らない**)` / `message: 0..120`（「27文字／120文字まで」） / `publishedPurposeIds: Uuid[]`（**0 件のまま `isPublished=true` にはできない**） / `version` / `updatedAt` |
 | `WebBookingSettingsInput` | 更新 | 上の可変項目 + `version` |
 | `WebPreviewQuery` | プレビュー | `purposeIds?: string`（カンマ区切り。未保存の値） / `message?: 0..120` |
-| `WebPreviewResult` | プレビュー | `purposes: PublicStorePurpose[]` / `message: 0..120` / `storeName: 1..40`（SETTINGS-WEB 右「EYEX 銀座店　ご予約」） |
+| `WebPreviewResult` | プレビュー | `purposes: PublicStorePurpose[]` / `message: 0..120` / `storeName: 1..40`（SETTINGS-WEB 右「EYE 銀座店　ご予約」） |
 | `WebBookingReviewInput` | 承認・却下 | `decision: 'approve'\|'reject'` / `reason?: 0..120`（`decision='reject'` のとき必須を refine） |
 | `PublicStoreSearchQuery` | 店舗一覧 | `limit: int 1..10 (既定 3)`（WEB-01-STORE「近い順に3店舗」） / `lat?`・`lng?: number` |
 | `PublicStoreSummary` | 店舗 1 件 | `slug` / `name: 1..40` / `accessNote: 0..60`（「銀座駅 A2出口から徒歩3分」） |
@@ -1149,25 +1159,25 @@ payload に置けるキーも `z.strictObject` で固定されている（`reser
 
 | `type` | 件名 |
 |---|---|
-| `reservation.confirmed` | `EYEX {店名}　ご予約を承りました` |
-| `reservation.management_code_issued` | `EYEX {店名}　ご予約の確認番号` |
-| `reservation.management_code_reissued` | `EYEX {店名}　ご予約の確認番号をお送りし直しました` |
+| `reservation.confirmed` | `EYE {店名}　ご予約を承りました` |
+| `reservation.management_code_issued` | `EYE {店名}　ご予約の確認番号` |
+| `reservation.management_code_reissued` | `EYE {店名}　ご予約の確認番号をお送りし直しました` |
 
 本文（`reservation.confirmed`）:
 
 ```
 {お名前} 様
 
-EYEX {店名}のご予約を承りました。
+EYE {店名}のご予約を承りました。
 
 ご来店　2026年8月29日（土）11:00
-店舗　EYEX 銀座店（銀座4丁目）
+店舗　EYE 銀座店（銀座4丁目）
 ご用件　新しいメガネを作る（約60分）
 ご予約番号　EY-W-2608-0031
 確認番号　****
 
 ご変更・お取り消しは、ご予約番号と確認番号をお使いください。
-https://eyex.jp/w/reservations/EY-W-2608-0031
+https://eye.jp/w/reservations/EY-W-2608-0031
 ```
 
 書くときの決め:
@@ -1231,7 +1241,7 @@ return c.json(PublicBookingResult.parse({ ...result, emailed }))
 | 決定ブリーフ §1（binding・secrets）と矛盾しないか | `NOTIFIER` / `SHORT_LIVED` / `RECORDINGS` / `INTERNAL_KEY` / `JWT_SECRET` / `AUTH_DEV_GRANT` を使う。**`ADMIN` binding と `AUTH_PEPPER`（PIN のハッシュに要る）は §2.1 の `[要確認]` が解けたら §1 に足す** |
 | 決定ブリーフ §3（テーブル名・カラム）を勝手に変えていないか | この文書からは変えていない。§4.0 (b) で挙げた列は `03-data-model.md` が足し、**表を 5 本（`store_memberships` / `store_blackout_windows` / `store_settings_revision` / `staff_weekly_shifts` / `reservation_slot_locks`）足した**（`store_memberships` はブリーフ §12.4 で確定済み。残る 4 本が新規）。表の追加は規約 10 の人間の追認事項として `03-data-model.md` §16 に載せてある |
 | 決定ブリーフ §4（空き枠の 8 条件）を全部使っているか | `AvailabilityReason` の 11 値が 8 条件をすべて覆う |
-| 決定ブリーフ §5（画面）を賄えるか | §3 の「使う画面」列で 68 画面のうち API を要する画面をすべて指した。画面 ID は `docs/frontend/mockups/eyex/screens/<ID>.html` の**ファイル名と同じ表記**にした |
+| 決定ブリーフ §5（画面）を賄えるか | §3 の「使う画面」列で 68 画面のうち API を要する画面をすべて指した。画面 ID は `docs/frontend/mockups/eye/screens/<ID>.html` の**ファイル名と同じ表記**にした |
 | 決定ブリーフ §6（API 面）と矛盾しないか | 一致。`/api/staff/**` / `/api/public/**` / `/api/internal/**` / health / dev token |
 | モックに無いことを断定していないか | 断定していない箇所のうち、モックとブリーフから決まるもの・設計判断で決まるものは本文で決めた。**発注元に聞かないと決められない 5 件だけを `[要確認]` として残した**（下表。すべて `design/09-open-questions.md` の問いを指す。新しい問いを足していない） |
 | 規約（`docs/api/API_RULE.md`）に反していないか | チェーン／`zValidator` インライン／CORS 無し／`hc<AppType>`／401・403・503 の使い分け／エラー形状を満たす。**`requireRole('admin')` を店長判定に使わない**理由を §2 に明記した |
@@ -1255,7 +1265,7 @@ return c.json(PublicBookingResult.parse({ ...result, emailed }))
 
 | 論点 | 決めた内容 |
 |---|---|
-| 保守 2 本の定期実行 | `glasses-management` に Cron 枠 1 本を割り当て、日次処理をすべてこの 1 本に乗せる（アカウント 5 本のうち**現時点の使用は 0 本**なので、これが 1 本目。`wrangler.jsonc` の `triggers.crons` と `scheduled` ハンドラを足すのは、Cron を最初に必要とするフェーズの TASKS） |
+| 定期実行 | 既存 Cron 1 本を `0 15 * * *` UTC（JST 00:00）にする。`scheduledTime` を注入し、Web 公開反映→analytics rollup→録音掃除を独立 `try/catch` で実行する。analytics の手動再集計は最大 31 日・最大 3 店舗の内部 API に限定する |
 | `StorePermission` の保存先 | `store_memberships`（`03-data-model.md` §3.2） |
 | 勤務時間の保存 | 曜日パターンを `staff_weekly_shifts` に保存し、62 日先まで展開。窓は日次 Cron が送る |
 | 来店進捗の stage | `handover` を足して 8 値。`left` は退店 |

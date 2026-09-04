@@ -94,10 +94,15 @@ async function startSession(
 }
 
 function callAs(token: string) {
-  return async (method: string, path: string, body?: unknown) => {
+  return async (
+    method: string,
+    path: string,
+    body?: unknown,
+    headers: Record<string, string> = {},
+  ) => {
     const res = await SELF.fetch(`${BASE}${path}`, {
       method,
-      headers: authed(token),
+      headers: { ...authed(token), ...headers },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     })
     return { status: res.status, body: (await res.json().catch(() => null)) as never as Json }
@@ -108,12 +113,18 @@ function callAs(token: string) {
 async function startRecording(
   tenant: { org: string; token: string; storeId: string },
   sessionId: string,
+  headers: Record<string, string> = {},
 ): Promise<Json> {
-  const created = await callAs(tenant.token)('POST', '/api/staff/recordings', {
-    receptionSessionId: sessionId,
-    storeId: tenant.storeId,
-    startedAt: FIXED_NOW,
-  })
+  const created = await callAs(tenant.token)(
+    'POST',
+    '/api/staff/recordings',
+    {
+      receptionSessionId: sessionId,
+      storeId: tenant.storeId,
+      startedAt: FIXED_NOW,
+    },
+    headers,
+  )
   expect(created.status).toBe(200)
   return created.body
 }
@@ -122,7 +133,12 @@ async function startRecording(
 async function putContent(
   token: string,
   recordingId: string,
-  input: { body?: BodyInit; contentType?: string; durationSeconds?: number } = {},
+  input: {
+    body?: BodyInit
+    contentType?: string
+    durationSeconds?: number
+    headers?: Record<string, string>
+  } = {},
 ) {
   const query =
     input.durationSeconds === undefined ? '' : `?durationSeconds=${input.durationSeconds}`
@@ -131,6 +147,7 @@ async function putContent(
     headers: {
       authorization: `Bearer ${token}`,
       'content-type': input.contentType ?? 'audio/mp4',
+      ...input.headers,
     },
     body: input.body ?? AUDIO,
   })
@@ -165,6 +182,65 @@ async function storedObjects(org: string): Promise<string[]> {
   return listed.objects.map((object) => object.key).sort()
 }
 
+async function credentialHash(token: string): Promise<string> {
+  const digest = new Uint8Array(
+    await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token)),
+  )
+  let binary = ''
+  for (const byte of digest) binary += String.fromCharCode(byte)
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+async function terminalCredential(
+  tenant: { org: string; storeId: string; staffId: string },
+  input: {
+    mode?: 'shared' | 'personal'
+    storeId?: string
+    expiresAt?: string
+    token?: string
+  } = {},
+) {
+  const terminalId = crypto.randomUUID()
+  const storeId = input.storeId ?? tenant.storeId
+  const mode = input.mode ?? 'shared'
+  const token = input.token ?? 't'.repeat(64)
+  await env.DB.prepare(
+    "INSERT INTO terminals (id, organization_id, store_id, name, kind, auto_lock_seconds, is_active, version, created_at) VALUES (?,?,?,'録音テスト端末','shared',120,'1',1,?)",
+  )
+    .bind(terminalId, tenant.org, storeId, FIXED_NOW)
+    .run()
+  await env.DB.prepare(
+    'INSERT INTO terminal_sessions (id, organization_id, store_id, terminal_id, staff_id, mode, credential_hash, started_at, expires_at, revoked_at, created_at) VALUES (?,?,?,?,?,?,?,?,?,NULL,?)',
+  )
+    .bind(
+      crypto.randomUUID(),
+      tenant.org,
+      storeId,
+      terminalId,
+      mode === 'personal' ? tenant.staffId : null,
+      mode,
+      await credentialHash(token),
+      FIXED_NOW,
+      input.expiresAt ?? '2026-08-27T02:10:00.000Z',
+      FIXED_NOW,
+    )
+    .run()
+  return {
+    terminalId,
+    token,
+    headers: { 'x-terminal-id': terminalId, 'x-terminal-session': token },
+  }
+}
+
+async function recordingAuditCount(recordingId: string): Promise<number> {
+  const row = await env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM audit_events WHERE target_type = 'recordings' AND target_id = ?",
+  )
+    .bind(recordingId)
+    .first<{ n: number }>()
+  return row?.n ?? 0
+}
+
 /** 1 本の録音に残った操作を古い順に。 */
 async function auditActions(recordingId: string): Promise<string[]> {
   const found = await env.DB.prepare(
@@ -176,6 +252,72 @@ async function auditActions(recordingId: string): Promise<string[]> {
 }
 
 describe('録音の開始', () => {
+  it.each(['shared', 'personal'] as const)(
+    '有効な%s pairのrecording.startedはsession由来のactor三列を残す',
+    async (mode) => {
+      const tenant = await recordingTenant()
+      const sessionId = await startSession(tenant.org, tenant.storeId)
+      const terminal = await terminalCredential(tenant, { mode })
+
+      const recording = await startRecording(tenant, sessionId, terminal.headers)
+      const audit = await env.DB.prepare(
+        "SELECT actor_type AS actorType, actor_id AS actorId, terminal_id AS terminalId FROM audit_events WHERE organization_id = ? AND action = 'recording.started' AND target_id = ?",
+      )
+        .bind(tenant.org, recording.id)
+        .first<{ actorType: string; actorId: string; terminalId: string }>()
+      expect(audit).toEqual({
+        actorType: mode === 'shared' ? 'terminal' : 'staff',
+        actorId: mode === 'shared' ? terminal.terminalId : tenant.staffId,
+        terminalId: terminal.terminalId,
+      })
+    },
+  )
+
+  it('不正・不完全・期限切れ・別storeのpairでは録音行と監査を作らない', async () => {
+    const tenant = await recordingTenant()
+    const sessionId = await startSession(tenant.org, tenant.storeId)
+    const valid = await terminalCredential(tenant)
+    const expired = await terminalCredential(tenant, {
+      token: 'e'.repeat(64),
+      expiresAt: '2026-08-27T02:07:59.999Z',
+    })
+    const otherStore = await insertStore(tenant.org)
+    const crossStore = await terminalCredential(tenant, {
+      storeId: otherStore,
+      token: 'c'.repeat(64),
+    })
+    const invalid: Record<string, string>[] = [
+      { 'x-terminal-id': valid.terminalId },
+      { 'x-terminal-session': valid.token },
+      { 'x-terminal-id': valid.terminalId, 'x-terminal-session': 'w'.repeat(64) },
+      expired.headers,
+      crossStore.headers,
+    ]
+
+    for (const headers of invalid) {
+      const denied = await callAs(tenant.token)(
+        'POST',
+        '/api/staff/recordings',
+        { receptionSessionId: sessionId, storeId: tenant.storeId, startedAt: FIXED_NOW },
+        headers,
+      )
+      expect(denied.status).toBe(403)
+    }
+    const rows = await env.DB.prepare(
+      'SELECT COUNT(*) AS n FROM recordings WHERE organization_id = ? AND reception_session_id = ?',
+    )
+      .bind(tenant.org, sessionId)
+      .first<{ n: number }>()
+    const audits = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM audit_events WHERE organization_id = ? AND action = 'recording.started'",
+    )
+      .bind(tenant.org)
+      .first<{ n: number }>()
+    expect(rows?.n).toBe(0)
+    expect(audits?.n).toBe(0)
+    expect(await storedObjects(tenant.org)).toEqual([])
+  })
+
   it("受付セッションを指して作ると state='recording' と EY-R-NNNN が返る", async () => {
     const tenant = await recordingTenant()
     const sessionId = await startSession(tenant.org, tenant.storeId)
@@ -218,6 +360,148 @@ describe('録音の開始', () => {
     })
     expect(denied.status).toBe(404)
     expect(denied.body).toMatchObject({ error: 'not_found' })
+  })
+})
+
+describe('録音staff writeの端末pair検証', () => {
+  const operations = ['create', 'content', 'patch', 'retry', 'playback', 'hold', 'delete'] as const
+  const invalidKinds = [
+    'id-only',
+    'token-only',
+    'malformed',
+    'wrong',
+    'expired',
+    'cross-store',
+  ] as const
+
+  it.each(
+    operations.flatMap((operation) => invalidKinds.map((kind) => [operation, kind] as const)),
+  )('%s は %s pairを403にしてD1・R2・監査を変えない', async (operation, invalidKind) => {
+    const tenant = await recordingTenant()
+    const valid = await terminalCredential(tenant)
+    let headers: Record<string, string>
+    if (invalidKind === 'id-only') headers = { 'x-terminal-id': valid.terminalId }
+    else if (invalidKind === 'token-only') headers = { 'x-terminal-session': valid.token }
+    else if (invalidKind === 'malformed')
+      headers = {
+        'x-terminal-id': valid.terminalId,
+        'x-terminal-session': `+${'a'.repeat(63)}`,
+      }
+    else if (invalidKind === 'wrong')
+      headers = {
+        'x-terminal-id': valid.terminalId,
+        'x-terminal-session': 'w'.repeat(64),
+      }
+    else if (invalidKind === 'expired') {
+      headers = (
+        await terminalCredential(tenant, {
+          token: 'e'.repeat(64),
+          expiresAt: '2026-08-27T02:07:59.999Z',
+        })
+      ).headers
+    } else {
+      const otherStore = await insertStore(tenant.org)
+      headers = (await terminalCredential(tenant, { storeId: otherStore, token: 'c'.repeat(64) }))
+        .headers
+    }
+
+    const receptionSessionId = await startSession(tenant.org, tenant.storeId)
+    if (operation === 'create') {
+      const denied = await callAs(tenant.token)(
+        'POST',
+        '/api/staff/recordings',
+        { receptionSessionId, storeId: tenant.storeId, startedAt: FIXED_NOW },
+        headers,
+      )
+      expect(denied.status).toBe(403)
+      const rows = await env.DB.prepare(
+        'SELECT COUNT(*) AS n FROM recordings WHERE organization_id = ? AND reception_session_id = ?',
+      )
+        .bind(tenant.org, receptionSessionId)
+        .first<{ n: number }>()
+      expect(rows?.n).toBe(0)
+      expect(await storedObjects(tenant.org)).toEqual([])
+      return
+    }
+
+    const recording = await startRecording(tenant, receptionSessionId)
+    const recordingId = String(recording.id)
+    if (operation === 'retry') {
+      await env.DB.prepare("UPDATE recordings SET state = 'failed' WHERE id = ?")
+        .bind(recordingId)
+        .run()
+    }
+    if (operation === 'playback' || operation === 'hold' || operation === 'delete') {
+      await env.DB.prepare(
+        "UPDATE recordings SET state = 'stored', duration_seconds = 12, bytes = 12, retain_until = '2020-01-01T00:00:00.000Z' WHERE id = ?",
+      )
+        .bind(recordingId)
+        .run()
+    }
+    const before = await recordingRow(recordingId)
+    expect(before).not.toBeNull()
+    if (operation === 'delete') await env.RECORDINGS.put(String(before?.r2Key), AUDIO)
+    const auditBefore = await recordingAuditCount(recordingId)
+
+    let status: number
+    if (operation === 'content') {
+      status = (await putContent(tenant.token, recordingId, { headers })).status
+    } else if (operation === 'patch') {
+      status = (
+        await callAs(tenant.token)(
+          'PATCH',
+          `/api/staff/recordings/${recordingId}`,
+          { state: 'failed' },
+          headers,
+        )
+      ).status
+    } else if (operation === 'retry') {
+      status = (
+        await callAs(tenant.token)(
+          'POST',
+          `/api/staff/recordings/${recordingId}/retry`,
+          undefined,
+          headers,
+        )
+      ).status
+    } else if (operation === 'playback') {
+      status = (
+        await callAs(tenant.token)(
+          'POST',
+          `/api/staff/recordings/${recordingId}/playback`,
+          undefined,
+          headers,
+        )
+      ).status
+    } else if (operation === 'hold') {
+      status = (
+        await callAs(tenant.token)(
+          'POST',
+          `/api/staff/recordings/${recordingId}/hold`,
+          { legalHold: true, reason: '照会に備えるため' },
+          headers,
+        )
+      ).status
+    } else {
+      status = (
+        await callAs(tenant.token)(
+          'DELETE',
+          `/api/staff/recordings/${recordingId}`,
+          undefined,
+          headers,
+        )
+      ).status
+    }
+
+    expect(status).toBe(403)
+    expect(await recordingRow(recordingId)).toEqual(before)
+    expect(await recordingAuditCount(recordingId)).toBe(auditBefore)
+    const stored = await env.RECORDINGS.head(String(before?.r2Key))
+    expect(stored === null).toBe(operation !== 'delete')
+    if (before?.r2Key) await env.RECORDINGS.delete(String(before.r2Key))
+    await env.DB.prepare('DELETE FROM recordings WHERE organization_id = ? AND id = ?')
+      .bind(tenant.org, recordingId)
+      .run()
   })
 })
 
@@ -413,6 +697,54 @@ describe('保存の失敗', () => {
     // 1 録音 = 1 キー。分割も別名も作らない（キーが第 2 の冪等キーである）。
     expect((await putContent(tenant.token, String(recording.id))).status).toBe(200)
     expect(await storedObjects(tenant.org)).toEqual(firstKeys)
+  })
+
+  it('retry受付や失敗ではalertを解決せず、実際にstoredへ遷移した同じ処理で解決する', async () => {
+    const tenant = await recordingTenant()
+    const recording = await startRecording(tenant, await startSession(tenant.org, tenant.storeId))
+    const alertId = crypto.randomUUID()
+    await env.DB.prepare(
+      "INSERT INTO alerts (id, organization_id, store_id, code, severity, audience, title, body, target_type, target_id, occurred_at, read_at, resolved_at, resolved_by, created_at) VALUES (?,?,?,'recording.upload_failed','action','store','録音の保存に3回失敗しました',NULL,'recording',?,?,NULL,NULL,NULL,?)",
+    )
+      .bind(alertId, tenant.org, tenant.storeId, recording.id, FIXED_NOW, FIXED_NOW)
+      .run()
+    const call = callAs(tenant.token)
+    await call('PATCH', `/api/staff/recordings/${recording.id}`, { state: 'failed' })
+    expect((await call('POST', `/api/staff/recordings/${recording.id}/retry`)).status).toBe(200)
+    let alert = await env.DB.prepare(
+      'SELECT resolved_at AS resolvedAt FROM alerts WHERE organization_id = ? AND id = ?',
+    )
+      .bind(tenant.org, alertId)
+      .first<{ resolvedAt: string | null }>()
+    expect(alert?.resolvedAt).toBeNull()
+
+    expect(
+      (
+        await putContent(tenant.token, String(recording.id), {
+          contentType: 'text/plain',
+        })
+      ).status,
+    ).toBe(400)
+    alert = await env.DB.prepare(
+      'SELECT resolved_at AS resolvedAt FROM alerts WHERE organization_id = ? AND id = ?',
+    )
+      .bind(tenant.org, alertId)
+      .first<{ resolvedAt: string | null }>()
+    expect(alert?.resolvedAt).toBeNull()
+
+    expect((await putContent(tenant.token, String(recording.id))).status).toBe(200)
+    alert = await env.DB.prepare(
+      'SELECT resolved_at AS resolvedAt FROM alerts WHERE organization_id = ? AND id = ?',
+    )
+      .bind(tenant.org, alertId)
+      .first<{ resolvedAt: string | null }>()
+    expect(alert?.resolvedAt).not.toBeNull()
+    const audit = await env.DB.prepare(
+      "SELECT target_id AS targetId FROM audit_events WHERE organization_id = ? AND action = 'alert.resolved' AND target_type = 'alerts'",
+    )
+      .bind(tenant.org)
+      .first<{ targetId: string }>()
+    expect(audit?.targetId).toBe(alertId)
   })
 
   it('stored の録音に retry を投げると 409 invalid_transition', async () => {
@@ -666,6 +998,53 @@ describe('再生', () => {
 })
 
 describe('保全と削除', () => {
+  it('personal fallbackの24h境界とhold更新・監査時刻を同じ注入時刻で判定する', async () => {
+    const tenant = await recordingTenant()
+    const receptionSessionId = await startSession(tenant.org, tenant.storeId)
+    const recording = await startRecording(tenant, receptionSessionId)
+    expect((await putContent(tenant.token, String(recording.id))).status).toBe(200)
+    const terminal = await terminalCredential(tenant, {
+      mode: 'personal',
+      expiresAt: '2026-08-26T02:10:00.000Z',
+    })
+    await env.DB.prepare(
+      'UPDATE terminal_sessions SET started_at = ? WHERE organization_id = ? AND terminal_id = ?',
+    )
+      .bind('2026-08-26T02:08:00.001Z', tenant.org, terminal.terminalId)
+      .run()
+
+    const denied = await callAs(tenant.token)(
+      'POST',
+      `/api/staff/recordings/${recording.id}/hold`,
+      { legalHold: true, reason: '境界の確認' },
+    )
+    expect(denied.status).toBe(403)
+    expect(await recordingAuditCount(String(recording.id))).toBe(2)
+
+    await env.DB.prepare(
+      'UPDATE terminal_sessions SET started_at = ? WHERE organization_id = ? AND terminal_id = ?',
+    )
+      .bind('2026-08-26T02:08:00.000Z', tenant.org, terminal.terminalId)
+      .run()
+    const held = await callAs(tenant.token)('POST', `/api/staff/recordings/${recording.id}/hold`, {
+      legalHold: true,
+      reason: '境界の確認',
+    })
+    expect(held.status).toBe(200)
+    const row = await env.DB.prepare(
+      'SELECT legal_hold AS legalHold, updated_at AS updatedAt FROM recordings WHERE organization_id = ? AND id = ?',
+    )
+      .bind(tenant.org, recording.id)
+      .first<{ legalHold: string; updatedAt: string }>()
+    const audit = await env.DB.prepare(
+      "SELECT occurred_at AS occurredAt FROM audit_events WHERE organization_id = ? AND target_id = ? AND action = 'recording.hold_set'",
+    )
+      .bind(tenant.org, recording.id)
+      .first<{ occurredAt: string }>()
+    expect(row).toEqual({ legalHold: '1', updatedAt: FIXED_NOW })
+    expect(audit?.occurredAt).toBe(FIXED_NOW)
+  })
+
   it('hold を立てると legalHold が true になる', async () => {
     const tenant = await recordingTenant()
     const sessionId = await startSession(tenant.org, tenant.storeId)
@@ -679,6 +1058,43 @@ describe('保全と削除', () => {
     expect(held.status).toBe(200)
     expect(held.body).toMatchObject({ legalHold: true })
     expect((await recordingRow(String(recording.id)))?.legalHold).toBe('1')
+  })
+
+  it('共有端末のままでは保全を始めず、ご本人の確認を求める', async () => {
+    const tenant = await recordingTenant()
+    const sessionId = await startSession(tenant.org, tenant.storeId)
+    const recording = await startRecording(tenant, sessionId)
+    expect((await putContent(tenant.token, String(recording.id))).status).toBe(200)
+    const terminalId = crypto.randomUUID()
+    await env.DB.prepare(
+      "INSERT INTO terminals (id, organization_id, store_id, name, kind, place_note, device_label, pin_hash, auto_lock_seconds, last_seen_at, is_active, version, created_at) VALUES (?,?,?,?, 'shared',?,?,?,120,?,'1',1,?)",
+    )
+      .bind(
+        terminalId,
+        tenant.org,
+        tenant.storeId,
+        '銀座店 レジ横iPad',
+        'レジの右側',
+        'EYE-iPad-07',
+        'hmac$test',
+        FIXED_NOW,
+        FIXED_NOW,
+      )
+      .run()
+    await env.DB.prepare(
+      "INSERT INTO terminal_sessions (id, organization_id, store_id, terminal_id, staff_id, mode, started_at, expires_at, revoked_at, created_at) VALUES (?,?,?,?,NULL,'shared',?,'2026-08-28T02:08:00.000Z',NULL,?)",
+    )
+      .bind(crypto.randomUUID(), tenant.org, tenant.storeId, terminalId, FIXED_NOW, FIXED_NOW)
+      .run()
+
+    const denied = await callAs(tenant.token)(
+      'POST',
+      `/api/staff/recordings/${recording.id}/hold`,
+      { legalHold: true, reason: '照会に備えるため' },
+    )
+    expect(denied.status).toBe(403)
+    expect(denied.body).toEqual({ error: 'personal_mode_required', subject: '録音の保全' })
+    expect((await recordingRow(String(recording.id)))?.legalHold).toBe('0')
   })
 
   it('期限内の削除は 409 recording_retained で retainUntil と legalHold を返す', async () => {
@@ -790,15 +1206,18 @@ describe('録音の監査', () => {
       .run()
     expect((await call('DELETE', `/api/staff/recordings/${id}`)).status).toBe(200)
 
-    expect(await auditActions(id)).toEqual([
-      'recording.started',
-      'recording.failed',
-      'recording.stored',
-      'recording.played',
-      'recording.hold_set',
-      'recording.hold_cleared',
-      'recording.deleted',
-    ])
+    expect(await auditActions(id)).toEqual(
+      expect.arrayContaining([
+        'recording.started',
+        'recording.failed',
+        'recording.stored',
+        'recording.played',
+        'recording.hold_set',
+        'recording.hold_cleared',
+        'recording.deleted',
+      ]),
+    )
+    expect(await auditActions(id)).toHaveLength(7)
   })
 
   it('再生は必ず残る（チケットを出すたびに 1 行）', async () => {

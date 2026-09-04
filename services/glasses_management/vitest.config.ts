@@ -16,14 +16,22 @@ export default defineConfig({
           // wrangler vars から機密を撤去したぶん、テストは自前で dev 値を供給する
           INTERNAL_KEY: 'dev-internal-key',
           JWT_SECRET: 'dev-jwt-secret-change-me',
+          AUTH_PEPPER: 'dev-auth-pepper-change-me',
           AUTH_DEV_GRANT: 'true',
-          AUTH_PEPPER: 'dev-auth-pepper',
+          // 受付履歴の「今月まで広げる」候補を、CI の実行日ではなく世界観データの
+          // 基準時刻で検証する。
+          TEST_NOW: '2026-08-27T02:08:00.000Z',
         },
         // notifier への同期送信はスタブで受ける。呼び出しの有無と本文を
         // vi.spyOn(env.NOTIFIER, 'fetch') で検証する。
         serviceBindings: {
           NOTIFIER: () =>
             new Response(JSON.stringify({ status: 'sent', id: 'stub' }), { status: 200 }),
+          ADMIN: () =>
+            new Response(JSON.stringify({ error: 'not_stubbed' }), {
+              status: 501,
+              headers: { 'content-type': 'application/json' },
+            }),
         },
       },
     }),

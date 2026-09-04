@@ -479,7 +479,7 @@ describe('来店回数の書き戻し', () => {
     expect(merged.body.customer?.visitCount).toBe(2)
   })
 
-  it('last_visit_at は接客中を除き done の最終 starts_at の JST 暦日になる', async () => {
+  it('last_visit_at は接客中も数えた最終 starts_at の JST 暦日になる', async () => {
     const f = await fixture()
     // UTC 15:00 をまたぐ 1 件。JST では翌日の 0 時なので暦日は 8 月 28 日。
     await insertVisit(f.org, {
@@ -491,17 +491,25 @@ describe('来店回数の書き戻し', () => {
     const { body: plan } = await preview(f)
     const merged = await mergeWith(f, { fields: plan.fields })
     expect(merged.status).toBe(200)
+    /*
+     * `AC-CUST-11` は「最後のご来店」を**来店済み（`arrived` / `serving` / `done`）の
+     * 予約の最終 `starts_at`」と定めている。いまお店にいらしている方の日付が
+     * 前回のまま止まると、一覧・要約・重複の警告に古い日付が出続ける
+     * （実装不足の洗い出し customers-05）。
+     * 来店回数（`visit_count`）のほうは AC-RECEP-23 のとおり退店（`done`）だけを数える。
+     */
     const row = await env.DB.prepare(
-      'SELECT last_visit_at AS lastVisitAt FROM customers WHERE id = ?',
+      'SELECT last_visit_at AS lastVisitAt, visit_count AS visitCount FROM customers WHERE id = ?',
     )
       .bind(f.primaryId)
-      .first<{ lastVisitAt: string }>()
-    expect(row?.lastVisitAt).toBe('2026-05-12T02:00:00.000Z')
+      .first<{ lastVisitAt: string; visitCount: number }>()
+    expect(row?.lastVisitAt).toBe('2026-08-27T15:00:00.000Z')
     const res = await SELF.fetch(`${BASE}/api/staff/customers/${f.primaryId}`, {
       headers: authed(f.manager),
     })
     const detail = (await res.json()) as { lastVisitAt: string | null }
-    expect(detail.lastVisitAt).toBe('2026-05-12')
+    // UTC 15:00 をまたぐので JST では翌日。暦日は 8 月 28 日。
+    expect(detail.lastVisitAt).toBe('2026-08-28')
   })
 
   it('first_visit_at は最初の来店済みの日で、あとから来る予約で書き換わらない', async () => {

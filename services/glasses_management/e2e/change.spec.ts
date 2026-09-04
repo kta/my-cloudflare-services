@@ -1,10 +1,10 @@
 import type { APIRequestContext, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
-import { enterSharedWorkspace } from './terminal-start'
+import { completeSeededTerminalStart } from './support/terminal'
 
 /**
  * 予約の検索・変更・取消（009-change-and-cancel）の受け入れ基準を、実ブラウザと実 Worker で
- * 確かめる。`vite preview` が実 workerd を動かし、D1 は `seed.mjs` が入れた EYEX 銀座店である
+ * 確かめる。`vite preview` が実 workerd を動かし、D1 は `seed.mjs` が入れた EYE 銀座店である
  * （`playwright test` を叩くたびに使い捨ての D1 が作り直される）。
  *
  * 1 本の test の直前の行に `// @e2e-covers <ID>` を置く。**この面は 1 ID = 1 test** で、
@@ -34,8 +34,8 @@ import { enterSharedWorkspace } from './terminal-start'
  * EX-CONFLICT の 6 面はすべてブラウザから通しで操作している。
  */
 
-const ORG = 'org-eyex-seed'
-/** seed.mjs が固定 id で入れる EYEX 銀座店と、丸の内店（別店舗を見せない証明に使う）。 */
+const ORG = 'eye'
+/** seed.mjs が固定 id で入れる EYE 銀座店と、丸の内店（別店舗を見せない証明に使う）。 */
 const GINZA = '11111111-1111-4111-8111-111111111111'
 const MARUNOUCHI = '22222222-2222-4222-8222-222222222222'
 
@@ -272,12 +272,13 @@ async function startWork(page: Page, nowIso: string): Promise<void> {
    */
   const code = page.getByLabel('お店のコード')
   const rail = page.getByRole('navigation', { name: '画面の切り替え' })
-  await expect(code.or(rail).first()).toBeVisible()
+  const placePick = page.getByRole('heading', { name: 'この端末はどこに置きますか？' })
+  await expect(code.or(rail).or(placePick).first()).toBeVisible()
   if (await code.isVisible()) {
     await code.fill(ORG)
     await page.getByRole('button', { name: '業務を始める' }).click()
   }
-  await enterSharedWorkspace(page)
+  await completeSeededTerminalStart(page)
   await rail.waitFor()
 }
 
@@ -313,17 +314,6 @@ async function openDateTime(page: Page, code: string, nowIso: string = SEED_NOW)
   await page.getByRole('button', { name: '日時を変える' }).click()
   await expect(page.getByRole('region', { name: 'いまのご予約' })).toBeVisible()
   await expect(page.getByRole('group', { name: 'お時間' })).toBeVisible()
-}
-
-/**
- * 時刻の札は 1 画面 8 枚までしか出ない（`docs/frontend/mockups/eyex/README.md` の
- * 引き算の規準「一覧・表の行 / 選択の札 … 8つまで」）。窓の外の時刻に用があるときは、
- * 先に「ほかの時刻も見る」を踏む。**押せる札が無いときは何もしない**
- * （営業時間が短い日は 8 枚に収まって、この操作そのものが出ない）。
- */
-async function revealAllTimes(page: Page): Promise<void> {
-  const more = page.getByRole('button', { name: /^ほかの時刻も見る/ })
-  if ((await more.count()) > 0) await more.click()
 }
 
 /* ========================================================================== *
@@ -583,12 +573,10 @@ test('候補には受けられるかどうかが文字で添い、満席の時�
    * 満席である。モックの「10:00　受付できます」「15:30　満席」と同じ形で、
    * 時刻ごとに受けられるかどうかが**文字で**添う。
    */
-  // 札は 8 枚までで、残りは格子の空き枠に置いた「ほかの時刻も見る」の中にある
-  // （選んだ結果の 1 文と仮の押さえの残り時間を、810pt の外へ押し出さないため）。
+  // 札は営業時間ぶんを全部出す（UX 監査 CHG-02 で折りたたみをやめた。
+  // 隠れていたのが午後と夕方で、変更先の相談でいちばん要る時間帯だったため）。
   const times = page.getByRole('group', { name: 'お時間' }).getByRole('button')
-  await expect(times).toHaveCount(9)
-  await expect(times.last()).toHaveAccessibleName(/^ほかの時刻も見る（あと\d+件）$/)
-  await revealAllTimes(page)
+  await expect(times.last()).not.toHaveAccessibleName(/ほかの時刻も見る/)
 
   await expect(page.getByRole('button', { name: '13:00　受付できます' })).toBeEnabled()
   await expect(page.getByRole('button', { name: '14:00　満席' })).toBeDisabled()
@@ -607,7 +595,6 @@ test('同じ担当の枠を先に持たれていると満席になり、元の�
   request,
 }) => {
   await openDateTime(page, HANAKO_CODE)
-  await revealAllTimes(page)
   await expect(page.getByRole('button', { name: '14:00　満席' })).toBeDisabled()
 
   const still = await readDetail(request, HANAKO_RESERVATION)
@@ -620,7 +607,6 @@ test('変更先の枠を先に押さえてから元の予約を切り替える',
   const mine = await createReservation(request, DAYS.holdFirst, '14:00')
 
   await openDateTime(page, mine.code)
-  await revealAllTimes(page)
   await page.getByRole('button', { name: '16:00　受付できます' }).click()
   // 押さえたことが画面に出る。この時点で元の 14:00 はまだ空いていない。
   await expect(page.getByText('16:00 から60分、佐藤 美咲 を確保します。')).toBeVisible()
@@ -644,7 +630,6 @@ test('変更先の枠を先に押さえてから元の予約を切り替える',
 test('変更前と変更後を項目ごとに 4 行で並べる', async ({ page, request }) => {
   const mine = await createReservation(request, DAYS.fourRows, '14:00')
   await openDateTime(page, mine.code)
-  await revealAllTimes(page)
   await page.getByRole('button', { name: '16:00　受付できます' }).click()
   await page.getByRole('button', { name: '変更内容を確認する' }).click()
 
@@ -662,7 +647,6 @@ test('差分は「変わる行だけ色を付けています」と出て、変�
 }) => {
   const mine = await createReservation(request, DAYS.diff, '14:00')
   await openDateTime(page, mine.code)
-  await revealAllTimes(page)
   await page.getByRole('button', { name: '16:00　受付できます' }).click()
   await page.getByRole('button', { name: '変更内容を確認する' }).click()
 
@@ -685,7 +669,6 @@ test('「戻って直す」で戻ったあと開き直すと、日時は元の�
 }) => {
   const mine = await createReservation(request, DAYS.backOut, '14:00')
   await openDateTime(page, mine.code)
-  await revealAllTimes(page)
   await page.getByRole('button', { name: '16:00　受付できます' }).click()
   await page.getByRole('button', { name: '変更内容を確認する' }).click()
 
@@ -712,7 +695,6 @@ test('「変更を確定する」を押すと承った旨が出て、予約番�
 }) => {
   const mine = await createReservation(request, DAYS.confirmed, '14:00')
   await openDateTime(page, mine.code)
-  await revealAllTimes(page)
   await page.getByRole('button', { name: '16:00　受付できます' }).click()
   await page.getByRole('button', { name: '変更内容を確認する' }).click()
   await page.getByRole('button', { name: '変更を確定する' }).click()
@@ -739,7 +721,6 @@ test('変更を確定すると、読み上げる文と変更後の姿を 1 画�
 }) => {
   const mine = await createReservation(request, DAYS.sayAloud, '14:00')
   await openDateTime(page, mine.code)
-  await revealAllTimes(page)
   await page.getByRole('button', { name: '16:00　受付できます' }).click()
   await page.getByRole('button', { name: '変更内容を確認する' }).click()
 
@@ -758,23 +739,36 @@ test('変更を確定すると、読み上げる文と変更後の姿を 1 画�
 })
 
 // @e2e-covers UC-CHANGE-06
-test('日時を保ったまま担当と場所だけを置き直せる', async ({ request }) => {
+test('日時を保ったまま担当と場所だけを置き直せる', async ({ page, request }) => {
   const mine = await createReservation(request, DAYS.slotOnly, '14:00')
-  const res = await changeReservation(request, mine.id, {
-    version: mine.version,
-    staffId: KOBAYASHI,
-  })
-  expect(res.status(), await res.text()).toBe(200)
+  await openByCode(page, mine.code)
+
+  /*
+   * この入口は長いあいだ「これから作ります。」としか答えず、**店側には担当を
+   * 差し替える手立てが 1 つも無かった**（UX 監査 NEW-01）。盤は予約フローの工程 3
+   * （BOOK-03-SLOT-STAFF）をそのまま使うので、同じ手つきで担当を置き直せる。
+   */
+  await page.getByRole('button', { name: '担当・場所を変える' }).click()
+  await expect(page.getByRole('table', { name: 'ご予約を置く盤' })).toBeVisible()
+  await expect(page.getByRole('list', { name: /予約の変更の工程/ })).toContainText(
+    '担当と場所を変える',
+  )
+
+  // 何も変えないうちは進めない（差分の無い変更は監査に空の 1 行を残すだけになる）。
+  const next = page.getByRole('button', { name: /^変更内容を確認する/ })
+  await expect(next).toBeDisabled()
+
+  await page.getByRole('button', { name: '担当はあとで決める' }).click()
+  await expect(next).toBeEnabled()
+  await next.click()
+  await page.getByRole('button', { name: '変更を確定する' }).click()
+  await expect(page.getByRole('heading', { name: 'ご予約の変更を承りました' })).toBeVisible()
 
   const after = await readDetail(request, mine.id)
+  // 日時はそのまま。動いたのは担当だけである。
   expect(after.startsAt).toBe(mine.startsAt)
   expect(after.endsAt).toBe(mine.endsAt)
-  expect(after.assignments.find((band) => band.kind === 'staff')?.targetId).toBe(KOBAYASHI)
-  /*
-   * 「担当・場所を変える」は BOOK-03-SLOT-STAFF / BOOK-03b-SLOT-RESOURCE を再利用する決めで、
-   * その入口はまだ器に繋がっていない（`ChangeScreen` は `onChangeSlot` を渡されないと
-   * 「担当・場所を変える画面はこれから作ります。」と答える）。面が繋がったら操作へ書き換える。
-   */
+  expect(after.assignments.find((band) => band.kind === 'staff')?.targetId ?? null).toBeNull()
 })
 
 /* ========================================================================== *
@@ -852,7 +846,6 @@ test('取り消したあと、その時刻はほかのご予約の候補とし�
   // 同じ日の別のご予約から日時を選び直すと、空いた 11:00 が押せる候補として出る。
   const other = await createReservation(request, DAYS.cancelledSlot, '15:00')
   await openDateTime(page, other.code)
-  await revealAllTimes(page)
   await expect(page.getByRole('button', { name: '11:00　受付できます' })).toBeEnabled()
 })
 
@@ -890,7 +883,6 @@ test('ほかの端末が先に保存していると、選ぶまでどちらの�
 }) => {
   const mine = await createReservation(request, DAYS.bothSides, '14:00')
   await openDateTime(page, mine.code)
-  await revealAllTimes(page)
   await page.getByRole('button', { name: '16:00　受付できます' }).click()
   await page.getByRole('button', { name: '変更内容を確認する' }).click()
 
@@ -919,7 +911,6 @@ test('確定を押すと相手の内容と自分の内容が並び、どちら�
 }) => {
   const mine = await createReservation(request, DAYS.twoPanes, '14:00')
   await openDateTime(page, mine.code)
-  await revealAllTimes(page)
   await page.getByRole('button', { name: '16:00　受付できます' }).click()
   await page.getByRole('button', { name: '変更内容を確認する' }).click()
 
@@ -964,7 +955,6 @@ test('「あなたの内容で上書きする」は、送る前に空きを当�
   const mine = await createReservation(request, DAYS.overwriteMine, '14:00')
 
   await openDateTime(page, mine.code)
-  await revealAllTimes(page)
   await page.getByRole('button', { name: '15:00　受付できます' }).click()
   await page.getByRole('button', { name: '変更内容を確認する' }).click()
 
@@ -1009,7 +999,6 @@ test('相手の内容を残すと、ご予約は相手の内容のままで自�
   const theirsAt = atJst(DAYS.keepTheirs, '15:00')
 
   await openDateTime(page, mine.code)
-  await revealAllTimes(page)
   await page.getByRole('button', { name: '16:00　受付できます' }).click()
   await page.getByRole('button', { name: '変更内容を確認する' }).click()
 
@@ -1047,7 +1036,6 @@ test('確定の瞬間に枠が埋まっていると変更されず、BOOK-CONFLI
 }) => {
   const mine = await createReservation(request, DAYS.slotTaken, '10:30')
   await openDateTime(page, mine.code)
-  await revealAllTimes(page)
   await page.getByRole('button', { name: '17:00　受付できます' }).click()
   await page.getByRole('button', { name: '変更内容を確認する' }).click()
 

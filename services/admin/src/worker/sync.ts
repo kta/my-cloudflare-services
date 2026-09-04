@@ -81,7 +81,7 @@ export async function syncOrganization(
 }
 
 /* ------------------------------------------------------------------------- *
- * Store membership synchronization (UC-EYEX-149).
+ * Store membership synchronization (UC-EYE-149).
  *
  * admin owns users, standard roles and store assignments; the domain receives
  * only the resulting membership. A revoked assignment is delivered as the same

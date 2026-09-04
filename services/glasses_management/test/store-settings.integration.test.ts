@@ -11,6 +11,7 @@
  */
 import { env, SELF } from 'cloudflare:test'
 import { describe, expect, it } from 'vitest'
+import { expandShiftWindow } from '../src/worker/index'
 import { authed, BASE, INTERNAL_HEADERS, orgId, tokenFor } from './helpers'
 
 const NOW = '2026-08-27T02:08:00.000Z'
@@ -19,7 +20,7 @@ const THURSDAY = 4
 
 /* --- 器を作る ------------------------------------------------------------ */
 
-async function seedStore(org: string, name = 'EYEX 銀座店'): Promise<string> {
+async function seedStore(org: string, name = 'EYE 銀座店'): Promise<string> {
   const id = crypto.randomUUID()
   await env.DB.prepare(
     'INSERT INTO stores (id, organization_id, name, slug, phone, address, access_note, is_active, created_at) VALUES (?,?,?,?,?,?,?,?,?)',
@@ -153,8 +154,8 @@ describe('店舗の情報', () => {
     expect(before.status).toBe(200)
 
     const saved = await call('PATCH', `/api/staff/stores/${storeId}`, {
-      name: 'EYEX 銀座店',
-      namePublic: 'EYEX 銀座',
+      name: 'EYE 銀座店',
+      namePublic: 'EYE 銀座',
       phone: '03-1234-5678',
       address: '東京都中央区銀座1-2-3',
       nearestStation: '銀座駅',
@@ -167,7 +168,7 @@ describe('店舗の情報', () => {
 
     const after = await call('GET', `/api/staff/stores/${storeId}`)
     expect(after.body).toMatchObject({
-      namePublic: 'EYEX 銀座',
+      namePublic: 'EYE 銀座',
       nearestStation: '銀座駅',
       parkingNote: '提携駐車場あり',
       introText: 'まぶしさの少ないレンズをご案内します。',
@@ -185,7 +186,7 @@ describe('店舗の情報', () => {
       .bind(staffId, org, storeId, `dev:${org}`, '山田 大輔', 'manager', 1, '1', 0, NOW, NOW)
       .run()
 
-    await call('PATCH', `/api/staff/stores/${storeId}`, { name: 'EYEX 銀座店', version: 1 })
+    await call('PATCH', `/api/staff/stores/${storeId}`, { name: 'EYE 銀座店', version: 1 })
 
     const after = await call('GET', `/api/staff/stores/${storeId}`)
     const body = after.body as { updatedAt: string | null; updatedBy: string | null }
@@ -1156,5 +1157,69 @@ describe('影響の試算', () => {
       maintenance: await countRows('equipment_maintenance', org),
       reservations: await countRows('reservations', org),
     }).toEqual(before)
+  })
+})
+
+describe('勤務の窓を日次で前へ出す', () => {
+  /*
+   * 曜日テンプレートが正本で、日付の行はその展開結果である
+   * （`004-store-settings/spec.md`「62 日先までを展開した結果で、保存時と日次 Cron の
+   * 両方で展開する」）。保存時しか展開していなかったので、設定を触らないまま
+   * 62 日が過ぎると勤務の行が尽き、台帳に担当者の行が出ず空き枠も出せなくなっていた
+   * （実装不足の洗い出し settings-07）。
+   */
+  async function savedShifts() {
+    const { org, token, storeId } = await manager()
+    const call = api(token)
+    const { id } = await addStaff(token, storeId, '佐藤 美咲')
+    const saved = await call('PUT', `/api/staff/stores/${storeId}/staff-shifts`, {
+      staffId: id,
+      weekly: weeklyShifts(),
+      effectiveFrom: '2026-08-27',
+      version: await settingsVersion(org, storeId),
+    })
+    expect(saved.status).toBe(200)
+    return { org, storeId, staffId: id }
+  }
+
+  async function shiftsOn(org: string, date: string): Promise<number> {
+    const row = await env.DB.prepare(
+      'SELECT COUNT(*) AS n FROM staff_shifts WHERE organization_id = ? AND date = ?',
+    )
+      .bind(org, date)
+      .first<{ n: number }>()
+    return row?.n ?? 0
+  }
+
+  it('窓の先端の 1 日を足す（保存の窓が切れる先まで前へ出る）', async () => {
+    const { org } = await savedShifts()
+    // 保存は 2026-08-27 から 62 日ぶん。その最後は 2026-10-27。
+    expect(await shiftsOn(org, '2026-10-27')).toBeGreaterThan(0)
+    expect(await shiftsOn(org, '2026-10-28')).toBe(0)
+
+    // 翌日に Cron が回ると、先端が 1 日ぶん前へ出る。
+    const result = await expandShiftWindow(env.DB, new Date('2026-08-28T02:00:00.000Z'))
+    expect(result.date).toBe('2026-10-28')
+    expect(result.inserted).toBeGreaterThan(0)
+    expect(await shiftsOn(org, '2026-10-28')).toBeGreaterThan(0)
+  })
+
+  it('すでに行がある日は触らない（日付ごとの手直しを塗り潰さない）', async () => {
+    const { org } = await savedShifts()
+    const before = await shiftsOn(org, '2026-10-27')
+    // 2026-08-27 + 61 = 2026-10-27。すでに保存時の展開が入っている日。
+    // JST の暦日で 2026-08-27（Cron は JST 0 時に動くが、ここは日だけが要る）。
+    const result = await expandShiftWindow(env.DB, new Date('2026-08-27T02:00:00.000Z'))
+    expect(result.date).toBe('2026-10-27')
+    expect(result.inserted).toBe(0)
+    expect(await shiftsOn(org, '2026-10-27')).toBe(before)
+  })
+
+  it('お休みの曜日は行を作らない', async () => {
+    const { org } = await savedShifts()
+    // `weeklyShifts()` の火曜は定休。2026-11-03 は火曜。
+    await expandShiftWindow(env.DB, new Date('2026-09-03T15:10:00.000Z'))
+    expect(new Date('2026-11-03T00:00:00.000Z').getUTCDay()).toBe(2)
+    expect(await shiftsOn(org, '2026-11-03')).toBe(0)
   })
 })

@@ -8,11 +8,11 @@ import {
 } from 'react'
 
 /*
- * 工程 4 お客様の情報（承認済みモック docs/frontend/mockups/eyex/images/WEB-04-FORM.png）。
+ * 工程 4 お客様の情報（承認済みモック docs/frontend/mockups/eye/images/WEB-04-FORM.png）。
  *
  * この面の仕事は「4 欄だけを伺い、ふりがなは打たせずに埋める」こと。
  *
- * 実測値（screens/WEB-04-FORM.html と assets/eyex.css）:
+ * 実測値（screens/WEB-04-FORM.html と assets/eye.css）:
  *   `.phone` は 390×844（実装は 390×800）。本文の余白 32px 28px 120px。
  *   問いかけは見出し 20px・補足 13px `--color-ink-muted`、左の吹き出し 18×15px（上 6px・間 10px）。
  *   欄の並びは間 20px・上に 28px。見出し 13px `--color-ink-muted`、

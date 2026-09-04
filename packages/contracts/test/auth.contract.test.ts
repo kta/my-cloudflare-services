@@ -95,10 +95,10 @@ describe('Organization(同期 upsert 契約)', () => {
   it('admin正本とdomain同期で同じ組織名のtrim規則を使う', () => {
     const parsed = Organization.parse({
       id: 'o1',
-      name: '  EYEX Organization  ',
+      name: '  EYE Organization  ',
       createdAt: new Date().toISOString(),
     })
-    expect(parsed.name).toBe('EYEX Organization')
+    expect(parsed.name).toBe('EYE Organization')
   })
 })
 

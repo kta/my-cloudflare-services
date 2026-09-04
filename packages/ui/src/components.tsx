@@ -35,6 +35,17 @@ export const focusRing =
 export const focusRingOnPine =
   'focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-focus-on-pine'
 
+/**
+ * 押せないことの見せ方。**色を変えずに彩度だけ落とす。**
+ *
+ * 別の色へ塗り替えると、主操作が副ボタンや説明文に化けて序列が逆転する
+ * （設定の「保存」が無効のとき副ボタンと同じ姿になり、逆に押せる「変更を捨てる」が
+ * 枠なしの文字だけになっていた。UX 監査 UI-11）。
+ * `focusRing` と同じく**文字列**で配る —— コンポーネントの中に閉じると、
+ * 素の `<button>` を手書きした場所へ届かない（同 HIG-01）。
+ */
+export const disabledLook = 'disabled:cursor-not-allowed disabled:opacity-40'
+
 // All interactive controls meet the 44px touch-target floor.
 const controlBase = 'min-h-11 rounded-ctl font-sans text-sm'
 
@@ -78,9 +89,6 @@ export function TextInput({
   return (
     <input
       ref={ref}
-      /* 共有端末では前のお客様の入力が次の方に補完されてはいけない。既定で切っておき、
-         お客様ご自身が打つ Web 予約の欄だけが `autoComplete` を明示して上書きする。 */
-      autoComplete="off"
       className={cn(
         controlBase,
         'w-full border border-line bg-surface px-3 py-2 text-ink',
@@ -101,7 +109,6 @@ export function Textarea({
   return (
     <textarea
       ref={ref}
-      autoComplete="off"
       className={cn(
         controlBase,
         'w-full border border-line bg-surface px-3 py-2 text-ink',

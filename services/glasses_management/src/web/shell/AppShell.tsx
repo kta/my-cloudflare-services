@@ -1,16 +1,48 @@
 import { cn, focusRing, focusRingOnPine } from '@app/ui'
 import type { ReactNode } from 'react'
-import { alertsEntryLabel } from '../alerts/alertLabels'
-import {
-  ALERTS_DESTINATION,
-  DESTINATIONS,
-  type Destination,
-  HOME_DESTINATION,
-} from './destinations'
+import { DESTINATIONS, type Destination, HOME_DESTINATION } from './destinations'
 import { Icon } from './icons'
 
+const ALERT_DESTINATION: Destination = { key: 'alerts', label: 'お知らせ', icon: 'alerts' }
 /*
- * 業務画面の骨格。承認済みモック（docs/frontend/mockups/eyex）の実測に合わせる。
+ * 上のバーにお知らせを出す画面。**承認済みモックのとおり**にしてある。
+ *
+ * 来店受付・予約を探す・受付履歴・分析にはモックが意図してベルを描いていない
+ * （`RECEPTION-CHECKIN.png` の上のバーは店名だけで、右端は空である）。
+ * お客様が目の前に立っている面から通知を外す判断だと読める。
+ *
+ * ただしその結果、「録音の保存に3回失敗しました（対応が必要）」が 4 画面で
+ * 見えなくなる（UX 監査 UI-05）。ここを変えるなら承認済みモックを変えることになるので、
+ * 実装だけを先に動かさない。`docs/audit/2026-09-02-eye-ux/` の宿題として残す。
+ */
+/*
+ * 上のバーに「お知らせ」を出す面。
+ *
+ * 出さないのは 2 通りだけである。**お客様が目の前に立つ面**（受け付ける面・
+ * 予約の 5 工程）と、**お知らせそのもの**。承認済みモックの上のバーが
+ * 店名だけなのはその判断だと読める（`RECEPTION-CHECKIN.png`）。
+ *
+ * 受付履歴・予約を探すは店員だけが見る面なので出す。ここを外していたころ、
+ * その 2 面には**お知らせへ行く道が 1 つも無かった** —— 左の柱の「お知らせ」は
+ * `current === 'alerts'`、つまり**すでに開いているときだけ**現れる作りで、
+ * 行きたいときには無かった（UX 監査 J-02）。
+ *
+ * 来店受付（`reception`）はまだ出せない。**受け付ける面が同じ行き先の中にある**ので、
+ * ここへ入れるとお客様が目の前に立つ面にも通知が出てしまう（承認済みモック
+ * `RECEPTION-CHECKIN.png` の上のバーは店名だけ）。盤と受け付ける面を器が
+ * 区別できるようにしてから足す。
+ */
+const HEADER_ALERT_DESTINATIONS = new Set([
+  'home',
+  'ledger',
+  'history',
+  'search',
+  'customers',
+  'settings',
+])
+
+/*
+ * 業務画面の骨格。承認済みモック（docs/frontend/mockups/eye）の実測に合わせる。
  *   上のバー 64px（店名・日付・お知らせだけ）
  *   左サイドバー 216px / たたむと 76px（行き先はすべてここ）
  * 触れるものは 44pt 以上（Apple HIG）。色はすべて packages/ui のトークン経由。
@@ -26,10 +58,8 @@ export type AppShellProps = {
   /** たたんだ細い柱にするか。 */
   rail: boolean
   onToggleRail: () => void
-  /** いま対応が要るお知らせの件数。**裸の数字にしない**（読み上げは「お知らせ 3件」）。 */
+  /** 未読のお知らせ件数。0 なら出さない。 */
   alertCount?: number
-  /** 上のバーの「お知らせ」の行き先。ALERTS を開いているときは渡さない。 */
-  onOpenAlerts?: () => void
   /** この端末は何か（例: 銀座店 レジ横iPad / 共有で使っています）。 */
   terminalNote?: readonly string[]
   /**
@@ -39,16 +69,10 @@ export type AppShellProps = {
   barCenter?: ReactNode
   /** 上のバーの右端に足す操作。 */
   barActions?: ReactNode
-  /**
-   * 上のバーの札（「いまは共有モード」「お客様の情報を隠しています」）。
-   * **状態を色だけで伝えない**ので、札は必ず文字を持つ。
-   */
-  barTag?: { text: string; tone: 'plain' | 'danger' }
-  /**
-   * 画面を覆う 1 枚（自動で伏せたとき）。**サイドバーごと覆う**ので、
-   * ここに渡したものは骨格の外側に絶対配置で敷かれる。
-   */
-  veil?: ReactNode
+  /** 自動ロックなど、器全体を覆うモーダル。 */
+  overlay?: ReactNode
+  /** 共有端末のロック中は、ダイアログ以外をキーボード操作から除外する。 */
+  isLocked?: boolean
   children: ReactNode
 }
 
@@ -60,17 +84,19 @@ export function AppShell({
   rail,
   onToggleRail,
   alertCount = 0,
-  onOpenAlerts,
   terminalNote,
   barCenter,
   barActions,
-  barTag,
-  veil,
+  overlay,
+  isLocked = false,
   children,
 }: AppShellProps) {
   return (
-    <div data-shell="" className="relative flex h-dvh flex-col bg-paper text-ink">
-      <header className="flex h-16 shrink-0 items-center gap-4 bg-pine px-4 text-on-pine">
+    <div className="relative flex h-dvh flex-col bg-paper text-ink">
+      <header
+        inert={isLocked ? true : undefined}
+        className="flex h-16 shrink-0 items-center gap-4 bg-pine px-4 text-on-pine"
+      >
         <button
           type="button"
           onClick={() => onNavigate('home')}
@@ -88,36 +114,17 @@ export function AppShell({
         </div>
         {barCenter}
         <div className="ml-auto flex items-center gap-2">
-          {barTag && (
-            <span
-              className={`rounded-full px-3 py-1 text-note font-semibold ${
-                barTag.tone === 'danger'
-                  ? 'bg-danger-soft text-danger'
-                  : 'bg-surface text-ink-muted'
-              }`}
-            >
-              {barTag.text}
-            </span>
-          )}
-          {onOpenAlerts && (
+          {HEADER_ALERT_DESTINATIONS.has(current) && alertCount > 0 && (
             <button
               type="button"
-              onClick={onOpenAlerts}
-              aria-label={alertsEntryLabel(alertCount)}
-              className={cn(
-                'flex min-h-12 items-center gap-2 rounded-card px-3 text-lead font-semibold text-on-pine',
-                focusRingOnPine,
-              )}
+              onClick={() => onNavigate('alerts')}
+              aria-label={`お知らせ ${alertCount}件`}
+              className={`grid min-h-12 place-items-center gap-0 rounded-card px-3 text-lead font-semibold leading-tight ${focusRingOnPine}`}
             >
-              <span aria-hidden="true">お知らせ</span>
-              {alertCount > 0 && (
-                <span
-                  aria-hidden="true"
-                  className="min-w-5.5 rounded-full bg-danger px-1.5 text-center text-note font-bold text-on-danger"
-                >
-                  {alertCount}
-                </span>
-              )}
+              <span>お知らせ</span>
+              <span className="min-w-5.5 rounded-full bg-danger px-1.5 text-center text-note font-bold leading-tight text-on-danger">
+                {alertCount}
+              </span>
             </button>
           )}
           {barActions}
@@ -128,6 +135,7 @@ export function AppShell({
       <div className="flex min-h-0 flex-1">
         <nav
           aria-label="画面の切り替え"
+          inert={isLocked ? true : undefined}
           className={cn(
             'flex min-h-0 shrink-0 flex-col gap-1 overflow-hidden border-r border-line bg-surface-2 py-4',
             rail ? 'w-19 items-center px-2.5' : 'w-54 px-3.5',
@@ -169,42 +177,31 @@ export function AppShell({
             <span className={rail ? 'sr-only' : undefined}>予約を取る</span>
           </button>
 
-          {DESTINATIONS.filter((destination) => destination.group !== 'operations').map(
-            (destination) => (
+          {DESTINATIONS.map((destination, index) => (
+            <NavGroupLabel
+              key={destination.key}
+              rail={rail}
+              destination={destination}
+              previous={DESTINATIONS[index - 1]}
+            >
               <NavItem
-                key={destination.key}
                 destination={destination}
                 rail={rail}
                 current={current}
                 onNavigate={onNavigate}
                 alertCount={alertCount}
               />
-            ),
-          )}
+            </NavGroupLabel>
+          ))}
 
-          {/* お知らせの行はこの面を開いているときだけ出す（モック 68 枚がそうなっている）。 */}
-          {current === ALERTS_DESTINATION.key && (
+          {current === 'alerts' && (
             <NavItem
-              destination={ALERTS_DESTINATION}
+              destination={ALERT_DESTINATION}
               rail={rail}
               current={current}
               onNavigate={onNavigate}
               alertCount={alertCount}
             />
-          )}
-
-          {!rail && <p className="mt-5 mb-0.5 px-3 text-grid text-ink-muted">お店の運用</p>}
-          {DESTINATIONS.filter((destination) => destination.group === 'operations').map(
-            (destination) => (
-              <NavItem
-                key={destination.key}
-                destination={destination}
-                rail={rail}
-                current={current}
-                onNavigate={onNavigate}
-                alertCount={alertCount}
-              />
-            ),
           )}
 
           {!rail && terminalNote && (
@@ -220,7 +217,7 @@ export function AppShell({
 
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">{children}</div>
       </div>
-      {veil}
+      {overlay}
     </div>
   )
 }
@@ -242,10 +239,12 @@ function NavItem({
     <button
       type="button"
       onClick={() => onNavigate(destination.key)}
+      aria-label={
+        destination.key === 'alerts' && alertCount > 0
+          ? `お知らせ ${alertCount}件`
+          : destination.label
+      }
       aria-current={current === destination.key ? 'page' : undefined}
-      {...(destination.key === ALERTS_DESTINATION.key
-        ? { 'aria-label': alertsEntryLabel(alertCount) }
-        : {})}
       className={cn(
         'flex min-h-11.5 items-center rounded-card font-semibold',
         rail ? 'w-13 justify-center' : 'w-full gap-3 px-3 text-body',
@@ -257,14 +256,33 @@ function NavItem({
       {/* 柱にたたんでも名前は消さない。目に見えなくなるだけで、読み上げと
           キーボードの選択には残る（アイコンだけのボタンに名前が無いのは重大な欠陥）。 */}
       <span className={rail ? 'sr-only' : undefined}>{destination.label}</span>
-      {!rail && destination.key === ALERTS_DESTINATION.key && alertCount > 0 && (
-        <span
-          aria-hidden="true"
-          className="ml-auto min-w-5.5 rounded-full bg-danger px-1.5 text-center text-note font-bold text-on-danger"
-        >
+      {!rail && destination.key === 'alerts' && alertCount > 0 && (
+        <span className="ml-auto min-w-5.5 rounded-full bg-danger px-1.5 text-center text-note font-bold text-on-danger">
           {alertCount}
         </span>
       )}
     </button>
+  )
+}
+
+/** 「お店の運用」の見出しを、その群の先頭の直前にだけ挟む。 */
+function NavGroupLabel({
+  rail,
+  destination,
+  previous,
+  children,
+}: {
+  rail: boolean
+  destination: Destination
+  previous?: Destination
+  children: ReactNode
+}) {
+  const startsGroup = destination.group === 'operations' && previous?.group !== 'operations'
+  if (!startsGroup) return children
+  return (
+    <>
+      {!rail && <p className="mt-5 mb-0.5 px-3 text-grid text-ink-muted">お店の運用</p>}
+      {children}
+    </>
   )
 }

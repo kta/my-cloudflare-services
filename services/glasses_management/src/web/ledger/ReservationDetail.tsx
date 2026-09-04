@@ -6,12 +6,12 @@ import { RecordingPlayer } from '../recording/RecordingPlayer'
 import { jstClock } from './metrics'
 
 /*
- * 予約の詳細（承認済みモック docs/frontend/mockups/eyex/images/LEDGER-DETAIL.png）。
+ * 予約の詳細（承認済みモック docs/frontend/mockups/eye/images/LEDGER-DETAIL.png）。
  *
  * 台帳の位置を見失わないまま、1 件の中身と次の操作だけを見る面。**モーダルにしない** —
  * 後ろの台帳は見えたままで、押した帯の左端へ矢印が刺さる。
  *
- * 実測値（screens/LEDGER-DETAIL.html と assets/eyex.css の `.popover`）:
+ * 実測値（screens/LEDGER-DETAIL.html と assets/eye.css の `.popover`）:
  *   幅 440px（w-110）・角 16px（rounded-panel）・縁 1px --line-strong・影 0 12px 32px。
  *   矢印 16px を左 40px。頭 padding 14px 16px / 胴 12px 16px / 足 12px 16px（足の地は --surface-2）。
  *   ご用件などの見出し列は 84px（w-21）。主操作は幅いっぱい・min-height 52px・17px、
@@ -67,9 +67,15 @@ export type ReservationDetailProps = {
    * `RecordingSummary` を別に持つ）、欄が生えたらここへ 1 行で繋ぎ替える。
    */
   recording?: RecordingSummary | null
-  onCheckIn?: () => void
-  onChange?: () => void
-  onCancel?: () => void
+  /*
+   * この面が描く 3 つの操作。**任意にしない。**
+   * 任意プロパティにしていたとき `LedgerScreen` が 1 つも渡しておらず、
+   * 3 つとも `onClick={undefined}` で描かれていた（UX 監査 RECEP-01）。
+   * ボタンを描くのにハンドラが無い状態を、型のうえで作れなくする。
+   */
+  onCheckIn: () => void
+  onChange: () => void
+  onCancel: () => void
 }
 
 /**
@@ -240,7 +246,8 @@ export function ReservationDetail({
 
             <dl className="m-0 px-4 py-3">
               <Row term="ご用件">{detail.purposeLabelInternal}</Row>
-              <Row term="担当">{staffName ?? <span className="text-danger">担当が未定</span>}</Row>
+              {/* 担当未定は失敗ではないので amber（UX 監査 J-03。danger は取消と破壊的操作に限る）。 */}
+              <Row term="担当">{staffName ?? <span className="text-amber">担当が未定</span>}</Row>
               <Row term="場所">
                 {places ?? <span className="font-normal text-ink-muted">場所は決めていません</span>}
               </Row>

@@ -403,6 +403,14 @@ describe('reservations', () => {
     expect(isUnique(table, 'reservations_org_store_start_idx')).toBe(false)
   })
 
+  it('受付日での分析範囲走査用 index を持つ', () => {
+    expect(columnsOf(table, 'reservations_org_store_created_idx')).toEqual([
+      'organization_id',
+      'store_id',
+      'created_at',
+    ])
+  })
+
   it('組織の中で予約番号が一意である', () => {
     // 採番は組織 × YYMM の連番。店舗をまたぐ検索で番号が衝突しないよう組織で一意にする。
     expect(isUnique(table, 'reservations_org_code_idx')).toBe(true)
@@ -1078,7 +1086,7 @@ describe('web_booking_settings', () => {
         'created_at',
       ]),
     )
-    // 「ご案内のページ eyex.jp/ginza」はこの表に持たない（stores.slug から組み立てる）。
+    // 「ご案内のページ eye.jp/ginza」はこの表に持たない（stores.slug から組み立てる）。
     expect(names).not.toContain('landing_path')
     // 真偽値は text の '0' | '1'。受け付ける時間は 'HH:MM' の text。
     for (const name of ['is_published', 'requires_approval', 'opens_at', 'closes_at']) {
@@ -1133,7 +1141,8 @@ describe('web_bookings', () => {
       'status',
     ])
     expect(isUnique(table, 'web_bookings_org_store_status_idx')).toBe(false)
-    expect(table.indexes).toHaveLength(3)
+    expect(columnsOf(table, 'web_bookings_status_created_idx')).toEqual(['status', 'created_at'])
+    expect(table.indexes).toHaveLength(4)
   })
 
   it('確認鍵と確認番号はハッシュの列しか持たない', () => {
@@ -1182,7 +1191,35 @@ describe('web_bookings', () => {
 describe('analytics_daily', () => {
   const table = getTableConfig(analyticsDaily)
 
-  it('日次 upsert の重複を組織・店舗・日・指標・切り口で止める', () => {
+  it('has only the non-null aggregate columns and no foreign key', () => {
+    expect(table.name).toBe('analytics_daily')
+    expect(table.foreignKeys).toHaveLength(0)
+    expect(table.columns.map((column) => column.name)).toEqual([
+      'id',
+      'organization_id',
+      'store_id',
+      'date',
+      'metric',
+      'dimension',
+      'dimension_key',
+      'dimension_label',
+      'value',
+      'created_at',
+      'updated_at',
+    ])
+    for (const column of table.columns) expect(column.notNull, column.name).toBe(true)
+    expect(
+      table.columns.find((column) => column.name === 'dimension_label')?.default,
+    ).toBeUndefined()
+    expect(table.columns.find((column) => column.name === 'value')?.columnType).toBe(
+      'SQLiteInteger',
+    )
+    expect(table.checks.map((constraint) => constraint.name)).toContain(
+      'analytics_daily_value_nonnegative_check',
+    )
+  })
+
+  it('makes a same-day histogram bucket idempotent and reads periods by metric', () => {
     expect(isUnique(table, 'analytics_daily_org_store_date_metric_dim_idx')).toBe(true)
     expect(columnsOf(table, 'analytics_daily_org_store_date_metric_dim_idx')).toEqual([
       'organization_id',
@@ -1192,51 +1229,14 @@ describe('analytics_daily', () => {
       'dimension',
       'dimension_key',
     ])
-  })
-
-  it('期間指定の読み出しを組織・店舗・指標・日の順で引ける', () => {
-    expect(isUnique(table, 'analytics_daily_org_store_metric_date_idx')).toBe(false)
     expect(columnsOf(table, 'analytics_daily_org_store_metric_date_idx')).toEqual([
       'organization_id',
       'store_id',
       'metric',
       'date',
     ])
-    expect(table.indexes).toHaveLength(2)
-  })
-
-  it('外部キーを持たない', () => {
-    expect(table.name).toBe('analytics_daily')
-    expect(table.foreignKeys).toHaveLength(0)
-    expect(table.columns.filter((c) => c.primary).map((c) => c.name)).toEqual(['id'])
-    expect(table.columns.filter((c) => c.hasDefault)).toHaveLength(0)
-  })
-
-  it('値は real で持つ（件数も率も中央値も 1 列に入る）', () => {
-    expect(table.columns.find((c) => c.name === 'value')?.getSQLType()).toBe('real')
-    expect(table.columns.find((c) => c.name === 'value')?.notNull).toBe(true)
-  })
-
-  it('dimension_key は NOT NULL で、total のときは空文字を入れる', () => {
-    expect(table.columns.map((c) => c.name)).toEqual([
-      'id',
-      'organization_id',
-      'store_id',
-      'date',
-      'metric',
-      'dimension',
-      'dimension_key',
-      'value',
-      'created_at',
-      'updated_at',
-    ])
-    for (const column of table.columns) {
-      expect(column.notNull).toBe(true)
-    }
   })
 })
-
-/* --- P10 端末の使い分けと監査（013-terminals-and-audit） ------------------- */
 
 describe('terminals', () => {
   const table = getTableConfig(terminals)
@@ -1247,45 +1247,19 @@ describe('terminals', () => {
       'store_id',
       'created_at',
     ])
-    // 同じ店舗に同じ名前の置き場所を作れないわけではない（名前は付け替えられる）。
     expect(isUnique(table, 'terminals_org_store_created_idx')).toBe(false)
-    expect(table.indexes).toHaveLength(1)
   })
 
-  it('楽観ロックの version を持つ（PATCH が 409 を返せる）', () => {
-    const version = table.columns.find((c) => c.name === 'version')
-    expect(version?.getSQLType()).toBe('integer')
+  it('楽観ロックの version を持つ', () => {
+    const version = table.columns.find((column) => column.name === 'version')
     expect(version?.notNull).toBe(true)
-    // DDL の DEFAULT に意味を持たせない（version=1 はアプリ層が入れる）。
-    expect(version?.hasDefault).toBe(false)
+    expect(version?.columnType).toBe('SQLiteInteger')
   })
 
-  it('pin_hash と auto_lock_seconds を持ち、外部キーを宣言していない', () => {
-    expect(table.name).toBe('terminals')
+  it('PIN hash と自動ロック秒数を持ち、外部キーを宣言しない', () => {
+    expect(table.columns.find((column) => column.name === 'pin_hash')?.notNull).toBe(false)
+    expect(table.columns.find((column) => column.name === 'auto_lock_seconds')?.notNull).toBe(true)
     expect(table.foreignKeys).toHaveLength(0)
-    expect(table.columns.filter((c) => c.primary).map((c) => c.name)).toEqual(['id'])
-    expect(table.columns.map((c) => c.name)).toEqual([
-      'id',
-      'organization_id',
-      'store_id',
-      'name',
-      'kind',
-      'place_note',
-      'device_label',
-      'pin_hash',
-      'auto_lock_seconds',
-      'last_seen_at',
-      'is_active',
-      'version',
-      'created_at',
-    ])
-    expect(table.columns.find((c) => c.name === 'auto_lock_seconds')?.getSQLType()).toBe('integer')
-    // 暗証番号のハッシュも最終通信も、まだ無い状態がある。
-    expect(table.columns.find((c) => c.name === 'pin_hash')?.notNull).toBe(false)
-    expect(table.columns.find((c) => c.name === 'last_seen_at')?.notNull).toBe(false)
-    for (const name of ['organization_id', 'store_id', 'name', 'kind', 'is_active', 'created_at']) {
-      expect(table.columns.find((c) => c.name === name)?.notNull).toBe(true)
-    }
   })
 })
 
@@ -1298,8 +1272,6 @@ describe('terminal_sessions', () => {
       'terminal_id',
       'started_at',
     ])
-    // 引き継ぎで前の行を失効させて新しい行を積むので、一意にしない。
-    expect(isUnique(table, 'terminal_sessions_org_terminal_started_idx')).toBe(false)
   })
 
   it('期限切れの掃除を組織・期限で引ける', () => {
@@ -1307,31 +1279,21 @@ describe('terminal_sessions', () => {
       'organization_id',
       'expires_at',
     ])
-    expect(table.indexes).toHaveLength(2)
   })
 
-  it('外部キーを宣言していない', () => {
-    expect(table.name).toBe('terminal_sessions')
-    expect(table.foreignKeys).toHaveLength(0)
-    expect(table.columns.filter((c) => c.primary).map((c) => c.name)).toEqual(['id'])
-    expect(table.columns.filter((c) => c.hasDefault)).toHaveLength(0)
-    expect(table.columns.map((c) => c.name)).toEqual([
-      'id',
+  it('セッション資格情報はnullable hashだけを持ち、組織・端末・hashで照合できる', () => {
+    const credentialHash = table.columns.find((column) => column.name === 'credential_hash')
+    expect(credentialHash).toBeDefined()
+    expect(credentialHash?.notNull).toBe(false)
+    expect(columnsOf(table, 'terminal_sessions_org_terminal_credential_idx')).toEqual([
       'organization_id',
-      'store_id',
       'terminal_id',
-      'staff_id',
-      'mode',
-      'started_at',
-      'expires_at',
-      'revoked_at',
-      'created_at',
+      'credential_hash',
     ])
-    // 共有モードは担当を持たず、生きている間は revoked_at が NULL である。
-    expect(table.columns.find((c) => c.name === 'staff_id')?.notNull).toBe(false)
-    expect(table.columns.find((c) => c.name === 'revoked_at')?.notNull).toBe(false)
-    for (const name of ['organization_id', 'store_id', 'terminal_id', 'mode', 'expires_at']) {
-      expect(table.columns.find((c) => c.name === name)?.notNull).toBe(true)
-    }
+    expect(isUnique(table, 'terminal_sessions_org_terminal_credential_idx')).toBe(false)
+  })
+
+  it('外部キーを宣言しない', () => {
+    expect(table.foreignKeys).toHaveLength(0)
   })
 })

@@ -11,10 +11,10 @@ import {
 } from './PublicBookingApp'
 
 /*
- * お客様向けの器（承認済みモック docs/frontend/mockups/eyex/images/WEB-01-STORE.png 〜
+ * お客様向けの器（承認済みモック docs/frontend/mockups/eye/images/WEB-01-STORE.png 〜
  * WEB-06-DONE.png と WEB-CANCEL.png の共通部分）。
  *
- * 実測（screens/WEB-0*.html の <style> と assets/eyex.css）:
+ * 実測（screens/WEB-0*.html の <style> と assets/eye.css）:
  *   上のバー 56px・地 --brand・左に ‹ 48×48px、店名 19px/700・副題 12px（opacity .9）
  *   進捗 白地・下 1px 罫・padding 10px 16px、帯は 4px 高・間 4px・角 2px
  *   本文 padding 32px 28px、下端の固定は左右 28px・下 32px・主操作は全幅 56px/18px
@@ -24,12 +24,12 @@ import {
 
 const GINZA: PublicStoreSummary = {
   slug: 'ginza',
-  name: 'EYEX 銀座店',
+  name: 'EYE 銀座店',
   accessNote: '銀座駅 A2出口から徒歩3分',
 }
 const MARUNOUCHI: PublicStoreSummary = {
   slug: 'marunouchi',
-  name: 'EYEX 丸の内店',
+  name: 'EYE 丸の内店',
   accessNote: '東京駅 丸の内南口から徒歩5分',
 }
 
@@ -70,7 +70,7 @@ describe('お客様向けの器', () => {
     expect(publicStoreSlug('/w/ginza')).toBe('ginza')
     expect(publicStoreSlug('/')).toBeNull()
     render(<PublicBookingApp slug="ginza" today={TODAY} loaders={loaders()} />)
-    await screen.findByRole('radio', { name: /EYEX 銀座店/ })
+    await screen.findByRole('radio', { name: /EYE 銀座店/ })
 
     expect(screen.queryAllByRole('navigation')).toHaveLength(0)
     expect(screen.queryByRole('complementary')).toBeNull()
@@ -79,17 +79,17 @@ describe('お客様向けの器', () => {
 
   it('上のバーに店名と「ステップ N / 6」を出す', async () => {
     render(<PublicBookingApp slug="ginza" today={TODAY} loaders={loaders()} />)
-    await screen.findByRole('radio', { name: /EYEX 銀座店/ })
+    await screen.findByRole('radio', { name: /EYE 銀座店/ })
 
     const bar = screen.getByRole('banner')
-    expect(bar).toHaveTextContent('EYEX 銀座店')
+    expect(bar).toHaveTextContent('EYE 銀座店')
     expect(bar).toHaveTextContent('ステップ 1 / 6')
     expect(bar).toHaveTextContent('店舗')
   })
 
   it('進捗は role="img" で「全6ステップのうち1つ目です」と読める', async () => {
     render(<PublicBookingApp slug="ginza" today={TODAY} loaders={loaders()} />)
-    await screen.findByRole('radio', { name: /EYEX 銀座店/ })
+    await screen.findByRole('radio', { name: /EYE 銀座店/ })
 
     expect(screen.getByRole('img', { name: '全6ステップのうち1つ目です' })).toBeInTheDocument()
   })
@@ -118,7 +118,7 @@ describe('お客様向けの器', () => {
 
   it('‹ は 1 つ前の工程へ戻り、入力は消えない', async () => {
     render(<PublicBookingApp slug="ginza" today={TODAY} loaders={loaders()} />)
-    const ginza = await screen.findByRole('radio', { name: /EYEX 銀座店/ })
+    const ginza = await screen.findByRole('radio', { name: /EYE 銀座店/ })
     expect(ginza).toBeChecked()
 
     await userEvent.click(screen.getByRole('button', { name: '銀座店で予約を進める' }))
@@ -126,7 +126,7 @@ describe('お客様向けの器', () => {
 
     await userEvent.click(screen.getByRole('button', { name: '前の画面へ戻る' }))
 
-    expect(await screen.findByRole('radio', { name: /EYEX 銀座店/ })).toBeChecked()
+    expect(await screen.findByRole('radio', { name: /EYE 銀座店/ })).toBeChecked()
   })
 
   it('読み込み中・空・エラー・通信が切れたの 4 状態を、見出し 1 行と理由 1 行と次の一手 1 つで出す', async () => {

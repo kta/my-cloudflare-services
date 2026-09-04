@@ -3,6 +3,7 @@ import { cn, focusRing } from '@app/ui'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { weekdayOf } from '../../worker/domain/store-settings'
 import { client } from '../client'
+import { LoadFailed } from '../shell/LoadFailed'
 import {
   type SaveOutcome,
   type SettingsPanelProps,
@@ -12,7 +13,7 @@ import {
 } from './sections'
 
 /*
- * 営業日（承認済みモック docs/frontend/mockups/eyex/images/SETTINGS-CALENDAR.png）。
+ * 営業日（承認済みモック docs/frontend/mockups/eye/images/SETTINGS-CALENDAR.png）。
  *
  * 実測: .months = 1fr + 1fr / gap 22px / margin-top 16px。月のカードは 1px 罫 +
  * 角 16px + padding 14px 14px 16px、見出し 15px。日の格子は 7 列 / gap 4px、
@@ -30,7 +31,6 @@ import {
  */
 
 const SECTION_NAME = '営業日'
-const LOAD_FAILED = `${SECTION_NAME}を読み込めませんでした。画面を開き直してください。`
 
 type DayState = 'weekly-closed' | 'exception-closed' | 'special' | 'open'
 
@@ -66,6 +66,8 @@ export function CalendarPanel({ storeId, now, today, onDraftChange }: SettingsPa
 
   const [loaded, setLoaded] = useState<Loaded | null>(null)
   const [failed, setFailed] = useState(false)
+  // 読み直しの合図。読み込みの useEffect の依存に入れる。
+  const [reloadCount, setReloadCount] = useState(0)
   const [pending, setPending] = useState<Record<string, Intent>>({})
 
   const load = useCallback(async (): Promise<Loaded | null> => {
@@ -106,7 +108,7 @@ export function CalendarPanel({ storeId, now, today, onDraftChange }: SettingsPa
     return () => {
       alive = false
     }
-  }, [load])
+  }, [load, reloadCount])
 
   const changes = useMemo(
     () =>
@@ -158,9 +160,13 @@ export function CalendarPanel({ storeId, now, today, onDraftChange }: SettingsPa
 
   if (failed)
     return (
-      <p role="alert" className="text-body text-ink-muted">
-        {LOAD_FAILED}
-      </p>
+      <LoadFailed
+        what="営業日"
+        onRetry={() => {
+          setFailed(false)
+          setReloadCount((n) => n + 1)
+        }}
+      />
     )
   if (!loaded)
     return (

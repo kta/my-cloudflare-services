@@ -5,7 +5,7 @@ import { PurposePanel } from './PurposePanel'
 import type { SettingsPanelProps } from './sections'
 
 /*
- * 承認済みモック docs/frontend/mockups/eyex/images/SETTINGS-PURPOSE.png の面。
+ * 承認済みモック docs/frontend/mockups/eye/images/SETTINGS-PURPOSE.png の面。
  * 「何が読めて、何が押せるか」と、所要時間を延ばしたときに落ちる Web 枠が
  * 保存の前に出ることを見る。いまの時刻は prop で注ぎ、実行日に依存させない。
  */
@@ -476,15 +476,15 @@ describe('読み込みと失敗', () => {
     expect(screen.getByText('ご来店の目的を読み込んでいます…')).toHaveAttribute('role', 'status')
   })
 
-  it('読み込めなかったら理由と次の行動を出す', async () => {
+  it('読み込めなかったら理由と、その場でやり直す手立てを出す', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => new Response('boom', { status: 500 })),
     )
     render(<PurposePanel storeId={STORE_ID} now={NOW} onDraftChange={() => {}} />)
-    expect(
-      await screen.findByText('ご来店の目的を読み込めませんでした。画面を開き直してください。'),
-    ).toBeInTheDocument()
+    expect(await screen.findByText('ご来店の目的を読み込めませんでした。')).toBeInTheDocument()
+    // 読み直す手立てをその場に置く（画面ごとの URL が無いので「開き直す」は実行できない）。
+    expect(screen.getByRole('button', { name: 'もう一度読み込む' })).toBeInTheDocument()
   })
 
   it('1 件も無ければ、その事実だけを出す', async () => {

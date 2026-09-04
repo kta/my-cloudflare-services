@@ -1,10 +1,10 @@
 import type { APIRequestContext, Locator, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
-import { enterSharedWorkspace } from './terminal-start'
+import { completeSeededTerminalStart } from './support/terminal'
 
 /**
  * 顧客台帳（007-customer-records）の受け入れ基準を、実ブラウザと実 Worker で確かめる。
- * `vite preview` が実 workerd を動かし、D1 は `seed.mjs` が入れた EYEX 銀座店
+ * `vite preview` が実 workerd を動かし、D1 は `seed.mjs` が入れた EYE 銀座店
  * —— お客様 46 名（ご来店 2〜4回 が 42 名）と、田中 花子 様の度数 3 件・
  * いまお使いのメガネ 2 本・接客のメモ 7 件・過去のご予約 5 件、および
  * おまとめの見本になる 渡会 昭 様／渡会 章 様 —— である。
@@ -42,8 +42,8 @@ import { enterSharedWorkspace } from './terminal-start'
 /** この e2e の tsconfig は Worker 向けで DOM の型を持たない。使う分だけをここで宣言する。 */
 declare function getComputedStyle(node: unknown): { touchAction: string }
 
-const ORG = 'org-eyex-seed'
-/** seed.mjs が固定 id で入れる EYEX 銀座店と EYEX 丸の内店。 */
+const ORG = 'eye'
+/** seed.mjs が固定 id で入れる EYE 銀座店と EYE 丸の内店。 */
 const GINZA = '11111111-1111-4111-8111-111111111111'
 const MARUNOUCHI = '22222222-2222-4222-8222-222222222222'
 /** dev グラントが載せる `sub`。担当店舗の `userId` はこれに合わせる。 */
@@ -66,8 +66,6 @@ const MANAGER_PERMISSIONS = [
   'customer.read',
   'customer.write',
   'settings.read',
-  // 分析は seed の盤面をそのまま読むので、配り直しでも `analytics.read` を落とさない。
-  'analytics.read',
   'settings.manage',
 ]
 /** 店長ではないスタッフ。顧客は読み書きできるが `settings.manage` を持たない。 */
@@ -78,8 +76,6 @@ const STAFF_PERMISSIONS = [
   'customer.read',
   'customer.write',
   'settings.read',
-  // 分析は seed の盤面をそのまま読むので、配り直しでも `analytics.read` を落とさない。
-  'analytics.read',
 ]
 
 /** seed の id は `${区分}-0000-4000-8000-${連番}`（`seed.mjs` の `uid`）。 */
@@ -252,13 +248,14 @@ async function startWork(page: Page): Promise<void> {
   await page.goto('/')
   const code = page.getByLabel('お店のコード')
   const nav = page.getByRole('navigation', { name: '画面の切り替え' })
-  await expect(code.or(nav).first()).toBeVisible()
+  const placePick = page.getByRole('heading', { name: 'この端末はどこに置きますか？' })
+  await expect(code.or(nav).or(placePick).first()).toBeVisible()
   if ((await code.count()) > 0) {
     await code.fill(ORG)
     await page.getByRole('button', { name: '業務を始める' }).click()
   }
-  await enterSharedWorkspace(page)
-  await expect(page.locator('header').first()).toContainText('EYEX 銀座店')
+  await completeSeededTerminalStart(page)
+  await expect(page.locator('header').first()).toContainText('EYE 銀座店')
 }
 
 /** 左のサイドバーから顧客台帳を開き、一覧が届くまで待つ。 */
@@ -308,9 +305,6 @@ async function walkToCustomerStep(page: Page, hhmm: string): Promise<void> {
 
   await page.getByRole('button', { name: new RegExp(`^${WALK_DAY}`) }).click()
   const slot = page.getByRole('button', { name: new RegExp(`^${hhmm} `) })
-  const more = page.getByRole('button', { name: /^ほかの時刻も見る/ })
-  await expect(slot.or(more).first()).toBeVisible()
-  if ((await slot.count()) === 0) await more.click()
   await expect(slot).toBeEnabled()
   await slot.click()
   await proceed(page)
@@ -782,7 +776,7 @@ test('店長でないと入口が出ず、直接叩いても拒まれる', async
 
 // @e2e-covers AC-CUST-17
 test('別の会社のお客様 ID は 404 として扱われる', async ({ request }) => {
-  const other = 'org-eyex-other'
+  const other = 'org-eye-other'
   const token = await request.post('/api/auth/token', {
     data: { organizationId: other, role: 'staff' },
   })

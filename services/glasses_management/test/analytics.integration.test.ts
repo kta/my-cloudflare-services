@@ -1,736 +1,220 @@
-/**
- * 分析 8 タブの読み出し（`GET /api/staff/analytics` / `.../targets`）。
- *
- * 画面は `analytics_daily` しか読まないので、ここも同じ表を材料に置いて
- * 「何を、いつを基準に、どれだけの母数で数えたか」が応答から読めることを固定する。
- *
- * この面が守る 3 つを、境界値で潰す:
- * 1. **人数（「名」）を 1 か所も返さない。**
- * 2. **「1日あたり」の分母は営業日数**で、暦日数では割らない。
- * 3. **根拠にできない率は数字にしない**（20 件ちょうどは出し、19 件は `null`）。
- *
- * 時刻は `now` を query で注入する。**テストは実時刻を読まない。**
- */
+/** P9 の読出し／保守 API。集計済み analytics_daily だけを fixture にする。 */
 import { env, SELF } from 'cloudflare:test'
-import { beforeAll, describe, expect, it } from 'vitest'
+import { AnalyticsReport, AnalyticsRollupResult } from '@app/contracts'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { rollupAnalytics } from '../src/worker/index'
 import {
   authed,
   BASE,
-  FIXED_NOW,
-  grantStorePermissions,
   INTERNAL_HEADERS,
-  insertAnalyticsDaily,
   insertBusinessHours,
   insertReservation,
   insertStaff,
   insertStore,
-  insertVisitPurpose,
+  JSON_HEADERS,
   jstAt,
-  markAnalyticsDays,
   orgId,
   tokenFor,
 } from './helpers'
 
-/** JST 2026年8月27日（木）11:08。トップの「本日」はこの日になる。 */
-const NOW = FIXED_NOW
-const AUGUST = { from: '2026-08-01', to: '2026-08-31' }
-/** 2026年8月の火曜（定休）。暦 31 日 − 4 日 = 営業日 27 日。 */
-const CLOSED_TUESDAYS = ['2026-08-04', '2026-08-11', '2026-08-18', '2026-08-25']
+const NOW = '2026-08-27T02:08:00.000Z'
+const FROM = '2026-08-01'
+const TO = '2026-08-31'
+const METRICS = [
+  'overview',
+  'reservation_count',
+  'reservation_source',
+  'cancellation',
+  'visit_frequency',
+  'staff',
+  'purpose',
+  'wait_time',
+] as const
 
-const augustDates = (): string[] =>
-  Array.from({ length: 31 }, (_, i) => `2026-08-${String(i + 1).padStart(2, '0')}`)
+beforeEach(() => {
+  vi.useFakeTimers()
+  vi.setSystemTime(new Date(NOW))
+})
 
-type Report = {
-  metric: string
-  granularity: string
-  countBy: string
-  series: {
-    name: string
-    pattern: string
-    points: {
-      key: string
-      label: string
-      value: number
-      secondaryValue: number | null
-      isClosed: boolean
-      isOverTarget: boolean
-    }[]
-  }[]
-  summary: { label: string; value: string; unit: string; isOverTarget: boolean }[]
-  target: number | null
-  suppressed: boolean
-  businessDays: number
-  pendingDays: number
-}
+afterEach(() => {
+  vi.useRealTimers()
+})
 
-type Fixture = { org: string; token: string; storeId: string }
-
-/** 組織・店舗・`analytics.read` を持つ人を 1 組作る。組織 id は毎回ユニーク。 */
-async function setup(): Promise<Fixture> {
+async function analyticsTenant(permission = 'analytics.read') {
   const org = orgId()
   const token = await tokenFor(org)
-  const storeId = await insertStore(org)
-  await grantStorePermissions(org, storeId, `dev:${org}`, ['analytics.read'])
+  const storeId = await insertStore(org, '分析テスト店')
+  await insertBusinessHours(org, storeId)
+  await SELF.fetch(`${BASE}/api/internal/store-memberships/sync`, {
+    method: 'POST',
+    headers: INTERNAL_HEADERS,
+    body: JSON.stringify({
+      id: crypto.randomUUID(),
+      organizationId: org,
+      storeId,
+      userId: `dev:${org}`,
+      permissions: permission ? [permission] : [],
+      createdAt: NOW,
+    }),
+  })
   return { org, token, storeId }
 }
 
-async function fetchReport(
-  fixture: Fixture,
-  params: Record<string, string>,
-): Promise<{ status: number; body: Report }> {
-  const query = new URLSearchParams({ storeId: fixture.storeId, now: NOW, ...params })
-  const res = await SELF.fetch(`${BASE}/api/staff/analytics?${query}`, {
-    headers: authed(fixture.token),
-  })
-  return { status: res.status, body: (await res.json()) as Report }
+async function daily(
+  tenant: { org: string; storeId: string },
+  input: { date: string; metric: string; dimension?: string; key?: string; value: number },
+) {
+  await env.DB.prepare(
+    'INSERT INTO analytics_daily (id, organization_id, store_id, date, metric, dimension, dimension_key, dimension_label, value, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+  )
+    .bind(
+      crypto.randomUUID(),
+      tenant.org,
+      tenant.storeId,
+      input.date,
+      input.metric,
+      input.dimension ?? 'total',
+      input.key ?? '',
+      input.key ?? '合計',
+      input.value,
+      NOW,
+      NOW,
+    )
+    .run()
 }
 
-const sumOfPoints = (report: Report): number =>
-  report.series.reduce(
-    (total, series) => total + series.points.reduce((sub, point) => sub + point.value, 0),
-    0,
-  )
+function reportPath(storeId: string, metric: (typeof METRICS)[number], extra = '') {
+  return `${BASE}/api/staff/analytics?storeId=${storeId}&metric=${metric}&from=${FROM}&to=${TO}${extra}`
+}
 
-const summaryOf = (report: Report, label: string): string =>
-  report.summary.find((row) => row.label === label)?.value ?? '（無い）'
-
-/* ═════════════════════════════════════════════════════════════════════════
- * トップ
- * ═══════════════════════════════════════════════════════════════════════ */
-
-describe('トップ', () => {
-  let fixture: Fixture
-
-  beforeAll(async () => {
-    fixture = await setup()
-    // 前後 7 日（8/20〜9/3）の 15 日ぶん。すべて営業日として印を置く。
-    const dates = Array.from({ length: 15 }, (_, i) =>
-      i < 12 ? `2026-08-${20 + i}` : `2026-09-0${i - 11}`,
-    )
-    await markAnalyticsDays(fixture.org, fixture.storeId, dates)
-    await insertAnalyticsDaily(
-      fixture.org,
-      fixture.storeId,
-      dates.map((date) => ({ date, metric: 'reservations', value: 3 })),
-    )
-  })
-
-  it('前後7日の 15 点を返し、本日の点に label「8/27 本日」が付く', async () => {
-    const { status, body } = await fetchReport(fixture, {
-      metric: 'overview',
-      from: '2026-08-20',
-      to: '2026-09-03',
-    })
-    expect(status).toBe(200)
-    expect(body.series).toHaveLength(1)
-    expect(body.series[0]?.points).toHaveLength(15)
-    expect(body.series[0]?.points.map((point) => point.label)).toContain('8/27 本日')
-    // 「本日」は 1 日だけ。前後の日はただの日付に留める。
-    expect(body.series[0]?.points.filter((point) => point.label.includes('本日'))).toHaveLength(1)
-  })
-
-  it('まとめは 先週・今週・来週 の 3 行で、単位は「件」だけになる', async () => {
-    const { body } = await fetchReport(fixture, {
-      metric: 'overview',
-      from: '2026-08-20',
-      to: '2026-09-03',
-    })
-    expect(body.summary.map((row) => row.label)).toEqual(['先週', '今週', '来週'])
-    expect(new Set(body.summary.map((row) => row.unit))).toEqual(new Set(['件']))
-    // 今週（8/24〜8/30）は 7 日ぶんすべてが期間に入っている。
-    expect(summaryOf(body, '今週')).toBe('21')
-  })
-
-  it('応答のどこにも「名」が現れない（JSON を文字列にして検査する）', async () => {
-    for (const metric of [
-      'overview',
-      'reservation_count',
-      'reservation_source',
-      'cancellation',
-      'visit_frequency',
-      'staff',
-      'purpose',
-      'wait_time',
-    ]) {
-      const { body } = await fetchReport(fixture, {
-        metric,
-        from: '2026-08-20',
-        to: '2026-09-03',
-      })
-      expect(JSON.stringify(body)).not.toContain('名')
-    }
-  })
-
-  it("analytics_daily に metric='guests' の行を 1 つも書かない", async () => {
-    // 日次集計を実際に走らせても、人数の行は 1 行も生まれない。
-    const storeId = await insertStore(fixture.org, 'EYEX 集計確認店')
-    await insertBusinessHours(fixture.org, storeId, { closedWeekdays: [] })
-    await insertReservation(fixture.org, {
-      storeId,
-      startsAt: jstAt('2026-08-27', '11:00'),
-      status: 'done',
-    })
-    const res = await SELF.fetch(`${BASE}/api/internal/maintenance/analytics/rollup`, {
+async function rollupAllPages(body: { from: string; to: string; limit: number }) {
+  const seenCursors = new Set<string>()
+  let storeCursor: string | undefined
+  let processedStores = 0
+  for (let page = 0; page < 100; page += 1) {
+    const response = await SELF.fetch(`${BASE}/api/internal/maintenance/analytics/rollup`, {
       method: 'POST',
       headers: INTERNAL_HEADERS,
-      body: JSON.stringify({ now: NOW, days: 1 }),
+      body: JSON.stringify({ ...body, ...(storeCursor === undefined ? {} : { storeCursor }) }),
     })
-    expect(res.status).toBe(200)
+    expect(response.status).toBe(200)
+    const result = AnalyticsRollupResult.parse(await response.json())
+    expect(result.processedStores).toBeLessThanOrEqual(3)
+    processedStores += result.processedStores
+    if (result.nextStoreCursor === null) return { processedStores, pages: page + 1 }
+    expect(seenCursors.has(result.nextStoreCursor)).toBe(false)
+    seenCursors.add(result.nextStoreCursor)
+    storeCursor = result.nextStoreCursor
+  }
+  throw new Error('storeCursor did not terminate within the bounded test page count')
+}
 
-    const guests = await env.DB.prepare(
-      "SELECT COUNT(*) AS n FROM analytics_daily WHERE metric = 'guests'",
-    ).first<{ n: number }>()
-    expect(guests?.n).toBe(0)
-    const counted = await env.DB.prepare(
-      "SELECT value FROM analytics_daily WHERE store_id = ? AND date = '2026-08-27' " +
-        "AND metric = 'reservations' AND dimension = 'total'",
-    )
-      .bind(storeId)
-      .first<{ value: number }>()
-    expect(counted?.value).toBe(1)
-  })
-})
+describe('分析レポートは analytics_daily だけを読む', () => {
+  it('8 metric を契約どおり返し、guests を作らない', async () => {
+    const tenant = await analyticsTenant()
+    await daily(tenant, { date: FROM, metric: 'closed', value: 0 })
+    await daily(tenant, { date: FROM, metric: 'reservations', value: 20 })
 
-/* ═════════════════════════════════════════════════════════════════════════
- * 予約数
- * ═══════════════════════════════════════════════════════════════════════ */
-
-describe('予約数', () => {
-  let fixture: Fixture
-
-  beforeAll(async () => {
-    fixture = await setup()
-    await markAnalyticsDays(fixture.org, fixture.storeId, augustDates(), CLOSED_TUESDAYS)
-    // 営業日 27 日に 2 件ずつ = 54 件。1日あたりはちょうど 2.0 件になる。
-    await insertAnalyticsDaily(
-      fixture.org,
-      fixture.storeId,
-      augustDates()
-        .filter((date) => !CLOSED_TUESDAYS.includes(date))
-        .map((date) => ({ date, metric: 'reservations', value: 2 })),
-    )
-    // 受付日で数えると別の日に落ちる（同じ 8 月でも合計が変わる）。
-    await insertAnalyticsDaily(fixture.org, fixture.storeId, [
-      { date: '2026-08-10', metric: 'reservations_received', value: 9 },
-    ])
-    // 時間帯別・曜日別・月別の材料。
-    await insertAnalyticsDaily(
-      fixture.org,
-      fixture.storeId,
-      Array.from({ length: 9 }, (_, i) => ({
-        date: '2026-08-10',
-        metric: 'reservations',
-        dimension: 'hour',
-        dimensionKey: String(10 + i),
-        value: i + 1,
-      })),
-    )
-  })
-
-  it('集計の種類 4 択 × かぞえる日 2 択 の 8 通りがすべて 200 で返る', async () => {
-    for (const granularity of ['day', 'month', 'hour', 'weekday']) {
-      for (const countBy of ['visit_date', 'received_date']) {
-        const { status } = await fetchReport(fixture, {
-          metric: 'reservation_count',
-          ...AUGUST,
-          granularity,
-          countBy,
-        })
-        expect(status, `${granularity} × ${countBy}`).toBe(200)
-      }
-    }
-  })
-
-  it('ご来店日と受付日で同じ月の合計が異なる（同じ予約が別の日に落ちる）', async () => {
-    const visit = await fetchReport(fixture, {
-      metric: 'reservation_count',
-      ...AUGUST,
-      countBy: 'visit_date',
-    })
-    const received = await fetchReport(fixture, {
-      metric: 'reservation_count',
-      ...AUGUST,
-      countBy: 'received_date',
-    })
-    expect(summaryOf(visit.body, '合計')).toBe('54')
-    expect(summaryOf(received.body, '合計')).toBe('9')
-  })
-
-  it('時間帯別にすると点の key が 10..18 になり、日付が 1 つも出ない', async () => {
-    const { body } = await fetchReport(fixture, {
-      metric: 'reservation_count',
-      ...AUGUST,
-      granularity: 'hour',
-    })
-    expect(body.series[0]?.points.map((point) => point.key)).toEqual([
-      '10',
-      '11',
-      '12',
-      '13',
-      '14',
-      '15',
-      '16',
-      '17',
-      '18',
-    ])
-    for (const point of body.series[0]?.points ?? []) {
-      expect(point.key).not.toContain('-')
-      expect(point.label).not.toContain('/')
-    }
-  })
-
-  it('曜日別にすると点が 7 つになり、月別にすると期間の月数と同じ数になる', async () => {
-    const weekday = await fetchReport(fixture, {
-      metric: 'reservation_count',
-      ...AUGUST,
-      granularity: 'weekday',
-    })
-    expect(weekday.body.series[0]?.points).toHaveLength(7)
-    expect(weekday.body.series[0]?.points.map((point) => point.label)).toEqual([
-      '月',
-      '火',
-      '水',
-      '木',
-      '金',
-      '土',
-      '日',
-    ])
-    // 火曜は 4 日とも定休なので 0 件。棒は残す（曜日の軸を欠かさない）。
-    expect(weekday.body.series[0]?.points[1]?.value).toBe(0)
-
-    const month = await fetchReport(fixture, {
-      metric: 'reservation_count',
-      ...AUGUST,
-      granularity: 'month',
-    })
-    expect(month.body.series[0]?.points).toHaveLength(1)
-    expect(month.body.series[0]?.points[0]?.label).toBe('8月')
-  })
-
-  it('まとめは 合計・1日あたり・最も多い日 の 3 つだけで、4 つ目を返さない', async () => {
-    const { body } = await fetchReport(fixture, { metric: 'reservation_count', ...AUGUST })
-    expect(body.summary.map((row) => row.label)).toEqual(['合計', '1日あたり', '最も多い日'])
-  })
-
-  it('1日あたりは 合計 ÷ businessDays で、暦日数では割らない', async () => {
-    const { body } = await fetchReport(fixture, { metric: 'reservation_count', ...AUGUST })
-    // 暦は 31 日だが、火曜 4 日は定休なので分母は 27 日（54 ÷ 27 = 2）。
-    expect(body.businessDays).toBe(27)
-    expect(summaryOf(body, '1日あたり')).toBe('2')
-    expect(summaryOf(body, '1日あたり')).not.toBe(String(Math.round((54 / 31) * 10) / 10))
-  })
-
-  it('取り消した予約を合計に含めない', async () => {
-    // 日次集計を実際に走らせる（取消の除外は数え方の問題なので、生データから見る）。
-    const storeId = await insertStore(fixture.org, 'EYEX 取消確認店')
-    await insertBusinessHours(fixture.org, storeId, { closedWeekdays: [] })
-    await grantStorePermissions(fixture.org, storeId, `dev:${fixture.org}`, ['analytics.read'])
-    for (const status of ['confirmed', 'done', 'no_show'] as const) {
-      await insertReservation(fixture.org, {
-        storeId,
-        startsAt: jstAt('2026-08-27', '11:00'),
-        status,
+    for (const metric of METRICS) {
+      const response = await SELF.fetch(reportPath(tenant.storeId, metric), {
+        headers: authed(tenant.token),
       })
+      expect(response.status).toBe(200)
+      const report = AnalyticsReport.parse(await response.json())
+      expect(report.metric).toBe(metric)
+      expect(JSON.stringify(report)).not.toContain('guests')
     }
-    const res = await SELF.fetch(`${BASE}/api/internal/maintenance/analytics/rollup`, {
-      method: 'POST',
-      headers: INTERNAL_HEADERS,
-      body: JSON.stringify({ now: NOW, days: 1 }),
+  })
+
+  it('期間合算 histogram の中央値、20/19 の抑制、closed と pending を区別する', async () => {
+    const twenty = await analyticsTenant()
+    await daily(twenty, { date: '2026-08-01', metric: 'closed', value: 0 })
+    await daily(twenty, { date: '2026-08-02', metric: 'closed', value: 1 })
+    await daily(twenty, {
+      date: '2026-08-01',
+      metric: 'revisit_eligible',
+      dimension: 'staff',
+      key: 'staff-analytics',
+      value: 20,
     })
-    expect(res.status).toBe(200)
-
-    const query = new URLSearchParams({
-      storeId,
-      now: NOW,
-      metric: 'reservation_count',
-      from: '2026-08-27',
-      to: '2026-08-27',
+    await daily(twenty, {
+      date: '2026-08-01',
+      metric: 'revisit_returning_90d',
+      dimension: 'staff',
+      key: 'staff-analytics',
+      value: 10,
     })
-    const report = (await (
-      await SELF.fetch(`${BASE}/api/staff/analytics?${query}`, { headers: authed(fixture.token) })
-    ).json()) as Report
-    expect(summaryOf(report, '合計')).toBe('2')
+    await daily(twenty, {
+      date: '2026-08-01',
+      metric: 'wait_seconds_histogram',
+      dimension: 'wait_seconds',
+      key: 'hour:10:300',
+      value: 1,
+    })
+    await daily(twenty, {
+      date: '2026-08-02',
+      metric: 'wait_seconds_histogram',
+      dimension: 'wait_seconds',
+      key: 'hour:11:480',
+      value: 1,
+    })
+
+    const staffResponse = await SELF.fetch(reportPath(twenty.storeId, 'staff'), {
+      headers: authed(twenty.token),
+    })
+    expect(staffResponse.status).toBe(200)
+    const staff = AnalyticsReport.parse(await staffResponse.json())
+    expect(staff.businessDays).toBe(1)
+    expect(staff.pendingDays).toBe(29)
+    expect(
+      staff.series.flatMap((series) => series.points).some((point) => point.secondaryValue === 0.5),
+    ).toBe(true)
+    const waitResponse = await SELF.fetch(reportPath(twenty.storeId, 'wait_time'), {
+      headers: authed(twenty.token),
+    })
+    expect(waitResponse.status).toBe(200)
+    const wait = AnalyticsReport.parse(await waitResponse.json())
+    expect(wait.summary[0]?.value).toBe('390')
+
+    const nineteen = await analyticsTenant()
+    await daily(nineteen, { date: FROM, metric: 'closed', value: 0 })
+    await daily(nineteen, {
+      date: FROM,
+      metric: 'revisit_eligible',
+      dimension: 'staff',
+      key: 'staff-analytics',
+      value: 19,
+    })
+    await daily(nineteen, {
+      date: FROM,
+      metric: 'revisit_returning_90d',
+      dimension: 'staff',
+      key: 'staff-analytics',
+      value: 10,
+    })
+    const suppressedResponse = await SELF.fetch(reportPath(nineteen.storeId, 'staff'), {
+      headers: authed(nineteen.token),
+    })
+    expect(suppressedResponse.status).toBe(200)
+    const suppressed = AnalyticsReport.parse(await suppressedResponse.json())
+    expect(suppressed.suppressed).toBe(true)
+    expect(
+      suppressed.series
+        .flatMap((series) => series.points)
+        .some((point) => point.secondaryValue === null),
+    ).toBe(true)
   })
-})
 
-/* ═════════════════════════════════════════════════════════════════════════
- * 担当者
- * ═══════════════════════════════════════════════════════════════════════ */
-
-describe('担当者', () => {
-  let fixture: Fixture
-  let sato = ''
-  let ito = ''
-
-  beforeAll(async () => {
-    fixture = await setup()
-    sato = await insertStaff(fixture.org, fixture.storeId, { displayName: '佐藤 美咲' })
-    ito = await insertStaff(fixture.org, fixture.storeId, { displayName: '伊藤 亮', sortOrder: 1 })
-    // 中村さんは期間に 1 件も受けていない（点としては残る）。
-    await insertStaff(fixture.org, fixture.storeId, { displayName: '中村 彩', sortOrder: 2 })
-    await markAnalyticsDays(fixture.org, fixture.storeId, augustDates(), CLOSED_TUESDAYS)
-    await insertAnalyticsDaily(fixture.org, fixture.storeId, [
+  it('targets は analytics_daily の内容に関係なく固定値を返す', async () => {
+    const tenant = await analyticsTenant()
+    const response = await SELF.fetch(
+      `${BASE}/api/staff/analytics/targets?storeId=${tenant.storeId}`,
       {
-        date: '2026-08-10',
-        metric: 'receptions',
-        dimension: 'staff',
-        dimensionKey: sato,
-        value: 30,
+        headers: authed(tenant.token),
       },
-      {
-        date: '2026-08-10',
-        metric: 'receptions',
-        dimension: 'staff',
-        dimensionKey: ito,
-        value: 24,
-      },
-      {
-        date: '2026-08-10',
-        metric: 'receptions',
-        dimension: 'staff',
-        dimensionKey: 'unassigned',
-        value: 6,
-      },
-      {
-        date: '2026-08-10',
-        metric: 'revisits_90d',
-        dimension: 'staff',
-        dimensionKey: sato,
-        value: 12,
-      },
-    ])
-  })
-
-  it('各点の value の合計が まとめの合計件数と一致する', async () => {
-    const { body } = await fetchReport(fixture, { metric: 'staff', ...AUGUST })
-    expect(summaryOf(body, '合計')).toBe(String(sumOfPoints(body)))
-    expect(sumOfPoints(body)).toBe(60)
-  })
-
-  it('件数 0 の担当も点として返る', async () => {
-    const { body } = await fetchReport(fixture, { metric: 'staff', ...AUGUST })
-    const nakamura = body.series[0]?.points.find((point) => point.label === '中村 彩')
-    expect(nakamura?.value).toBe(0)
-  })
-
-  it('担当が未定は key=unassigned で並びの最後に来て、secondaryValue は常に null', async () => {
-    const { body } = await fetchReport(fixture, { metric: 'staff', ...AUGUST })
-    const points = body.series[0]?.points ?? []
-    expect(points[points.length - 1]?.key).toBe('unassigned')
-    expect(points[points.length - 1]?.secondaryValue).toBeNull()
-    // 担当が決まっている人は、分母が足りていれば率が出る（30 件中 12 件）。
-    expect(points[0]?.secondaryValue).toBeCloseTo(0.4, 5)
-  })
-})
-
-/* ═════════════════════════════════════════════════════════════════════════
- * お待ち時間
- * ═══════════════════════════════════════════════════════════════════════ */
-
-describe('お待ち時間', () => {
-  let fixture: Fixture
-
-  beforeAll(async () => {
-    fixture = await setup()
-    await markAnalyticsDays(fixture.org, fixture.storeId, augustDates(), CLOSED_TUESDAYS)
-    await markAnalyticsDays(
-      fixture.org,
-      fixture.storeId,
-      Array.from({ length: 31 }, (_, i) => `2026-07-${String(i + 1).padStart(2, '0')}`),
     )
-    await insertAnalyticsDaily(fixture.org, fixture.storeId, [
-      // 8 月：中央値 320 秒（外れ値の 3600 秒に引っぱられない）。
-      { date: '2026-08-05', metric: 'wait_seconds_median', value: 300 },
-      { date: '2026-08-05', metric: 'receptions', value: 10 },
-      { date: '2026-08-06', metric: 'wait_seconds_median', value: 320 },
-      { date: '2026-08-06', metric: 'receptions', value: 10 },
-      { date: '2026-08-07', metric: 'wait_seconds_median', value: 3600 },
-      { date: '2026-08-07', metric: 'receptions', value: 1 },
-      // 時間帯別。12 時台は受付が 0 件なので点を返さない。
-      {
-        date: '2026-08-05',
-        metric: 'wait_seconds_median',
-        dimension: 'hour',
-        dimensionKey: '11',
-        value: 540,
-      },
-      {
-        date: '2026-08-05',
-        metric: 'receptions',
-        dimension: 'hour',
-        dimensionKey: '11',
-        value: 8,
-      },
-      {
-        date: '2026-08-05',
-        metric: 'wait_seconds_median',
-        dimension: 'hour',
-        dimensionKey: '12',
-        value: 200,
-      },
-      // 前の月（7 月）の中央値。
-      { date: '2026-07-15', metric: 'wait_seconds_median', value: 420 },
-      { date: '2026-07-15', metric: 'receptions', value: 12 },
-    ])
-  })
-
-  it('中央値は日ごとの中央値を受付件数で重み付けして出す（秒で持つ）', async () => {
-    const { body } = await fetchReport(fixture, { metric: 'wait_time', ...AUGUST })
-    expect(summaryOf(body, '中央値')).toBe('5分20秒')
-    expect(body.target).toBe(480)
-  })
-
-  it('中央値であって平均ではない（外れ値 1 件で動かない）', async () => {
-    const { body } = await fetchReport(fixture, { metric: 'wait_time', ...AUGUST })
-    // 平均なら (300+320+3600)/3 ≒ 1406 秒（23分）になる。中央値はそこへ動かない。
-    expect(summaryOf(body, '中央値')).not.toBe('23分27秒')
-    expect(body.summary.find((row) => row.label === '中央値')?.isOverTarget).toBe(false)
-  })
-
-  it('まとめに 前の月の中央値と 受付件数の母数が入る', async () => {
-    const { body } = await fetchReport(fixture, { metric: 'wait_time', ...AUGUST })
-    expect(summaryOf(body, '前の月の中央値')).toBe('7分0秒')
-    expect(summaryOf(body, '受付')).toBe('21')
-    expect(body.summary.find((row) => row.label === '受付')?.unit).toBe('件')
-  })
-
-  it('受付 0 件の時間帯は点を返さない（軸だけ残す）', async () => {
-    const { body } = await fetchReport(fixture, { metric: 'wait_time', ...AUGUST })
-    const keys = body.series[0]?.points.map((point) => point.key)
-    expect(keys).toEqual(['11'])
-    // 11 時台の 540 秒（9 分）は 8 分の目安を超えている。
-    expect(body.series[0]?.points[0]?.isOverTarget).toBe(true)
-  })
-})
-
-/* ═════════════════════════════════════════════════════════════════════════
- * 取り消し
- * ═══════════════════════════════════════════════════════════════════════ */
-
-describe('取り消し', () => {
-  let fixture: Fixture
-
-  beforeAll(async () => {
-    fixture = await setup()
-    const july = Array.from({ length: 31 }, (_, i) => `2026-07-${String(i + 1).padStart(2, '0')}`)
-    await markAnalyticsDays(fixture.org, fixture.storeId, [...july, ...augustDates()])
-    await insertAnalyticsDaily(fixture.org, fixture.storeId, [
-      { date: '2026-08-10', metric: 'reservations', value: 90 },
-      // 5 層で合計 10 件（取消率 10.0% ちょうど＝超過にしない）。
-      ...(
-        [
-          ['customer', 4],
-          ['store', 2],
-          ['duplicate', 1],
-          ['no_show', 2],
-          ['web', 1],
-        ] as const
-      ).map(([key, value]) => ({
-        date: '2026-08-10',
-        metric: 'cancellations',
-        dimension: 'cancel_reason',
-        dimensionKey: key,
-        value,
-      })),
-      { date: '2026-08-10', metric: 'no_shows', value: 2 },
-      // 7 月は予約だけで取消が 0 件。
-      { date: '2026-07-10', metric: 'reservations', value: 50 },
-    ])
-  })
-
-  const cancellation = () =>
-    fetchReport(fixture, {
-      metric: 'cancellation',
-      from: '2026-07-01',
-      to: '2026-08-31',
-      granularity: 'month',
-    })
-
-  it('凡例は 5 本で、名前が CHANGE-CANCEL の 4 択と 1 字も違わない', async () => {
-    const { body } = await cancellation()
-    expect(body.series.map((series) => series.name)).toEqual([
-      'お客様のご都合',
-      '店舗の都合',
-      '予約の重複',
-      'ご来店がなかった',
-      'Webからの取消',
-    ])
-  })
-
-  it('5 層は排他で、層の合計がその月の取消件数と一致する', async () => {
-    const { body } = await cancellation()
-    expect(sumOfPoints(body)).toBe(10)
-    expect(summaryOf(body, '取消件数')).toBe('10')
-  })
-
-  it('取消率の分母は 予約数 + 取消件数（来店予定だった総数）である', async () => {
-    const { body } = await cancellation()
-    // 予約 140 件（7 月 50 + 8 月 90）＋ 取消 10 件 = 150 件。
-    expect(summaryOf(body, '来店予定だった総数')).toBe('150')
-    expect(summaryOf(body, '取消率')).toBe('6.7')
-    expect(body.target).toBe(10)
-    expect(body.suppressed).toBe(false)
-  })
-
-  it('取消が 0 件の月は点を返さない', async () => {
-    const { body } = await cancellation()
-    for (const series of body.series) {
-      expect(series.points.map((point) => point.key)).toEqual(['2026-08'])
-    }
-  })
-
-  it('取消率 10.0% ちょうどは超過にせず、10.1% で超過にする', async () => {
-    const exact = await fetchReport(fixture, {
-      metric: 'cancellation',
-      from: '2026-08-01',
-      to: '2026-08-31',
-      granularity: 'month',
-    })
-    // 8 月だけなら 90 + 10 = 100 件の 10 件 = 10.0%。
-    expect(summaryOf(exact.body, '取消率')).toBe('10')
-    expect(exact.body.summary.find((row) => row.label === '取消率')?.isOverTarget).toBe(false)
-
-    // 予約を 1 件減らすと 10 / 99 = 10.1% になり、超過になる。
-    await insertAnalyticsDaily(fixture.org, fixture.storeId, [
-      { date: '2026-08-10', metric: 'reservations', value: 89 },
-    ])
-    const over = await fetchReport(fixture, {
-      metric: 'cancellation',
-      from: '2026-08-01',
-      to: '2026-08-31',
-      granularity: 'month',
-    })
-    expect(summaryOf(over.body, '取消率')).toBe('10.1')
-    expect(over.body.summary.find((row) => row.label === '取消率')?.isOverTarget).toBe(true)
-  })
-})
-
-/* ═════════════════════════════════════════════════════════════════════════
- * モックの無い 3 タブ
- * ═══════════════════════════════════════════════════════════════════════ */
-
-describe('予約の入口・来店回数・ご来店の目的', () => {
-  let fixture: Fixture
-  let purposeId = ''
-
-  beforeAll(async () => {
-    fixture = await setup()
-    await markAnalyticsDays(fixture.org, fixture.storeId, augustDates(), CLOSED_TUESDAYS)
-    purposeId = await insertVisitPurpose(fixture.org, fixture.storeId, {
-      nameInternal: 'メガネを新しく作る',
-      nameShort: '新調',
-    })
-    // 目的そのものは削除済み（is_active='0'）でも、期間に予約があるなら名前を残す。
-    await env.DB.prepare("UPDATE visit_purposes SET is_active = '0' WHERE id = ?")
-      .bind(purposeId)
-      .run()
-    await insertAnalyticsDaily(fixture.org, fixture.storeId, [
-      ...(
-        [
-          ['phone', 12],
-          ['counter', 5],
-          ['web', 8],
-          ['walkin', 3],
-        ] as const
-      ).map(([key, value]) => ({
-        date: '2026-08-10',
-        metric: 'reservations',
-        dimension: 'source',
-        dimensionKey: key,
-        value,
-      })),
-      ...(
-        [
-          ['first', 9],
-          ['second', 4],
-          ['third_to_fifth', 6],
-          ['sixth_plus', 2],
-        ] as const
-      ).map(([key, value]) => ({
-        date: '2026-08-10',
-        metric: 'receptions',
-        dimension: 'visit_frequency',
-        dimensionKey: key,
-        value,
-      })),
-      {
-        date: '2026-08-10',
-        metric: 'reservations',
-        dimension: 'purpose',
-        dimensionKey: purposeId,
-        value: 7,
-      },
-    ])
-  })
-
-  it('予約の入口 > お電話・店頭・Web予約・ウォークイン の 4 系列を返す', async () => {
-    const { body } = await fetchReport(fixture, { metric: 'reservation_source', ...AUGUST })
-    expect(body.series.map((series) => series.name)).toEqual([
-      'お電話',
-      '店頭',
-      'Web予約',
-      'ウォークイン',
-    ])
-    expect(sumOfPoints(body)).toBe(28)
-    expect(summaryOf(body, '最も多い入口')).toBe('お電話')
-  })
-
-  it('来店回数 > 初めて・2回目・3〜5回・6回以上 の 4 階級を返す', async () => {
-    const { body } = await fetchReport(fixture, { metric: 'visit_frequency', ...AUGUST })
-    expect(body.series[0]?.points.map((point) => point.label)).toEqual([
-      '初めて',
-      '2回目',
-      '3〜5回',
-      '6回以上',
-    ])
-    expect(summaryOf(body, '合計')).toBe('21')
-  })
-
-  it('ご来店の目的 > 目的ごとの件数を返し、削除済みの目的も期間内に予約があれば残す', async () => {
-    const { body } = await fetchReport(fixture, { metric: 'purpose', ...AUGUST })
-    expect(body.series[0]?.points).toHaveLength(1)
-    expect(body.series[0]?.points[0]?.label).toBe('メガネを新しく作る')
-    expect(body.series[0]?.points[0]?.value).toBe(7)
-  })
-})
-
-/* ═════════════════════════════════════════════════════════════════════════
- * 8 タブ共通 / 目安
- * ═══════════════════════════════════════════════════════════════════════ */
-
-describe('8 タブ共通', () => {
-  let fixture: Fixture
-
-  beforeAll(async () => {
-    fixture = await setup()
-    await markAnalyticsDays(fixture.org, fixture.storeId, augustDates(), CLOSED_TUESDAYS)
-  })
-
-  it('どの metric でも series が 1 つ以上あり、summary が 3 つ以下である', async () => {
-    for (const metric of [
-      'overview',
-      'reservation_count',
-      'reservation_source',
-      'cancellation',
-      'visit_frequency',
-      'staff',
-      'purpose',
-      'wait_time',
-    ]) {
-      const { status, body } = await fetchReport(fixture, { metric, ...AUGUST })
-      expect(status, metric).toBe(200)
-      expect(body.series.length, metric).toBeGreaterThanOrEqual(1)
-      expect(body.summary.length, metric).toBeLessThanOrEqual(3)
-      expect(body.metric, metric).toBe(metric)
-    }
-  })
-
-  it('目安 > GET /api/staff/analytics/targets が 8 / 10 / 90 を返す', async () => {
-    const res = await SELF.fetch(`${BASE}/api/staff/analytics/targets?storeId=${fixture.storeId}`, {
-      headers: authed(fixture.token),
-    })
-    expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({
       waitMinutes: 8,
       cancellationRatePercent: 10,
       revisitWindowDays: 90,
@@ -738,192 +222,387 @@ describe('8 タブ共通', () => {
   })
 })
 
-/* ═════════════════════════════════════════════════════════════════════════
- * 小標本抑制（T-005）
- * ═══════════════════════════════════════════════════════════════════════ */
+describe('内部 rollup は範囲・ページング・結果を固定する', () => {
+  it('先頭ページのcatch-upは内部cursorで同じページを再試行する', async () => {
+    const tenant = await analyticsTenant()
+    const firstStoreId = '00000000-0000-4000-8000-000000000001'
+    await env.DB.prepare('UPDATE stores SET id = ? WHERE organization_id = ? AND id = ?')
+      .bind(firstStoreId, tenant.org, tenant.storeId)
+      .run()
+    await env.DB.prepare(
+      'UPDATE store_business_hours SET store_id = ? WHERE organization_id = ? AND store_id = ?',
+    )
+      .bind(firstStoreId, tenant.org, tenant.storeId)
+      .run()
+    await daily(
+      { ...tenant, storeId: firstStoreId },
+      { date: '2026-08-31', metric: 'closed', value: 0 },
+    )
 
-describe('小標本', () => {
-  let fixture: Fixture
-  let exactly20 = ''
-  let nineteen = ''
-  let quiet = ''
+    const input = {
+      from: '2026-10-02',
+      to: '2026-10-10',
+      limit: 3,
+      now: new Date('2026-10-02T15:00:00.000Z'),
+      completedThrough: '2026-10-02',
+    }
+    const first = await rollupAnalytics(env, input)
+    expect(first.nextStoreCursor).toBe(btoa('analytics:retry-first-page'))
 
-  beforeAll(async () => {
-    fixture = await setup()
-    exactly20 = await insertStaff(fixture.org, fixture.storeId, { displayName: '佐藤 美咲' })
-    nineteen = await insertStaff(fixture.org, fixture.storeId, {
-      displayName: '伊藤 亮',
-      sortOrder: 1,
+    await expect(
+      rollupAnalytics(env, { ...input, storeCursor: first.nextStoreCursor ?? undefined }),
+    ).resolves.toMatchObject({ processedStores: expect.any(Number) })
+  })
+
+  it('32日以上の停止後も同じcursorを保持し、店舗ごとに実績確定日までcatch-upする', async () => {
+    const tenant = await analyticsTenant()
+    // UUID順の末尾に置き、直前のcursorからはこの店舗だけを選べるようにする。
+    const beforeCatchUpStoreId = 'ffffffff-ffff-4fff-8fff-ffffffffff00'
+    const catchUpStoreId = 'ffffffff-ffff-4fff-8fff-ffffffffff01'
+    await env.DB.prepare('UPDATE stores SET id = ? WHERE organization_id = ? AND id = ?')
+      .bind(catchUpStoreId, tenant.org, tenant.storeId)
+      .run()
+    await env.DB.prepare(
+      'UPDATE store_business_hours SET store_id = ? WHERE organization_id = ? AND store_id = ?',
+    )
+      .bind(catchUpStoreId, tenant.org, tenant.storeId)
+      .run()
+    const catchUpTenant = { ...tenant, storeId: catchUpStoreId }
+    await daily(catchUpTenant, { date: '2026-08-31', metric: 'closed', value: 0 })
+    const staffId = await insertStaff(tenant.org, catchUpStoreId, { displayName: '追いつく担当' })
+    const customerId = `customer-${crypto.randomUUID()}`
+    const priorReservationId = await insertReservation(tenant.org, {
+      storeId: catchUpStoreId,
+      startsAt: jstAt('2026-09-10', '10:00'),
+      status: 'done',
+      staffId,
     })
-    quiet = await insertStaff(fixture.org, fixture.storeId, {
-      displayName: '中村 彩',
-      sortOrder: 2,
+    const currentReservationId = await insertReservation(tenant.org, {
+      storeId: catchUpStoreId,
+      startsAt: jstAt('2026-10-02', '10:00'),
+      status: 'done',
+      staffId,
     })
-    await markAnalyticsDays(fixture.org, fixture.storeId, augustDates(), CLOSED_TUESDAYS)
-    await insertAnalyticsDaily(fixture.org, fixture.storeId, [
-      // 分母ちょうど 20 件 → 率を出す。
-      {
-        date: '2026-08-10',
-        metric: 'receptions',
-        dimension: 'staff',
-        dimensionKey: exactly20,
-        value: 20,
-      },
-      {
-        date: '2026-08-10',
-        metric: 'revisits_90d',
-        dimension: 'staff',
-        dimensionKey: exactly20,
-        value: 5,
-      },
-      // 分母 19 件 → 伏せる（件数は返す）。
-      {
-        date: '2026-08-10',
-        metric: 'receptions',
-        dimension: 'staff',
-        dimensionKey: nineteen,
-        value: 19,
-      },
-      {
-        date: '2026-08-10',
-        metric: 'revisits_90d',
-        dimension: 'staff',
-        dimensionKey: nineteen,
-        value: 9,
-      },
-      // 担当未定は分母 40 件でも伏せる。
-      {
-        date: '2026-08-10',
-        metric: 'receptions',
-        dimension: 'staff',
-        dimensionKey: 'unassigned',
-        value: 40,
-      },
-      {
-        date: '2026-08-10',
-        metric: 'revisits_90d',
-        dimension: 'staff',
-        dimensionKey: 'unassigned',
-        value: 20,
-      },
+    await env.DB.prepare('UPDATE reservations SET customer_id = ? WHERE id IN (?, ?)')
+      .bind(customerId, priorReservationId, currentReservationId)
+      .run()
+    for (const [stage, occurredAt] of [
+      ['received', jstAt('2026-10-02', '09:55')],
+      ['consulting', jstAt('2026-10-02', '10:00')],
+    ] as const) {
+      await env.DB.prepare(
+        'INSERT INTO visit_events (id, organization_id, store_id, subject_type, subject_id, stage, occurred_at, staff_id, note, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
+      )
+        .bind(
+          crypto.randomUUID(),
+          tenant.org,
+          catchUpStoreId,
+          'reservation',
+          currentReservationId,
+          stage,
+          occurredAt,
+          staffId,
+          null,
+          NOW,
+        )
+        .run()
+    }
+
+    const now = new Date('2026-10-02T15:00:00.000Z') // JST 2026-10-03
+    const first = await rollupAnalytics(env, {
+      from: '2026-10-02',
+      to: '2026-10-10',
+      limit: 3,
+      storeCursor: btoa(beforeCatchUpStoreId),
+      now,
+      completedThrough: '2026-10-02',
+    })
+
+    expect(first.nextStoreCursor).toBe(btoa(beforeCatchUpStoreId))
+    expect(
+      (
+        await env.DB.prepare(
+          "SELECT 1 FROM analytics_daily WHERE organization_id = ? AND store_id = ? AND date = '2026-10-02' AND metric = 'closed'",
+        )
+          .bind(tenant.org, catchUpStoreId)
+          .all()
+      ).results,
+    ).toEqual([])
+
+    const second = await rollupAnalytics(env, {
+      from: '2026-10-03',
+      to: '2026-10-11',
+      limit: 3,
+      storeCursor: first.nextStoreCursor ?? undefined,
+      now: new Date('2026-10-03T15:00:00.000Z'),
+      completedThrough: '2026-10-03',
+    })
+    expect(second.nextStoreCursor).toBeNull()
+    const actuals = await env.DB.prepare(
+      "SELECT metric, dimension, dimension_key AS dimensionKey, value FROM analytics_daily WHERE organization_id = ? AND store_id = ? AND date = '2026-10-02' AND ((metric = 'closed' AND dimension = 'total') OR (metric = 'receptions' AND dimension = 'total') OR (metric = 'wait_seconds_histogram' AND dimension = 'wait_seconds') OR (metric IN ('revisit_eligible', 'revisit_returning_90d') AND dimension = 'staff')) ORDER BY metric, dimension_key",
+    )
+      .bind(tenant.org, catchUpStoreId)
+      .all<{ metric: string; dimension: string; dimensionKey: string; value: number }>()
+    expect(actuals.results).toEqual(
+      expect.arrayContaining([
+        { metric: 'closed', dimension: 'total', dimensionKey: '', value: 0 },
+        { metric: 'receptions', dimension: 'total', dimensionKey: '', value: 1 },
+        {
+          metric: 'wait_seconds_histogram',
+          dimension: 'wait_seconds',
+          dimensionKey: 'hour:9:300',
+          value: 1,
+        },
+        { metric: 'revisit_eligible', dimension: 'staff', dimensionKey: staffId, value: 1 },
+        {
+          metric: 'revisit_returning_90d',
+          dimension: 'staff',
+          dimensionKey: staffId,
+          value: 1,
+        },
+      ]),
+    )
+  })
+
+  it('未来期間のbackfillでも現在の保持行を削除しない', async () => {
+    const tenant = await analyticsTenant()
+    await daily(tenant, { date: '2026-08-01', metric: 'reservations', value: 1 })
+
+    const response = await SELF.fetch(`${BASE}/api/internal/maintenance/analytics/rollup`, {
+      method: 'POST',
+      headers: INTERNAL_HEADERS,
+      body: JSON.stringify({ from: '2099-01-01', to: '2099-01-31', limit: 1 }),
+    })
+    expect(response.status).toBe(200)
+
+    const retained = await env.DB.prepare(
+      'SELECT value FROM analytics_daily WHERE organization_id = ? AND store_id = ? AND date = ?',
+    )
+      .bind(tenant.org, tenant.storeId, '2026-08-01')
+      .all<{ value: number }>()
+    expect(retained.results).toEqual([{ value: 1 }])
+  })
+
+  it('最終日の受付後、翌JST日に相談開始した待ち時間も単日集計する', async () => {
+    const tenant = await analyticsTenant()
+    const subjectId = crypto.randomUUID()
+    for (const [stage, occurredAt] of [
+      ['received', jstAt('2026-08-27', '23:59')],
+      ['consulting', jstAt('2026-08-28', '00:01')],
+    ] as const) {
+      await env.DB.prepare(
+        'INSERT INTO visit_events (id, organization_id, store_id, subject_type, subject_id, stage, occurred_at, staff_id, note, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
+      )
+        .bind(
+          crypto.randomUUID(),
+          tenant.org,
+          tenant.storeId,
+          'walkin',
+          subjectId,
+          stage,
+          occurredAt,
+          null,
+          null,
+          NOW,
+        )
+        .run()
+    }
+
+    await rollupAllPages({ from: '2026-08-27', to: '2026-08-27', limit: 3 })
+    const rows = await env.DB.prepare(
+      "SELECT dimension_key AS dimensionKey, value FROM analytics_daily WHERE organization_id = ? AND store_id = ? AND date = '2026-08-27' AND metric = 'wait_seconds_histogram'",
+    )
+      .bind(tenant.org, tenant.storeId)
+      .all<{ dimensionKey: string; value: number }>()
+    expect(rows.results).toEqual([{ dimensionKey: 'hour:23:120', value: 1 }])
+  })
+
+  it('101件超でもJSON1のID集合で目的・担当を読み、failedにしない', async () => {
+    const tenant = await analyticsTenant()
+    for (let index = 0; index < 101; index += 1) {
+      await insertReservation(tenant.org, {
+        storeId: tenant.storeId,
+        startsAt: jstAt('2026-08-27', `10:${String(index % 60).padStart(2, '0')}`),
+      })
+    }
+    // purpose / assignment / customer の3集合すべてを JSON1 1 bind で読む経路へ入れる。
+    await env.DB.prepare(
+      'UPDATE reservations SET customer_id = ? WHERE organization_id = ? AND store_id = ?',
+    )
+      .bind('customer-many', tenant.org, tenant.storeId)
+      .run()
+    await rollupAllPages({ from: '2026-08-27', to: '2026-08-27', limit: 3 })
+    const rows = await env.DB.prepare(
+      "SELECT value FROM analytics_daily WHERE organization_id = ? AND store_id = ? AND date = ? AND metric = 'reservations' AND dimension = 'total'",
+    )
+      .bind(tenant.org, tenant.storeId, '2026-08-27')
+      .all<{ value: number }>()
+    expect(rows.results[0]?.value).toBe(101)
+  })
+
+  it('各完了来店より前の完了来店数で2回目と3〜5回を分類する', async () => {
+    const tenant = await analyticsTenant()
+    const thirdStaff = await insertStaff(tenant.org, tenant.storeId, {
+      displayName: '先の担当',
+      sortOrder: 10,
+    })
+    const secondStaff = await insertStaff(tenant.org, tenant.storeId, {
+      displayName: '後の担当',
+      sortOrder: 20,
+    })
+    const secondCustomer = `customer-${crypto.randomUUID()}`
+    const thirdCustomer = `customer-${crypto.randomUUID()}`
+    const ids = [
+      await insertReservation(tenant.org, {
+        storeId: tenant.storeId,
+        startsAt: jstAt('2026-08-20', '10:00'),
+        status: 'done',
+        staffId: secondStaff,
+      }),
+      await insertReservation(tenant.org, {
+        storeId: tenant.storeId,
+        startsAt: jstAt('2025-01-01', '10:00'),
+        status: 'done',
+        staffId: thirdStaff,
+      }),
+      await insertReservation(tenant.org, {
+        storeId: tenant.storeId,
+        startsAt: jstAt('2025-02-01', '10:00'),
+        status: 'done',
+        staffId: thirdStaff,
+      }),
+      await insertReservation(tenant.org, {
+        storeId: tenant.storeId,
+        startsAt: jstAt('2025-03-01', '10:00'),
+        status: 'done',
+        staffId: thirdStaff,
+      }),
+      await insertReservation(tenant.org, {
+        storeId: tenant.storeId,
+        startsAt: jstAt('2026-08-27', '10:00'),
+        status: 'done',
+        staffId: secondStaff,
+      }),
+      await insertReservation(tenant.org, {
+        storeId: tenant.storeId,
+        startsAt: jstAt('2026-08-27', '11:00'),
+        status: 'done',
+        staffId: thirdStaff,
+      }),
+    ]
+    await env.DB.prepare('UPDATE reservations SET customer_id = ? WHERE id IN (?,?)')
+      .bind(secondCustomer, ids[0], ids[4])
+      .run()
+    await env.DB.prepare('UPDATE reservations SET customer_id = ? WHERE id IN (?,?,?,?)')
+      .bind(thirdCustomer, ids[1], ids[2], ids[3], ids[5])
+      .run()
+
+    await rollupAllPages({ from: '2026-08-27', to: '2026-08-27', limit: 3 })
+
+    const frequencies = await env.DB.prepare(
+      "SELECT dimension_key AS dimensionKey, value FROM analytics_daily WHERE organization_id = ? AND store_id = ? AND date = '2026-08-27' AND metric = 'receptions' AND dimension = 'visit_frequency'",
+    )
+      .bind(tenant.org, tenant.storeId)
+      .all<{ dimensionKey: string; value: number }>()
+    expect(
+      Object.fromEntries(frequencies.results.map((row) => [row.dimensionKey, row.value])),
+    ).toMatchObject({
+      second: 1,
+      third_to_fifth: 1,
+    })
+  })
+
+  it('inactive storeを含めて25か月前の月全体を保持し、それより前を全体削除する', async () => {
+    const tenant = await analyticsTenant()
+    await env.DB.prepare("UPDATE stores SET is_active = '0' WHERE organization_id = ? AND id = ?")
+      .bind(tenant.org, tenant.storeId)
+      .run()
+    await daily(tenant, { date: '2024-07-27', metric: 'reservations', value: 1 })
+    await daily(tenant, { date: '2024-08-01', metric: 'reservations', value: 2 })
+    await daily(tenant, { date: '2024-08-26', metric: 'reservations', value: 3 })
+    await daily(tenant, { date: '2024-08-27', metric: 'reservations', value: 2 })
+
+    const response = await SELF.fetch(`${BASE}/api/internal/maintenance/analytics/rollup`, {
+      method: 'POST',
+      headers: INTERNAL_HEADERS,
+      body: JSON.stringify({ from: '2026-08-27', to: '2026-08-27', limit: 3 }),
+    })
+    expect(response.status).toBe(200)
+    const retained = await env.DB.prepare(
+      'SELECT date FROM analytics_daily WHERE organization_id = ? AND store_id = ? ORDER BY date',
+    )
+      .bind(tenant.org, tenant.storeId)
+      .all<{ date: string }>()
+    expect(retained.results).toEqual([
+      { date: '2024-08-01' },
+      { date: '2024-08-26' },
+      { date: '2024-08-27' },
     ])
   })
 
-  const staffPoints = async () => {
-    const { body } = await fetchReport(fixture, { metric: 'staff', ...AUGUST })
-    return { body, points: body.series[0]?.points ?? [] }
-  }
-
-  it('分母 20 件ちょうどの担当は率を返す', async () => {
-    const { points } = await staffPoints()
-    const row = points.find((point) => point.label === '佐藤 美咲')
-    expect(row?.value).toBe(20)
-    expect(row?.secondaryValue).toBeCloseTo(0.25, 5)
-  })
-
-  it('分母 19 件の担当は secondaryValue が null になり、件数は返る', async () => {
-    const { points } = await staffPoints()
-    const row = points.find((point) => point.label === '伊藤 亮')
-    expect(row?.value).toBe(19)
-    expect(row?.secondaryValue).toBeNull()
-  })
-
-  it('伏せた行があっても report.suppressed は担当者タブでは false のまま（点ごとの話である）', async () => {
-    const { body } = await staffPoints()
-    expect(body.suppressed).toBe(false)
-    // 1 件も受けていない担当も伏せられる（分母 0）。
-    const row = (body.series[0]?.points ?? []).find((point) => point.label === '中村 彩')
-    expect(row?.key).toBe(quiet.slice(0, 20))
-    expect(row?.secondaryValue).toBeNull()
-  })
-
-  it('担当が未定は分母 40 件でも secondaryValue が null', async () => {
-    const { points } = await staffPoints()
-    const row = points.find((point) => point.key === 'unassigned')
-    expect(row?.value).toBe(40)
-    expect(row?.secondaryValue).toBeNull()
-  })
-
-  it('取消率の分母が 19 のとき report.suppressed が true になり、まとめの率が「—」で返る', async () => {
-    const thin = await setup()
-    await markAnalyticsDays(thin.org, thin.storeId, augustDates(), CLOSED_TUESDAYS)
-    await insertAnalyticsDaily(thin.org, thin.storeId, [
-      { date: '2026-08-10', metric: 'reservations', value: 17 },
-      {
-        date: '2026-08-10',
-        metric: 'cancellations',
-        dimension: 'cancel_reason',
-        dimensionKey: 'customer',
-        value: 2,
-      },
-    ])
-    const { body } = await fetchReport(thin, {
-      metric: 'cancellation',
-      ...AUGUST,
-      granularity: 'month',
+  it('JWTを拒否し、31日/limit3とcursorを受け、32日/limit4を拒否する', async () => {
+    const tenant = await analyticsTenant()
+    for (let index = 0; index < 3; index += 1) {
+      const storeId = await insertStore(tenant.org, `ページング ${index}`)
+      await insertBusinessHours(tenant.org, storeId)
+    }
+    const body = { from: '2026-08-01', to: '2026-08-31', limit: 3 }
+    const jwt = await SELF.fetch(`${BASE}/api/internal/maintenance/analytics/rollup`, {
+      method: 'POST',
+      headers: authed(tenant.token),
+      body: JSON.stringify(body),
     })
-    expect(body.suppressed).toBe(true)
-    expect(summaryOf(body, '取消率')).toBe('—')
-    // 件数そのものは返る（率だけを伏せる）。
-    expect(summaryOf(body, '取消件数')).toBe('2')
-    expect(summaryOf(body, '来店予定だった総数')).toBe('19')
-  })
-})
-
-/* ═════════════════════════════════════════════════════════════════════════
- * 欠測と定休（T-005）
- * ═══════════════════════════════════════════════════════════════════════ */
-
-describe('欠測', () => {
-  let fixture: Fixture
-  /** 8/20〜9/3 の 15 日。うち 2 日はまだ集計していない。 */
-  const RANGE = { from: '2026-08-20', to: '2026-09-03' }
-  const PENDING = ['2026-09-02', '2026-09-03']
-  const CLOSED = ['2026-08-25']
-
-  beforeAll(async () => {
-    fixture = await setup()
-    const dates = Array.from({ length: 15 }, (_, i) =>
-      i < 12 ? `2026-08-${20 + i}` : `2026-09-0${i - 11}`,
-    ).filter((date) => !PENDING.includes(date))
-    await markAnalyticsDays(fixture.org, fixture.storeId, dates, CLOSED)
-    await insertAnalyticsDaily(fixture.org, fixture.storeId, [
-      { date: '2026-08-21', metric: 'reservations', value: 4 },
-    ])
-  })
-
-  const overview = () => fetchReport(fixture, { metric: 'overview', ...RANGE })
-
-  it('closed の行が無い日は点を返さず、pendingDays に数える', async () => {
-    const { body } = await overview()
-    const keys = body.series[0]?.points.map((point) => point.key) ?? []
-    expect(keys).not.toContain('2026-09-02')
-    expect(keys).not.toContain('2026-09-03')
-    expect(keys).toHaveLength(13)
+    expect(jwt.status).toBe(401)
+    const noKey = await SELF.fetch(`${BASE}/api/internal/maintenance/analytics/rollup`, {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify(body),
+    })
+    expect(noKey.status).toBe(401)
+    const wrongKey = await SELF.fetch(`${BASE}/api/internal/maintenance/analytics/rollup`, {
+      method: 'POST',
+      headers: { ...JSON_HEADERS, 'x-internal-key': 'wrong-internal-key' },
+      body: JSON.stringify(body),
+    })
+    expect(wrongKey.status).toBe(401)
+    const pages = await rollupAllPages(body)
+    expect(pages.processedStores).toBeGreaterThanOrEqual(4)
+    expect(pages.pages).toBeGreaterThanOrEqual(2)
+    const invalidCursor = await SELF.fetch(`${BASE}/api/internal/maintenance/analytics/rollup`, {
+      method: 'POST',
+      headers: INTERNAL_HEADERS,
+      body: JSON.stringify({ ...body, storeCursor: 'not-a-store-cursor' }),
+    })
+    expect(invalidCursor.status).toBe(400)
+    const invalidDays = await SELF.fetch(`${BASE}/api/internal/maintenance/analytics/rollup`, {
+      method: 'POST',
+      headers: INTERNAL_HEADERS,
+      body: JSON.stringify({ ...body, to: '2026-09-01' }),
+    })
+    expect(invalidDays.status).toBe(400)
+    const invalidLimit = await SELF.fetch(`${BASE}/api/internal/maintenance/analytics/rollup`, {
+      method: 'POST',
+      headers: INTERNAL_HEADERS,
+      body: JSON.stringify({ ...body, limit: 4 }),
+    })
+    expect(invalidLimit.status).toBe(400)
   })
 
-  it('closed=1 の日は value=0 の点を返し、isClosed が true になる', async () => {
-    const { body } = await overview()
-    const row = body.series[0]?.points.find((point) => point.key === '2026-08-25')
-    expect(row?.value).toBe(0)
-    expect(row?.isClosed).toBe(true)
-  })
-
-  it('closed=0 で予約が 0 件の日は value=0・isClosed=false の点を返す（定休と区別する）', async () => {
-    const { body } = await overview()
-    const row = body.series[0]?.points.find((point) => point.key === '2026-08-24')
-    expect(row?.value).toBe(0)
-    expect(row?.isClosed).toBe(false)
-  })
-
-  it('期間の 15 日のうち 2 日が未集計なら pendingDays=2 を返す', async () => {
-    const { body } = await overview()
-    expect(body.pendingDays).toBe(2)
-  })
-
-  it('businessDays は closed=0 の日数だけを数え、未集計の日を営業日に数えない', async () => {
-    const { body } = await overview()
-    // 15 日 − 未集計 2 日 − 定休 1 日 = 12 日。
-    expect(body.businessDays).toBe(12)
+  it('再実行は同じ日次行を重複させず、保持対象月を丸ごと残す', async () => {
+    const tenant = await analyticsTenant()
+    await daily(tenant, { date: '2024-07-31', metric: 'closed', value: 0 })
+    await daily(tenant, { date: '2024-08-27', metric: 'closed', value: 0 })
+    await daily(tenant, { date: '2024-08-26', metric: 'closed', value: 0 })
+    const body = { from: '2026-08-01', to: '2026-08-31', limit: 3 }
+    for (let run = 0; run < 2; run += 1) await rollupAllPages(body)
+    const rows = await env.DB.prepare(
+      'SELECT date FROM analytics_daily WHERE organization_id = ? AND store_id = ? AND metric = ? ORDER BY date',
+    )
+      .bind(tenant.org, tenant.storeId, 'closed')
+      .all<{ date: string }>()
+    expect(rows.results.map((row) => row.date)).toContain('2024-08-27')
+    expect(rows.results.map((row) => row.date)).toContain('2024-08-26')
+    expect(rows.results.map((row) => row.date)).not.toContain('2024-07-31')
+    expect(new Set(rows.results.map((row) => row.date)).size).toBe(rows.results.length)
   })
 })

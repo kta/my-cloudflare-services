@@ -6,7 +6,7 @@ import { StaffPanel } from './StaffPanel'
 
 /*
  * スタッフと技能（SETTINGS-STAFF）。承認済みモック
- * docs/frontend/mockups/eyex/images/SETTINGS-STAFF.png と同じ盤面
+ * docs/frontend/mockups/eye/images/SETTINGS-STAFF.png と同じ盤面
  * —— スタッフ 6名・佐藤 美咲の技能 3 つ・勤務の 7 列（日曜 12:00–19:00）——
  * を出せることと、技能と勤務を直して保存できることを固定する。
  *
@@ -498,14 +498,14 @@ describe('読み込みと失敗', () => {
     await waitFor(() => expect(screen.getByText('スタッフ 6名')).toBeInTheDocument())
   })
 
-  it('読み込めなかったら理由と次の行動を出す', async () => {
+  it('読み込めなかったら理由と、その場でやり直す手立てを出す', async () => {
     mockApi({ readStatus: 500 })
     renderPanel()
     await waitFor(() =>
-      expect(
-        screen.getByText('スタッフと技能を読み込めませんでした。画面を開き直してください。'),
-      ).toBeInTheDocument(),
+      expect(screen.getByText('スタッフと技能を読み込めませんでした。')).toBeInTheDocument(),
     )
+    // 読み直す手立てをその場に置く（画面ごとの URL が無いので「開き直す」は実行できない）。
+    expect(screen.getByRole('button', { name: 'もう一度読み込む' })).toBeInTheDocument()
   })
 
   it('スタッフが 1 人もいなければ、その事実だけを出す', async () => {

@@ -1,5 +1,5 @@
 /**
- * EYEX予約（`glasses_management`）の Zod 単一ソース。
+ * EYE予約（`glasses_management`）の Zod 単一ソース。
  *
  * このファイルだけが API の入出力の形を持つ。Worker は `zValidator` で受け、
  * 返すときも必ずここのスキーマで `parse` してから `c.json` する。
@@ -184,6 +184,12 @@ const spanWithinDays =
       86_400_000
     return days >= 0 && days <= maxDays
   }
+
+/** 両端を含む日数で範囲を制限する。400 日なら日差 399 までを許す。 */
+const spanWithinInclusiveDays =
+  (maxDays: number) =>
+  (value: { from: string; to: string }): boolean =>
+    spanWithinDays(maxDays - 1)(value)
 
 /** 同じ値を 2 回書かせない。 */
 const noDuplicates = (values: readonly string[]): boolean => new Set(values).size === values.length
@@ -2571,12 +2577,6 @@ export type Alert = z.infer<typeof Alert>
  */
 export const AlertListQuery = z.strictObject({
   storeId: Uuid.optional(),
-  audience: z.enum(['store', 'ops']).default('store'),
-  /**
-   * ALERTS 左ペインの 4 分類。`all` は未対応すべて、`action` / `info` はその内訳、
-   * `resolved` は**本日（JST）に `resolved_at` が入ったもの**を数える
-   * （右ペインの見出しが「本日 8月27日（木）」であるため）。
-   */
   kind: z.enum(['all', 'action', 'info', 'resolved']).default('all'),
   limit: Limit,
   cursor: Cursor.optional(),
@@ -2588,10 +2588,6 @@ export const AlertList = z.strictObject({
   items: Alert.array().default([]),
   nextCursor: Cursor.nullable().default(null),
   total: CountInteger,
-  /**
-   * 4 分類の件数。左ペインは 4 つを同時に出すので、`kind` で絞ったときも
-   * 4 つすべてを返す。数えるのは `audience='store'` の行だけである。
-   */
   counts: z
     .strictObject({
       all: CountInteger,
@@ -2602,6 +2598,385 @@ export const AlertList = z.strictObject({
     .default({ all: 0, action: 0, info: 0, resolved: 0 }),
 })
 export type AlertList = z.infer<typeof AlertList>
+
+/** お知らせの既読・対応済み更新。空の PATCH は受け付けない。 */
+export const AlertPatch = z
+  .strictObject({
+    readAt: IsoDateTime.nullable().optional(),
+  })
+  .refine((value) => value.readAt !== undefined, {
+    message: 'readAt を指定する',
+  })
+export type AlertPatch = z.infer<typeof AlertPatch>
+
+export const AlertReadAllInput = z.strictObject({ storeId: Uuid.optional() })
+export type AlertReadAllInput = z.infer<typeof AlertReadAllInput>
+
+export const AlertReadAllResult = z.strictObject({ updated: CountInteger })
+export type AlertReadAllResult = z.infer<typeof AlertReadAllResult>
+
+/* ------------------------------------------------------------------------- *
+ * P10 端末・個人モード・監査
+ * ------------------------------------------------------------------------- */
+
+export const Pin = z.string().regex(/^\d{4,6}$/, '暗証番号は4〜6桁の数字にする')
+export type Pin = z.infer<typeof Pin>
+
+export const TerminalKind = z.enum(['shared', 'personal'])
+export type TerminalKind = z.infer<typeof TerminalKind>
+
+export const Terminal = z.strictObject({
+  id: Uuid,
+  storeId: Uuid,
+  name: z.string().trim().min(1).max(60),
+  kind: TerminalKind,
+  placeNote: z.string().trim().max(40).default(''),
+  deviceLabel: z.string().trim().max(30).default(''),
+  autoLockSeconds: z.number().int().min(30).max(1800).default(120),
+  isActive: z.boolean(),
+  hasPin: z.boolean(),
+  lastSeenAt: IsoDateTime.nullable(),
+  isOnline: z.boolean(),
+  version: Version,
+  createdAt: IsoDateTime,
+})
+export type Terminal = z.infer<typeof Terminal>
+
+export const TerminalListQuery = z.strictObject({
+  storeId: Uuid,
+  includeInactive: QueryFlag,
+  kind: TerminalKind.optional(),
+})
+export type TerminalListQuery = z.infer<typeof TerminalListQuery>
+
+const terminalInputShape = {
+  name: z.string().trim().min(1).max(60),
+  kind: TerminalKind,
+  placeNote: z.string().trim().max(40).default(''),
+  deviceLabel: z.string().trim().max(30).default(''),
+  autoLockSeconds: z.number().int().min(30).max(1800).default(120),
+  isActive: z.boolean().default(true),
+  pin: Pin.optional(),
+}
+
+export const TerminalInput = z.strictObject(terminalInputShape)
+export type TerminalInput = z.infer<typeof TerminalInput>
+
+export const TerminalPatch = z.strictObject({
+  name: terminalInputShape.name.optional(),
+  kind: terminalInputShape.kind.optional(),
+  placeNote: terminalInputShape.placeNote.removeDefault().optional(),
+  deviceLabel: terminalInputShape.deviceLabel.removeDefault().optional(),
+  autoLockSeconds: terminalInputShape.autoLockSeconds.removeDefault().optional(),
+  isActive: terminalInputShape.isActive.removeDefault().optional(),
+  pin: Pin.optional(),
+  version: Version,
+})
+export type TerminalPatch = z.infer<typeof TerminalPatch>
+
+export const TerminalSessionStart = z.discriminatedUnion('mode', [
+  z.strictObject({ mode: z.literal('personal'), staffId: Uuid, pin: Pin }),
+  z.strictObject({ mode: z.literal('shared'), pin: Pin }),
+])
+export type TerminalSessionStart = z.infer<typeof TerminalSessionStart>
+
+export const TerminalSession = z.strictObject({
+  id: Uuid,
+  terminalId: Uuid,
+  staffId: Uuid.nullable(),
+  mode: z.enum(['shared', 'personal']),
+  startedAt: IsoDateTime,
+  expiresAt: IsoDateTime,
+  sessionToken: z
+    .string()
+    .min(64)
+    .max(128)
+    .regex(/^[A-Za-z0-9_-]+$/),
+})
+export type TerminalSession = z.infer<typeof TerminalSession>
+
+export const ReauthInput = z.strictObject({
+  staffId: Uuid,
+  pin: Pin,
+  reason: z.enum(['recording', 'attention', 'settings', 'customer_merge']),
+})
+export type ReauthInput = z.infer<typeof ReauthInput>
+
+export const PinInvalidError = z.strictObject({
+  error: z.literal('pin_invalid'),
+  remainingAttempts: z.number().int().min(0).max(2),
+})
+export type PinInvalidError = z.infer<typeof PinInvalidError>
+
+export const PinLockedError = z.strictObject({
+  error: z.literal('pin_locked'),
+  retryAfterSeconds: z.number().int().positive(),
+  remainingAttempts: z.literal(0),
+})
+export type PinLockedError = z.infer<typeof PinLockedError>
+
+export const StaffPinInput = z.strictObject({ pin: Pin })
+export type StaffPinInput = z.infer<typeof StaffPinInput>
+
+export const PinSetResult = z.strictObject({ staffId: Uuid, updatedAt: IsoDateTime })
+export type PinSetResult = z.infer<typeof PinSetResult>
+
+export const AuditActorType = z.enum(['staff', 'terminal', 'system', 'customer'])
+export type AuditActorType = z.infer<typeof AuditActorType>
+
+export const AuditTargetType = z.enum([
+  'organizations',
+  'stores',
+  'store_business_hours',
+  'store_blackout_windows',
+  'store_calendar_exceptions',
+  'store_slot_rules',
+  'staff',
+  'staff_skills',
+  'staff_weekly_shifts',
+  'staff_shifts',
+  'equipment',
+  'equipment_maintenance',
+  'visit_purposes',
+  'purpose_requirements',
+  'reservations',
+  'walk_ins',
+  'reception_sessions',
+  'customers',
+  'customer_notes',
+  'recordings',
+  'web_bookings',
+  'web_booking_settings',
+  'alerts',
+  'terminals',
+])
+export type AuditTargetType = z.infer<typeof AuditTargetType>
+
+export const AuditEvent = z.strictObject({
+  id: Uuid,
+  occurredAt: IsoDateTime,
+  actorType: AuditActorType,
+  actorId: z.string().nullable(),
+  terminalId: Uuid.nullable(),
+  action: z.string().trim().min(1).max(80),
+  targetType: AuditTargetType,
+  targetId: z.string().min(1),
+  correlationId: Uuid.nullable(),
+  beforeJson: z.unknown(),
+  afterJson: z.unknown(),
+})
+export type AuditEvent = z.infer<typeof AuditEvent>
+
+export const AuditSearchQuery = z.strictObject({
+  storeId: Uuid.optional(),
+  from: LocalDate.optional(),
+  to: LocalDate.optional(),
+  actorId: z.string().min(1).optional(),
+  action: z.string().trim().min(1).max(80).optional(),
+  limit: QueryInteger.pipe(z.number().int().min(1).max(200)).default(50),
+  cursor: Cursor.optional(),
+})
+export type AuditSearchQuery = z.infer<typeof AuditSearchQuery>
+
+export const AuditEventList = z.strictObject({
+  items: AuditEvent.array().default([]),
+  nextCursor: Cursor.nullable().default(null),
+  total: CountInteger,
+})
+export type AuditEventList = z.infer<typeof AuditEventList>
+
+/* ------------------------------------------------------------------------- *
+ * P9 分析
+ * ------------------------------------------------------------------------- */
+
+export const AnalyticsMetric = z.enum([
+  'overview',
+  'reservation_count',
+  'reservation_source',
+  'cancellation',
+  'visit_frequency',
+  'staff',
+  'purpose',
+  'wait_time',
+])
+export type AnalyticsMetric = z.infer<typeof AnalyticsMetric>
+
+export const AnalyticsDailyMetric = z.enum([
+  'closed',
+  'reservations',
+  'scheduled_reservations',
+  'reservations_received',
+  'receptions',
+  'cancellations',
+  'wait_seconds_histogram',
+  'revisit_eligible',
+  'revisit_returning_90d',
+])
+export type AnalyticsDailyMetric = z.infer<typeof AnalyticsDailyMetric>
+
+export const AnalyticsDailyDimension = z.enum([
+  'total',
+  'staff',
+  'purpose',
+  'hour',
+  'source',
+  'cancellation_category',
+  'wait_seconds',
+  'visit_frequency',
+])
+export type AnalyticsDailyDimension = z.infer<typeof AnalyticsDailyDimension>
+
+const isAnalyticsDimensionKey = (dimension: AnalyticsDailyDimension, key: string): boolean => {
+  switch (dimension) {
+    case 'total':
+      return key === ''
+    case 'staff':
+      return key === 'unassigned' || Uuid.safeParse(key).success
+    case 'purpose':
+      return Uuid.safeParse(key).success
+    case 'hour':
+      return /^(?:[0-9]|1[0-9]|2[0-3])$/.test(key)
+    case 'source':
+      return ['phone', 'counter', 'web', 'walkin'].includes(key)
+    case 'cancellation_category':
+      return ['customer', 'store', 'duplicate', 'no_show', 'web'].includes(key)
+    case 'wait_seconds':
+      return /^hour:(?:[0-9]|1[0-9]|2[0-3]):\d+$/.test(key)
+    case 'visit_frequency':
+      return ['first', 'second', 'third_to_fifth', 'sixth_or_more'].includes(key)
+  }
+}
+
+const analyticsDimensionsByMetric: Record<
+  AnalyticsDailyMetric,
+  readonly AnalyticsDailyDimension[]
+> = {
+  closed: ['total'],
+  reservations: ['total', 'purpose', 'hour', 'source'],
+  scheduled_reservations: ['total'],
+  reservations_received: ['total', 'purpose', 'hour', 'source'],
+  receptions: ['total', 'staff', 'source', 'visit_frequency'],
+  cancellations: ['cancellation_category'],
+  wait_seconds_histogram: ['wait_seconds'],
+  revisit_eligible: ['staff'],
+  revisit_returning_90d: ['staff'],
+}
+
+/** analytics_daily の 1 行。次元と key の対応を入口で fail-close にする。 */
+export const AnalyticsDailyRow = z
+  .strictObject({
+    id: Uuid,
+    organizationId: z.string().trim().min(1).max(200),
+    storeId: Uuid,
+    date: LocalDate,
+    metric: AnalyticsDailyMetric,
+    dimension: AnalyticsDailyDimension,
+    dimensionKey: z.string().max(200),
+    /** ロールアップ時の名称snapshot。元マスタが無効化されても表示を保つ。 */
+    dimensionLabel: z.string().trim().min(1).max(60),
+    value: z.number().int().nonnegative(),
+    createdAt: IsoDateTime,
+    updatedAt: IsoDateTime,
+  })
+  .refine((row) => isAnalyticsDimensionKey(row.dimension, row.dimensionKey), {
+    message: '切り口キーが次元の語彙に含まれない',
+    path: ['dimensionKey'],
+  })
+  .refine((row) => analyticsDimensionsByMetric[row.metric].includes(row.dimension), {
+    message: '指標と切り口の組み合わせが許可されていない',
+    path: ['dimension'],
+  })
+export type AnalyticsDailyRow = z.infer<typeof AnalyticsDailyRow>
+
+export const AnalyticsQuery = z
+  .strictObject({
+    storeId: Uuid,
+    metric: AnalyticsMetric,
+    from: LocalDate,
+    to: LocalDate,
+    granularity: z.enum(['day', 'month', 'hour', 'weekday']).default('day'),
+    countBy: z.enum(['visit_date', 'received_date']).default('visit_date'),
+  })
+  .refine(spanWithinInclusiveDays(400), {
+    message: '期間は400日以内にする',
+    path: ['to'],
+  })
+export type AnalyticsQuery = z.infer<typeof AnalyticsQuery>
+
+export const StoreIdQuery = z.strictObject({ storeId: Uuid })
+export type StoreIdQuery = z.infer<typeof StoreIdQuery>
+
+export const AnalyticsPoint = z.strictObject({
+  key: z.string().min(1).max(200),
+  label: z.string().min(1).max(60),
+  value: z.number().nonnegative(),
+  secondaryValue: z.number().min(0).max(1).nullable().default(null),
+  isClosed: z.boolean(),
+  isOverTarget: z.boolean(),
+})
+export type AnalyticsPoint = z.infer<typeof AnalyticsPoint>
+
+export const AnalyticsSeries = z.strictObject({
+  name: z.string().min(1).max(60),
+  points: AnalyticsPoint.array().default([]),
+  pattern: z.enum(['solid', 'hatch', 'dot']),
+})
+export type AnalyticsSeries = z.infer<typeof AnalyticsSeries>
+
+export const AnalyticsReport = z.strictObject({
+  metric: AnalyticsMetric,
+  from: LocalDate,
+  to: LocalDate,
+  granularity: z.enum(['day', 'month', 'hour', 'weekday']),
+  countBy: z.enum(['visit_date', 'received_date']),
+  series: AnalyticsSeries.array().default([]),
+  summary: z
+    .strictObject({
+      label: z.string().min(1).max(30),
+      value: z.string().max(40),
+      unit: z.string().max(8),
+      isOverTarget: z.boolean(),
+    })
+    .array()
+    .max(3)
+    .default([]),
+  target: z.number().nonnegative().nullable(),
+  suppressed: z.boolean(),
+  businessDays: z.number().int().nonnegative(),
+  pendingDays: z.number().int().nonnegative(),
+})
+export type AnalyticsReport = z.infer<typeof AnalyticsReport>
+
+export const AnalyticsTargets = z.strictObject({
+  waitMinutes: z.literal(8),
+  cancellationRatePercent: z.literal(10),
+  revisitWindowDays: z.literal(90),
+})
+export type AnalyticsTargets = z.infer<typeof AnalyticsTargets>
+
+export const AnalyticsRollupRequest = z
+  .strictObject({
+    from: LocalDate,
+    to: LocalDate,
+    limit: QueryInteger.pipe(z.number().int().min(1).max(3)).default(3),
+    storeCursor: z.string().min(1).max(512).optional(),
+  })
+  .refine(spanWithinInclusiveDays(31), {
+    message: '期間は31日以内にする',
+    path: ['to'],
+  })
+export type AnalyticsRollupRequest = z.infer<typeof AnalyticsRollupRequest>
+
+export const AnalyticsRollupResult = z.strictObject({
+  processedStores: z.number().int().min(0).max(3),
+  failedStores: z.string().min(1).max(200).array().max(3),
+  nextStoreCursor: z.string().min(1).max(512).nullable(),
+  from: LocalDate,
+  to: LocalDate,
+  upserted: CountInteger,
+  dropped: CountInteger,
+})
+export type AnalyticsRollupResult = z.infer<typeof AnalyticsRollupResult>
 
 /* ------------------------------------------------------------------------- *
  * P8 お客様向け Web 予約（`specs/glasses_management/features/011-web-booking`）
@@ -2622,7 +2997,7 @@ export type AlertList = z.infer<typeof AlertList>
 
 /* --- 公開設定（SETTINGS-WEB） -------------------------------------------- */
 
-/** ご案内のページ（`eyex.jp/ginza`）。表に持たず `stores.slug` から組み立てる。 */
+/** ご案内のページ（`eye.jp/ginza`）。表に持たず `stores.slug` から組み立てる。 */
 const LandingPath = z.string().trim().min(1).max(60)
 
 /** お知らせ文。画面の「27文字／120文字まで」と同じ**符号位置**で数える。 */
@@ -2941,440 +3316,3 @@ export const WebPublicationApplyResult = z.strictObject({
   autoCancelled: CountInteger,
 })
 export type WebPublicationApplyResult = z.infer<typeof WebPublicationApplyResult>
-
-/* ------------------------------------------------------------------------- *
- * P9 分析（`specs/glasses_management/features/012-analytics`）
- *
- * 朝礼と月次のふりかえりで使う 8 タブの入出力。**人数（「名」）を持たない** —
- * 何人のお客様かを数える経路がまだ無いので、件数だけを返す（Q-11）。
- * 率は「小標本抑制」で伏せることがあり、伏せた率は 0 ではなく `null` で表す。
- * ------------------------------------------------------------------------- */
-
-/**
- * タブ 1 枚 = metric 1 つ。1 画面で 2 本叩かないので、トップ（`overview`）にも
- * 自分の値を与える（`reservation_count` の使い回しにしない）。
- */
-export const AnalyticsMetric = z.enum([
-  'overview',
-  'reservation_count',
-  'reservation_source',
-  'cancellation',
-  'visit_frequency',
-  'staff',
-  'purpose',
-  'wait_time',
-])
-export type AnalyticsMetric = z.infer<typeof AnalyticsMetric>
-
-/**
- * `analytics_daily.metric` の語彙。画面の 8 タブ（`AnalyticsMetric`）とは別物で、
- * こちらは**日次で数えて保存する量**である。`guests`（人数）は書かない。
- * `closed` は「その日を集計した」印を兼ねる（1=定休・臨時休業／0=営業日）ので、
- * 定休日の 0 件（行がある）と欠測（行が無い）を区別できる。
- */
-export const AnalyticsDailyMetric = z.enum([
-  'closed',
-  'reservations',
-  'reservations_received',
-  'receptions',
-  'cancellations',
-  'no_shows',
-  'wait_seconds_median',
-  'revisits_90d',
-])
-export type AnalyticsDailyMetric = z.infer<typeof AnalyticsDailyMetric>
-
-/**
- * `analytics_daily.dimension` の語彙。`total` のとき `dimension_key` は空文字。
- * `hour` は `'14'`（2 桁ゼロ埋めしない）。`staff` の担当未定は `'unassigned'`。
- * `visit_frequency` は来店回数の 4 階級（`first` / `second` / `third_to_fifth` / `sixth_plus`）。
- */
-export const AnalyticsDimension = z.enum([
-  'total',
-  'staff',
-  'purpose',
-  'hour',
-  'source',
-  'cancel_reason',
-  'visit_frequency',
-])
-export type AnalyticsDimension = z.infer<typeof AnalyticsDimension>
-
-/**
- * `GET /api/staff/analytics` のクエリ。期間の上限は 400 日
- * （2026-01-01〜2027-02-04 がちょうど 400 日）。
- * `countBy` は「来店日で数えるか、受け付けた日で数えるか」。
- */
-export const AnalyticsQuery = z
-  .strictObject({
-    storeId: Uuid,
-    metric: AnalyticsMetric,
-    from: LocalDate,
-    to: LocalDate,
-    granularity: z.enum(['day', 'month', 'hour', 'weekday']).default('day'),
-    countBy: z.enum(['visit_date', 'received_date']).default('visit_date'),
-    /**
-     * 「本日」の判定に使う基準時刻。**日境界をテストから注入するための口**で、
-     * 省くとサーバの時刻を使う（`AnalyticsRollupRequest.now` と同じ作法）。
-     */
-    now: IsoDateTime.optional(),
-  })
-  .refine(spanWithinDays(399), { message: '一度に見られるのは 400 日ぶんまで', path: ['to'] })
-export type AnalyticsQuery = z.infer<typeof AnalyticsQuery>
-
-/** `GET /api/staff/analytics/targets` のクエリ。 */
-export const StoreIdQuery = z.strictObject({ storeId: Uuid })
-export type StoreIdQuery = z.infer<typeof StoreIdQuery>
-
-/**
- * グラフの 1 本（棒・点）。
- * `secondaryValue` は**率**（0.00〜1.00）で、小標本で伏せたときは `null`。
- * 状態は色ではなく `isClosed` / `isOverTarget` の真偽値で伝える。
- */
-export const AnalyticsPoint = z.strictObject({
-  key: z.string().min(1).max(20),
-  label: z.string().min(1).max(30),
-  value: z.number().nonnegative(),
-  secondaryValue: z.number().min(0).max(1).nullable().default(null),
-  isClosed: z.boolean(),
-  isOverTarget: z.boolean(),
-})
-export type AnalyticsPoint = z.infer<typeof AnalyticsPoint>
-
-/** 積み上げの 1 層。凡例は色に頼らないので、模様を必ず持たせる。 */
-export const AnalyticsSeries = z.strictObject({
-  name: z.string().min(1).max(30),
-  pattern: z.enum(['solid', 'hatch', 'dot']),
-  points: AnalyticsPoint.array(),
-})
-export type AnalyticsSeries = z.infer<typeof AnalyticsSeries>
-
-/**
- * タブ 1 枚ぶんの応答。`summary` は最大 3 行で、`value` は「8分40秒」「8月15日」の
- * ように数でない値も入るため**文字列**にする。
- * `businessDays` は「1日あたり」の分母（暦を正とした営業日数）、
- * `pendingDays` は「〜日ぶんはまだ集計中です」に使う未集計の日数。
- */
-export const AnalyticsReport = z.strictObject({
-  metric: AnalyticsMetric,
-  from: LocalDate,
-  to: LocalDate,
-  granularity: z.enum(['day', 'month', 'hour', 'weekday']),
-  countBy: z.enum(['visit_date', 'received_date']),
-  series: AnalyticsSeries.array(),
-  summary: z
-    .strictObject({
-      label: z.string().min(1).max(30),
-      value: z.string().max(40),
-      unit: z.string().max(8),
-      isOverTarget: z.boolean(),
-    })
-    .array()
-    .max(3),
-  target: z.number().nullable(),
-  suppressed: z.boolean(),
-  businessDays: CountInteger,
-  pendingDays: CountInteger,
-})
-export type AnalyticsReport = z.infer<typeof AnalyticsReport>
-
-/** 目安の 3 つ。全店共通の固定値で、画面から変える操作を作らない。 */
-export const AnalyticsTargets = z.strictObject({
-  waitMinutes: z.literal(8),
-  cancellationRatePercent: z.literal(10),
-  revisitWindowDays: z.literal(90),
-})
-export type AnalyticsTargets = z.infer<typeof AnalyticsTargets>
-
-/**
- * 日次集計の保守。`now` は日境界をテストから注入するための口で、省くとサーバの
- * 時刻を使う（`RecordingPurgeRequest` と同じ作法）。
- * `days` は「当日から遡って何日ぶんを数え直すか」（既定 2 = 当日分と前日分）。
- */
-export const AnalyticsRollupRequest = z.strictObject({
-  now: IsoDateTime.optional(),
-  days: QueryInteger.pipe(z.number().int().min(1).max(31)).default(2),
-  /**
-   * 「当日から何日**先**まで数えるか」（既定 7 = トップの前後 7 日ぶん）。
-   * 先の予定を数えないと、トップの未来側の棒と「来週」が永久に 0 のままになる。
-   */
-  ahead: QueryInteger.pipe(z.number().int().min(0).max(31)).default(7),
-  limit: QueryInteger.pipe(z.number().int().min(1).max(500)).default(100),
-})
-export type AnalyticsRollupRequest = z.infer<typeof AnalyticsRollupRequest>
-
-/**
- * 集計の結果。**落とした行（`dropped`）と失敗した店舗（`failed`）を件数に混ぜない** —
- * 前者はデータの壊れ、後者は次の実行で拾い直す対象で、直し方が違う。
- */
-export const AnalyticsRollupResult = z.strictObject({
-  stores: CountInteger,
-  days: CountInteger,
-  rows: CountInteger,
-  deleted: CountInteger,
-  dropped: CountInteger,
-  failed: CountInteger,
-})
-export type AnalyticsRollupResult = z.infer<typeof AnalyticsRollupResult>
-
-/* ------------------------------------------------------------------------- *
- * P10 端末の使い分けと監査（`specs/glasses_management/features/013-terminals-and-audit`）
- *
- * 同じアプリを「スタッフが持ち歩く個人の iPad」と「レジ横に据え置く共有の iPad」の
- * どちらとしても使う。**平文の暗証番号は保存も応答もログ出力もしない**ので、
- * この節のどの応答スキーマにも `pin` / `pinHash` を置かない（`z.strictObject` に
- * しているので、D1 の行をそのまま返すと落ちる）。
- * ------------------------------------------------------------------------- */
-
-/* --- 暗証番号 ------------------------------------------------------------- */
-
-/**
- * 暗証番号。**4〜6 桁の半角数字だけ**（`04-api.md` §4.1）。
- * 全角数字も空白も受けない（テンキー以外から来た値をここで落とす）。
- */
-export const Pin = z.string().regex(/^\d{4,6}$/)
-export type Pin = z.infer<typeof Pin>
-
-/** 端末に暗証番号を設定する（`PUT /api/staff/stores/:storeId/staff/:staffId/pin`）。 */
-export const StaffPinInput = z.strictObject({ pin: Pin })
-export type StaffPinInput = z.infer<typeof StaffPinInput>
-
-/** 設定の結果。**暗証番号そのものを返さない。** */
-export const PinSetResult = z.strictObject({ staffId: Uuid, updatedAt: IsoDateTime })
-export type PinSetResult = z.infer<typeof PinSetResult>
-
-/**
- * 暗証番号が違ったときの 401。残り回数を返さないと画面が
- * 「あと2回お試しいただけます」と書けない。**入力された値は返さない。**
- */
-export const PinInvalidError = z.strictObject({
-  error: z.literal('pin_invalid'),
-  remainingAttempts: z.number().int().min(0).max(2),
-})
-export type PinInvalidError = z.infer<typeof PinInvalidError>
-
-/**
- * 3 回続けて間違えたときの 429。待ち時間は 30 秒で、明けたら失敗回数は 0 に戻る。
- */
-export const PinLockedError = z.strictObject({
-  error: z.literal('pin_locked'),
-  retryAfterSeconds: z.number().int().min(1).max(300),
-  remainingAttempts: z.literal(0),
-})
-export type PinLockedError = z.infer<typeof PinLockedError>
-
-/* --- 端末 ----------------------------------------------------------------- */
-
-/** 端末の使い方。`shared` は置き場所（レジ横）、`personal` は持ち歩く 1 台。 */
-export const TerminalKind = z.enum(['shared', 'personal'])
-export type TerminalKind = z.infer<typeof TerminalKind>
-
-/**
- * 端末 1 台。`name` の上限は **60 文字**（`04-api.md` §4.2 を正とする。
- * `03-data-model.md` §10.1 の「1〜30文字」は採らない）。
- *
- * `hasPin` と `isOnline` は**サーバで計算して返す真偽値**で、D1 の列ではない
- * （`hasPin` は `pin_hash` の有無、`isOnline` は `last_seen_at` が 5 分以内か）。
- * `version` は楽観ロックで、`TerminalPatch` が必ず持って来る。
- */
-export const Terminal = z.strictObject({
-  id: Uuid,
-  storeId: Uuid,
-  name: z.string().trim().min(1).max(60),
-  kind: TerminalKind,
-  placeNote: z.string().max(40).default(''),
-  deviceLabel: z.string().max(30).default(''),
-  autoLockSeconds: z.number().int().min(30).max(1800).default(120),
-  isActive: z.boolean().default(true),
-  hasPin: z.boolean(),
-  lastSeenAt: IsoDateTime.nullable().default(null),
-  isOnline: z.boolean(),
-  version: z.number().int().min(1),
-  createdAt: IsoDateTime,
-})
-export type Terminal = z.infer<typeof Terminal>
-
-/** 置き場所の一覧（`GET /api/staff/terminals`）。 */
-export const TerminalListQuery = z.strictObject({
-  storeId: Uuid,
-  includeInactive: QueryFlag,
-  kind: TerminalKind.optional(),
-})
-export type TerminalListQuery = z.infer<typeof TerminalListQuery>
-
-/**
- * 端末の登録（`POST /api/staff/terminals`）。`pin` はここでだけ受け取り、
- * ハッシュにしてから保存する。**応答には載せない。**
- */
-export const TerminalInput = z.strictObject({
-  name: z.string().trim().min(1).max(60),
-  kind: TerminalKind,
-  placeNote: z.string().max(40).default(''),
-  deviceLabel: z.string().max(30).default(''),
-  autoLockSeconds: z.number().int().min(30).max(1800).default(120),
-  isActive: z.boolean().default(true),
-  pin: Pin.optional(),
-})
-export type TerminalInput = z.infer<typeof TerminalInput>
-
-/**
- * 端末の更新（`PATCH /api/staff/terminals/:terminalId`）。
- * **`version` だけ必須**で、合わなければ 409 `version_conflict` を返す。
- */
-export const TerminalPatch = z.strictObject({
-  version: z.number().int().min(1),
-  name: z.string().trim().min(1).max(60).optional(),
-  kind: TerminalKind.optional(),
-  placeNote: z.string().max(40).optional(),
-  deviceLabel: z.string().max(30).optional(),
-  autoLockSeconds: z.number().int().min(30).max(1800).optional(),
-  isActive: z.boolean().optional(),
-  pin: Pin.optional(),
-})
-export type TerminalPatch = z.infer<typeof TerminalPatch>
-
-/**
- * 業務の開始（`POST /api/staff/terminals/:terminalId/sessions`）。
- * **`mode` の判別つき union**にして、個人は `staffId` 必須・共有は `staffId` を持てない
- * ようにする（共有の開始に担当の id が混ざると、責任の所在が曖昧になる）。
- */
-export const TerminalSessionStart = z.discriminatedUnion('mode', [
-  z.strictObject({ mode: z.literal('shared'), pin: Pin }),
-  z.strictObject({ mode: z.literal('personal'), staffId: Uuid, pin: Pin }),
-])
-export type TerminalSessionStart = z.infer<typeof TerminalSessionStart>
-
-/** 開いた業務のセッション。共有のときは `staffId` が `null` である。 */
-export const TerminalSession = z.strictObject({
-  id: Uuid,
-  terminalId: Uuid,
-  staffId: Uuid.nullable().default(null),
-  mode: TerminalKind,
-  startedAt: IsoDateTime,
-  expiresAt: IsoDateTime,
-})
-export type TerminalSession = z.infer<typeof TerminalSession>
-
-/**
- * 個人モードへの昇格（`POST /api/staff/terminals/:terminalId/elevate`）。
- * `reason` は**用件 4 語の許可リスト**で、画面の「録音の保全」「注意ごとの公開」
- * 「設定の変更」「お客様のおまとめ」に 1 対 1 で対応する。知らない用件は落とす。
- */
-export const ReauthInput = z.strictObject({
-  staffId: Uuid,
-  pin: Pin,
-  reason: z.enum(['recording', 'attention', 'settings', 'customer_merge']),
-})
-export type ReauthInput = z.infer<typeof ReauthInput>
-
-/* --- 監査 ----------------------------------------------------------------- */
-
-/**
- * 監査の主体。共有モードの書き込みは `terminal`、個人モードは `staff`、
- * 端末セッションが 1 本も無い経路（内部同期）は `system` になる。
- */
-export const AuditActorType = z.enum(['staff', 'terminal', 'system', 'customer'])
-export type AuditActorType = z.infer<typeof AuditActorType>
-
-/**
- * 監査の対象。**対象のテーブル名そのまま（snake_case・複数形）**で綴る
- * （`07-nfr.md` §7.2）。`03-data-model.md` §10.3 の単数形の列挙は
- * `customer_notes` / `alerts` / `store_business_hours` を表せないので採らない。
- * **知らない値は落とす（fail close）。**
- */
-export const AuditTargetType = z.enum([
-  'organizations',
-  'stores',
-  'store_business_hours',
-  'store_blackout_windows',
-  'store_calendar_exceptions',
-  'store_slot_rules',
-  'staff',
-  'staff_skills',
-  'staff_weekly_shifts',
-  'staff_shifts',
-  'equipment',
-  'equipment_maintenance',
-  'visit_purposes',
-  'purpose_requirements',
-  'reservations',
-  'walk_ins',
-  'reception_sessions',
-  'customers',
-  'customer_notes',
-  'recordings',
-  'web_bookings',
-  'web_booking_settings',
-  'alerts',
-  'terminals',
-])
-export type AuditTargetType = z.infer<typeof AuditTargetType>
-
-/**
- * 監査 1 件。**追記専用**で、書き換える経路を作らない。
- * `beforeJson` / `afterJson` は表ごとに形が違うので `unknown` のまま運び、
- * 中身は `changedFields()` が「変わった項目だけ」に絞る
- * （`pin` / `pinHash` / `email` を含むキーは落とす）。
- */
-export const AuditEvent = z.strictObject({
-  id: Uuid,
-  occurredAt: IsoDateTime,
-  actorType: AuditActorType,
-  actorId: z.string().min(1).max(200).nullable().default(null),
-  terminalId: Uuid.nullable().default(null),
-  action: z.string().min(1).max(80),
-  targetType: AuditTargetType,
-  targetId: z.string().min(1).max(200),
-  correlationId: Uuid.nullable().default(null),
-  beforeJson: z.unknown(),
-  afterJson: z.unknown(),
-})
-export type AuditEvent = z.infer<typeof AuditEvent>
-
-/**
- * 監査の読み返し（`GET /api/staff/audit`）。`from` / `to` は**暦日**で受ける
- * （画面が日付で絞るため）。`OFFSET` を使わないので続きは `cursor` でたどる。
- */
-export const AuditSearchQuery = z.strictObject({
-  storeId: Uuid.optional(),
-  from: LocalDate.optional(),
-  to: LocalDate.optional(),
-  actorId: Uuid.optional(),
-  action: z.string().min(1).max(80).optional(),
-  limit: Limit,
-  cursor: Cursor.optional(),
-})
-export type AuditSearchQuery = z.infer<typeof AuditSearchQuery>
-
-/** 監査の応答（`04-api.md` §1.2 の `{ items, nextCursor, total }`）。 */
-export const AuditEventList = z.strictObject({
-  items: AuditEvent.array().default([]),
-  nextCursor: Cursor.nullable().default(null),
-  total: CountInteger,
-})
-export type AuditEventList = z.infer<typeof AuditEventList>
-
-/* --- お知らせの書き込み --------------------------------------------------- */
-
-/**
- * お知らせ 1 件の更新（`PATCH /api/staff/alerts/:alertId`）。
- * `readAt: null` を受けるのは、既読にしたものをもう一度未読へ戻せるようにするため。
- * **両方欠けた本文は落とす**（何も起きない PATCH を通さない）。
- */
-export const AlertPatch = z
-  .strictObject({
-    readAt: IsoDateTime.nullable().optional(),
-    resolved: z.boolean().optional(),
-  })
-  .refine((value) => value.readAt !== undefined || value.resolved !== undefined, {
-    message: 'readAt か resolved のどちらかが要る',
-  })
-export type AlertPatch = z.infer<typeof AlertPatch>
-
-/** 「すべて既読にする」（`POST /api/staff/alerts/read-all`）。 */
-export const AlertReadAllInput = z.strictObject({ storeId: Uuid.optional() })
-export type AlertReadAllInput = z.infer<typeof AlertReadAllInput>
-
-/** 既読にした件数。0 件でも成功として返す（押した結果が読めるようにする）。 */
-export const AlertReadAllResult = z.strictObject({ updated: CountInteger })
-export type AlertReadAllResult = z.infer<typeof AlertReadAllResult>

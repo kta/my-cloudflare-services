@@ -386,7 +386,7 @@
 - **触るファイル**
   - `packages/ui/src/theme.css`（`--color-busy-soft: #e4e9e6` を新設）
   - `services/glasses_management/src/web/ledger/metrics.ts`（新規。表示窓と寸法の定数）
-- **見るべきモックと実測値**（`docs/frontend/mockups/eyex/images/` を Read で実際に見る）
+- **見るべきモックと実測値**（`docs/frontend/mockups/eye/images/` を Read で実際に見る）
 
   | 画面ID | 読むもの | 実測値 |
   |---|---|---|
@@ -512,7 +512,7 @@
     現在時刻は `--color-danger` の線 2px と同色のピル。地は `--color-surface`、見出し行は `--color-surface-2`。
   - シグネチャ: **帯が乗っても目盛りが途切れないこと**（セルの `border` で線を引かない）。
 - **目的**: T-013 の 35 本を緑にする。
-- **見るべきモック**: `docs/frontend/mockups/eyex/images/LEDGER-STAFF.png`。実測値は T-012 の表。
+- **見るべきモック**: `docs/frontend/mockups/eye/images/LEDGER-STAFF.png`。実測値は T-012 の表。
 - **触るファイル**
   - `services/glasses_management/src/web/ledger/LedgerPage.tsx`（新規）
   - `services/glasses_management/src/web/ledger/TimeGrid.tsx`（新規。背景の目盛り 1 枚）
@@ -549,7 +549,7 @@
     空き設備は `--color-free` の地に破線 `--color-pine-line`。
   - シグネチャ: **同じ予約が 2 行に同時に現れ、片方を押すともう片方にも同じ印が付くこと。**
 - **目的**: AC-LEDGER-09 / 10 / 11 を満たす。
-- **見るべきモック**: `docs/frontend/mockups/eyex/images/LEDGER-RESOURCE.png`。
+- **見るべきモック**: `docs/frontend/mockups/eye/images/LEDGER-RESOURCE.png`。
   縦軸は「視力測定機 A」「視力測定機 B」「検査室 1」「相談カウンター 1」「相談カウンター 2」の 5 行。
   空き行の帯は破線 1px、点検の帯は 1 列分（11:30–12:00）。
 - **先に書くテスト**: T-013 で書いた `Timetable.test.tsx` の設備別 4 本。ここでは足さない。
@@ -572,7 +572,7 @@
     （`--color-pine` / `--color-walkin` / `--color-web`）。地は `--color-surface`。
   - シグネチャ: **左端の 1 列だけが押せて、ほかは読むだけであること。**
 - **目的**: AC-LEDGER-12 / 13 / 14 を満たす。
-- **見るべきモック**: `docs/frontend/mockups/eyex/images/LEDGER-LIST.png`。
+- **見るべきモック**: `docs/frontend/mockups/eye/images/LEDGER-LIST.png`。
   絞り込みの帯 60px、列幅 `120px / 96px / 224px / 1fr / 140px`、行 `min-height 62px`、
   操作ボタン `min-height 46px`。末尾に「このあと 14:00 …」の 1 行。
 - **先に書くテスト**: T-014 で書いた `LedgerList.test.tsx` のリスト 7 本。ここでは足さない。
@@ -600,7 +600,7 @@
     主操作は `--color-pine`、取り消しは `--color-danger` の枠だけ。注意ごとは `--color-danger` の文字。
   - シグネチャ: **押した帯へ矢印が刺さり、台帳がその後ろに見えたままであること。**
 - **目的**: AC-LEDGER-04 / 15 / 19 を満たす。
-- **見るべきモック**: `docs/frontend/mockups/eyex/images/LEDGER-DETAIL.png`。
+- **見るべきモック**: `docs/frontend/mockups/eye/images/LEDGER-DETAIL.png`。
   幅 440px、角 16px、矢印 16px を左 40px、頭 `14px 16px` / 胴 `12px 16px` / 足 `12px 16px`、
   主操作は幅いっぱい `min-height 52px` 17px、その下に「変更する」「取り消す」を 10px 空けて 2 つ。
 - **触るファイル**
@@ -628,10 +628,10 @@
   - シグネチャ: **帯が出ても台帳が消えず、押せないものが押せない形で残ること。**
 - **目的**: AC-LEDGER-18 / 21 を満たす。
 - **見るべきモック**
-  - `docs/frontend/mockups/eyex/images/EX-OFFLINE.png` — 帯 `padding 20px 32px`、見出し 21px、
+  - `docs/frontend/mockups/eye/images/EX-OFFLINE.png` — 帯 `padding 20px 32px`、見出し 21px、
     本文 16px/1.6、「再接続を試す」`min-height 52px`、その下に自動再試行の時刻 1 行。
     表は「受け付け」の列を落とした 4 列（`112px / 250px / 1fr / 140px`）。
-  - `docs/frontend/mockups/eyex/images/HOME-PERSONAL.png` — 右の一覧は見出し 1 行 ＋
+  - `docs/frontend/mockups/eye/images/HOME-PERSONAL.png` — 右の一覧は見出し 1 行 ＋
     時刻（等幅）・お名前・状態の札・ご用件の 2 行組みで、行の間は 1px の罫線。
 - **先に書くテスト**: T-014 で書いた `OfflineBand.test.tsx` 5 本と `MyReservations.test.tsx` 4 本。ここでは足さない。
 - **触るファイル**
@@ -683,7 +683,7 @@
 - **やること**
   - `playwright test --project=mock`（viewport 1194×810 / deviceScaleFactor 2）で
     `LEDGER-STAFF` / `LEDGER-RESOURCE` / `LEDGER-LIST` / `LEDGER-DETAIL` / `EX-OFFLINE` /
-    `HOME-PERSONAL` の 6 枚を撮る。基準画像は `docs/frontend/mockups/eyex/reference/`。
+    `HOME-PERSONAL` の 6 枚を撮る。基準画像は `docs/frontend/mockups/eye/reference/`。
   - `LEDGER-WALKIN` は右 400px の受付パネルが `008-reception-and-walkin` の範囲なので**突き合わせない**。
     「ご来店お待ち」の行見出しに人数を出す根拠としてだけ読む。
   - `maxDiffPixelRatio` は「いま許している差」。**下げるだけで、上げてはいけない。**

@@ -6,9 +6,9 @@ import { StepBar } from './StepBar'
 import type { BookingStepKey } from './steps'
 
 /*
- * 下端の工程の帯（承認済みモック docs/frontend/mockups/eyex/images/BOOK-01-DATETIME.png ほか）。
+ * 下端の工程の帯（承認済みモック docs/frontend/mockups/eye/images/BOOK-01-DATETIME.png ほか）。
  *
- * 実測（screens/BOOK-0*.html と assets/eyex.css）:
+ * 実測（screens/BOOK-0*.html と assets/eye.css）:
  *   .stepbar = 高さ 76px・左右 18px・要素の間 14px・上に 1px の罫
  *   .back    = 48×48px の丸・--line-strong の 1px 罫
  *   .step    = 最小高 36px・左右 14px・角 999px・14px/600
@@ -107,6 +107,7 @@ describe('録音の表示', () => {
     open('datetime')
     const badge = within(screen.getByRole('contentinfo')).getByRole('status')
     expect(badge).toHaveTextContent('録音していません')
-    expect(badge).toHaveTextContent('--:--')
+    // 数えていないのに時計の枠だけ置くと、壊れているように読まれる（UX 監査 REC-04）。
+    expect(badge).not.toHaveTextContent('--:--')
   })
 })

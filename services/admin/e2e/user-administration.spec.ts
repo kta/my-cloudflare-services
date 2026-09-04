@@ -1,7 +1,7 @@
 import { type APIRequestContext, expect, type Page, test } from '@playwright/test'
 
 /**
- * 利用者管理(UC-EYEX-149)と個人 PIN(UC-EYEX-151)の e2e。
+ * 利用者管理(UC-EYE-149)と個人 PIN(UC-EYE-151)の e2e。
  *
  * dev グラントで運営 admin のセッションを起動し、招待 → 受諾で実在利用者を作る。
  * 受諾後のブラウザは招待された本人としてログイン済みになるため、同じ context で
@@ -57,7 +57,7 @@ test('本部管理者が利用者を検索し、権限差分を見て標準ロ�
   page,
   request,
 }) => {
-  const orgId = unique('eyex-admin-e2e')
+  const orgId = unique('eye-admin-e2e')
   const token = await mintAdminToken(request, orgId)
   await signIn(page, token)
   const email = `${unique('staff')}@example.test`
@@ -125,7 +125,7 @@ test('本人が個人PINを設定・変更し、管理者は本人確認後に�
   page,
   request,
 }) => {
-  const orgId = unique('eyex-pin-e2e')
+  const orgId = unique('eye-pin-e2e')
   const token = await mintAdminToken(request, orgId)
   await signIn(page, token)
   const email = `${unique('manager')}@example.test`

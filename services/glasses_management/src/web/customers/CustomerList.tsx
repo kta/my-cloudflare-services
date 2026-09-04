@@ -14,15 +14,16 @@ import {
   visitLabel,
 } from '../../worker/domain/customers'
 import { jstClock } from '../ledger/metrics'
+import { EmptyState, LoadingState } from '../shell/EmptyState'
 
 /*
  * 顧客台帳の一覧と、選んだ 1 名の要約
- * （承認済みモック docs/frontend/mockups/eyex/images/CUSTOMER-LIST.png）。
+ * （承認済みモック docs/frontend/mockups/eye/images/CUSTOMER-LIST.png）。
  *
  * 題材: お名前があいまいなまま、来店回数と最後のご来店から 1 名に手繰る面。
  * シグネチャ: **選んだ 1 名の要約が、一覧を閉じずに右に出続けること。**
  *
- * 実測（screens/CUSTOMER-LIST.html と assets/eyex.css）:
+ * 実測（screens/CUSTOMER-LIST.html と assets/eye.css）:
  *   本文は 2 ペイン `1fr 360px`（w-90）。ツールバー 56px・padding 0 16px・gap 10px。
  *   segmented のボタン min-height 38px（触れる大きさは 44pt へ上げる）・padding 0 16px・14px 600。
  *   検索欄の帯 padding 16px 20px・下に 1px の罫、欄は min-height 52px・角 12px・17px。
@@ -224,6 +225,34 @@ export function CustomerList({
     onSelect(customerId)
   }
 
+  /*
+   * 一覧が届いたら先頭の 1 名を選ぶ。
+   *
+   * 以前は何も選ばれずに開き、画面の 30% を占める右ペインが灰色の 1 行だけだった。
+   * 承認済みモック `CUSTOMER-LIST.png` は選択済みの姿で描かれており、
+   * 68 枚のモックに右ペインが空の絵は 1 枚も無い（UX 監査 UI-09）。
+   * **一度でも自分で選んだら、そのあとは触らない**（並べ方や絞り込みを変えても、
+   * 選んだ人が外れないのが AC-CUST-03 の約束である）。
+   */
+  const firstId = found.items[0]?.id ?? null
+  useEffect(() => {
+    if (selectedId !== null || firstId === null) return
+    setSelectedId(firstId)
+    onSelect(firstId)
+  }, [firstId, selectedId, onSelect])
+
+  /*
+   * 当てはまる方が 1 人もいなくなったら、選択を外す。
+   * 外さないと、左に「当てはまるお客様はいません」と出ているのに、
+   * 右にはその条件に当てはまらない方の要約が読み込まれ続けたまま残る。
+   */
+  const nothingFound = found.items.length === 0
+  useEffect(() => {
+    if (!nothingFound || selectedId === null) return
+    setSelectedId(null)
+    onSelect(null)
+  }, [nothingFound, selectedId, onSelect])
+
   function clearConditions() {
     setQuery('')
     setVisitRange(null)
@@ -416,7 +445,7 @@ export function CustomerList({
                       </span>
                       {/* 来店回数は**平文**で出す。色つきの印（`ledger/Timetable.tsx` の
                           `VisitBadge`）はお名前の右に添えるもので、回数の列をすでに持つ
-                          この面には入れない（モックの規準 `docs/frontend/mockups/eyex/README.md`）。
+                          この面には入れない（モックの規準 `docs/frontend/mockups/eye/README.md`）。
                           数字は等幅で桁を揃える。 */}
                       <span className="w-18 font-mono text-body font-semibold text-ink">
                         {visitLabel(row.visitCount, 'list')}
@@ -587,17 +616,23 @@ function SummaryPane({
       aria-label="選んだお客様の要約"
       className="flex w-90 flex-none flex-col overflow-y-auto bg-surface px-7 py-8"
     >
+      {/*
+        空・読み込み中・失敗を**形で見分けられる**ようにする。以前はどれも灰色の 1 行で、
+        文字を読むまで区別が付かなかった（UX 監査 UI-10）。
+      */}
       {selectedId === null ? (
-        <p className="text-body text-ink-muted">
-          お客様の行をお選びください。選んだ方の要約がここに出ます。
-        </p>
+        <EmptyState
+          title="お客様を選んでください"
+          note="左の行を押すと、その方の要約がここに出ます。"
+          live={false}
+        />
       ) : summary === null ? (
         phase === 'error' ? (
           <p role="alert" className="text-body text-ink-muted">
             この方の要約を読み込めませんでした。もう一度お選びください。
           </p>
         ) : (
-          <p className="text-body text-ink-muted">要約を読み込んでいます…</p>
+          <LoadingState label="要約を読み込んでいます" rows={5} />
         )
       ) : (
         <>

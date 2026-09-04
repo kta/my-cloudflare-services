@@ -1,7 +1,7 @@
 /*
  * お客様向けの 2 つの流れの目次と、進捗の帯の読み上げ。
  *
- * 承認済みモック docs/frontend/mockups/eyex/images/WEB-01-STORE.png 〜 WEB-06-DONE.png の
+ * 承認済みモック docs/frontend/mockups/eye/images/WEB-01-STORE.png 〜 WEB-06-DONE.png の
  * `.webprogress` は 6 本の細い帯で、`aria-label` に「全6ステップのうち1つ目です」を持つ。
  * WEB-CANCEL.png は同じ帯を 2 本にし、「2つの手順のうち2つ目です」と読ませる。
  *

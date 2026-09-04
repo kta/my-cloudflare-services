@@ -9,14 +9,15 @@ import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
+import { scrollLeftFor } from './SlotBoard'
 import { type SlotChoice, SlotStep, type SlotStepProps } from './SlotStep'
 import { nextButtonLabel, type StepGuard } from './steps'
 
 /*
- * 工程 3「担当と場所」（承認済みモック docs/frontend/mockups/eyex/images/BOOK-03-SLOT-STAFF.png /
+ * 工程 3「担当と場所」（承認済みモック docs/frontend/mockups/eye/images/BOOK-03-SLOT-STAFF.png /
  * BOOK-03b-SLOT-RESOURCE.png / BOOK-03c-DRAG.png）。
  *
- * 実測（screens/BOOK-03*.html の <style> と assets/eyex.css）:
+ * 実測（screens/BOOK-03*.html の <style> と assets/eye.css）:
  *   .split  = 1fr / 330px（相談欄）。.side = padding 28px 24px・左に 1px の罫
  *   .tt-grid = 名前列 170px ＋ 30分刻み 1fr。.tt-head 34px / .tt-name 64px / .tt-cell 64px
  *   .appt   = min-height 54px・角 8px。.clash は 3px の --alert 罫、.placing は 3px の --brand 罫
@@ -704,5 +705,87 @@ describe('読めないとき', () => {
     expect(screen.getByRole('status')).toHaveTextContent('この日はお店を開けていません。')
     await user.click(screen.getByRole('button', { name: '別の日を選ぶ' }))
     expect(onBackToDate).toHaveBeenCalled()
+  })
+})
+
+describe('盤の横の流れ', () => {
+  /*
+   * 盤は 1 日ぶんの列を持つが、窓に入るのは 8 列だけである。
+   * いま置いているご予約が流れた先にあると、右の柱が「14:00 の先約があります」
+   * 「指でつかんで動かせます」と言っているのに、その 14:00 も、つかむ帯も
+   * 画面の外にある（UX 監査 J-05。実測 scrollWidth 1732 / clientWidth 864 / scrollLeft 0）。
+   */
+  const BOX = { clientWidth: 864, scrollWidth: 1732, columns: 18, span: 2 }
+
+  it('置いているご予約が窓の外なら、真ん中に来るまで送る', () => {
+    const next = scrollLeftFor({ ...BOX, scrollLeft: 0, column: 8 })
+    expect(next).not.toBeNull()
+    // 8 列目（14:00）の左端は 170 + 8 × 86.8 = 864.6。窓の右端 864 の外にある。
+    const columnWidth = (BOX.scrollWidth - 170) / BOX.columns
+    const left = 170 + 8 * columnWidth
+    expect(next).toBeGreaterThan(0)
+    expect(next).toBeLessThan(left)
+    // 送ったあとは窓の中に入っている。
+    expect(left).toBeGreaterThanOrEqual((next ?? 0) + 170)
+    expect(left + 2 * columnWidth).toBeLessThanOrEqual((next ?? 0) + BOX.clientWidth)
+  })
+
+  it('すでに見えているときは動かさない（運んでいる最中に盤が滑らない）', () => {
+    expect(scrollLeftFor({ ...BOX, scrollLeft: 0, column: 1 })).toBeNull()
+  })
+
+  it('名前の列の下に隠れているぶんは「見えている」に数えない', () => {
+    // 0 列目は名前の列（170px）の真下に来るので、送って外に出す。
+    expect(scrollLeftFor({ ...BOX, scrollLeft: 300, column: 1 })).not.toBeNull()
+  })
+
+  it('横に流れない盤では何もしない', () => {
+    expect(
+      scrollLeftFor({
+        clientWidth: 900,
+        scrollWidth: 900,
+        columns: 8,
+        span: 2,
+        scrollLeft: 0,
+        column: 7,
+      }),
+    ).toBeNull()
+  })
+
+  it('名前の列は左に貼り付いて、流しても誰の行か分かる', () => {
+    renderStep()
+    const header = screen.getByRole('rowheader', { name: /佐藤 美咲/ })
+    expect(header.className).toContain('sticky')
+    expect(header.className).toContain('left-0')
+    // 地が透けると、下を通る帯に名前が重なって読めなくなる。
+    expect(header.className).toContain('bg-surface-2')
+    const corner = screen.getByRole('columnheader', { name: '担当者' })
+    expect(corner.className).toContain('sticky')
+  })
+})
+
+describe('塞がりの描き分け', () => {
+  /*
+   * 先約とお店の都合（休憩・勤務時間外・点検）は、店員にとって意味が違う。
+   * 休憩なら時間をずらす相談ができるが、先約はできない。どちらも同じ灰色の箱だと、
+   * 盤の午前は一面の灰色で、文字を読むまで区別が付かない（UX 監査 J-06）。
+   */
+  function bandNamed(text: string): HTMLElement {
+    const board = screen.getByRole('table', { name: 'ご予約を置く盤' })
+    const label = within(board).getAllByText(text)[0]
+    const band = label?.closest('span[class*="border-l-4"]')
+    if (!(band instanceof HTMLElement)) throw new Error(`${text} の帯が無い`)
+    return band
+  }
+
+  it('先約は塗り、休憩は斜線で、文字を読まなくても見分けられる', () => {
+    renderStep()
+    const booked = bandNamed('先約')
+    const rest = bandNamed('休憩')
+    expect(booked.style.backgroundImage).toBe('')
+    expect(rest.style.backgroundImage).toContain('repeating-linear-gradient')
+    // 地の色そのものは同じままにする（斜線を足しただけで、色をもう 1 つ増やさない）。
+    expect(booked.className).toContain('bg-busy-soft')
+    expect(rest.className).toContain('bg-busy-soft')
   })
 })

@@ -6,7 +6,7 @@ import { SettingsScreen } from './SettingsScreen'
 import type { SettingsPanelProps } from './sections'
 
 /*
- * 設定の器（承認済みモック docs/frontend/mockups/eyex/images/SETTINGS-STORE.png）。
+ * 設定の器（承認済みモック docs/frontend/mockups/eye/images/SETTINGS-STORE.png）。
  * 6 面が同じ第2サイドバーと同じ 56px の保存バーの上で切り替わることを固定する。
  * 見た目の寸法は e2e の突き合わせで見るので、ここでは「何が読めて、何が押せるか」を見る。
  */
@@ -15,15 +15,15 @@ const STORE_ID = '11111111-2222-4333-8444-555555555555'
 
 const storeDetail = {
   id: STORE_ID,
-  organizationId: 'eyex',
-  name: 'EYEX 銀座店',
+  organizationId: 'eye',
+  name: 'EYE 銀座店',
   slug: 'ginza',
   phone: '03-3571-0001',
-  address: '東京都中央区銀座4-5-6　EYEXビル 2階',
+  address: '東京都中央区銀座4-5-6　EYEビル 2階',
   accessNote: 'A1出口から徒歩3分',
   isActive: true,
   createdAt: '2026-08-01T00:00:00.000Z',
-  namePublic: 'EYEX 銀座店（銀座4丁目）',
+  namePublic: 'EYE 銀座店（銀座4丁目）',
   nearestStation: '東京メトロ 銀座駅',
   parkingNote: '提携駐車場はありません',
   introText: '銀座4丁目の交差点からすぐ。',
@@ -43,7 +43,7 @@ const staff = [
     isActive: true,
     sortOrder: 5,
     skills: [],
-    adminUserId: 'dev:eyex-manager',
+    adminUserId: 'dev:eye-manager',
     hasPin: true,
     maxParallelReservations: 1,
     pinUpdatedAt: null,
@@ -57,7 +57,7 @@ const staff = [
     isActive: true,
     sortOrder: 2,
     skills: [],
-    adminUserId: 'dev:eyex',
+    adminUserId: 'dev:eye',
     hasPin: true,
     maxParallelReservations: 1,
     pinUpdatedAt: null,
@@ -107,7 +107,7 @@ function json(body: unknown, status = 200): Response {
 beforeEach(() => {
   sent = []
   patchReply = { status: 200, body: { ...storeDetail, settingsVersion: 4 } }
-  sessionStorage.setItem('app.auth.token', devToken('dev:eyex'))
+  sessionStorage.setItem('app.auth.token', devToken('dev:eye'))
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
@@ -132,7 +132,7 @@ afterEach(() => {
 
 /** dev グラントが載せる `sub` だけを持つ、署名を確かめない見せかけの JWT。 */
 function devToken(sub: string): string {
-  const payload = btoa(JSON.stringify({ sub, org: 'eyex' }))
+  const payload = btoa(JSON.stringify({ sub, org: 'eye' }))
   return `header.${payload}.signature`
 }
 
@@ -148,7 +148,7 @@ async function typeInto(label: string, value: string) {
 }
 
 describe('第2サイドバー', () => {
-  it('8 項目を上から店舗の情報・営業日・営業時間・ご来店の目的・スタッフと技能・設備と点検・Web予約の公開・端末の設定の順に持つ', async () => {
+  it('端末を含む8項目を実装済みの順に持つ', async () => {
     await openSettings()
     const nav = screen.getByRole('navigation', { name: '設定の項目' })
     const names = Array.from(nav.querySelectorAll('button')).map((b) => b.textContent)
@@ -160,7 +160,7 @@ describe('第2サイドバー', () => {
       'スタッフと技能',
       '設備と点検',
       'Web予約の公開',
-      '端末の設定',
+      '端末',
     ])
   })
 
@@ -232,7 +232,7 @@ describe('保存バー', () => {
 
   it('2 項目を直すと札が「未保存の変更 2件」になり、保存が押せる', async () => {
     await openSettings()
-    await typeInto('店名', 'EYEX 銀座本店')
+    await typeInto('店名', 'EYE 銀座本店')
     await typeInto('住所', '東京都中央区銀座4-5-7')
     expect(screen.getByText('未保存の変更 2件')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '保存' })).toBeEnabled()
@@ -240,7 +240,7 @@ describe('保存バー', () => {
 
   it('件数の変化は割り込まない知らせ（role="status"）として 1 度だけ伝わる', async () => {
     await openSettings()
-    await typeInto('店名', 'EYEX 銀座本店')
+    await typeInto('店名', 'EYE 銀座本店')
     const tags = screen.getAllByText('未保存の変更 1件')
     expect(tags).toHaveLength(1)
     const tag = tags[0] as HTMLElement
@@ -250,15 +250,15 @@ describe('保存バー', () => {
 
   it('「変更を捨てる」を押すと値が編集前へ戻り、札が消える', async () => {
     await openSettings()
-    await typeInto('店名', 'EYEX 銀座本店')
+    await typeInto('店名', 'EYE 銀座本店')
     await userEvent.click(screen.getByRole('button', { name: '変更を捨てる' }))
-    expect(screen.getByLabelText('店名')).toHaveValue('EYEX 銀座店')
+    expect(screen.getByLabelText('店名')).toHaveValue('EYE 銀座店')
     expect(screen.queryByText(/未保存の変更/)).not.toBeInTheDocument()
   })
 
   it('保存できたら「保存しました」が 1 度だけ伝わり、札が消える', async () => {
     await openSettings()
-    await typeInto('店名', 'EYEX 銀座本店')
+    await typeInto('店名', 'EYE 銀座本店')
     await userEvent.click(screen.getByRole('button', { name: '保存' }))
     const saved = await screen.findAllByText('保存しました')
     expect(saved).toHaveLength(1)
@@ -269,12 +269,12 @@ describe('保存バー', () => {
   it('保存が落ちたら「保存できませんでした。入力はそのまま残っています。」を出し、打ち込んだ値を保つ', async () => {
     patchReply = { status: 500, body: { error: 'internal' } }
     await openSettings()
-    await typeInto('店名', 'EYEX 銀座本店')
+    await typeInto('店名', 'EYE 銀座本店')
     await userEvent.click(screen.getByRole('button', { name: '保存' }))
     expect(
       await screen.findByText('保存できませんでした。入力はそのまま残っています。'),
     ).toBeInTheDocument()
-    expect(screen.getByLabelText('店名')).toHaveValue('EYEX 銀座本店')
+    expect(screen.getByLabelText('店名')).toHaveValue('EYE 銀座本店')
   })
 
   it('影響するご予約が 1 件以上あると札が赤くなり、色だけでなく文字でも伝える', async () => {
@@ -288,14 +288,14 @@ describe('保存バー', () => {
   it('ほかの端末が先に保存していたら、何をすればよいかを出す', async () => {
     patchReply = { status: 409, body: { error: 'version_conflict' } }
     await openSettings()
-    await typeInto('店名', 'EYEX 銀座本店')
+    await typeInto('店名', 'EYE 銀座本店')
     await userEvent.click(screen.getByRole('button', { name: '保存' }))
     expect(
       await screen.findByText(
         'ほかの端末が先に保存しました。画面を開き直して、もう一度お試しください。',
       ),
     ).toBeInTheDocument()
-    expect(screen.getByLabelText('店名')).toHaveValue('EYEX 銀座本店')
+    expect(screen.getByLabelText('店名')).toHaveValue('EYE 銀座本店')
   })
 })
 
@@ -303,7 +303,7 @@ describe('権限', () => {
   it('保存が 403 で跳ねられたら EX-PERMISSION の型で断り、打ち込んだ値を残す', async () => {
     patchReply = { status: 403, body: { error: 'forbidden' } }
     await openSettings()
-    await typeInto('店名', 'EYEX 銀座本店')
+    await typeInto('店名', 'EYE 銀座本店')
     await userEvent.click(screen.getByRole('button', { name: '保存' }))
     expect(await screen.findByText('この操作は店長だけができます')).toBeInTheDocument()
     expect(
@@ -313,13 +313,13 @@ describe('権限', () => {
     ).toBeInTheDocument()
     expect(screen.getByText('下書きは残っています')).toBeInTheDocument()
     expect(screen.getByText(/店名を .* から .* に変える/)).toBeInTheDocument()
-    expect(screen.getByLabelText('店名')).toHaveValue('EYEX 銀座本店')
+    expect(screen.getByLabelText('店名')).toHaveValue('EYE 銀座本店')
   })
 
   it('「この下書きを店長に依頼する」のボタンを出さない', async () => {
     patchReply = { status: 403, body: { error: 'forbidden' } }
     await openSettings()
-    await typeInto('店名', 'EYEX 銀座本店')
+    await typeInto('店名', 'EYE 銀座本店')
     await userEvent.click(screen.getByRole('button', { name: '保存' }))
     await screen.findByText('この操作は店長だけができます')
     expect(

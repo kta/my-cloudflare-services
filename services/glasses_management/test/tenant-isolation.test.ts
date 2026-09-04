@@ -8,16 +8,11 @@
  * D1 はテストファイル内で共有されるので、組織 id は毎回ユニークに作る。
  */
 import { env, SELF } from 'cloudflare:test'
-import { signAccessToken } from '@app/shared'
 import { describe, expect, it } from 'vitest'
 import {
   authed,
   BASE,
-  createTerminal,
-  grantStorePermissions,
   INTERNAL_HEADERS,
-  insertAlert,
-  insertAnalyticsDaily,
   insertBusinessHours,
   insertReservation,
   insertShift,
@@ -28,10 +23,7 @@ import {
   JSON_HEADERS,
   jstAt,
   LEDGER_DATE,
-  markAnalyticsDays,
   orgId,
-  setStaffPin,
-  startSession,
   syncOrganization,
   tokenFor,
 } from './helpers'
@@ -57,18 +49,61 @@ async function listStores(token: string) {
   }
 }
 
+async function analyticsTenant(name: string, permission = true) {
+  const org = orgId()
+  const token = await tokenFor(org)
+  const storeId = await seedStore(org, name, `analytics-${crypto.randomUUID().slice(0, 8)}`)
+  await SELF.fetch(`${BASE}/api/internal/store-memberships/sync`, {
+    method: 'POST',
+    headers: INTERNAL_HEADERS,
+    body: JSON.stringify({
+      id: crypto.randomUUID(),
+      organizationId: org,
+      storeId,
+      userId: `dev:${org}`,
+      permissions: permission ? ['analytics.read'] : [],
+      createdAt: NOW,
+    }),
+  })
+  return { org, token, storeId }
+}
+
+async function seedAnalytics(tenant: { org: string; storeId: string }, value: number) {
+  await env.DB.prepare(
+    'INSERT INTO analytics_daily (id, organization_id, store_id, date, metric, dimension, dimension_key, dimension_label, value, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+  )
+    .bind(
+      crypto.randomUUID(),
+      tenant.org,
+      tenant.storeId,
+      '2026-08-27',
+      'reservations',
+      'total',
+      '',
+      '合計',
+      value,
+      NOW,
+      NOW,
+    )
+    .run()
+}
+
+function analyticsPath(storeId: string, extra = '') {
+  return `/api/staff/analytics?storeId=${storeId}&metric=overview&from=2026-08-01&to=2026-08-31${extra}`
+}
+
 describe('複数テナントの相互不可視', () => {
   it('3 テナントが同時に店舗を持っても、各自の店舗しか見えない', async () => {
     const [a, b, c] = [orgId(), orgId(), orgId()]
     const [ta, tb, tc] = await Promise.all([tokenFor(a), tokenFor(b), tokenFor(c)])
 
-    await seedStore(a, 'EYEX 銀座店', `ginza-${crypto.randomUUID().slice(0, 8)}`)
-    await seedStore(a, 'EYEX 丸の内店', `marunouchi-${crypto.randomUUID().slice(0, 8)}`)
+    await seedStore(a, 'EYE 銀座店', `ginza-${crypto.randomUUID().slice(0, 8)}`)
+    await seedStore(a, 'EYE 丸の内店', `marunouchi-${crypto.randomUUID().slice(0, 8)}`)
     await seedStore(b, 'B 新宿店', `shinjuku-${crypto.randomUUID().slice(0, 8)}`)
     await seedStore(c, 'C 渋谷店', `shibuya-${crypto.randomUUID().slice(0, 8)}`)
 
     const [ra, rb, rc] = await Promise.all([listStores(ta), listStores(tb), listStores(tc)])
-    expect(ra.stores.map((s) => s.name).sort()).toEqual(['EYEX 丸の内店', 'EYEX 銀座店'])
+    expect(ra.stores.map((s) => s.name).sort()).toEqual(['EYE 丸の内店', 'EYE 銀座店'])
     expect(rb.stores.map((s) => s.name)).toEqual(['B 新宿店'])
     expect(rc.stores.map((s) => s.name)).toEqual(['C 渋谷店'])
   })
@@ -87,6 +122,87 @@ describe('複数テナントの相互不可視', () => {
     await seedStore(b, 'B の銀座店', `ginza-${crypto.randomUUID().slice(0, 8)}`)
     expect((await listStores(ta)).stores.map((s) => s.name)).toEqual(['A の銀座店'])
     expect((await listStores(tb)).stores.map((s) => s.name)).toEqual(['B の銀座店'])
+  })
+})
+
+describe('分析は3テナント・店舗権限で隔離する', () => {
+  it('同じ期間・metricでもJWTの組織に属する analytics_daily だけを返す', async () => {
+    const [a, b, c] = await Promise.all([
+      analyticsTenant('分析 A'),
+      analyticsTenant('分析 B'),
+      analyticsTenant('分析 C'),
+    ])
+    await Promise.all([seedAnalytics(a, 11), seedAnalytics(b, 22), seedAnalytics(c, 33)])
+
+    for (const [tenant, own, foreign] of [
+      [a, '11', '22'],
+      [b, '22', '33'],
+      [c, '33', '11'],
+    ] as const) {
+      const response = await SELF.fetch(`${BASE}${analyticsPath(tenant.storeId)}`, {
+        headers: authed(tenant.token),
+      })
+      expect(response.status).toBe(200)
+      const body = JSON.stringify(await response.json())
+      expect(body).toContain(own)
+      expect(body).not.toContain(foreign)
+    }
+  })
+
+  it('他org storeは404、同orgの担当外またはanalytics.read無しは403、forged orgは400', async () => {
+    const mine = await analyticsTenant('分析 A')
+    const theirs = await analyticsTenant('分析 B')
+    const outsideStore = await seedStore(
+      mine.org,
+      '同組織の別店舗',
+      `outside-${crypto.randomUUID().slice(0, 8)}`,
+    )
+    const noPermission = await analyticsTenant('分析 権限なし', false)
+
+    expect(
+      (await SELF.fetch(`${BASE}${analyticsPath(theirs.storeId)}`, { headers: authed(mine.token) }))
+        .status,
+    ).toBe(404)
+    expect(
+      (await SELF.fetch(`${BASE}${analyticsPath(outsideStore)}`, { headers: authed(mine.token) }))
+        .status,
+    ).toBe(403)
+    expect(
+      (
+        await SELF.fetch(`${BASE}${analyticsPath(noPermission.storeId)}`, {
+          headers: authed(noPermission.token),
+        })
+      ).status,
+    ).toBe(403)
+    expect(
+      (
+        await SELF.fetch(`${BASE}${analyticsPath(mine.storeId, `&organizationId=${theirs.org}`)}`, {
+          headers: authed(mine.token),
+        })
+      ).status,
+    ).toBe(400)
+  })
+
+  it('内部rollupはテナントJWTを拒否し、他orgの日次行を更新しない', async () => {
+    const [mine, theirs] = await Promise.all([analyticsTenant('分析 A'), analyticsTenant('分析 B')])
+    await seedAnalytics(theirs, 99)
+    const before = await env.DB.prepare(
+      'SELECT value FROM analytics_daily WHERE organization_id = ?',
+    )
+      .bind(theirs.org)
+      .all<{ value: number }>()
+    const denied = await SELF.fetch(`${BASE}/api/internal/maintenance/analytics/rollup`, {
+      method: 'POST',
+      headers: authed(mine.token),
+      body: JSON.stringify({ from: '2026-08-01', to: '2026-08-31', limit: 3 }),
+    })
+    expect(denied.status).toBe(401)
+    const after = await env.DB.prepare(
+      'SELECT value FROM analytics_daily WHERE organization_id = ?',
+    )
+      .bind(theirs.org)
+      .all<{ value: number }>()
+    expect(after.results).toEqual(before.results)
   })
 })
 
@@ -168,7 +284,7 @@ describe('組織の同期状態による遷移', () => {
 describe('内部 API は組織を越えて配れるが、業務 API は越えられない', () => {
   it('共有鍵の一覧は全組織を返す（admin の日次照合のため）', async () => {
     const org = orgId()
-    await syncOrganization({ id: org, name: 'EYEX 照合用', revision: 1 })
+    await syncOrganization({ id: org, name: 'EYE 照合用', revision: 1 })
     const res = await SELF.fetch(`${BASE}/api/internal/organizations`, {
       headers: INTERNAL_HEADERS,
     })
@@ -191,7 +307,7 @@ describe('内部 API は組織を越えて配れるが、業務 API は越えら
  * ─────────────────────────────────────────────────────────────────────────── */
 
 /** 店長として入り、店舗 1 つを持つ組織を用意する。 */
-async function managerOf(name = 'EYEX 銀座店') {
+async function managerOf(name = 'EYE 銀座店') {
   const org = orgId()
   const token = await tokenFor(org)
   const storeId = await seedStore(org, name, `store-${crypto.randomUUID().slice(0, 8)}`)
@@ -397,10 +513,10 @@ describe('受付条件は組織をまたがない', () => {
   })
 
   it('店舗をまたぐ読み取りは無い — 同じ組織の別店舗の営業時間は storeId を変えないと読めない', async () => {
-    const mine = await managerOf('EYEX 銀座店')
+    const mine = await managerOf('EYE 銀座店')
     const another = await seedStore(
       mine.org,
-      'EYEX 丸の内店',
+      'EYE 丸の内店',
       `marunouchi-${crypto.randomUUID().slice(0, 8)}`,
     )
     await saveHours(mine.token, mine.storeId, '10:00', '19:00')
@@ -421,7 +537,7 @@ describe('受付条件は組織をまたがない', () => {
  * ─────────────────────────────────────────────────────────────────────────── */
 
 /** 台帳と空き枠を読める最小の店舗（営業時間・予約の間隔・担当・ご用件）を持つテナント。 */
-async function ledgerTenant(name = 'EYEX 銀座店') {
+async function ledgerTenant(name = 'EYE 銀座店') {
   const org = orgId()
   const token = await tokenFor(org)
   const storeId = await insertStore(org, name)
@@ -1425,7 +1541,7 @@ describe('予約の検索・変更・取消は組織をまたがない', () => {
   it('別の店舗の reservationId は、同じ組織でも選択中店舗の外なら結果に出ない', async () => {
     // Q-04 のいまの前提。別店舗のご予約は見せない（押せない導線を置かない）。
     const mine = await ledgerTenant()
-    const another = await insertStore(mine.org, 'EYEX 丸の内店')
+    const another = await insertStore(mine.org, 'EYE 丸の内店')
     await insertBusinessHours(mine.org, another)
     await insertSlotRules(mine.org, another)
     const here = await insertReservation(mine.org, {
@@ -1459,7 +1575,7 @@ describe('予約の検索・変更・取消は組織をまたがない', () => {
  * ─────────────────────────────────────────────────────────────────────────── */
 
 /** 録音を持てるテナント。再生も保全もできる権限を最初から配る。 */
-async function recordingTenant(name = 'EYEX 銀座店') {
+async function recordingTenant(name = 'EYE 銀座店') {
   const org = orgId()
   const token = await tokenFor(org)
   const storeId = await insertStore(org, name)
@@ -1633,7 +1749,7 @@ describe('録音は組織をまたがない', () => {
   it('権限外の店舗の録音は、同じ組織でも聞けず一覧にも出ない', async () => {
     // Q-03 のいまの前提。`recording.read` は担当している店舗にだけ効く。
     const mine = await recordingTenant()
-    const another = await insertStore(mine.org, 'EYEX 丸の内店')
+    const another = await insertStore(mine.org, 'EYE 丸の内店')
     const outside = await seedRecording({ org: mine.org, storeId: another }, { code: 'EY-R-0002' })
     const here = await seedRecording(mine, { code: 'EY-R-0001' })
 
@@ -1944,335 +2060,5 @@ describe('お客様向け Web 予約は組織をまたがない', () => {
       .bind(storeB.storeId)
       .first<{ isPublished: string; version: number }>()
     expect(row).toEqual({ isPublished: '1', version: 1 })
-  })
-})
-
-/* ═════════════════════════════════════════════════════════════════════════
- * 分析（P9）
- * ═══════════════════════════════════════════════════════════════════════ */
-
-describe('分析は組織と店舗を越えない', () => {
-  const AUGUST = 'from=2026-08-01&to=2026-08-31'
-
-  /** 分析を開ける人を 1 人作り、8/10 に予約を `count` 件だけ数えた状態にする。 */
-  async function seedAnalytics(count: number) {
-    const org = orgId()
-    const token = await tokenFor(org)
-    const storeId = await insertStore(org)
-    await grantStorePermissions(org, storeId, `dev:${org}`, ['analytics.read'])
-    await markAnalyticsDays(org, storeId, ['2026-08-10'])
-    await insertAnalyticsDaily(org, storeId, [
-      { date: '2026-08-10', metric: 'reservations', value: count },
-    ])
-    return { org, token, storeId }
-  }
-
-  const totalOf = async (token: string, storeId: string, extra = '') => {
-    const res = await SELF.fetch(
-      `${BASE}/api/staff/analytics?storeId=${storeId}&metric=reservation_count&${AUGUST}${extra}`,
-      { headers: authed(token) },
-    )
-    const body = (await res.json().catch(() => null)) as {
-      summary?: { label: string; value: string }[]
-    } | null
-    return {
-      status: res.status,
-      total: body?.summary?.find((row) => row.label === '合計')?.value ?? null,
-    }
-  }
-
-  it('3 テナントが同じ期間・同じ指標を集計しても、数字が互いに混ざらない', async () => {
-    const [a, b, c] = await Promise.all([seedAnalytics(11), seedAnalytics(22), seedAnalytics(33)])
-    expect(await totalOf(a.token, a.storeId)).toEqual({ status: 200, total: '11' })
-    expect(await totalOf(b.token, b.storeId)).toEqual({ status: 200, total: '22' })
-    expect(await totalOf(c.token, c.storeId)).toEqual({ status: 200, total: '33' })
-  })
-
-  it('他組織の storeId を渡しても 403 で、その店舗が存在するかどうかも分からない', async () => {
-    const [a, b] = await Promise.all([seedAnalytics(11), seedAnalytics(22)])
-    // 実在する他組織の店舗と、どこにも無い店舗が**同じ答え**になる。
-    const real = await totalOf(a.token, b.storeId)
-    const imaginary = await totalOf(a.token, crypto.randomUUID())
-    expect(real.status).toBe(403)
-    expect(imaginary.status).toBe(403)
-    expect(real.total).toBeNull()
-  })
-
-  it('query の organizationId を混ぜても、JWT の org でしか集計しない', async () => {
-    const [a, b] = await Promise.all([seedAnalytics(11), seedAnalytics(22)])
-    // 契約は未知の鍵を通さない（400）。他組織の org を騙っても数字は動かない。
-    const spoofed = await totalOf(a.token, a.storeId, `&organizationId=${b.org}`)
-    expect(spoofed.status).toBe(400)
-    expect(await totalOf(a.token, a.storeId)).toEqual({ status: 200, total: '11' })
-  })
-
-  it('日次 upsert が他組織の行を 1 行も書き換えない（同じ日・同じ指標でも組織で分かれる）', async () => {
-    const [a, b] = await Promise.all([seedAnalytics(11), seedAnalytics(22)])
-    const rows = await env.DB.prepare(
-      "SELECT organization_id AS org, value FROM analytics_daily WHERE date = '2026-08-10' " +
-        "AND metric = 'reservations' AND organization_id IN (?, ?) ORDER BY value",
-    )
-      .bind(a.org, b.org)
-      .all<{ org: string; value: number }>()
-    expect(rows.results).toEqual([
-      { org: a.org, value: 11 },
-      { org: b.org, value: 22 },
-    ])
-  })
-
-  it('担当していない自組織の店舗も 403 になる（membership が無ければ通さない）', async () => {
-    const a = await seedAnalytics(11)
-    // 同じ組織の別店舗。権限を配っていないので開けない。
-    const another = await insertStore(a.org, 'EYEX 丸の内店')
-    await markAnalyticsDays(a.org, another, ['2026-08-10'])
-    expect((await totalOf(a.token, another)).status).toBe(403)
-  })
-
-  it('テナントのトークンでは内部 API（保守）に触れない', async () => {
-    const a = await seedAnalytics(11)
-    const res = await SELF.fetch(`${BASE}/api/internal/maintenance/analytics/rollup`, {
-      method: 'POST',
-      headers: authed(a.token),
-      body: JSON.stringify({}),
-    })
-    expect(res.status).toBe(401)
-  })
-})
-
-/* ───────────────────────────────────────────────────────────────────────────
- * P10 端末・セッション・お知らせ・監査
- *
- * 端末は「置き場所」なので、他社の置き場所が見えるだけで店舗名が漏れる。
- * セッションは他社の業務を止められる（引き継ぎで失効させられる）ので、
- * 見えないだけでは足りず**触れない**ことまで見る。
- * ─────────────────────────────────────────────────────────────────────────── */
-
-/** 弱くない 4 桁。共有端末と本人でそれぞれ使う。 */
-const TERMINAL_PIN = '4831'
-const TENANT_STAFF_PIN = '2748'
-
-/** 1 テナントぶんの足場（店舗・権限・PIN 付きスタッフ・端末 1 台）。 */
-async function seedTenant(storeName: string): Promise<{
-  org: string
-  token: string
-  storeId: string
-  staffId: string
-  terminalId: string
-}> {
-  const org = orgId()
-  const token = await tokenFor(org)
-  const storeId = await seedStore(org, storeName, `t-${crypto.randomUUID().slice(0, 8)}`)
-  await grantStorePermissions(org, storeId, `dev:${org}`, [
-    'settings.read',
-    'settings.manage',
-    'terminal.manage',
-    'audit.read',
-  ])
-  const staffId = await insertStaff(org, storeId, { displayName: '佐藤 美咲' })
-  await setStaffPin(token, storeId, staffId, TENANT_STAFF_PIN)
-  const terminal = await createTerminal(token, {
-    storeId,
-    name: 'レジ横iPad',
-    pin: TERMINAL_PIN,
-    autoLockSeconds: 1800,
-  })
-  return { org, token, storeId, staffId, terminalId: String(terminal.body?.id) }
-}
-
-describe('端末とセッションは組織をまたがない', () => {
-  it('3 テナントが同じ名前の端末を持っても、各自の端末しか見えない', async () => {
-    const [a, b, c] = await Promise.all([
-      seedTenant('EYEX 銀座店'),
-      seedTenant('B 新宿店'),
-      seedTenant('C 渋谷店'),
-    ])
-    for (const tenant of [a, b, c]) {
-      const res = await SELF.fetch(`${BASE}/api/staff/terminals?storeId=${tenant.storeId}`, {
-        headers: authed(tenant.token),
-      })
-      expect(res.status).toBe(200)
-      const body = (await res.json()) as { items: Array<{ id: string; name: string }> }
-      expect(body.items.map((item) => item.id)).toEqual([tenant.terminalId])
-      expect(body.items.map((item) => item.name)).toEqual(['レジ横iPad'])
-    }
-    // 他社の店舗 id を指したときは、その店舗が在ることを 404 で漏らさず 403。
-    const crossed = await SELF.fetch(`${BASE}/api/staff/terminals?storeId=${b.storeId}`, {
-      headers: authed(a.token),
-    })
-    expect(crossed.status).toBe(403)
-  })
-
-  it('他テナントの terminalId でセッションを開こうとしても 404 になる', async () => {
-    const [mine, theirs] = await Promise.all([seedTenant('A 店'), seedTenant('B 店')])
-    const opened = await startSession(mine.token, theirs.terminalId, {
-      mode: 'shared',
-      pin: TERMINAL_PIN,
-    })
-    expect(opened.status).toBe(404)
-    const rows = await env.DB.prepare(
-      'SELECT COUNT(*) AS n FROM terminal_sessions WHERE terminal_id = ?',
-    )
-      .bind(theirs.terminalId)
-      .first<{ n: number }>()
-    expect(rows?.n).toBe(0)
-  })
-
-  it('他テナントの staffId を混ぜた個人ログインは 404 で、自分のテナントのスタッフとして開かない', async () => {
-    const [mine, theirs] = await Promise.all([seedTenant('A 店'), seedTenant('B 店')])
-    const opened = await startSession(mine.token, mine.terminalId, {
-      mode: 'personal',
-      staffId: theirs.staffId,
-      pin: TENANT_STAFF_PIN,
-    })
-    expect(opened.status).toBe(404)
-    const rows = await env.DB.prepare(
-      'SELECT COUNT(*) AS n FROM terminal_sessions WHERE organization_id = ?',
-    )
-      .bind(mine.org)
-      .first<{ n: number }>()
-    expect(rows?.n).toBe(0)
-  })
-
-  it('他テナントのセッション id を DELETE しても 404 で、相手のセッションは生きたままである', async () => {
-    const [mine, theirs] = await Promise.all([seedTenant('A 店'), seedTenant('B 店')])
-    const theirSession = await startSession(theirs.token, theirs.terminalId, {
-      mode: 'shared',
-      pin: TERMINAL_PIN,
-    })
-    const res = await SELF.fetch(
-      `${BASE}/api/staff/terminals/${mine.terminalId}/sessions/${String(theirSession.body?.id)}`,
-      { method: 'DELETE', headers: authed(mine.token) },
-    )
-    expect(res.status).toBe(404)
-    const row = await env.DB.prepare('SELECT revoked_at FROM terminal_sessions WHERE id = ?')
-      .bind(String(theirSession.body?.id))
-      .first<{ revoked_at: string | null }>()
-    expect(row?.revoked_at).toBeNull()
-  })
-
-  it('本文に別のテナントの organizationId を混ぜても、保存されるのは JWT の org である', async () => {
-    const [mine, theirs] = await Promise.all([seedTenant('A 店'), seedTenant('B 店')])
-    const res = await SELF.fetch(`${BASE}/api/staff/terminals?storeId=${mine.storeId}`, {
-      method: 'POST',
-      headers: authed(mine.token),
-      body: JSON.stringify({
-        name: '偽装した端末',
-        kind: 'shared',
-        placeNote: '',
-        deviceLabel: '',
-        autoLockSeconds: 1800,
-        isActive: true,
-        pin: TERMINAL_PIN,
-        organizationId: theirs.org,
-        storeId: theirs.storeId,
-      }),
-    })
-    // `z.strictObject` なので知らない欄は 400 で落ちる。通ってしまったときは、
-    // 保存された行が JWT の org でなければならない。
-    if (res.status === 201) {
-      const created = (await res.json()) as { id: string }
-      const row = await env.DB.prepare(
-        'SELECT organization_id, store_id FROM terminals WHERE id = ?',
-      )
-        .bind(created.id)
-        .first<{ organization_id: string; store_id: string }>()
-      expect(row).toMatchObject({ organization_id: mine.org, store_id: mine.storeId })
-    } else {
-      expect(res.status).toBe(400)
-    }
-    const theirCount = await env.DB.prepare(
-      'SELECT COUNT(*) AS n FROM terminals WHERE organization_id = ?',
-    )
-      .bind(theirs.org)
-      .first<{ n: number }>()
-    expect(theirCount?.n).toBe(1)
-  })
-})
-
-describe('お知らせと監査は組織をまたがない', () => {
-  it('他テナントの alertId を PATCH しても 404 で、相手の行は既読にならない', async () => {
-    const [mine, theirs] = await Promise.all([seedTenant('A 店'), seedTenant('B 店')])
-    const theirAlert = await insertAlert(theirs.org, theirs.storeId)
-    const res = await SELF.fetch(`${BASE}/api/staff/alerts/${theirAlert}`, {
-      method: 'PATCH',
-      headers: authed(mine.token),
-      body: JSON.stringify({ readAt: NOW }),
-    })
-    expect(res.status).toBe(404)
-    const row = await env.DB.prepare('SELECT read_at FROM alerts WHERE id = ?')
-      .bind(theirAlert)
-      .first<{ read_at: string | null }>()
-    expect(row?.read_at).toBeNull()
-  })
-
-  it('read-all は自分のテナントの、しかも選択中店舗の行だけを既読にする', async () => {
-    const mine = await seedTenant('A 銀座店')
-    const theirs = await seedTenant('B 新宿店')
-    const otherStoreId = await seedStore(
-      mine.org,
-      'A 丸の内店',
-      `t-${crypto.randomUUID().slice(0, 8)}`,
-    )
-    const target = await insertAlert(mine.org, mine.storeId)
-    const otherStore = await insertAlert(mine.org, otherStoreId)
-    const otherTenant = await insertAlert(theirs.org, theirs.storeId)
-
-    const res = await SELF.fetch(`${BASE}/api/staff/alerts/read-all`, {
-      method: 'POST',
-      headers: authed(mine.token),
-      body: JSON.stringify({ storeId: mine.storeId }),
-    })
-    expect(res.status).toBe(200)
-    expect(await res.json()).toMatchObject({ updated: 1 })
-    for (const [id, expected] of [
-      [target, true],
-      [otherStore, false],
-      [otherTenant, false],
-    ] as const) {
-      const row = await env.DB.prepare('SELECT read_at FROM alerts WHERE id = ?')
-        .bind(id)
-        .first<{ read_at: string | null }>()
-      expect(row?.read_at !== null).toBe(expected)
-    }
-  })
-
-  it('GET /api/staff/audit は他テナントの監査を 1 行も返さない', async () => {
-    const [mine, theirs] = await Promise.all([seedTenant('A 店'), seedTenant('B 店')])
-    await startSession(theirs.token, theirs.terminalId, { mode: 'shared', pin: TERMINAL_PIN })
-    await startSession(mine.token, mine.terminalId, { mode: 'shared', pin: TERMINAL_PIN })
-    const res = await SELF.fetch(`${BASE}/api/staff/audit?storeId=${mine.storeId}`, {
-      headers: authed(mine.token),
-    })
-    expect(res.status).toBe(200)
-    const body = (await res.json()) as {
-      items: Array<{ terminalId: string | null }>
-      total: number
-    }
-    expect(body.items.length).toBeGreaterThan(0)
-    for (const item of body.items) {
-      expect(item.terminalId).not.toBe(theirs.terminalId)
-    }
-    expect(JSON.stringify(body)).not.toContain(theirs.org)
-    expect(JSON.stringify(body)).not.toContain(theirs.terminalId)
-  })
-
-  it('無効化されたテナント（403）と未同期のテナント（503）は端末の一覧でも取り違えない', async () => {
-    const disabled = await seedTenant('停止された店')
-    await syncOrganization({ id: disabled.org, isDisabled: true, revision: 9 })
-    const stopped = await SELF.fetch(`${BASE}/api/staff/terminals?storeId=${disabled.storeId}`, {
-      headers: authed(disabled.token),
-    })
-    expect(stopped.status).toBe(403)
-
-    // 同期がまだ届いていない組織は 503（再試行できる）。403 と混ぜない。
-    const unsynced = orgId()
-    const token = await signAccessToken(
-      { sub: `dev:${unsynced}`, org: unsynced, email: 'a@example.test', role: 'staff' },
-      'dev-jwt-secret-change-me',
-    )
-    const pending = await SELF.fetch(`${BASE}/api/staff/terminals?storeId=${crypto.randomUUID()}`, {
-      headers: authed(token),
-    })
-    expect(pending.status).toBe(503)
   })
 })

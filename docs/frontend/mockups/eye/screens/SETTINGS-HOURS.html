@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EYE予約 — 設定・営業時間</title>
+<link rel="stylesheet" href="../assets/eye.css">
+<style>
+  /* 行き先は左のサイドバーが持つ。設定の項目は薄い第2の一覧にして、緑は1本に保つ。 */
+  .set { height: 100%; display: grid; grid-template-columns: 236px 1fr; }
+  .sidebar {
+    padding: 4px 10px 0; background: var(--surface-2); color: var(--ink);
+    border-right: 1px solid var(--line);
+  }
+  .sidebar .sgroup { padding: 3px 12px 0; font-size: 11px; line-height: 13px; color: var(--ink-2); opacity: 1; }
+  .sidebar .sitem {
+    min-height: 44px; padding: 0 12px; border-radius: 8px;
+    font-size: 14px; color: var(--ink); text-decoration: none;
+  }
+  .sidebar .sitem.on { background: var(--brand); color: var(--on-brand); font-weight: 700; }
+  .setmain { min-width: 0; display: flex; flex-direction: column; }
+  .setbar {
+    height: 56px; flex: none; display: grid; grid-template-columns: 1fr auto 1fr;
+    align-items: center; padding: 0 20px;
+    background: var(--surface); border-bottom: 1px solid var(--line);
+  }
+  .setbar h2 { margin: 0; font-size: 17px; text-align: center; }
+  .setbar .l { justify-self: start; }
+  .setbar .r { justify-self: end; display: flex; align-items: center; gap: 10px; }
+  .setbar .btn { min-height: 44px; padding: 0 16px; font-size: 15px; }
+  .setbody { flex: 1; min-height: 0; overflow: hidden; padding: 32px 40px; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  .cols > div > :first-child { margin-top: 0; }
+  .groupname { margin: 28px 2px 12px; }
+  .grouped .gr { min-height: 56px; }
+  .grouped .gr .val { text-align: right; }
+  .li { display: flex; align-items: center; gap: 16px; }
+  .li .val { margin-left: auto; color: var(--ink-2); }
+  .li .chev { color: var(--ink-3); }
+  .add { color: var(--brand); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="caption">
+  <h1>設定 — 営業時間</h1>
+  <p>通常の営業時間・曜日ごとの上書き・受付を止める時間帯を1枚で見比べる。片付けの時間を差し引いた「本当に受けられる時間」を右下で確かめられる。</p>
+</div>
+
+<main class="device" id="screen">
+  <div class="statusbar"><span>11:08</span><span>EYE 銀座店</span><span>Wi‑Fi　100%</span></div>
+
+  <header class="appbar">
+    <button class="homebtn" aria-label="トップへ">⌂</button>
+    <div class="storename">EYE 銀座店<small>設定</small></div>
+    <div class="barbtns"><button class="barbtn"><b>お知らせ</b><span class="badge">3</span></button></div>
+  </header>
+
+  <div class="body">
+    <div class="shell rail">
+      <nav class="sidenav rail" aria-label="画面の切り替え">
+        <button class="navtoggle" aria-label="サイドバーをたたむ">たたむ</button>
+        <button class="new">＋ 予約を取る</button>
+        <button class="nav-item" data-icon="ledger">予約台帳</button>
+        <button class="nav-item" data-icon="reception">来店受付</button>
+        <button class="nav-item" data-icon="search">予約を検索</button>
+        <button class="nav-item" data-icon="history">受付履歴</button>
+        <button class="nav-item" data-icon="customer">顧客台帳</button>
+        <div class="group">お店の運用</div>
+        <button class="nav-item" data-icon="analytics">分析</button>
+        <button class="nav-item on" data-icon="settings">設定</button>
+        <div class="foot">銀座店 レジ横iPad<br>共有で使っています</div>
+      </nav>
+
+      <div class="content">
+        <div class="inner">
+          <div class="set">
+            <nav class="sidebar" aria-label="設定の項目">
+              <div class="sgroup">店舗の設定</div>
+              <a class="sitem" href="#">店舗の情報</a>
+              <a class="sitem" href="#">営業日</a>
+              <a class="sitem on" href="#" aria-current="page">営業時間</a>
+              <a class="sitem" href="#">ご来店の目的</a>
+              <a class="sitem" href="#">スタッフと技能</a>
+              <a class="sitem" href="#">設備と点検</a>
+              <a class="sitem" href="#">予約のきまり</a>
+              <div class="sgroup">Web予約</div>
+              <a class="sitem" href="#">公開</a>
+              <a class="sitem" href="#">受付できる時間</a>
+              <a class="sitem" href="#">お知らせ文</a>
+              <div class="sgroup">顧客台帳</div>
+              <a class="sitem" href="#">項目</a>
+              <a class="sitem" href="#">注意ごと</a>
+              <div class="sgroup">端末とスタッフ</div>
+              <a class="sitem" href="#">端末の登録</a>
+              <a class="sitem" href="#">PINと自動ロック</a>
+              <div class="sgroup">全般</div>
+              <a class="sitem" href="#">通知・印刷</a>
+            </nav>
+
+            <section class="setmain">
+              <div class="setbar">
+                <button class="btn quiet l">キャンセル</button>
+                <h2>営業時間</h2>
+                <div class="r">
+                  <span class="tag">未保存の変更 1件</span>
+                  <button class="btn primary">保存</button>
+                </div>
+              </div>
+
+              <div class="setbody">
+                <div class="cols">
+                  <div>
+                    <div class="groupname">通常の営業時間</div>
+                    <div class="grouped">
+                      <div class="gr"><span>開店</span><span class="val mono">10:00</span><span class="chev" aria-hidden="true">›</span></div>
+                      <div class="gr"><span>閉店</span><span class="val mono">19:00</span><span class="chev" aria-hidden="true">›</span></div>
+                      <div class="gr"><span>お昼の休憩</span><span class="val mono">13:00–14:00</span><span class="chev" aria-hidden="true">›</span></div>
+                    </div>
+
+                    <div class="groupname">曜日ごとの上書き</div>
+                    <div class="lines">
+                      <div class="li"><span>火曜日</span><span class="val">お休み（定休日）</span><span class="chev" aria-hidden="true">›</span></div>
+                      <div class="li"><span>金曜日</span><span class="val mono">11:00–20:00</span><span class="chev" aria-hidden="true">›</span></div>
+                      <div class="li"><span>日曜日</span><span class="val mono">10:00–18:00</span><span class="chev" aria-hidden="true">›</span></div>
+                      <div class="li"><span>月・水・木・土曜日</span><span class="val">通常どおり</span><span class="chev" aria-hidden="true">›</span></div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div class="groupname">受付を止める時間帯</div>
+                    <div class="grouped">
+                      <div class="gr"><span>朝の支度</span><span class="val mono">10:00–10:15</span><span class="chev" aria-hidden="true">›</span></div>
+                      <div class="gr"><span>お昼の休憩</span><span class="val mono">13:00–14:00</span><span class="chev" aria-hidden="true">›</span></div>
+                      <div class="gr"><span>閉店前の片付け</span><span class="val mono">18:40–19:00</span><span class="chev" aria-hidden="true">›</span></div>
+                      <div class="gr"><span class="add">＋ 止める時間帯を足す</span></div>
+                    </div>
+
+                    <div class="groupname">予約の間隔</div>
+                    <div class="lines">
+                      <div class="li"><span>1件あたりの片付け時間</span><span class="val">10分</span><span class="chev" aria-hidden="true">›</span></div>
+                      <div class="li"><span>予約をお受けする刻み</span><span class="val">30分ごと</span><span class="chev" aria-hidden="true">›</span></div>
+                      <div class="li"><span>同じ時刻に受けられる件数</span><span class="val">3件まで</span><span class="chev" aria-hidden="true">›</span></div>
+                    </div>
+
+                    <p class="small muted" style="margin:28px 2px 0">木曜日に最後にお受けできるのは 18:20 です。</p>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+</body>
+</html>

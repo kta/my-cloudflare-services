@@ -1,241 +1,102 @@
-import { PinInvalidError, PinLockedError, TerminalSession } from '@app/contracts'
-import { focusRing, Keypad, PinField, TryMeter } from '@app/ui'
-import { useEffect, useState } from 'react'
-import { client } from '../client'
-import { StartBar, StartBarButton } from './StartBar'
-
-/*
- * LOGIN-STAFF-PIN / LOGIN-SHARED-PIN / LOGIN-PIN-ERROR。
- *
- * 画面の計画（DESIGN_RULE パス 1）
- *   主役は 1 画面に 1 つ ——「誰の番号か」。テンキーは右 420px に固定した道具。
- *   状態は色だけで伝えない —— 残り回数は目盛と文字の両方、待ち時間は秒数の文字。
- *   説明文は 2 つまで・各 1 行。空いた場所を埋めるために要素を足さない。
- *
- * **平文の暗証番号は state の外へ出さない。**画面にも `console` にも出さず、
- * 送るのは本文だけ。誤りの回数はサーバ（KV・30 秒）が数える。
- */
-
-export type PinSubject =
-  | { kind: 'personal'; staffId: string; name: string; note: string }
-  | { kind: 'shared'; name: string; note: string }
-
-const SHARED_GROUPS = [
-  { label: '個人を選ばずにできる', words: ['予約を受ける', '台帳を見る', 'ご来店を受け付ける'] },
-  { label: 'ご本人の確認が必要', words: ['録音の保全', '注意ごとの公開', '設定の変更'] },
-] as const
+import { Keypad, PinField, TryMeter } from '@app/ui'
+import { useState } from 'react'
+import { StartBar } from './StartBar'
 
 export function PinEntry({
-  storeName,
-  terminalId,
-  subject,
-  onStarted,
+  kind,
+  title,
+  detail,
+  remainingAttempts,
+  retryAfterSeconds,
+  onSubmit,
   onBack,
-  onQuit,
 }: {
-  storeName: string
-  terminalId: string
-  subject: PinSubject
-  onStarted: (session: TerminalSession) => void
+  kind: 'personal' | 'shared'
+  title: string
+  detail: string
+  remainingAttempts?: number
+  retryAfterSeconds?: number
+  onSubmit: (pin: string) => void
   onBack: () => void
-  onQuit: () => void
 }) {
-  const personal = subject.kind === 'personal'
-  const [value, setValue] = useState('')
-  const [remaining, setRemaining] = useState<number | null>(null)
-  const [lockSeconds, setLockSeconds] = useState<number | null>(null)
-  const [failed, setFailed] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const [notice, setNotice] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (lockSeconds === null) return
-    if (lockSeconds <= 0) {
-      // 30 秒ちょうどはまだ入力できず、+1 秒で入力できる（07-nfr.md §10.3）。
-      setLockSeconds(null)
-      setFailed(false)
-      return
-    }
-    const timer = setTimeout(
-      () => setLockSeconds((left) => (left === null ? null : left - 1)),
-      1000,
-    )
-    return () => clearTimeout(timer)
-  }, [lockSeconds])
-
-  async function submit() {
-    if (busy) return
-    setBusy(true)
-    setNotice(null)
-    setError(null)
-    try {
-      const res = await client.api.staff.terminals[':terminalId'].sessions.$post({
-        param: { terminalId },
-        json:
-          subject.kind === 'personal'
-            ? { mode: 'personal', staffId: subject.staffId, pin: value }
-            : { mode: 'shared', pin: value },
-      })
-      const status: number = res.status
-      if (status === 201) {
-        onStarted(TerminalSession.parse(await res.json()))
-        return
-      }
-      setValue('')
-      if (status === 401) {
-        setFailed(true)
-        setRemaining(PinInvalidError.parse(await res.json()).remainingAttempts)
-        return
-      }
-      if (status === 429) {
-        setFailed(true)
-        setRemaining(0)
-        setLockSeconds(PinLockedError.parse(await res.json()).retryAfterSeconds)
-        return
-      }
-      setError('業務を始められませんでした。もう一度お試しください。')
-    } catch {
-      setValue('')
-      setError('通信できませんでした。もう一度お試しください。')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const locked = lockSeconds !== null && lockSeconds > 0
-
+  const [pin, setPin] = useState('')
+  const invalid = remainingAttempts !== undefined
+  const locked = retryAfterSeconds !== undefined && retryAfterSeconds > 0 && remainingAttempts === 0
   return (
     <div className="flex h-dvh flex-col bg-paper text-ink">
       <StartBar
-        storeName={storeName}
-        subline={personal ? '業務を始める　個人の端末' : '業務を始める　みんなで使う端末'}
-        actions={<StartBarButton label="やめる" onPress={onQuit} />}
+        mode={kind === 'personal' ? '個人の端末' : 'みんなで使う端末'}
+        action={{ label: 'やめる', onPress: onBack }}
       />
-      <div className="grid min-h-0 flex-1 grid-cols-[1fr_420px]">
-        <main className="min-h-0 overflow-auto px-11 py-10">
-          {locked ? (
-            <section className="rounded-panel border border-danger bg-danger-soft px-7 py-6">
-              <h1 className="text-title font-bold text-danger">暗証番号を3回続けて間違えました</h1>
-              <p role="status" className="mt-2 text-body">
-                あと{lockSeconds}秒お待ちください。そのあと、もう一度お試しいただけます。
-              </p>
-              <TryMeter used={3} />
-            </section>
-          ) : failed ? (
-            <section className="rounded-panel border border-danger bg-danger-soft px-7 py-6">
+      <main className="flex min-h-0 flex-1">
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col px-11 py-10">
+          {invalid && (
+            <div className="mb-6 rounded-panel border border-danger bg-danger-soft px-7 py-6">
               <h1 className="text-title font-bold text-danger">
-                暗証番号が違います。あと{remaining ?? 0}回お試しいただけます
+                {locked
+                  ? `${retryAfterSeconds}秒お待ちください`
+                  : `暗証番号が違います。あと${remainingAttempts}回お試しいただけます`}
               </h1>
               <p className="mt-2 text-body">3回続くと、30秒お待ちいただきます。</p>
-              <TryMeter used={3 - (remaining ?? 0)} />
-            </section>
-          ) : (
-            <>
-              <h1 className="text-title font-bold">
-                {personal
-                  ? '4〜6桁の暗証番号を入力してください'
-                  : '店舗の暗証番号を入力してください'}
-              </h1>
-              <p className="mt-1 text-body text-ink-muted">
-                {personal
-                  ? '番号は誰にも見えないよう ● で表示します。'
-                  : '番号は店長からお聞きください。'}
-              </p>
-            </>
+              <div className="mt-3.5">
+                <TryMeter remainingAttempts={remainingAttempts} />
+              </div>
+            </div>
           )}
-
-          <section
-            aria-label="この暗証番号の持ち主"
-            className={`mt-6 flex items-center gap-5 ${
-              failed || locked
-                ? 'py-2'
-                : 'rounded-panel border border-pine-line bg-pine-soft px-6 py-5'
-            }`}
-          >
+          {!invalid && <h1 className="text-title font-bold">4〜6桁の暗証番号を入力してください</h1>}
+          <p className="mt-1 text-body text-ink-muted">番号は誰にも見えないよう ● で表示します。</p>
+          <div className="mt-5 flex items-center gap-5 rounded-panel border border-pine-line bg-pine-soft px-5 py-4">
             <span
-              aria-hidden="true"
-              className={`grid size-14 shrink-0 place-items-center text-title font-bold text-on-pine ${
-                personal ? 'rounded-circle bg-pine' : 'rounded-ctl bg-walkin'
+              className={`grid size-14 place-items-center text-lead font-bold text-on-pine ${
+                kind === 'personal' ? 'rounded-circle bg-pine' : 'rounded-ctl bg-walkin'
               }`}
             >
-              {personal ? subject.name.slice(0, 1) : '▤'}
+              {kind === 'personal' ? title.slice(0, 1) : '▤'}
             </span>
-            <span>
-              <span className="block text-lead font-bold">{subject.name}</span>
-              <span className="mt-1 block text-grid text-ink-muted">{subject.note}</span>
-            </span>
-          </section>
-
-          <div className="mt-6">
+            <div>
+              <h2 className="text-lead font-bold">{title}</h2>
+              <p className="mt-1 text-note text-ink-muted">{detail}</p>
+            </div>
+          </div>
+          <div className="mt-7">
             <PinField
-              label={personal ? '暗証番号' : '店舗の暗証番号'}
-              filled={value.length}
-              invalid={failed && value.length === 0}
+              value={pin}
+              onChange={setPin}
+              onConfirm={() => !locked && onSubmit(pin)}
+              invalid={invalid}
             />
           </div>
-
-          {!personal && (
-            <dl className="mt-8.5 max-w-160">
-              {SHARED_GROUPS.map((group, index) => (
-                <div key={group.label} className={index === 0 ? '' : 'border-t border-line pt-4'}>
-                  <dt className="text-grid text-ink-muted">{group.label}</dt>
-                  <dd className="mt-1 pb-4">
-                    <ul aria-label={group.label} className="flex flex-wrap gap-6 text-body">
-                      {group.words.map((word) => (
-                        <li key={word}>{word}</li>
-                      ))}
-                    </ul>
-                  </dd>
-                </div>
-              ))}
-            </dl>
+          {invalid && (
+            <p className="mt-5 text-body font-semibold text-pine">店長に暗証番号の再設定を頼む</p>
           )}
-
-          {error !== null && (
-            <p role="status" className="mt-6 text-body text-danger">
-              {error}
-            </p>
+          {kind === 'shared' && (
+            <div className="mt-8 border-t border-line pt-5 text-body">
+              <p className="text-note font-semibold text-ink-muted">個人を選ばずにできる</p>
+              <p className="mt-1">予約を受ける　台帳を見る　ご来店を受け付ける</p>
+              <p className="mt-5 border-t border-line pt-5 text-note font-semibold text-ink-muted">
+                ご本人の確認が必要
+              </p>
+              <p className="mt-1">録音の保全　注意ごとの公開　設定の変更</p>
+            </div>
           )}
-          {notice !== null && (
-            <p role="status" className="mt-6 text-body text-ink-muted">
-              {notice}
-            </p>
-          )}
-
-          <div className="mt-10 flex gap-4">
-            {personal && failed && (
-              <button
-                type="button"
-                onClick={() =>
-                  setNotice('店長に、「設定 › スタッフ」から暗証番号を作り直してもらってください。')
-                }
-                className={`min-h-12 rounded-card bg-pine px-6 text-lead font-bold text-on-pine ${focusRing}`}
-              >
-                店長に暗証番号の再設定を頼む
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={onBack}
-              className={`min-h-12 rounded-card border border-line-strong bg-surface px-6 text-lead font-semibold ${focusRing}`}
-            >
-              {personal ? '別のスタッフを選ぶ' : '別の置き場所を選ぶ'}
-            </button>
-          </div>
-        </main>
-
-        <aside className="grid content-center justify-center border-l border-line bg-surface px-6 py-10">
+          <button
+            type="button"
+            onClick={onBack}
+            className="mt-auto min-h-12 self-start rounded-ctl border border-line-strong bg-surface px-5 font-semibold"
+          >
+            {kind === 'personal' ? '別のスタッフを選ぶ' : '別の置き場所を選ぶ'}
+          </button>
+        </section>
+        <aside className="grid w-105 shrink-0 content-center justify-center border-l border-line bg-surface px-6 py-10">
           <Keypad
-            value={value}
-            onChange={setValue}
-            onSubmit={() => {
-              void submit()
+            value={pin}
+            onChange={setPin}
+            onConfirm={() => {
+              if (!locked) onSubmit(pin)
             }}
-            {...(locked ? { blockedReason: `あと${lockSeconds}秒お待ちください` } : {})}
           />
         </aside>
-      </div>
+      </main>
     </div>
   )
 }

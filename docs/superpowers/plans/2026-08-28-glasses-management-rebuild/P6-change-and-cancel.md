@@ -11,7 +11,7 @@
 
 このフェーズが触るモックは 7 枚。実装前に **必ず Read で実際に見る**。
 
-| 画面ID | ルート | 実測（`docs/frontend/mockups/eyex/screens/*.html` の `<style>`） |
+| 画面ID | ルート | 実測（`docs/frontend/mockups/eye/screens/*.html` の `<style>`） |
 |---|---|---|
 | CHANGE-SEARCH | `/search` | `.split` 既定 `340px 1fr` |
 | EX-EMPTY-SEARCH | `/search`（0件） | `.split` `300px 1fr` |
@@ -430,8 +430,8 @@
 
 - **目的**: T-014 を緑にする。お名前・お電話番号・予約番号のどれからでも 1 件にたどり着く面と、
   0 件のときに「入力を捨てずに次の一手を出す」面を立てる。
-- **見るモック**: `docs/frontend/mockups/eyex/images/CHANGE-SEARCH.png` /
-  `docs/frontend/mockups/eyex/images/EX-EMPTY-SEARCH.png`（**Read で実際に見る**）
+- **見るモック**: `docs/frontend/mockups/eye/images/CHANGE-SEARCH.png` /
+  `docs/frontend/mockups/eye/images/EX-EMPTY-SEARCH.png`（**Read で実際に見る**）
 - **触るファイル**
   - `services/glasses_management/src/web/search/SearchPage.tsx`（新規）
   - `services/glasses_management/src/web/search/ReservationDetailPane.tsx`（新規）
@@ -614,7 +614,7 @@
 - **目的**: 承認された見た目からどれだけ離れているかを画素で測り、残っている差を数字と理由で記録に残す。
 - **触るファイル**
   - `services/glasses_management/e2e/mock-compare.spec.ts`（追記）
-  - `docs/frontend/mockups/eyex/reference/`（`node docs/frontend/mockups/eyex/reference.mjs` で作り直す）
+  - `docs/frontend/mockups/eye/reference/`（`node docs/frontend/mockups/eye/reference.mjs` で作り直す）
 - **やること**
   - `CHANGE-SEARCH` / `EX-EMPTY-SEARCH` / `CHANGE-DATETIME` / `CHANGE-DIFF` / `CHANGE-CANCEL` /
     `CHANGE-DONE` / `EX-CONFLICT` の 7 枚を

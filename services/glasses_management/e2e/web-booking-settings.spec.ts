@@ -1,6 +1,6 @@
 import type { APIRequestContext, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
-import { enterSharedWorkspace } from './terminal-start'
+import { completeSeededTerminalStart } from './support/terminal'
 
 /**
  * お客様向け Web 予約（011-web-booking）のうち、**お店側**の 8 本。
@@ -15,9 +15,9 @@ import { enterSharedWorkspace } from './terminal-start'
  * 承認済みモックとの突き合わせ（mock / mock-phone）はこの面より先に済んでいる。
  */
 
-const ORG = 'org-eyex-seed'
+const ORG = 'eye'
 const SLUG = 'ginza'
-/** seed.mjs が固定 id で入れる EYEX 銀座店。 */
+/** seed.mjs が固定 id で入れる EYE 銀座店。 */
 const GINZA = '11111111-1111-4111-8111-111111111111'
 const VIEWER = `dev:${ORG}`
 const MEMBERSHIP_ID = '0f0f0f0f-0f0f-4f0f-8f0f-0f0f0f0f0f0f'
@@ -34,8 +34,6 @@ const MANAGER_PERMISSIONS = [
   'customer.read',
   'customer.write',
   'settings.read',
-  // 分析は seed の盤面をそのまま読むので、配り直しでも `analytics.read` を落とさない。
-  'analytics.read',
   'settings.manage',
 ]
 
@@ -183,7 +181,7 @@ async function bookAsCustomer(
 }
 
 /**
- * その枠に付けられる担当を 1 人引く。**誰でもよいわけではない** —— 銀座店の 6 名は
+ * その枠に付けられる担当を 1 人引く。**誰でもよいわけではない** —— 銀座店の 7 名は
  * 曜日ごとに勤務が違い、その日休みの担当へ移すと 409 `purpose_unavailable` で断られる。
  * 誰が空いているかは業務側の空き枠エンジンが知っているので、それを読む。
  */
@@ -213,8 +211,8 @@ async function startWork(page: Page): Promise<void> {
   await page.goto('/')
   await page.getByLabel('お店のコード').fill(ORG)
   await page.getByRole('button', { name: '業務を始める' }).click()
-  await enterSharedWorkspace(page)
-  await expect(page.locator('header').first()).toContainText('EYEX 銀座店')
+  await completeSeededTerminalStart(page)
+  await expect(page.locator('header').first()).toContainText('EYE 銀座店')
 }
 
 async function openWebSettings(page: Page): Promise<void> {
@@ -248,7 +246,7 @@ test('店長は Web 予約を公開するかどうかと、お客様へのお知
   const toggle = page.getByRole('switch', { name: 'Web予約を公開する' })
   await expect(toggle).toHaveAttribute('aria-checked', 'true')
   // ご案内のページは `stores.slug` から組み立てる（表に持たない）。
-  await expect(page.getByText(`eyex.jp/${SLUG}`)).toBeVisible()
+  await expect(page.getByText(`eye.jp/${SLUG}`)).toBeVisible()
 
   await page.getByRole('button', { name: '書き直す' }).click()
   const notice = '棚卸しのため、9月30日はお休みをいただきます。'
@@ -273,7 +271,7 @@ test('保存する前に「お客様の画面の見え方」で、社内の言�
   await openWebSettings(page)
 
   const seen = preview(page)
-  await expect(seen).toContainText('EYEX 銀座店（銀座4丁目）　ご予約')
+  await expect(seen).toContainText('EYE 銀座店（銀座4丁目）　ご予約')
   for (const publicName of [
     '新しいメガネを作る',
     'かけ具合の調整',
@@ -369,9 +367,8 @@ test('店長は受付を開始する何時間先からと、何日先まで受�
 
   /*
    * 10 日先までは枠が返り、11 日先からは 1 つも選べない。
-   * **seed の勤務は 2026年8月27日 から 35 日ぶんしか無い**ので、それより先を見ても
-   * 「受付の窓の外だから空いていない」のか「勤務が無いから空いていない」のか分からない。
-   * 窓を縮めて、勤務のある範囲の中だけで境目を見る。
+   * E2Eは注入した実行日から45日分の勤務を使い捨てD1に展開する。
+   * 受付窓の境目だけを見るため、窓を10日へ縮めて11日目と比べる。
    */
   const today = jstDay()
   const inside = await request.get(`/api/public/stores/${SLUG}/availability`, {
@@ -544,6 +541,7 @@ test('台帳の「確認待ち」からその 1 件を確定すると、確認�
 
   // 読み込み直すと器はトップへ戻るので、台帳をもう一度開いてから数え直す。
   await page.reload()
+  await completeSeededTerminalStart(page)
   await page
     .getByRole('navigation', { name: '画面の切り替え' })
     .getByRole('button', { name: '予約台帳', exact: true })

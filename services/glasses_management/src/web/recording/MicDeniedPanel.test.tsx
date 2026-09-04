@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { MicDeniedPanel } from './MicDeniedPanel'
 
 /*
- * マイクが使えない面（承認済みモック docs/frontend/mockups/eyex/images/EX-MIC-DENIED.png）。
+ * マイクが使えない面（承認済みモック docs/frontend/mockups/eye/images/EX-MIC-DENIED.png）。
  *
  * この面の仕事は「できないことを 1 つに絞って言い切り、次の一手をボタンで出す」こと。
  * お客様を待たせたまま読む面なので、失われていないものを先に言う。
@@ -62,7 +62,7 @@ describe('MicDeniedPanel', () => {
     // 丸番号は装飾（aria-hidden）で、読み上げには並びの順序だけが届く。
     expect(steps.map((step) => step.textContent)).toEqual([
       '1ホーム画面の「設定」を開く',
-      '2一覧から「EYEX予約」を選ぶ',
+      '2一覧から「EYE予約」を選ぶ',
       '3「マイク」をオンにする',
     ])
   })

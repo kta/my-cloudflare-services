@@ -4,12 +4,12 @@ import type { ReactNode } from 'react'
 import { dateLabel, jstClock } from '../ledger/metrics'
 
 /*
- * 工程 6 完了（承認済みモック docs/frontend/mockups/eyex/images/WEB-06-DONE.png）。
+ * 工程 6 完了（承認済みモック docs/frontend/mockups/eye/images/WEB-06-DONE.png）。
  *
  * この面の仕事は「番号を主役にし、戻り道を消し、メールが出なかった日でもお客様が
  * 自分の予約へ戻れるようにする」こと。
  *
- * 実測値（screens/WEB-06-DONE.html と assets/eyex.css）:
+ * 実測値（screens/WEB-06-DONE.html と assets/eye.css）:
  *   上のバーは `‹` を持たない（`⌂` も無い）。本文の余白 32px 28px 140px。
  *   ✓ の丸は 56×56px・地 `--color-pine`・文字 28px 太字・下に 12px。
  *   見出し 20px、副文 13px `--color-ink-muted`（上に 6px）。

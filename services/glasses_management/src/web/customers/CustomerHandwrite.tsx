@@ -4,14 +4,14 @@ import { acceptSheet, HANDWRITING_MAX_SHEETS, sanitizeSvg } from '../../worker/d
 import { Handwriting } from '../booking/Handwriting'
 
 /*
- * 手書きメモ（承認済みモック docs/frontend/mockups/eyex/images/CUSTOMER-HANDWRITE.png）。
+ * 手書きメモ（承認済みモック docs/frontend/mockups/eye/images/CUSTOMER-HANDWRITE.png）。
  *
  * 題材: 測定中に書いた紙のメモを、言い換えずにそのまま台帳へ置く面。
  * トークン計画: 左はサムネの柱（`--color-surface-2` の地）、右は白い用紙 1 枚。
  *   読み取った文字の欄は用紙の**下**に置き、2px の緑枠で「ここは直せる」と示す。
  * シグネチャ: 筆跡がいちばん大きく、読み取った文字がその下に従うこと（逆にしない）。
  *
- * 実測（screens/CUSTOMER-HANDWRITE.html の <style> と assets/eyex.css）:
+ * 実測（screens/CUSTOMER-HANDWRITE.html の <style> と assets/eye.css）:
  *   本文 2 列 260px / 1fr。左は padding 28px 20px。
  *   サムネは 1px の line-strong・角 8px・SVG の高さ 118px、下の帯は surface-2・padding 10px 12px
  *   （日付 14px/600 ＋ 店舗と記入者 13px）。サムネ間は margin-top 18px。選択中は 3px の緑枠。
@@ -384,7 +384,6 @@ export function CustomerHandwrite({
                 </label>
                 <textarea
                   id="handwrite-body"
-                  autoComplete="off"
                   value={draft}
                   onChange={(event) => setDraft(event.target.value)}
                   className={cn(

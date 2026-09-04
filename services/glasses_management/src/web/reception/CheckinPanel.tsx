@@ -7,12 +7,12 @@ import { jstClock } from '../ledger/metrics'
 import { VisitBadge } from '../ledger/Timetable'
 
 /*
- * ご来店の受け付け（承認済みモック docs/frontend/mockups/eyex/images/RECEPTION-CHECKIN.png）。
+ * ご来店の受け付け（承認済みモック docs/frontend/mockups/eye/images/RECEPTION-CHECKIN.png）。
  *
  * 題材: お客様が目の前に立っている 20 秒で、名前と伝え忘れやすいことを確かめて受け付ける面。
  * シグネチャ: **左に確かめること、右に前回のご来店。確かめ終えなくても受け付けられること。**
  *
- * 実測（screens/RECEPTION-CHECKIN.html の <style> と assets/eyex.css）:
+ * 実測（screens/RECEPTION-CHECKIN.html の <style> と assets/eye.css）:
  *   .chk  = 1fr 320px／.main padding 28px 32px・段の間 24px
  *   .side = 左罫 1px --line・地は白・padding 28px 24px／dt 13px（上に 20px）・dd 16px/600
  *   見出しの 1 行 = 13px --brand-dark・下に 10px
@@ -67,6 +67,7 @@ export type CheckinPanelProps = {
   onBack: () => void
   onReceive: (stage: 'received' | 'waiting', note: string) => void
   busy?: boolean
+  isOffline?: boolean
 }
 
 /** 「11:00 のご予約　5分早くお着きです」。ちょうどのときは差を出さない。 */
@@ -99,6 +100,7 @@ export function CheckinPanel({
   onBack,
   onReceive,
   busy = false,
+  isOffline = false,
 }: CheckinPanelProps) {
   const [done, setDone] = useState<ReadonlySet<string>>(() => new Set())
   const headingRef = useRef<HTMLHeadingElement>(null)
@@ -267,7 +269,7 @@ export function CheckinPanel({
           <div className="flex items-center gap-3">
             <button
               type="button"
-              disabled={subject.isReceived || busy}
+              disabled={subject.isReceived || busy || isOffline}
               onClick={() => onReceive('received', checkinNote(lines, done))}
               className={cn(
                 'min-h-14 min-w-70 rounded-ctl bg-pine px-6 text-bar font-bold text-on-pine',
@@ -279,7 +281,7 @@ export function CheckinPanel({
             </button>
             <button
               type="button"
-              disabled={busy}
+              disabled={busy || isOffline}
               onClick={() => onReceive('waiting', checkinNote(lines, done))}
               className={cn(
                 'min-h-12 rounded-ctl border border-line-strong bg-surface px-4.5 text-body font-semibold text-ink',

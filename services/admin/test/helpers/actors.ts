@@ -1,7 +1,7 @@
 import { SELF } from 'cloudflare:test'
 
 /**
- * UC-EYEX-149 / UC-EYEX-151 のテスト用アクター生成。テナント org と、その org の
+ * UC-EYE-149 / UC-EYE-151 のテスト用アクター生成。テナント org と、その org の
  * admin / staff を招待経由で実在させる(dev グラントは users 行を作らないため、
  * 監査の actor / 対象として使えない)。
  */
@@ -20,7 +20,7 @@ async function operatorToken(): Promise<string> {
   return ((await res.json()) as { token: string }).token
 }
 
-export async function createTenantOrganization(name = 'EYEX Chain'): Promise<string> {
+export async function createTenantOrganization(name = 'EYE Chain'): Promise<string> {
   const op = await operatorToken()
   const res = await SELF.fetch(`${BASE}/api/organizations`, {
     method: 'POST',

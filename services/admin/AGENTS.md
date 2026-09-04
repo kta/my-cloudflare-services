@@ -9,11 +9,11 @@ adminは運営コンソールであり、次の唯一の源泉である。
 - organization、plan、disabled状態
 - user、role、invitation
 - login、access token、refresh token rotation/revocation、rate limit
-- 標準ロール（head_office_admin / store_manager / staff）と担当店舗の割り当て、およびその結果の store membership 同期（UC-EYEX-149）
-- 個人PINの設定・変更と、本人確認記録付きのPIN再設定チケット（UC-EYEX-151）。adminはPINを閲覧・設定できない
+- 標準ロール（head_office_admin / store_manager / staff）と担当店舗の割り当て、およびその結果の store membership 同期（UC-EYE-149）
+- 個人PINの設定・変更と、本人確認記録付きのPIN再設定チケット（UC-EYE-151）。adminはPINを閲覧・設定できない
 - domain serviceへのorganization同期と日次reconciliation
 
-React SPAとHono APIを1 Workerで配信し、admin専用D1と `AUTH_RL` KVを所有する。Cloudflare には admin をデプロイし、EYEX の `glasses-management` へ組織スナップショットと認証プロキシを service binding で提供する。
+React SPAとHono APIを1 Workerで配信し、admin専用D1と `AUTH_RL` KVを所有する。Cloudflare には admin をデプロイし、EYE の `glasses-management` へ組織スナップショットと認証プロキシを service binding で提供する。
 
 ## 構成と入口
 

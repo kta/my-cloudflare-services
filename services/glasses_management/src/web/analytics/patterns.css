@@ -1,30 +1,18 @@
 /*
- * 地模様（P9 T-013）。**色を持たない** —— 塗りは `currentColor` で受け、
- * 色はトークンのユーティリティ（text-pine / text-danger / text-web）で当てる。
- *
- * 状態や系列を色だけで伝えないための最後の一手で、凡例と棒の両方に同じクラスを当てる。
- * ここに置くのは 3 クラスだけ（塗りつぶし・斜線・点）。
+ * 系列の見分けは色だけに頼らない。色は親要素の text-* トークン、白地は surface
+ * トークンから受けるので、モックの生値や任意色を足さない。
  */
-
-.pattern-solid {
-  background-color: currentColor;
-}
-
-/* 45° の 2px 斜線・6px 間隔。 */
-.pattern-hatch {
-  background-color: color-mix(in srgb, currentColor 22%, transparent);
+.analytics-pattern-hatch {
   background-image: repeating-linear-gradient(
     45deg,
-    currentColor 0,
-    currentColor 2px,
-    transparent 2px,
-    transparent 6px
+    transparent 0,
+    transparent 4px,
+    color-mix(in srgb, currentColor 42%, var(--color-surface)) 4px,
+    color-mix(in srgb, currentColor 42%, var(--color-surface)) 6px
   );
 }
 
-/* 2px の点・4px 間隔。 */
-.pattern-dot {
-  background-color: color-mix(in srgb, currentColor 16%, transparent);
-  background-image: radial-gradient(currentColor 1px, transparent 1px);
+.analytics-pattern-dot {
+  background-image: radial-gradient(var(--color-surface) 1px, transparent 1px);
   background-size: 4px 4px;
 }

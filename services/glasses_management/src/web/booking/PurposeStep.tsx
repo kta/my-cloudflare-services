@@ -14,12 +14,12 @@ import type { StepGuard } from './steps'
 
 /*
  * 工程 2「ご来店の目的」（承認済みモック
- * docs/frontend/mockups/eyex/images/BOOK-02-PURPOSE.png と BOOK-02b-PURPOSE-CONFLICT.png）。
+ * docs/frontend/mockups/eye/images/BOOK-02-PURPOSE.png と BOOK-02b-PURPOSE-CONFLICT.png）。
  *
  * 目的を押すだけで所要時間が決まり、先に伺った時刻にその所要が収まるかを同じ面で確かめる。
  * **収まらなくても工程は戻さない。**理由を 1 文で言い、代わりの時刻を同じ面に 3 つまで出す。
  *
- * 実測（screens/BOOK-02*.html の <style> と assets/eyex.css）:
+ * 実測（screens/BOOK-02*.html の <style> と assets/eye.css）:
  *   目的の札は 3 列・間 12px・最小高 96px・角 12px、題 17px/600、所要 13px、
  *   「✓ 選んでいます」12px/600（--brand-dark）。選ぶと 3px の緑罫 + --brand-tint
  *   「お取りする時間」は 4 列・間 14px・最小高 64px（45分 短め / 60分 標準 / 75分 ゆっくり / 90分 じっくり）

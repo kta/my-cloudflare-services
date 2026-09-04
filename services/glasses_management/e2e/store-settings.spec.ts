@@ -1,10 +1,10 @@
 import type { APIRequestContext, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
-import { enterSharedWorkspace } from './terminal-start'
+import { completeSeededTerminalStart } from './support/terminal'
 
 /**
  * 店舗の受付条件（004-store-settings）の受け入れ基準を、実ブラウザと実 Worker で確かめる。
- * `vite preview` が実 workerd を動かし、D1 は `seed.mjs` が入れた EYEX 銀座店の盤面である。
+ * `vite preview` が実 workerd を動かし、D1 は `seed.mjs` が入れた EYE 銀座店の盤面である。
  *
  * 1 本の test の直前の行に `// @e2e-covers <ID> ...` を置く。UC は対になる AC の test に
  * 相乗りさせ、36 件（UC-SET-01..14 / AC-SET-01..22）をちょうど 1 回ずつ並べる。
@@ -14,8 +14,8 @@ import { enterSharedWorkspace } from './terminal-start'
  * この面より先に走る（playwright.config.ts の project の並び）。
  */
 
-const ORG = 'org-eyex-seed'
-/** seed.mjs が固定 id で入れる EYEX 銀座店。 */
+const ORG = 'eye'
+/** seed.mjs が固定 id で入れる EYE 銀座店。 */
 const GINZA = '11111111-1111-4111-8111-111111111111'
 /** dev グラントが載せる `sub`。担当店舗の `userId` はこれに合わせる。 */
 const VIEWER = `dev:${ORG}`
@@ -36,8 +36,6 @@ const MANAGER_PERMISSIONS = [
   'customer.read',
   'customer.write',
   'settings.read',
-  // 分析は seed の盤面をそのまま読むので、配り直しでも `analytics.read` を落とさない。
-  'analytics.read',
   'settings.manage',
 ]
 /** スタッフ（設定は見るだけ）。AC-SET-17 が使う。 */
@@ -87,8 +85,8 @@ async function startWork(page: Page): Promise<void> {
   await page.goto('/')
   await page.getByLabel('お店のコード').fill(ORG)
   await page.getByRole('button', { name: '業務を始める' }).click()
-  await enterSharedWorkspace(page)
-  await expect(page.locator('header').first()).toContainText('EYEX 銀座店')
+  await completeSeededTerminalStart(page)
+  await expect(page.locator('header').first()).toContainText('EYE 銀座店')
 }
 
 function sectionNav(page: Page) {
@@ -150,14 +148,14 @@ test('設定を開くと店舗の情報が出て、お店の基本と行き方�
   )
   await expect(page.getByText('お店の基本')).toBeVisible()
   await expect(page.getByText('行き方のご案内')).toBeVisible()
-  await expect(page.getByLabel('店名', { exact: true })).toHaveValue('EYEX 銀座店')
-  await expect(page.getByLabel('お客様に見せる店名')).toHaveValue('EYEX 銀座店（銀座4丁目）')
+  await expect(page.getByLabel('店名', { exact: true })).toHaveValue('EYE 銀座店')
+  await expect(page.getByLabel('お客様に見せる店名')).toHaveValue('EYE 銀座店（銀座4丁目）')
   await expect(page.getByLabel('電話番号')).toHaveValue('03-3571-0001')
   await expect(page.getByLabel('最寄り駅')).toHaveValue('東京メトロ 銀座駅')
   await expect(page.getByLabel('出口と所要時間')).toHaveValue('A1出口から徒歩3分')
   await expect(page.getByLabel('駐車場')).toHaveValue('提携駐車場はありません')
-  // 第2サイドバーはモックの 14 項目ではなく 8 項目だけを出す（P1 の決め #1）。
-  // 6 項目だったところへ P8 が「Web予約の公開」を、P10 が「端末」を足して 8 項目になった。
+  // 第2サイドバーはモックの 14 項目ではなく、実装済みの項目だけを出す（P1 の決め #1）。
+  // P8 の「Web予約の公開」に続き、P10 が「端末」を足して 8 項目になった。
   await expect(sectionNav(page).getByRole('button')).toHaveCount(8)
 })
 
@@ -171,7 +169,7 @@ test('店名と住所を直すと未保存の変更 2件になり、保存する
   const before = { name: await name.inputValue(), address: await address.inputValue() }
 
   await expect(saveButton(page)).toBeDisabled()
-  await name.fill('EYEX 銀座本店')
+  await name.fill('EYE 銀座本店')
   await address.fill('東京都中央区銀座4-1-2')
 
   await expect(unsavedBadge(page)).toHaveText('未保存の変更 2件')
@@ -180,7 +178,7 @@ test('店名と住所を直すと未保存の変更 2件になり、保存する
   await expect(page.getByText('保存しました')).toHaveCount(1)
 
   await reopenSection(page, '店舗の情報', '営業日')
-  await expect(page.getByLabel('店名', { exact: true })).toHaveValue('EYEX 銀座本店')
+  await expect(page.getByLabel('店名', { exact: true })).toHaveValue('EYE 銀座本店')
 
   // 盤面を seed のままへ戻す。
   await page.getByLabel('店名', { exact: true }).fill(before.name)
@@ -366,7 +364,7 @@ test('臨時のお休みをもう一度押して保存すると営業日へ戻�
 // @e2e-covers UC-SET-07 AC-SET-10
 test('スタッフを選ぶと右がその人の設定になり、持っている技能に ✓ が付く', async ({ page }) => {
   await openSettings(page, 'スタッフと技能')
-  await expect(page.getByText('スタッフ　6名')).toBeVisible()
+  await expect(page.getByText('スタッフ　7名')).toBeVisible()
 
   const list = page.getByRole('list', { name: 'スタッフ' })
   await expect(list.getByRole('listitem').nth(5)).toContainText('山田 大輔')
@@ -600,12 +598,7 @@ test('スタッフの権限で保存すると、店長だけができると断�
     await expect(page.getByRole('heading', { name: 'この操作は店長だけができます' })).toBeVisible()
     await expect(
       page.getByText(
-        /*
-         * P10 から、その場に店長がいる端末では 403 のその場に EX-PERMISSION の壁が出る
-         * （`PermissionWall`）。断り文の最後の一句は面ごとの名前ではなく
-         * 「設定はまだ何も変わっていません。」で揃えてある。
-         */
-        '営業時間を変えられるのは 店長 だけです。中村 彩（スタッフ）の権限では保存できません。設定はまだ何も変わっていません。',
+        '営業時間を変えられるのは 店長 だけです。中村 彩（スタッフ）の権限では保存できません。営業時間はまだ何も変わっていません。',
       ),
     ).toBeVisible()
     await expect(page.getByText('下書きは残っています')).toBeVisible()
@@ -617,7 +610,7 @@ test('スタッフの権限で保存すると、店長だけができると断�
     await expect(page.getByRole('button', { name: /店長に依頼/ })).toHaveCount(0)
   } finally {
     await grant(request, MANAGER_PERMISSIONS)
-    await patch('user-eyex-nakamura')
+    await patch('user-eye-nakamura')
   }
 })
 
@@ -648,7 +641,7 @@ test('いま使えるの切り替えは入切を持つ操作で、状態が字�
 // @e2e-covers AC-SET-19
 test('件数の変化は割り込まない知らせとして伝わり、警告にはしない', async ({ page }) => {
   await openSettings(page, '店舗の情報')
-  await page.getByLabel('店名', { exact: true }).fill('EYEX 銀座店（下書き）')
+  await page.getByLabel('店名', { exact: true }).fill('EYE 銀座店（下書き）')
 
   await expect(page.getByRole('status').filter({ hasText: '未保存の変更 1件' })).toBeVisible()
   // 接客中の読み上げを断ち切る警告（role="alert"）にはしない。
@@ -664,9 +657,9 @@ test('件数の変化は割り込まない知らせとして伝わり、警告�
  */
 
 // @e2e-covers UC-SET-12 AC-SET-20
-test('スタッフを足すと 7名になり、いま使えるを切っても行は消えない', async ({ page }) => {
+test('スタッフを足すと 8名になり、いま使えるを切っても行は消えない', async ({ page }) => {
   await openSettings(page, 'スタッフと技能')
-  await expect(page.getByText('スタッフ　6名')).toBeVisible()
+  await expect(page.getByText('スタッフ　7名')).toBeVisible()
 
   await page.getByRole('button', { name: '＋ スタッフを足す' }).click()
   const form = page.getByRole('form', { name: 'スタッフを足す' })
@@ -676,7 +669,7 @@ test('スタッフを足すと 7名になり、いま使えるを切っても行
   await form.getByRole('button', { name: '販売・受付', exact: true }).click()
   await form.getByRole('button', { name: 'このスタッフを足す' }).click()
 
-  await expect(page.getByText('スタッフ　7名')).toBeVisible()
+  await expect(page.getByText('スタッフ　8名')).toBeVisible()
   const list = page.getByRole('list', { name: 'スタッフ' })
   const row = list.getByRole('listitem').filter({ hasText: '木村 涼' })
   await expect(row).toContainText('販売・受付')
@@ -685,7 +678,7 @@ test('スタッフを足すと 7名になり、いま使えるを切っても行
   await page.getByRole('switch', { name: /いま使える/ }).click()
   await save(page)
   // 退職した人の行は消さずに残す。過去のご予約から名前が消えないため。
-  await expect(page.getByText('スタッフ　7名')).toBeVisible()
+  await expect(page.getByText('スタッフ　8名')).toBeVisible()
   await expect(row).toBeVisible()
 })
 

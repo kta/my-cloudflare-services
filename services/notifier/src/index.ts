@@ -48,7 +48,7 @@ async function dedupeKey(job: NotificationJobValue): Promise<string> {
     'SHA-256',
     new TextEncoder().encode(JSON.stringify({ organizationId: job.organizationId, id: job.id })),
   )
-  return `eyex:${[...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')}`
+  return `eye:${[...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')}`
 }
 
 function canonicalize(value: unknown): unknown {
@@ -112,18 +112,18 @@ function payloadFor(job: NotificationJobValue) {
 }
 
 function subjectFor(job: NotificationJobValue): string {
-  if (job.type === 'reservation.confirmed') return 'EYEX ご予約完了のお知らせ'
+  if (job.type === 'reservation.confirmed') return 'EYE ご予約完了のお知らせ'
   if (job.type === 'reservation.management_code_issued') {
-    return 'EYEX 予約管理コードのお知らせ'
+    return 'EYE 予約管理コードのお知らせ'
   }
-  return 'EYEX 予約管理コード再発行のお知らせ'
+  return 'EYE 予約管理コード再発行のお知らせ'
 }
 
 function messageFor(job: NotificationJobValue, from: string): MailMessage {
   const payload = payloadFor(job)
   const reservationLabel = payload.reservationNumber ?? payload.reservationId
   const lines = [
-    'EYEXをご利用いただきありがとうございます。',
+    'EYEをご利用いただきありがとうございます。',
     '',
     `予約番号: ${reservationLabel}`,
     ...(payload.storeName ? [`店舗: ${payload.storeName}`] : []),
@@ -203,7 +203,7 @@ export async function deliverNotification(
         authorization: `Bearer ${apiKey}`,
         'content-type': 'application/json',
         'idempotency-key': key,
-        'user-agent': 'eyex-notifier/1.0',
+        'user-agent': 'eye-notifier/1.0',
       },
       body: JSON.stringify(message),
     })

@@ -14,9 +14,9 @@ import { emptyDraft, nextButtonLabel, type StepGuard } from './steps'
 
 /*
  * 工程 1「お日にちとお時間」（承認済みモック
- * docs/frontend/mockups/eyex/images/BOOK-01-DATETIME.png）。
+ * docs/frontend/mockups/eye/images/BOOK-01-DATETIME.png）。
  *
- * 実測（screens/BOOK-01-DATETIME.html の <style> と assets/eyex.css）:
+ * 実測（screens/BOOK-01-DATETIME.html の <style> と assets/eye.css）:
  *   本文 1fr ／ 右の要約 372px、本文の余白 36px 44px・要約 36px 28px、境目に 1px の罫
  *   暦は 7 列・間 8px、日の札は最小高 58px・角 8px・18px/600、曜日見出し 12px、「定休」10px
  *   時刻の札は 4 列・間 14px、最小高 72px・角 12px・19px/600、補足 11px
@@ -36,7 +36,12 @@ function at(clock: string, date: LocalDate = DATE): string {
   return new Date(Date.parse(`${date}T${clock}:00.000Z`) - 9 * 60 * 60 * 1000).toISOString()
 }
 
-function slot(clock: string, remaining: number, date: LocalDate = DATE): AvailabilitySlot {
+function slot(
+  clock: string,
+  remaining: number,
+  date: LocalDate = DATE,
+  reason: AvailabilitySlot['reason'] = null,
+): AvailabilitySlot {
   const hours = Number(clock.slice(0, 2))
   const minutes = Number(clock.slice(3, 5))
   const end = `${String(hours + (minutes === 30 ? 1 : 0)).padStart(2, '0')}:${minutes === 30 ? '00' : '30'}`
@@ -47,7 +52,7 @@ function slot(clock: string, remaining: number, date: LocalDate = DATE): Availab
     isAvailable: remaining > 0,
     staffIds: [],
     equipmentIds: [],
-    reason: remaining > 0 ? null : 'staff_busy',
+    reason: remaining > 0 ? null : (reason ?? 'staff_busy'),
   }
 }
 
@@ -130,8 +135,14 @@ afterEach(() => {
 
 const availabilityCalls = () => asked.filter((url) => url.pathname === '/api/staff/availability')
 
-function Harness() {
-  const [draft, setDraft] = useState<ReceptionSessionDraft>(emptyDraft())
+function Harness({
+  now = NOW,
+  draft: initialDraft,
+}: {
+  now?: string
+  draft?: ReceptionSessionDraft
+} = {}) {
+  const [draft, setDraft] = useState<ReceptionSessionDraft>(initialDraft ?? emptyDraft())
   const [guard, setGuard] = useState<StepGuard>({
     canProceed: false,
     blockedReason: 'まだ伺っていません',
@@ -141,7 +152,7 @@ function Harness() {
     <div className="flex">
       <DateTimeStep
         storeId={STORE_ID}
-        now={NOW}
+        now={now}
         receptionSessionId={SESSION_ID}
         draft={draft}
         onDraftChange={setDraft}
@@ -158,10 +169,20 @@ async function openStep() {
 }
 
 describe('工程 1', () => {
-  it('日付も時刻も選んでいないと「次へ進む」が押せず、理由が読み上げで分かる', async () => {
+  it('時刻を選んでいないと「次へ進む」が押せず、理由が読み上げで分かる', async () => {
+    // 日付は本日が既に選ばれているので（UI-06）、足りないのは時刻だけである。
     await openStep()
     expect(
-      screen.getByRole('button', { name: '次へ進む　お日にちとお時間をお選びになると進めます' }),
+      await screen.findByRole('button', { name: '次へ進む　お時間をお選びになると進めます' }),
+    ).toBeDisabled()
+  })
+
+  it('本日が定休で日付も選べていないときは、両方が足りないと言う', async () => {
+    render(<Harness now="2026-09-01T02:08:00.000Z" />)
+    expect(
+      await screen.findByRole('button', {
+        name: '次へ進む　お日にちとお時間をお選びになると進めます',
+      }),
     ).toBeDisabled()
   })
 
@@ -172,12 +193,35 @@ describe('工程 1', () => {
     expect(closed).toHaveTextContent('定休')
   })
 
-  it('埋まっている時刻の札に「満席」と書いてあり、押せない', async () => {
+  it('先約で埋まっている時刻の札に「満席」と書いてあり、押せない', async () => {
     await openStep()
     await userEvent.click(screen.getByRole('button', { name: '8月27日（木）　本日' }))
     const full = await screen.findByRole('button', { name: '11:30　満席' })
     expect(full).toBeDisabled()
     expect(full).toHaveTextContent('満席')
+  })
+
+  /*
+   * 受け付けられない理由を「満席」に丸めると、アルバイトはそれをそのまま読み上げ、
+   * 休憩の時間を「満席です」とお客様に伝えることになる（UX 監査 BOOK-06）。
+   * 事実と違うことを画面に書かない。
+   */
+  it.each([
+    ['break', '休憩'],
+    ['outside_hours', '時間外'],
+    ['closed', 'お休み'],
+    ['maintenance', '点検'],
+    ['no_skill', '受けられません'],
+  ] as const)('受け付けられない理由が %s の札は「満席」と書かない', async (reason, label) => {
+    serve = async (url) => {
+      if (url.pathname.endsWith('/business-hours')) return json(HOURS)
+      return json(availability(DATE, [slot('10:00', 2), slot('11:30', 0, DATE, reason)]))
+    }
+    await openStep()
+    await userEvent.click(screen.getByRole('button', { name: '8月27日（木）　本日' }))
+    const card = await screen.findByRole('button', { name: `11:30　${label}` })
+    expect(card).toBeDisabled()
+    expect(card).not.toHaveTextContent('満席')
   })
 
   it('空いている時刻の札に残り枠数（あと2枠）が出る', async () => {
@@ -227,8 +271,13 @@ describe('工程 1', () => {
     expect(screen.queryByText(/あと\d+枠/)).toBeNull()
   })
 
-  it('時刻の札は 1 画面 8 枚まで。残りは「ほかの時刻も見る」で開く', async () => {
-    // サーバは営業時間ぶんの格子を全部返す（10:00–14:30 の 10 枠）。
+  /*
+   * 以前は 1 画面 8 枚に切って残りを折りたたんでいた。
+   * その 8 枚に入らないのは営業時間の後ろ半分、つまり **午後と夕方**で、
+   * 電話口で読み上げるとき一番埋めたい時間帯を一度も案内しないことになる（UX 監査 BOOK-05）。
+   * サーバが返した枠は全部出し、入りきらないぶんは縦に流す。
+   */
+  it('サーバが返した時刻の札を、折りたたまずに全部出す', async () => {
     serve = async (url) => {
       if (url.pathname.endsWith('/business-hours')) return json(HOURS)
       return json(availability(DATE, [...MOCK_SLOTS(DATE), slot('15:00', 2), slot('15:30', 1)]))
@@ -236,12 +285,10 @@ describe('工程 1', () => {
     await openStep()
     await userEvent.click(screen.getByRole('button', { name: '8月27日（木）　本日' }))
     await screen.findByRole('button', { name: '10:00　あと2枠' })
-    expect(screen.queryByRole('button', { name: '15:00　あと2枠' })).not.toBeInTheDocument()
-
-    const more = screen.getByRole('button', { name: 'ほかの時刻も見る（あと2件）' })
-    expect(more.className).toContain('min-h-12')
-    await userEvent.click(more)
+    // 9 枚目・10 枚目（夕方）も最初から見えている。
     expect(screen.getByRole('button', { name: '15:00　あと2枠' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '15:30　あと1枠' })).toBeInTheDocument()
+    // 折りたたみのボタンそのものが無い。
     expect(screen.queryByRole('button', { name: /^ほかの時刻も見る/ })).not.toBeInTheDocument()
   })
 
@@ -289,5 +336,46 @@ describe('工程 1', () => {
       await screen.findByText('受け付けられる時刻を読み込めませんでした。'),
     ).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'もう一度読み込む' })).toBeInTheDocument()
+  })
+})
+
+/*
+ * 工程 1 は本日を選んだ姿で開く。
+ *
+ * 以前は日付も時刻も選ばれておらず、時刻の札が 0 枚のまま
+ * 「お日にちをお選びください。受け付けられる時刻をお出しします。」だけが出ていた
+ * （UX 監査 UI-06 / UI-09 と同じ「既定値を置かない」癖）。
+ * 承認済みモック BOOK-01-DATETIME.png は 27（本日）を選んだ姿で描かれている。
+ * 電話を受けた人がいちばん先に見たいのは今日の空きなので、その 1 タップを省く。
+ */
+describe('開いた瞬間の日付', () => {
+  it('本日が選ばれた姿で開き、その日の時刻の札が出る', async () => {
+    await openStep()
+    // 営業日が届いてから選ぶので、1 描画ぶん待つ。
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '8月27日（木）　本日' })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      ),
+    )
+    expect(await screen.findByRole('button', { name: /^11:30/ })).toBeInTheDocument()
+  })
+
+  it('本日が定休日なら選ばない（押せない日を選んだ姿にしない）', async () => {
+    // 2026-09-01 は火曜（定休）。
+    render(<Harness now="2026-09-01T02:08:00.000Z" />)
+    const closed = await screen.findByRole('button', { name: '9月1日（火）　定休' })
+    expect(closed).toBeDisabled()
+    // 営業日が届いてから選ぶので、押せない札が一瞬でも選ばれた姿にならない。
+    await waitFor(() => expect(closed).not.toHaveAttribute('aria-pressed', 'true'))
+    expect(screen.queryByRole('button', { name: /^\d{1,2}:\d{2}/ })).toBeNull()
+  })
+
+  it('途中まで入れた下書きがあれば、その日を優先する（本日で上書きしない）', async () => {
+    render(<Harness draft={{ ...emptyDraft(), startsAt: at('11:00', '2026-08-28') }} />)
+    expect(await screen.findByRole('button', { name: '8月28日（金）' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
   })
 })

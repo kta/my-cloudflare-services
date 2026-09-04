@@ -3,7 +3,7 @@
 - spec: [`specs/glasses_management/features/003-service-foundation/spec.md`](../../../../specs/glasses_management/features/003-service-foundation/spec.md)
 - 依存: なし
 - 状態: **完了**（2026-08-28）
-- 目的: `services/example_service` の雛形から EYEX予約を起こし、業務画面の器が立ち、
+- 目的: `services/example_service` の雛形から EYE予約を起こし、業務画面の器が立ち、
   admin から届く組織・担当店舗を受け取り、テナントの外へ一切漏れない状態にする。
 
 > このファイルは、以降のフェーズの TODO の**書き方の手本**でもある。
@@ -120,11 +120,11 @@
 
 ## T-007 デザイントークンを書き直す（Green）
 
-- **目的**: 見た目の意味の正本を、承認済みモック `eyex` の値へ合わせる。
+- **目的**: 見た目の意味の正本を、承認済みモック `eye` の値へ合わせる。
 - **触るファイル**: `packages/ui/src/theme.css` / `packages/ui/src/components.tsx` / `packages/ui/src/index.ts`
 - **実装**
-  - 旧モック（`eyex-reservation`）専用の方言（`terminal-*` / `viz-*` / `sp-*` / `compact-*`）を**削除**する。
-  - 面・文字・緑・出どころ・状態・グリッド・角・書体を `docs/frontend/mockups/eyex/assets/eyex.css` の `:root` から採る。
+  - 旧モック（`eye-reservation`）専用の方言（`terminal-*` / `viz-*` / `sp-*` / `compact-*`）を**削除**する。
+  - 面・文字・緑・出どころ・状態・グリッド・角・書体を `docs/frontend/mockups/eye/assets/eye.css` の `:root` から採る。
   - **アクセシビリティのために 3 つだけ暗くする**（モックの画像は変えない）:
     `--color-ink-faint` `#7d8b85`→`#626e69`（4.5:1）/ `--color-line-strong` `#b6c2bc`→`#778d82`（3:1）/
     `--color-pine-line` `#9cc4b6`→`#58947f`（3:1）。理由をコメントに残す。
@@ -178,7 +178,7 @@
 ## T-010 モックとの突き合わせを常設にする
 
 - **触るファイル**
-  - `docs/frontend/mockups/eyex/reference.mjs`（新規。ステータスバーを外した基準画像を作る）
+  - `docs/frontend/mockups/eye/reference.mjs`（新規。ステータスバーを外した基準画像を作る）
   - `services/glasses_management/playwright.config.ts`（`snapshotPathTemplate` と `mock` / `mock-phone` の project）
   - `services/glasses_management/e2e/mock-compare.spec.ts`（新規）
 - **やること**
@@ -195,11 +195,11 @@
 - **やること**
   - `knip.jsonc` の `services/glasses_management` の entry を実在のものだけにする。
   - 旧実装の残骸を削除する（`docs/frontend/{diff,overlay,raw,reference,screens,REBUILD.md}` /
-    旧モック `mockups/eyex-reservation/` / 旧 spec `features/002-*` / 旧 superpowers 文書）。
-  - 旧 spec が持っていた `UC-EYEX-149` / `UC-EYEX-151` は admin の業務なので
+    旧モック `mockups/eye-reservation/` / 旧 spec `features/002-*` / 旧 superpowers 文書）。
+  - 旧 spec が持っていた `UC-EYE-149` / `UC-EYE-151` は admin の業務なので
     `specs/admin/features/003-user-administration/spec.md` へ `UC-ADMIN-USERS-01/02` として移し、
     `services/admin/e2e/user-administration.spec.ts` のタグを付け替える。
-  - `docs/frontend/mockups/README.md` の台帳を、採用＝`eyex/`、却下＝`eyex-reservation/` に書き直す。
+  - `docs/frontend/mockups/README.md` の台帳を、採用＝`eye/`、却下＝`eye-reservation/` に書き直す。
 - **完了条件**: `pnpm check` が緑。
 - **依存**: T-009
 

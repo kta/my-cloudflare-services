@@ -11,9 +11,9 @@ import {
 } from './steps'
 
 /*
- * 下端の工程の帯（承認済みモック docs/frontend/mockups/eyex/images/BOOK-01-DATETIME.png ほか 12 面）。
+ * 下端の工程の帯（承認済みモック docs/frontend/mockups/eye/images/BOOK-01-DATETIME.png ほか 12 面）。
  *
- * 実測（screens/BOOK-0*.html と assets/eyex.css）:
+ * 実測（screens/BOOK-0*.html と assets/eye.css）:
  *   .stepbar  = 高さ 76px・左右 18px・要素の間 14px・上に 1px の罫・地は白
  *   .back     = 48×48px の丸・--line-strong の 1px 罫
  *   .step     = 最小高 36px・左右 14px・角 999px・14px/600。未通過 --surface-2 /

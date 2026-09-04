@@ -11,12 +11,14 @@ import type {
 import { auth, toJstDateString } from '@app/shared'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReservationSnapshot } from '../../worker/domain/reservation-change'
+import type { SlotChoice } from '../booking/SlotStep'
 import { client } from '../client'
 import { dateLabel, jstClock } from '../ledger/metrics'
 import { type CancelReason, ChangeCancel } from './ChangeCancel'
 import { ChangeDateTime } from './ChangeDateTime'
 import { ChangeDiff, type SlotTaken } from './ChangeDiff'
 import { ChangeDone } from './ChangeDone'
+import { ChangeSlot } from './ChangeSlot'
 import { type ConflictChoice, type ConflictFieldRow, ConflictPanel } from './ConflictPanel'
 import { ReservationSearch, type SearchConditions, type SearchPhase } from './ReservationSearch'
 
@@ -125,6 +127,11 @@ function snapshotOf(
   }
 }
 
+/** 並びも含めて同じ設備かどうか。並べ替えただけの入力を「変えた」と数えないため。 */
+function sameIds(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && [...a].sort().join() === [...b].sort().join()
+}
+
 /** 版が合わなかったときにサーバが載せてくる相手の姿（`conflictingVersion`）。 */
 type VersionConflict = {
   version: number
@@ -204,8 +211,11 @@ export function ChangeScreen({
   onOpenLedger,
   onGoHome,
   onSubline,
+  initialReservationId,
+  initialStep = 'datetime',
   onChangeSlot,
   onSessionExpired,
+  isOffline = false,
 }: {
   storeId: string
   /** 完了の脚注に出す店舗の名前（「銀座店 この端末・11:12　操作者 中村 彩」）。 */
@@ -224,9 +234,18 @@ export function ChangeScreen({
   onGoHome: () => void
   /** 上のバーの小見出し（「予約を変更する」／「予約の変更　EY-2608-0142」）。 */
   onSubline?: (subline: string) => void
+  /**
+   * 台帳の詳細から「変更する」「取り消す」で来たときの予約。
+   * **押した予約をそのまま開く。** 渡さなければ、これまでどおり検索から始まる。
+   */
+  initialReservationId?: string
+  /** 上と対で、日時変更と取り消しのどちらから始めるか。 */
+  initialStep?: 'datetime' | 'slot' | 'cancel'
   /** 担当・場所を変える（BOOK-03-SLOT-STAFF の再利用）。渡されないと 1 行で断る。 */
   onChangeSlot?: (detail: ReservationDetail) => void
   onSessionExpired?: () => void
+  /** Shell が検知した通信断。変更・取消の送信は行わない。 */
+  isOffline?: boolean
 }) {
   /*
    * 暦日は面を開いた時刻で決める。**残り時間の時計とは別に持つ** —— 1 秒ごとに
@@ -237,7 +256,9 @@ export function ChangeScreen({
   const [clock, setClock] = useState(opened)
   useEffect(() => setClock(opened), [opened])
 
-  const [step, setStep] = useState<'search' | 'datetime' | 'diff' | 'cancel' | 'done'>('search')
+  const [step, setStep] = useState<'search' | 'datetime' | 'slot' | 'diff' | 'cancel' | 'done'>(
+    initialReservationId === undefined ? 'search' : initialStep,
+  )
   const [conditions, setConditions] = useState<SearchConditions>(BLANK)
   const [reload, setReload] = useState(0)
   const [items, setItems] = useState<readonly ReservationSummary[]>([])
@@ -245,7 +266,7 @@ export function ChangeScreen({
   const [relaxations, setRelaxations] = useState<readonly SearchRelaxation[]>([])
   const [phase, setPhase] = useState<SearchPhase>('loading')
 
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(initialReservationId ?? null)
   const [detail, setDetail] = useState<ReservationDetail | null>(null)
   const [detailReload, setDetailReload] = useState(0)
   const [detailPhase, setDetailPhase] = useState<'loading' | 'ready' | 'error' | 'not_found'>(
@@ -256,6 +277,8 @@ export function ChangeScreen({
   const [placeNames, setPlaceNames] = useState<Map<string, string>>(() => new Map())
 
   const [chosenStartsAt, setChosenStartsAt] = useState<string | null>(null)
+  /* 担当・場所を選び直した結果。日時の道と混ざらないよう、別の入れ物に置く。 */
+  const [chosenSlot, setChosenSlot] = useState<SlotChoice | null>(null)
   const [hold, setHold] = useState<Hold | null>(null)
   const holdRef = useRef<Hold | null>(null)
   const [renewals, setRenewals] = useState(0)
@@ -332,6 +355,13 @@ export function ChangeScreen({
         setTotal(list.total)
         setRelaxations(list.relaxations)
         setPhase('ready')
+        /*
+         * 結果が届いたら先頭の 1 件を選ぶ。以前は何も選ばれずに開き、
+         * 画面の 53% を占める右ペインが灰色の 1 行だけだった（UX 監査 UI-09）。
+         * 承認済みモック `CHANGE-SEARCH.png` も選択済みの姿で描かれている。
+         * **自分で選んだあとや、台帳から予約を持って来たときは触らない。**
+         */
+        setSelectedId((current) => current ?? list.items[0]?.id ?? null)
       })
       .catch(() => {
         if (live) setPhase('error')
@@ -467,16 +497,36 @@ export function ChangeScreen({
   }
 
   const before = detail === null ? null : snapshotOf(detail, staffNames, placeNames)
-  const after =
-    before === null || chosenStartsAt === null
-      ? before
-      : {
-          ...before,
-          startsAt: chosenStartsAt,
-          endsAt: new Date(
-            Date.parse(chosenStartsAt) + before.durationMinutes * 60 * 1000,
-          ).toISOString(),
-        }
+  /*
+   * 差分の右側。日時の道と担当・場所の道は同じ 1 枚の差分表に流れ込む
+   * （どちらから来ても「変わる行だけが緑地になる」1 つの読み方で済むように）。
+   */
+  const after = (() => {
+    if (before === null) return before
+    let next = before
+    if (chosenStartsAt !== null) {
+      next = {
+        ...next,
+        startsAt: chosenStartsAt,
+        endsAt: new Date(
+          Date.parse(chosenStartsAt) + before.durationMinutes * 60 * 1000,
+        ).toISOString(),
+      }
+    }
+    if (chosenSlot !== null) {
+      next = {
+        ...next,
+        startsAt: chosenSlot.startsAt,
+        endsAt: chosenSlot.endsAt,
+        staffId: chosenSlot.staffId,
+        staffName:
+          chosenSlot.staffId === null ? null : (staffNames.get(chosenSlot.staffId) ?? null),
+        equipmentIds: chosenSlot.equipmentIds,
+        equipmentNames: chosenSlot.equipmentIds.map((id) => placeNames.get(id) ?? ''),
+      }
+    }
+    return next
+  })()
 
   /**
    * 監査の 1 行を読み直す。**端末の時計で「11:12」と書かない** —— 受付履歴に実際に
@@ -529,12 +579,24 @@ export function ChangeScreen({
     })
   }
 
-  /** 変更を確定する。**送るのはここだけ**（差分の面も競合の面も送らない）。 */
+  /**
+   * 変更を確定する。**送るのはここだけ**（差分の面も競合の面も送らない）。
+   * 担当・場所の道から来たときは、**変わった欄だけ**を足して送る —— 契約は
+   * 「欄が無い＝そのまま」なので、触っていない欄を送ると差分表に無い行が
+   * 監査に残ってしまう。
+   */
   async function patchTo(startsAt: string, version: number, previousRange: string) {
-    if (detail === null) return
+    if (detail === null || isOffline) return
+    const slotFields: { staffId?: string | null; equipmentIds?: string[] } = {}
+    if (chosenSlot !== null && before !== null) {
+      if (chosenSlot.staffId !== before.staffId) slotFields.staffId = chosenSlot.staffId
+      if (!sameIds(chosenSlot.equipmentIds, before.equipmentIds)) {
+        slotFields.equipmentIds = chosenSlot.equipmentIds
+      }
+    }
     const res = await client.api.staff.reservations[':reservationId'].$patch({
       param: { reservationId: detail.id },
-      json: { version, startsAt },
+      json: { version, startsAt, ...slotFields },
     })
     const status: number = res.status
     if (status === 409) {
@@ -550,6 +612,7 @@ export function ChangeScreen({
     setDetail(saved)
     setConflict(null)
     setChosenStartsAt(null)
+    setChosenSlot(null)
     setDone({
       kind: 'changed',
       previousRange,
@@ -560,12 +623,14 @@ export function ChangeScreen({
   }
 
   async function confirm() {
-    if (detail === null || chosenStartsAt === null || before === null) return
+    if (detail === null || before === null) return
+    const startsAt = after?.startsAt ?? chosenStartsAt
+    if (startsAt === null) return
     setConfirming(true)
     setConfirmError(null)
     try {
       await patchTo(
-        chosenStartsAt,
+        startsAt,
         detail.version,
         `${jstClock(before.startsAt)}–${jstClock(before.endsAt)}`,
       )
@@ -576,7 +641,7 @@ export function ChangeScreen({
 
   /** 取り消す。理由は面が選ばせてからしか届かない（`ReservationCancelInput` は必須）。 */
   async function cancelReservation(reason: CancelReason) {
-    if (detail === null) return
+    if (detail === null || isOffline) return
     setConfirming(true)
     try {
       const res = await client.api.staff.reservations[':reservationId'].cancel.$post({
@@ -754,6 +819,7 @@ export function ChangeScreen({
                 setStep('search')
               })
             }}
+            isOffline={isOffline}
           />
         ) : step === 'search' ? (
           <ReservationSearch
@@ -785,11 +851,13 @@ export function ChangeScreen({
             }}
             onChangeSlot={() => {
               if (detail === null) return
-              if (onChangeSlot === undefined) {
-                setNotice('担当・場所を変える画面はこれから作ります。')
+              if (onChangeSlot !== undefined) {
+                onChangeSlot(detail)
                 return
               }
-              onChangeSlot(detail)
+              setNotice(null)
+              setChosenStartsAt(null)
+              setStep('slot')
             }}
             onCancelReservation={() => {
               if (detail === null) return
@@ -829,6 +897,27 @@ export function ChangeScreen({
             onBack={backToSearch}
             onNext={() => setStep('diff')}
           />
+        ) : step === 'slot' && detail !== null && before !== null ? (
+          <ChangeSlot
+            storeId={storeId}
+            target={{
+              reservationId: detail.id,
+              startsAt: detail.startsAt,
+              durationMinutes: detail.durationMinutes,
+              purposeLabel: detail.purposeLabelInternal,
+              staffId: before.staffId,
+              equipmentIds: [...before.equipmentIds],
+            }}
+            isChanged={
+              chosenSlot !== null &&
+              (chosenSlot.staffId !== before.staffId ||
+                chosenSlot.startsAt !== before.startsAt ||
+                !sameIds(chosenSlot.equipmentIds, before.equipmentIds))
+            }
+            onChange={setChosenSlot}
+            onBack={backToSearch}
+            onNext={() => setStep('diff')}
+          />
         ) : step === 'diff' && before !== null && after !== null && detail !== null ? (
           <ChangeDiff
             source={detail.source}
@@ -851,6 +940,7 @@ export function ChangeScreen({
                 setConfirmError('うまく処理できませんでした。伺った内容は残っています。'),
               )
             }}
+            isOffline={isOffline}
           />
         ) : (
           <p className="px-11 py-9 text-body text-ink-muted">読み込んでいます…</p>

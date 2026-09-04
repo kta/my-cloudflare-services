@@ -14,12 +14,12 @@ import {
 import { sourceTagLabel } from './ReservationSearch'
 
 /*
- * 変更内容の確認（承認済みモック docs/frontend/mockups/eyex/images/CHANGE-DIFF.png）。
+ * 変更内容の確認（承認済みモック docs/frontend/mockups/eye/images/CHANGE-DIFF.png）。
  *
  * 題材: 変わる行と変わらない行を並べて、お客様へ読み上げてご了承をいただく面。
  * シグネチャ: **変わる行だけが緑地になり、変わらない行は薄字のまま並ぶ差分表。**
  *
- * 実測（screens/CHANGE-DIFF.html と assets/eyex.css）:
+ * 実測（screens/CHANGE-DIFF.html と assets/eye.css）:
  *   `1fr 360px`（`w-90`）gap 32px・padding 36px。見出し 18px、補足は 400/13px を 10px 右に。
  *   差分表は `132px 1fr 1fr`（`w-33`）、隙間 1px を --line で見せ、外枠 1px --line-strong・
  *   角 12px。セルは padding 16px 14px・16px。見出し行は --surface-2 の 12px/600
@@ -69,6 +69,7 @@ export type ChangeDiffProps = {
   onReselect?: (choice: ConflictChoice) => void
   onBack: () => void
   onConfirm: () => void
+  isOffline?: boolean
 }
 
 export function ChangeDiff({
@@ -81,6 +82,7 @@ export function ChangeDiff({
   onReselect,
   onBack,
   onConfirm,
+  isOffline = false,
 }: ChangeDiffProps) {
   /*
    * 確定を押した瞬間に枠が埋まっていたときは、差分をしまって BOOK-CONFLICT と同じ形に
@@ -220,10 +222,14 @@ export function ChangeDiff({
             <button
               type="button"
               aria-label={
-                nothingChanged ? '変更を確定する　変えるところがまだありません' : undefined
+                isOffline
+                  ? '変更を確定する　通信が戻ると押せます'
+                  : nothingChanged
+                    ? '変更を確定する　変えるところがまだありません'
+                    : undefined
               }
               aria-busy={confirming ? true : undefined}
-              disabled={nothingChanged}
+              disabled={nothingChanged || isOffline}
               onClick={() => {
                 // 確定している間の 2 度目・3 度目の押下は届かせない。
                 if (confirming) return

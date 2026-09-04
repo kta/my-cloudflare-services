@@ -6,12 +6,12 @@ import { describe, expect, it, vi } from 'vitest'
 import { ReservationDetail } from './ReservationDetail'
 
 /*
- * 予約の詳細（承認済みモック docs/frontend/mockups/eyex/images/LEDGER-DETAIL.png）。
+ * 予約の詳細（承認済みモック docs/frontend/mockups/eye/images/LEDGER-DETAIL.png）。
  *
  * この面の仕事は「台帳の位置を見失わないまま、1 件の中身と次の操作だけを見る」こと。
  * モーダルにしない — 後ろの台帳は見えたままで、押した帯へ矢印が刺さる。
  *
- * 実測値（screens/LEDGER-DETAIL.html と assets/eyex.css の `.popover`）:
+ * 実測値（screens/LEDGER-DETAIL.html と assets/eye.css の `.popover`）:
  *   幅 440px・角 16px・縁 1px --line-strong・影 0 12px 32px、矢印 16px を左 40px。
  *   頭 padding 14px 16px / 胴 12px 16px / 足 12px 16px（足の地は --surface-2）。
  *   主操作は幅いっぱい・min-height 52px・17px、その下に副操作 2 つを 10px 空けて置く。
@@ -67,6 +67,9 @@ function open(props: Partial<Parameters<typeof ReservationDetail>[0]> = {}) {
         equipmentNames={PLACES}
         anchor={{ left: 260, top: 172 }}
         onClose={() => {}}
+        onCheckIn={() => {}}
+        onChange={() => {}}
+        onCancel={() => {}}
         {...props}
       />
     </div>,
@@ -109,6 +112,9 @@ function Ledger({
         </button>
         {openId !== null && (
           <ReservationDetail
+            onCheckIn={() => {}}
+            onChange={() => {}}
+            onCancel={() => {}}
             detail={DETAIL}
             staffName="佐藤 美咲"
             equipmentNames={PLACES}
@@ -291,12 +297,23 @@ describe('予約の詳細', () => {
 
   it('読み込み中と、見つからないときを持つ', () => {
     const { rerender } = render(
-      <ReservationDetail detail={null} staffName={null} equipmentNames={[]} onClose={() => {}} />,
+      <ReservationDetail
+        detail={null}
+        staffName={null}
+        equipmentNames={[]}
+        onClose={() => {}}
+        onCheckIn={() => {}}
+        onChange={() => {}}
+        onCancel={() => {}}
+      />,
     )
     expect(screen.getByRole('status').textContent).toBe('ご予約を読み込んでいます…')
 
     rerender(
       <ReservationDetail
+        onCheckIn={() => {}}
+        onChange={() => {}}
+        onCancel={() => {}}
         detail={null}
         staffName={null}
         equipmentNames={[]}
@@ -351,6 +368,9 @@ describe('台帳の中に収める', () => {
     render(
       <div data-stage className="relative">
         <ReservationDetail
+          onCheckIn={() => {}}
+          onChange={() => {}}
+          onCancel={() => {}}
           detail={DETAIL}
           staffName="佐藤 美咲"
           equipmentNames={PLACES}

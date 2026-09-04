@@ -8,12 +8,12 @@ import { type CustomerDraft, CustomerStep, customerStepReady } from './CustomerS
 import { nextButtonLabel } from './steps'
 
 /*
- * 工程 4 お客様（承認済みモック docs/frontend/mockups/eyex/images/BOOK-04-CUSTOMER.png と
+ * 工程 4 お客様（承認済みモック docs/frontend/mockups/eye/images/BOOK-04-CUSTOMER.png と
  * BOOK-04c-KEYPAD.png）。
  *
  * この面の仕事は「受話器を持ったまま片手で番号を打ち切り、伺えないときはお名前だけで進む」こと。
  *
- * 実測値（screens/BOOK-04-CUSTOMER.html / BOOK-04c-KEYPAD.html と assets/eyex.css）:
+ * 実測値（screens/BOOK-04-CUSTOMER.html / BOOK-04c-KEYPAD.html と assets/eye.css）:
  *   本文 1fr ／ 右の柱 372px、本文の余白 36px 44px・柱 36px 28px。
  *   番号の欄は 幅 420px・最小高 96px・34px のモノスペース（テンキーを開くと 520px / 104px）。
  *   お名前とふりがなは 2 列・間 26px・最大 700px・最小高 60px。ご要望の箱は最小高 168px。
@@ -41,6 +41,7 @@ const EMPTY: CustomerDraft = {
   nameTyped: '',
   kanaTyped: '',
   noteTyped: '',
+  customerId: null,
   notes: [],
 }
 
@@ -62,7 +63,7 @@ function Flow({
   if (step === 5) {
     return (
       <ConfirmStep
-        storeName="EYEX 銀座店"
+        storeName="EYE 銀座店"
         startsAt={STARTS_AT}
         endsAt={ENDS_AT}
         durationMinutes={60}
@@ -462,5 +463,58 @@ describe('工程 4 の状態', () => {
       />,
     )
     expect(screen.getByRole('alert')).toHaveTextContent('この画面は店長だけがご覧になれます')
+  })
+})
+
+describe('選んだ 1 名を予約へ結び付ける', () => {
+  /*
+   * 候補から選んでも予約行の `customer_id` が NULL のままだったころ、台帳の帯に
+   * お名前も来店回数も出ず（AC-CUST-24 / 25）、来店回数と最後のご来店も一生
+   * 増えなかった（AC-CUST-10 / 11。実装不足の洗い出し customers-01）。
+   */
+  function Watch({ onDraft }: { onDraft: (draft: CustomerDraft) => void }) {
+    const [value, setValue] = useState<CustomerDraft>(EMPTY)
+    return (
+      <CustomerStep
+        value={value}
+        onChange={(next) => {
+          setValue(next)
+          onDraft(next)
+        }}
+        soFar={SO_FAR}
+        writer="山田 大輔（店長）"
+        now={NOW}
+        onLookup={async () => [HANAKO]}
+      />
+    )
+  }
+
+  async function pick(onDraft: (draft: CustomerDraft) => void) {
+    render(<Watch onDraft={onDraft} />)
+    await openKeypad()
+    await press('0', '9', '0', '1', '2', '3', '4', '5', '6', '7', '8')
+    await press('完了')
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(1))
+    await userEvent.click(
+      screen.getAllByRole('button', { name: 'このお客様で進む' })[0] as HTMLElement,
+    )
+  }
+
+  it('候補を押すと、お名前・ふりがなと一緒にその方の id も下書きに入る', async () => {
+    const seen: CustomerDraft[] = []
+    await pick((draft) => seen.push(draft))
+    const last = seen[seen.length - 1]
+    expect(last?.customerId).toBe(HANAKO.customer.id)
+    expect(last?.nameTyped).toBe(HANAKO.customer.name)
+  })
+
+  it('お電話番号を打ち直すと id を捨てる（違う番号の答えを引きずらない）', async () => {
+    const seen: CustomerDraft[] = []
+    await pick((draft) => seen.push(draft))
+    expect(seen[seen.length - 1]?.customerId).toBe(HANAKO.customer.id)
+
+    // 番号の欄を直に書き換えた＝別の番号を打ち始めた。
+    fireEvent.change(screen.getByLabelText('お電話番号'), { target: { value: '08099998888' } })
+    expect(seen[seen.length - 1]?.customerId).toBeNull()
   })
 })

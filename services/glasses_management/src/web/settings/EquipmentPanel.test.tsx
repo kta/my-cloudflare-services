@@ -5,7 +5,7 @@ import { EquipmentPanel } from './EquipmentPanel'
 import type { SettingsPanelProps } from './sections'
 
 /*
- * 承認済みモック docs/frontend/mockups/eyex/images/SETTINGS-EQUIPMENT.png の面。
+ * 承認済みモック docs/frontend/mockups/eye/images/SETTINGS-EQUIPMENT.png の面。
  * 見た目の寸法は e2e の突き合わせで見るので、ここでは「何が読めて、何が押せるか」を見る。
  * いまの時刻は prop で注ぎ、実行日に依存させない。
  *
@@ -111,8 +111,8 @@ function route(path: string, method: string, body: unknown): Response {
   if (path === `/api/staff/stores/${STORE_ID}`) {
     return json({
       id: STORE_ID,
-      organizationId: 'eyex',
-      name: 'EYEX 銀座店',
+      organizationId: 'eye',
+      name: 'EYE 銀座店',
       slug: 'ginza',
       phone: '',
       address: '',
@@ -454,15 +454,15 @@ describe('読み込みと失敗', () => {
     expect(screen.getByText('設備と点検を読み込んでいます…')).toBeInTheDocument()
   })
 
-  it('読み込めなかったら理由と次の行動を出す', async () => {
+  it('読み込めなかったら理由と、その場でやり直す手立てを出す', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => new Response('boom', { status: 500 })),
     )
     render(<EquipmentPanel storeId={STORE_ID} now={NOW} onDraftChange={() => {}} />)
-    expect(
-      await screen.findByText('設備と点検を読み込めませんでした。画面を開き直してください。'),
-    ).toBeInTheDocument()
+    expect(await screen.findByText('設備と点検を読み込めませんでした。')).toBeInTheDocument()
+    // 読み直す手立てをその場に置く（画面ごとの URL が無いので「開き直す」は実行できない）。
+    expect(screen.getByRole('button', { name: 'もう一度読み込む' })).toBeInTheDocument()
   })
 
   it('1 台も無ければ、その事実だけを出す', async () => {

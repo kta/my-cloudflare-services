@@ -3,12 +3,12 @@ import { cn, focusRing, focusRingOnPine } from '@app/ui'
 import { dateLabel, jstClock } from '../ledger/metrics'
 
 /*
- * 変更・取消を承った（承認済みモック docs/frontend/mockups/eyex/images/CHANGE-DONE.png）。
+ * 変更・取消を承った（承認済みモック docs/frontend/mockups/eye/images/CHANGE-DONE.png）。
  *
  * この面の主役は**予約番号が変わらないこと**である。取消の完了もこの面を流用し、
  * 新しい画面 ID を作らずに文言だけを差し替える（`spec.md`「決めたこと」）。
  *
- * 実測（screens/CHANGE-DONE.html の <style> と assets/eyex.css）:
+ * 実測（screens/CHANGE-DONE.html の <style> と assets/eye.css）:
  *   .done = padding 40px 44px 0・中央寄せ。.mark = 76px の円（--brand 地）・38px の ✓
  *   h2 26px（上に 18px）。.no = ピル・padding 6px 16px・--brand-tint 地・等幅 16px/600
  *           ＋ 13px の「予約番号は変わりません」（上に 12px）

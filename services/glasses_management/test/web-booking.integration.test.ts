@@ -26,6 +26,7 @@ import {
   insertBusinessHours,
   insertEquipment,
   insertShift,
+  insertSlotLock,
   insertSlotRules,
   insertStaff,
   JSON_HEADERS,
@@ -192,7 +193,7 @@ async function webTenant(
       '銀座駅 A2出口から徒歩3分',
       '1',
       now,
-      input.namePublic ?? 'EYEX 銀座店',
+      input.namePublic ?? 'EYE 銀座店',
       input.sortOrder ?? 0,
       now,
     )
@@ -494,12 +495,12 @@ describe('公開設定の取得', () => {
 
   it('ご案内のページは stores.slug から組み立てる', async () => {
     const t = await webTenant()
-    expect(await readSettings(t)).toMatchObject({ landingPath: `eyex.jp/${t.slug}` })
+    expect(await readSettings(t)).toMatchObject({ landingPath: `eye.jp/${t.slug}` })
 
     // slug を変えれば案内のページも変わる。表に持っていたら追随しない。
     const renamed = `ginza-${crypto.randomUUID().slice(0, 12)}`
     await env.DB.prepare('UPDATE stores SET slug = ? WHERE id = ?').bind(renamed, t.storeId).run()
-    expect(await readSettings(t)).toMatchObject({ landingPath: `eyex.jp/${renamed}` })
+    expect(await readSettings(t)).toMatchObject({ landingPath: `eye.jp/${renamed}` })
   })
 
   it('公開する目的は is_web_published と is_active の両方が立つ行だけ', async () => {
@@ -630,7 +631,7 @@ describe('お客様の画面の見え方', () => {
     )
     expect(res.status).toBe(200)
     expect(res.body).toMatchObject({
-      storeName: 'EYEX 銀座店',
+      storeName: 'EYE 銀座店',
       message: '棚卸しのため9月1日は休みます。',
     })
     expect((res.body.purposes as Json[]).map((p) => p.id)).toEqual(two.map((p) => p.id))
@@ -673,9 +674,9 @@ describe('店舗一覧', () => {
   it('公開している店舗だけを登録順（sort_order）で返す', async () => {
     // 一覧は全組織横断で `limit` が 10 までなので、先に立った店舗（`sort_order` 0）の
     // 前へ置く。並びを見たいのであって、混ざる件数を見たいのではない。
-    const third = await webTenant({ sortOrder: -30, namePublic: 'EYEX 渋谷店' })
-    const first = await webTenant({ sortOrder: -50, namePublic: 'EYEX 銀座店' })
-    const second = await webTenant({ sortOrder: -40, namePublic: 'EYEX 丸の内店' })
+    const third = await webTenant({ sortOrder: -30, namePublic: 'EYE 渋谷店' })
+    const first = await webTenant({ sortOrder: -50, namePublic: 'EYE 銀座店' })
+    const second = await webTenant({ sortOrder: -40, namePublic: 'EYE 丸の内店' })
     const closed = await webTenant({ publish: false, sortOrder: -45 })
 
     const res = await callList('/api/public/stores?limit=10')
@@ -683,7 +684,7 @@ describe('店舗一覧', () => {
     const mine = res.body.filter((store) =>
       [first.slug, second.slug, third.slug, closed.slug].includes(String(store.slug)),
     )
-    expect(mine.map((store) => store.name)).toEqual(['EYEX 銀座店', 'EYEX 丸の内店', 'EYEX 渋谷店'])
+    expect(mine.map((store) => store.name)).toEqual(['EYE 銀座店', 'EYE 丸の内店', 'EYE 渋谷店'])
   })
 
   it('公開している店舗が 0 件なら空配列を返す', async () => {
@@ -714,7 +715,7 @@ describe('店舗の詳細', () => {
     expect(res.status).toBe(200)
     expect(res.body).toMatchObject({
       slug: t.slug,
-      name: 'EYEX 銀座店',
+      name: 'EYE 銀座店',
       accessNote: '銀座駅 A2出口から徒歩3分',
       isPublished: true,
     })
@@ -909,6 +910,65 @@ describe('予約の作成', () => {
     expect(after?.status).toBe('confirmed')
   })
 
+  it('却下の候補取得後に別の承認が先に成立したら、予約本体と枠を取り消さない', async () => {
+    const t = await webTenant()
+    await book(t)
+    const web = await env.DB.prepare(
+      'SELECT id, reservation_id AS reservationId FROM web_bookings WHERE organization_id = ?',
+    )
+      .bind(t.org)
+      .first<{ id: string; reservationId: string }>()
+    if (web === null) throw new Error('Web予約のseedに失敗した')
+    const locksBefore = await countRows(
+      'SELECT COUNT(*) AS n FROM reservation_slot_locks WHERE organization_id = ? AND reservation_id = ?',
+      t.org,
+      web.reservationId,
+    )
+
+    const trigger = `test_approve_before_reject_${web.id.replaceAll('-', '_')}`
+    await env.DB.prepare(
+      `CREATE TRIGGER ${trigger} BEFORE UPDATE OF status ON web_bookings
+       WHEN OLD.id = '${web.id}' AND OLD.status = 'pending' AND NEW.status = 'cancelled'
+       BEGIN
+         UPDATE web_bookings
+            SET status = 'confirmed', confirmed_at = NEW.updated_at, updated_at = NEW.updated_at
+          WHERE id = OLD.id AND status = 'pending';
+         SELECT RAISE(IGNORE);
+       END`,
+    ).run()
+
+    try {
+      const review = await call(`/api/staff/web-bookings/${web.id}/review`, {
+        method: 'POST',
+        headers: authed(t.manager),
+        body: { decision: 'reject', reason: '時間が埋まったため' },
+      })
+      expect([200, 409]).toContain(review.status)
+
+      const afterWeb = await env.DB.prepare(
+        'SELECT status FROM web_bookings WHERE organization_id = ? AND id = ?',
+      )
+        .bind(t.org, web.id)
+        .first<{ status: string }>()
+      const reservation = await env.DB.prepare(
+        'SELECT status, version FROM reservations WHERE organization_id = ? AND id = ?',
+      )
+        .bind(t.org, web.reservationId)
+        .first<{ status: string; version: number }>()
+      expect(afterWeb?.status).toBe('confirmed')
+      expect(reservation).toEqual({ status: 'confirmed', version: 1 })
+      expect(
+        await countRows(
+          'SELECT COUNT(*) AS n FROM reservation_slot_locks WHERE organization_id = ? AND reservation_id = ?',
+          t.org,
+          web.reservationId,
+        ),
+      ).toBe(locksBefore)
+    } finally {
+      await env.DB.prepare(`DROP TRIGGER IF EXISTS ${trigger}`).run()
+    }
+  })
+
   it('受け付ける時間の外の時刻を送ると 409 store_closed になる', async () => {
     const t = await webTenant()
     // 店舗は 19:00 まで開いているが、Web で受けるのは 18:00 まで。
@@ -1094,7 +1154,7 @@ describe('照会', () => {
     expect(res.body).toMatchObject({
       code,
       startsAt: at(VISIT, '11:00'),
-      storeName: 'EYEX 銀座店',
+      storeName: 'EYE 銀座店',
       purposeName: '新しいメガネを作る',
       contactName: '山口 真央',
     })
@@ -1259,6 +1319,125 @@ describe('締切', () => {
   })
 })
 
+describe('確認待ちの自動取消', () => {
+  it('同じ時刻で二重実行しても、取消・版・お知らせを1回だけ進める', async () => {
+    const t = await webTenant()
+    const seeded = await seedWebBooking(t, {
+      startsAt: at(VISIT, '11:00'),
+      status: 'pending',
+      createdAt: at(plusDays(TODAY, -1), '10:00'),
+    })
+    await insertSlotLock(t.org, {
+      storeId: t.storeId,
+      reservationId: seeded.reservationId,
+      kind: 'store',
+      targetKey: 'store',
+      slotStart: at(VISIT, '11:00'),
+    })
+    const request = {
+      method: 'POST',
+      headers: INTERNAL_HEADERS,
+      body: { now: at(TODAY, '00:00'), limit: 100 },
+    }
+
+    const first = await call('/api/internal/maintenance/web-publications/apply', request)
+    const second = await call('/api/internal/maintenance/web-publications/apply', request)
+    expect(first.body).toMatchObject({ autoCancelled: 1 })
+    expect(second.body).toMatchObject({ autoCancelled: 0 })
+
+    const reservation = await env.DB.prepare(
+      'SELECT status, version FROM reservations WHERE organization_id = ? AND id = ?',
+    )
+      .bind(t.org, seeded.reservationId)
+      .first<{ status: string; version: number }>()
+    expect(reservation).toEqual({ status: 'cancelled', version: 2 })
+    expect(
+      await countRows(
+        "SELECT COUNT(*) AS n FROM alerts WHERE organization_id = ? AND code = 'web_booking.auto_cancelled' AND target_id = ?",
+        t.org,
+        seeded.reservationId,
+      ),
+    ).toBe(1)
+    expect(
+      await countRows(
+        'SELECT COUNT(*) AS n FROM reservation_slot_locks WHERE organization_id = ? AND reservation_id = ?',
+        t.org,
+        seeded.reservationId,
+      ),
+    ).toBe(0)
+  })
+
+  it('候補取得後に店長の承認が先に成立したら、予約・枠・お知らせを変更しない', async () => {
+    const t = await webTenant()
+    const yesterday = plusDays(TODAY, -1)
+    const seeded = await seedWebBooking(t, {
+      startsAt: at(VISIT, '11:00'),
+      status: 'pending',
+      createdAt: at(yesterday, '10:00'),
+    })
+    await insertSlotLock(t.org, {
+      storeId: t.storeId,
+      reservationId: seeded.reservationId,
+      kind: 'store',
+      targetKey: 'store',
+      slotStart: at(VISIT, '11:00'),
+    })
+
+    // 自動取消が候補を SELECT した直後、条件付き UPDATE より先に店長の承認が
+    // 成立した競合を再現する。外側の cancelled UPDATE は RAISE(IGNORE) で 0 行にし、
+    // それでも後続の予約取消・枠削除・alert INSERT が走らないことを確かめる。
+    const trigger = `test_approve_before_auto_cancel_${seeded.webBookingId.replaceAll('-', '_')}`
+    await env.DB.prepare(
+      `CREATE TRIGGER ${trigger} BEFORE UPDATE OF status ON web_bookings
+       WHEN OLD.id = '${seeded.webBookingId}' AND OLD.status = 'pending' AND NEW.status = 'cancelled'
+       BEGIN
+         UPDATE web_bookings
+            SET status = 'confirmed', confirmed_at = NEW.updated_at, updated_at = NEW.updated_at
+          WHERE id = OLD.id AND status = 'pending';
+         SELECT RAISE(IGNORE);
+       END`,
+    ).run()
+
+    try {
+      const result = await call('/api/internal/maintenance/web-publications/apply', {
+        method: 'POST',
+        headers: INTERNAL_HEADERS,
+        body: { now: at(TODAY, '00:00'), limit: 100 },
+      })
+      expect(result.status).toBe(200)
+
+      const web = await env.DB.prepare(
+        'SELECT status FROM web_bookings WHERE organization_id = ? AND id = ?',
+      )
+        .bind(t.org, seeded.webBookingId)
+        .first<{ status: string }>()
+      const reservation = await env.DB.prepare(
+        'SELECT status, version FROM reservations WHERE organization_id = ? AND id = ?',
+      )
+        .bind(t.org, seeded.reservationId)
+        .first<{ status: string; version: number }>()
+      expect(web?.status).toBe('confirmed')
+      expect(reservation).toEqual({ status: 'confirmed', version: 1 })
+      expect(
+        await countRows(
+          'SELECT COUNT(*) AS n FROM reservation_slot_locks WHERE organization_id = ? AND reservation_id = ?',
+          t.org,
+          seeded.reservationId,
+        ),
+      ).toBe(1)
+      expect(
+        await countRows(
+          "SELECT COUNT(*) AS n FROM alerts WHERE organization_id = ? AND code = 'web_booking.auto_cancelled' AND target_id = ?",
+          t.org,
+          seeded.reservationId,
+        ),
+      ).toBe(0)
+    } finally {
+      await env.DB.prepare(`DROP TRIGGER IF EXISTS ${trigger}`).run()
+    }
+  })
+})
+
 describe('確認メール', () => {
   it('送れたときだけ emailed が true になる', async () => {
     const t = await webTenant()
@@ -1332,7 +1511,7 @@ describe('確認メール', () => {
     const call0 = notify.mock.calls[0]
     const init = call0?.[1] as RequestInit | undefined
     const job = JSON.parse(String(init?.body)) as { payload: { storeName: string } }
-    expect(job.payload.storeName).toBe('EYEX 銀座店')
+    expect(job.payload.storeName).toBe('EYE 銀座店')
     expect(String(init?.body)).not.toContain('銀座本店（本部管理）')
   })
 

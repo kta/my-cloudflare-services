@@ -17,7 +17,7 @@
     "db:migrate:local": "wrangler d1 migrations apply glasses_management --local",
     "db:migrate:remote": "wrangler d1 migrations apply glasses_management --remote",
     "db:seed:local": "node seed.mjs",
-    "test": "vitest run --coverage",
+    "test": "node --test test/seed-migration.test.mjs && vitest run --coverage",
     "test:web": "vitest run --config vitest.web.config.ts --coverage",
     "test:all": "pnpm run test && pnpm run test:web",
     "e2e": "playwright test"

@@ -1,18 +1,19 @@
 import type { VisitBoardCell, VisitBoardRow, VisitBoard as VisitBoardShape } from '@app/contracts'
-import { cn, focusRing } from '@app/ui'
+import { cn, disabledLook, focusRing } from '@app/ui'
 import { type KeyboardEvent, useEffect, useRef, useState } from 'react'
 import { visitLabel } from '../../worker/domain/customers'
 import { BOARD_STAGES } from '../../worker/domain/visit-board'
 import { dateLabel, jstClock } from '../ledger/metrics'
 import { VisitBadge } from '../ledger/Timetable'
+import { EmptyState } from '../shell/EmptyState'
 
 /*
- * 来店受付ボード（承認済みモック docs/frontend/mockups/eyex/images/RECEPTION-JOURNEY.png）。
+ * 来店受付ボード（承認済みモック docs/frontend/mockups/eye/images/RECEPTION-JOURNEY.png）。
  *
  * 題材: フロアのスタッフが顔を上げて 3 秒で「誰をお待たせしているか」を掴む面。主役は盤面 1 枚。
  * シグネチャ: **待たせている行が赤地と文字の両方で真っ先に目に入り、空の欄は空のまま置くこと。**
  *
- * 実測（screens/RECEPTION-JOURNEY.html の <style> と assets/eyex.css）:
+ * 実測（screens/RECEPTION-JOURNEY.html の <style> と assets/eye.css）:
  *   .board  = padding 28px 36px
  *   .jgrid  = 220px + 6 列 1fr / 行 40px + 4 × 1fr / 枠 1px --line / 角 16px / overflow hidden
  *   .jhead  = padding 0 14px・13px/600・--ink-2・下罫 1px --line-strong
@@ -29,7 +30,7 @@ import { VisitBadge } from '../ledger/Timetable'
  */
 
 /** 盤面の 6 列の日本語名。並びは `worker/domain/visit-board.ts` の `BOARD_STAGES` が持つ。 */
-const STAGE_LABELS: Record<(typeof BOARD_STAGES)[number], string> = {
+export const STAGE_LABELS: Record<(typeof BOARD_STAGES)[number], string> = {
   received: '受付',
   consulting: 'ご相談',
   fitting: 'フレーム選び',
@@ -70,6 +71,8 @@ export type VisitBoardProps = {
   onReceiveVisit?: () => void
   /** 記録が届かなかったときの 1 文。届いた操作の結果は盤面そのものが語るので、失敗だけを言う。 */
   notice?: string | null
+  /** 通信断中は盤面を読み続けるが、状態を進める操作はできない。 */
+  isOffline?: boolean
   /**
    * 受け付ける面から戻ってきた行。**開いた要素へフォーカスを返す**ための値で、
    * その行のお客様欄へ焦点を戻す（戻ったあと Tab を最初から押し直さずに済む）。
@@ -88,6 +91,7 @@ export function VisitBoard({
   onMarkNoShow,
   onReceiveVisit,
   notice = null,
+  isOffline = false,
   focusSubjectId = null,
 }: VisitBoardProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -173,6 +177,7 @@ export function VisitBoard({
           <button
             type="button"
             onClick={onReceiveVisit}
+            disabled={isOffline}
             className={cn(
               'min-h-11 rounded-ctl bg-pine px-4.5 text-body font-semibold text-on-pine',
               focusRing,
@@ -198,27 +203,28 @@ export function VisitBoard({
           onLeave={onLeave}
           onLinkCustomer={onLinkCustomer}
           onMarkNoShow={onMarkNoShow}
+          isOffline={isOffline}
         />
       )}
 
       {rows.length === 0 ? (
         /* 0 名は行き止まりにしない（AC-RECEP-27）。見出し 1 行・理由 1 行・次の一手 1 つ。 */
-        <div role="status" className="grid flex-1 content-center justify-items-start gap-2 p-11">
-          <h2 className="text-title font-bold text-ink">ご来店中のお客様はいません</h2>
-          <p className="text-body text-ink-muted">まだどなたもお着きになっていません。</p>
+        <EmptyState title="ご来店中のお客様はいません" note="まだどなたもお着きになっていません。">
           {onReceiveVisit !== undefined && (
             <button
               type="button"
               onClick={onReceiveVisit}
+              disabled={isOffline}
               className={cn(
-                'mt-2 min-h-13 rounded-ctl bg-pine px-6 text-lead font-bold text-on-pine',
+                'min-h-13 rounded-ctl bg-pine px-6 text-lead font-bold text-on-pine',
                 focusRing,
+                disabledLook,
               )}
             >
               ＋ ご来店を受け付ける
             </button>
           )}
-        </div>
+        </EmptyState>
       ) : (
         <div className="min-h-0 flex-1 overflow-auto px-9 py-7">
           {/* biome-ignore lint/a11y/useSemanticElements: <table> を display:grid にすると
@@ -270,7 +276,7 @@ export function VisitBoard({
                 }}
                 onPressCell={(cell, column) => {
                   setActive({ row: rowIndex, column })
-                  if (cell.state === 'next') onAdvance(row, cell)
+                  if (!isOffline && cell.state === 'next') onAdvance(row, cell)
                 }}
               />
             ))}
@@ -291,12 +297,14 @@ function RowActions({
   onLeave,
   onLinkCustomer,
   onMarkNoShow,
+  isOffline,
 }: {
   row: VisitBoardRow
   onOpenCheckin?: (row: VisitBoardRow) => void
   onLeave?: (row: VisitBoardRow) => void
   onLinkCustomer?: (row: VisitBoardRow) => void
   onMarkNoShow?: (row: VisitBoardRow) => void
+  isOffline: boolean
 }) {
   const received = row.cells.find((cell) => cell.stage === 'received')
   const canCheckin =
@@ -325,6 +333,7 @@ function RowActions({
           key={action.label}
           type="button"
           onClick={action.press}
+          disabled={isOffline}
           className={cn(
             'min-h-11 rounded-ctl border border-line-strong bg-surface px-3.5 text-grid font-semibold text-ink',
             focusRing,

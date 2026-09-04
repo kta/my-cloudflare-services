@@ -13,7 +13,7 @@ import { type BoardCell, blockedText, columnSpan, snapToCell } from './slot-drag
 import type { StepGuard } from './steps'
 
 /*
- * 工程 3「担当と場所」（承認済みモック docs/frontend/mockups/eyex/images/BOOK-03-SLOT-STAFF.png /
+ * 工程 3「担当と場所」（承認済みモック docs/frontend/mockups/eye/images/BOOK-03-SLOT-STAFF.png /
  * BOOK-03b-SLOT-RESOURCE.png / BOOK-03c-DRAG.png）。
  *
  * 題材: 希望時刻に帯を置いてみて、先約とぶつかるかどうかを目で見る面。
@@ -28,7 +28,7 @@ import type { StepGuard } from './steps'
  * 枠を選び直した合図は `onChange` 1 本にまとめてある。仮の押さえの打ち直し
  * （`POST /api/staff/holds` と `DELETE /api/staff/holds/:holdId`）はこの合図で親が打つ。
  *
- * 実測（screens/BOOK-03*.html の <style> と assets/eyex.css）:
+ * 実測（screens/BOOK-03*.html の <style> と assets/eye.css）:
  *   .split = 1fr / 330px。.side = padding 28px 24px・左に 1px の罫
  *   .toolbar = 高さ 56px・padding 0 16px・要素の間 10px
  *   .cand button = min-height 56px・角 12px・16px/600、補足 12〜13px、間 10px

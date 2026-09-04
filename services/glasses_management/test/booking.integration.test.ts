@@ -12,11 +12,8 @@
 import { env, SELF } from 'cloudflare:test'
 import { describe, expect, it } from 'vitest'
 import {
-  auditRowsOf,
   authed,
   BASE,
-  createTerminal,
-  grantStorePermissions,
   insertBusinessHours,
   insertEquipment,
   insertReservation,
@@ -28,7 +25,6 @@ import {
   jstAt,
   LEDGER_DATE,
   orgId,
-  startSession as startTerminalSession,
   tokenFor,
 } from './helpers'
 
@@ -110,10 +106,21 @@ async function seedBookingCustomer(org: string): Promise<string> {
   return id
 }
 
-async function confirm(token: string, key: string, body: ConfirmBody) {
+async function confirm(
+  token: string,
+  key: string,
+  body: ConfirmBody,
+  terminal?: { id: string; sessionToken: string },
+) {
   const res = await SELF.fetch(`${BASE}/api/staff/reservations`, {
     method: 'POST',
-    headers: { ...authed(token), 'idempotency-key': key },
+    headers: {
+      ...authed(token),
+      'idempotency-key': key,
+      ...(terminal === undefined
+        ? {}
+        : { 'x-terminal-id': terminal.id, 'x-terminal-session': terminal.sessionToken }),
+    },
     body: JSON.stringify(body),
   })
   return { status: res.status, body: (await res.json().catch(() => null)) as ConfirmResponse }
@@ -365,6 +372,61 @@ describe('予約の確定', () => {
     expect(audit?.storeId).toBe(t.storeId)
     // 1 操作でまとまった行を束ねる鍵。同じ `db.batch()` の行は同じ値を持つ。
     expect(audit?.correlationId).toMatch(/^[0-9a-f-]{36}$/)
+  })
+
+  it('共有端末から受けた予約はスタッフではなく置き場所の名前を監査と履歴に残す', async () => {
+    const t = await bookingTenant()
+    const terminalId = crypto.randomUUID()
+    await env.DB.prepare(
+      "INSERT INTO terminals (id, organization_id, store_id, name, kind, auto_lock_seconds, is_active, version, created_at) VALUES (?,?,?,'銀座店 レジ横iPad','shared',120,'1',1,?)",
+    )
+      .bind(terminalId, t.org, t.storeId, jstAt(LEDGER_DATE, '10:00'))
+      .run()
+    const sessionToken = 's'.repeat(64)
+    const digest = new Uint8Array(
+      await crypto.subtle.digest('SHA-256', new TextEncoder().encode(sessionToken)),
+    )
+    let binary = ''
+    for (const byte of digest) binary += String.fromCharCode(byte)
+    const credentialHash = btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+    await env.DB.prepare(
+      "INSERT INTO terminal_sessions (id, organization_id, store_id, terminal_id, staff_id, mode, credential_hash, started_at, expires_at, revoked_at, created_at) VALUES (?,?,?,?,NULL,'shared',?,?,'2026-08-28T02:08:00.000Z',NULL,?)",
+    )
+      .bind(
+        crypto.randomUUID(),
+        t.org,
+        t.storeId,
+        terminalId,
+        credentialHash,
+        jstAt(LEDGER_DATE, '10:00'),
+        jstAt(LEDGER_DATE, '10:00'),
+      )
+      .run()
+    const res = await confirm(
+      t.token,
+      crypto.randomUUID(),
+      {
+        storeId: t.storeId,
+        startsAt: AT_11,
+        purposeIds: [t.purposeId],
+        source: 'phone',
+      },
+      { id: terminalId, sessionToken },
+    )
+    expect(res.status).toBe(200)
+    const audit = await env.DB.prepare(
+      "SELECT actor_type AS actorType, actor_id AS actorId, terminal_id AS terminalId FROM audit_events WHERE organization_id = ? AND action = 'reservation.created'",
+    )
+      .bind(t.org)
+      .first<{ actorType: string; actorId: string; terminalId: string }>()
+    expect(audit).toEqual({ actorType: 'terminal', actorId: terminalId, terminalId })
+
+    const history = await SELF.fetch(`${BASE}/api/staff/reservations/${res.body.id}/history`, {
+      headers: authed(t.token),
+    })
+    expect(await history.json()).toEqual([
+      expect.objectContaining({ actorName: '銀座店 レジ横iPad', what: '新しく受け付けました' }),
+    ])
   })
 })
 
@@ -837,69 +899,5 @@ describe('仮の押さえ', () => {
     })
     expect(res.status).toBe(200)
     expect((await countRows(t.org)).reservations).toBe(1)
-  })
-})
-
-/*
- * 監査の主体（P10 `013-terminals-and-audit` AC-TERM-08）。共有端末は個人ログイン無しで
- * 予約を受けられるので、**残るのは端末そのもの**でなければ「誰が受けたか」が空になる。
- * 主体は端末が名乗った業務セッション（`x-terminal-session`）だけが決める。
- */
-describe('受け付けた主体', () => {
-  it('共有モードの端末が名乗ると、予約の作成の監査は端末が主体になる', async () => {
-    const t = await bookingTenant()
-    await grantStorePermissions(t.org, t.storeId, `dev:${t.org}`, [
-      'settings.read',
-      'settings.manage',
-      'terminal.manage',
-    ])
-    const terminal = await createTerminal(t.token, { storeId: t.storeId, pin: '2580' })
-    const terminalId = String(terminal.body?.id)
-    const started = await startTerminalSession(t.token, terminalId, {
-      mode: 'shared',
-      pin: '2580',
-    })
-    const sessionId = String((started.body as { id?: string } | null)?.id)
-
-    const res = await SELF.fetch(`${BASE}/api/staff/reservations`, {
-      method: 'POST',
-      headers: {
-        ...authed(t.token),
-        'idempotency-key': crypto.randomUUID(),
-        'x-terminal-session': sessionId,
-      },
-      body: JSON.stringify({
-        storeId: t.storeId,
-        startsAt: AT_11,
-        purposeIds: [t.purposeId],
-        staffId: t.staffId,
-        source: 'phone',
-      }),
-    })
-    expect(res.status).toBe(200)
-
-    const created = (await auditRowsOf(t.org)).filter((row) => row.action === 'reservation.created')
-    expect(created).toHaveLength(1)
-    expect(created[0]).toMatchObject({
-      actor_type: 'terminal',
-      actor_id: terminalId,
-      terminal_id: terminalId,
-      target_type: 'reservations',
-    })
-  })
-
-  it('端末が名乗らない経路では、これまでどおり担当が主体のまま残る', async () => {
-    const t = await bookingTenant()
-    const res = await confirm(t.token, crypto.randomUUID(), {
-      storeId: t.storeId,
-      startsAt: AT_11,
-      purposeIds: [t.purposeId],
-      staffId: t.staffId,
-      source: 'phone',
-    })
-    expect(res.status).toBe(200)
-    const created = (await auditRowsOf(t.org)).filter((row) => row.action === 'reservation.created')
-    expect(created).toHaveLength(1)
-    expect(created[0]).toMatchObject({ actor_type: 'staff', terminal_id: null })
   })
 })

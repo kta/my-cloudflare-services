@@ -1,8 +1,7 @@
-import type { StaffMember } from '@app/contracts'
+import type { StaffMember, TerminalSession } from '@app/contracts'
 import { cn, focusRing } from '@app/ui'
 import { type ComponentType, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { client, subjectFromToken } from '../client'
-import { PermissionWall } from '../shell/PermissionWall'
+import { client, domainFetch, subjectFromToken, TERMINAL_ID_KEY } from '../client'
 import { CalendarPanel } from './CalendarPanel'
 import { EquipmentPanel } from './EquipmentPanel'
 import { HoursPanel } from './HoursPanel'
@@ -22,11 +21,11 @@ import {
   type SettingsSectionKey,
   toJstDay,
 } from './sections'
-import { TerminalSettings } from './TerminalSettings'
+import { TerminalPanel } from './TerminalPanel'
 import { WebPublishPanel } from './WebPublishPanel'
 
 /*
- * 設定の器（承認済みモック docs/frontend/mockups/eyex/images/SETTINGS-STORE.png）。
+ * 設定の器（承認済みモック docs/frontend/mockups/eye/images/SETTINGS-STORE.png）。
  *
  * 実測（SETTINGS-*.html の <style>。6 面とも同じ）:
  *   .set             = 236px + 1fr の 2 列
@@ -50,7 +49,7 @@ const DEFAULT_PANELS: Partial<Record<SettingsSectionKey, ComponentType<SettingsP
   staff: StaffPanel,
   equipment: EquipmentPanel,
   web: WebPublishPanel,
-  terminals: TerminalSettings,
+  terminals: TerminalPanel,
 }
 
 /** 保存の顛末に対する言い方。403 は EX-PERMISSION の面で断るので知らせを出さない。 */
@@ -72,11 +71,6 @@ const CLEAN: Summary = { dirtyCount: 0, danger: false, dangerNote: null, blocked
 
 export type SettingsScreenProps = {
   storeId: string
-  /**
-   * いまの端末。渡されていて、その場に店長がいるなら、403 のその場で
-   * 「店長の暗証番号で続ける」（EX-PERMISSION）を出す。
-   */
-  terminalId?: string
   /** いまの時刻（ISO8601）。実行時刻に依存させないため、面へはここから注ぐ。 */
   now?: string
   initialSection?: SettingsSectionKey
@@ -84,13 +78,7 @@ export type SettingsScreenProps = {
   panels?: Partial<Record<SettingsSectionKey, ComponentType<SettingsPanelProps>>>
 }
 
-export function SettingsScreen({
-  storeId,
-  terminalId,
-  now,
-  initialSection,
-  panels,
-}: SettingsScreenProps) {
+export function SettingsScreen({ storeId, now, initialSection, panels }: SettingsScreenProps) {
   const [section, setSection] = useState<SettingsSectionKey>(initialSection ?? 'store')
   const [summary, setSummary] = useState<Summary>(CLEAN)
   const [notice, setNotice] = useState<string | null>(null)
@@ -99,8 +87,6 @@ export function SettingsScreen({
   const draft = useRef<PanelDraft | null>(null)
   const compact = useCompactSidebar()
   const { actor, staff } = useViewer(storeId)
-  // その場にいる店長（EX-PERMISSION の右半分の持ち主）。いなければ壁は出さない。
-  const manager = staff?.find((member) => member.role === 'manager')
   const registry = useMemo(() => ({ ...DEFAULT_PANELS, ...panels }), [panels])
 
   const current = SETTINGS_SECTIONS.find((item) => item.key === section) ?? SETTINGS_SECTIONS[0]
@@ -149,6 +135,24 @@ export function SettingsScreen({
     } finally {
       setSaving(false)
     }
+  }
+
+  async function elevateAndSave(staffId: string, pin: string): Promise<boolean> {
+    const terminalId = sessionStorage.getItem(TERMINAL_ID_KEY)
+    const pending = draft.current
+    if (!terminalId || !pending) return false
+    const response = await domainFetch(`/api/staff/terminals/${terminalId}/elevate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ staffId, pin, reason: 'settings' }),
+    })
+    if (!response.ok) return false
+    const session = (await response.json()) as TerminalSession
+    window.dispatchEvent(new CustomEvent('eye:terminal-session', { detail: session }))
+    const outcome = await pending.save()
+    setRefused(outcome === 'forbidden' ? [...pending.changes] : null)
+    setNotice(SAVE_NOTICES[outcome])
+    return outcome === 'saved'
   }
 
   function onDiscard() {
@@ -222,25 +226,17 @@ export function SettingsScreen({
             )}
           </p>
 
-          {refused &&
-            (terminalId !== undefined && manager !== undefined ? (
-              <PermissionWall
-                terminalId={terminalId}
-                managerStaffId={manager.id}
-                target={title}
-                permission="設定の変更"
-                actor={actor}
-                changes={refused}
-                onElevated={() => {
-                  // 通ったら、下書きはそのままにもう一度同じ保存を投げる。
-                  setRefused(null)
-                  void onSave()
-                }}
-                onBack={() => setRefused(null)}
-              />
-            ) : (
-              <PermissionRefusal target={title} actor={actor} changes={refused} />
-            ))}
+          {refused && (
+            <PermissionRefusal
+              target={title}
+              actor={actor}
+              changes={refused}
+              staff={staff ?? []}
+              {...(sessionStorage.getItem('eye.active-terminal-id') === null
+                ? {}
+                : { onElevate: elevateAndSave })}
+            />
+          )}
 
           {Panel ? (
             <Panel

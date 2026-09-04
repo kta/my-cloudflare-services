@@ -1,48 +1,38 @@
 import { focusRingOnPine } from '@app/ui'
-import type { ReactNode } from 'react'
 
 /*
- * 業務開始 6 面の上のバー（64px）。**`⌂` を置かない** —— まだ戻る先が無いので、
- * 押して何も起きないボタンを置かない（`AppShell` の上のバーとはここが違う）。
+ * 業務を始めるまでの上のバー。
+ *
+ * 右の操作は **名前と押したときの動きを 1 つの組で受け取る**。
+ * 以前は `action?: string` と `onAction?: () => void` を別々の任意プロパティにしており、
+ * 置き場所選択とスタッフ選択が名前だけを渡していた。結果、両方の画面の右上に
+ * 押しても何も起きない「設定」が出ていた（UX 監査 UI-ERR-02）。
+ * 組にすれば、名前だけを渡すことが型のうえで書けなくなる。
  */
 export function StartBar({
-  storeName,
-  subline,
-  actions,
+  mode,
+  action,
+  showWorkPrefix = true,
 }: {
-  storeName: string
-  subline: string
-  actions?: ReactNode
+  mode: string
+  action?: { label: string; onPress: () => void }
+  showWorkPrefix?: boolean
 }) {
   return (
-    <header className="flex h-16 shrink-0 items-center gap-4 bg-pine px-11 text-on-pine">
-      <div className="min-w-0">
-        <p className="truncate text-bar font-bold">{storeName}</p>
-        <p className="truncate text-note opacity-90">{subline}</p>
+    <header className="flex h-16 shrink-0 items-center bg-pine px-6 text-on-pine">
+      <div>
+        <p className="text-bar font-bold">EYE 銀座店</p>
+        <p className="text-note opacity-90">{showWorkPrefix ? `業務を始める　${mode}` : mode}</p>
       </div>
-      <div className="ml-auto flex items-center gap-3">{actions}</div>
+      {action !== undefined && (
+        <button
+          type="button"
+          onClick={action.onPress}
+          className={`ml-auto min-h-12 rounded-card px-3 text-lead font-semibold ${focusRingOnPine}`}
+        >
+          {action.label}
+        </button>
+      )}
     </header>
-  )
-}
-
-/** バー右の操作。上段 12px の補足・下段 17px の名前で、当たり判定は 60×48px。 */
-export function StartBarButton({
-  label,
-  note,
-  onPress,
-}: {
-  label: string
-  note?: string
-  onPress: () => void
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onPress}
-      className={`grid min-h-12 min-w-15 place-items-center rounded-card px-3 ${focusRingOnPine}`}
-    >
-      {note !== undefined && <span className="text-note opacity-90">{note}</span>}
-      <span className="text-lead font-semibold">{label}</span>
-    </button>
   )
 }

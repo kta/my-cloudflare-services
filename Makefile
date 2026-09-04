@@ -32,6 +32,24 @@ dev/admin:
 dev/glasses_management:
 	pnpm --filter @app/glasses_management dev
 
+## dev/patent_research: run 典拠 — SPA + API (:5177). Start `make corpus/serve` first.
+# コーパスはローカルの別プロセスなので、先に別のターミナルで `make corpus/serve` を起こす。
+dev/patent_research:
+	pnpm --filter @app/patent_research dev
+
+## corpus/serve: run the patent corpus sidecar (:8899). DB=... to point at another corpus.
+corpus/serve:
+	INTERNAL_KEY=$${INTERNAL_KEY:-dev-internal-key} node packages/patent-corpus/src/cli.ts serve --db $${DB:-packages/patent-corpus/.data/corpus.db}
+
+## corpus/synth: build a synthetic corpus so the app is usable before the real bulk data arrives
+corpus/synth:
+	mkdir -p packages/patent-corpus/.data
+	node packages/patent-corpus/src/cli.ts synth --db $${DB:-packages/patent-corpus/.data/corpus.db} --count $${COUNT:-500}
+
+## corpus/probe: ask the received media what shape it actually is (run this FIRST on real data)
+corpus/probe:
+	node packages/patent-corpus/src/cli.ts probe $${PATH_TO_MEDIA:?PATH_TO_MEDIA=... が要る} --sample 20
+
 ## dev/notifier: run notifier internal notification Worker (:5176)
 dev/notifier:
 	pnpm --filter @app/notifier dev -- --port 5176
@@ -57,6 +75,15 @@ db/migrate/local:
 ## db/migrate/remote: apply all migrations to remote D1
 db/migrate/remote:
 	pnpm -r --if-present db:migrate:remote
+
+## db/reset/local: throw away local D1 state, then migrate + seed from scratch
+##   マイグレーションがリネーム・再生成されると、d1_migrations に残った古い名前のせいで
+##   db/migrate/local が `table ... already exists` で落ち、その先の seed（旧組織 ID の
+##   移行を含む）が一度も走らなくなる。ローカルの開発データだけを捨てて作り直す。
+db/reset/local:
+	rm -rf services/*/.wrangler/state/v3/d1
+	$(MAKE) db/migrate/local
+	$(MAKE) db/seed/local
 
 ## build: build all packages
 build:
@@ -96,6 +123,6 @@ worktree/rm:
 help:
 	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/## //' | awk -F': ' '{printf "  \033[36m%-26s\033[0m %s\n", $$1, $$2}'
 
-.PHONY: init dev/example_service dev/admin dev/glasses_management dev/notifier dev/all db/generate db/migrate/local db/migrate/remote db/seed/local \
+.PHONY: init dev/example_service dev/admin dev/glasses_management dev/patent_research dev/notifier dev/all corpus/serve corpus/synth corpus/probe db/generate db/migrate/local db/migrate/remote db/seed/local db/reset/local \
 	build test typecheck lint check dev-vars deploy/admin \
 	worktree/new worktree/rm help

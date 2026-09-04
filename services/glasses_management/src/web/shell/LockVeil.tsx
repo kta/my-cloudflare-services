@@ -1,64 +1,102 @@
-import { focusRing } from '@app/ui'
-import { useEffect, useRef } from 'react'
+import { focusRing, focusRingOnPine } from '@app/ui'
+import { type KeyboardEvent, useEffect, useRef } from 'react'
 
-/*
- * HOME-SHARED-LOCKED.png。離席した共有の iPad を覆う 1 枚（UC-TERM-08）。
- *
- * 画面の計画（DESIGN_RULE パス 1）
- *   主役は 1 画面に 1 つ ——「さわると元に戻る」こと。覆いは新しい色を作らず
- *   `--color-paper` を薄く敷くだけで、白い箱と 3px の松葉色だけが立つ。
- *   **サイドバーごと覆う**（さわるまでどこへも進めないことを形で示す）。
- *
- * **伏せるのは画面だけ**で、セッションは終わらせない（打ちかけの入力は残る）。
- * **Esc では閉じない** —— 閉じる手は「画面にさわって続ける」と「業務を終える」の 2 つ。
- */
+export type LockVeilProps = {
+  onContinue: () => void
+  onEndSession: () => void
+  /** raw PIIを含めず、伏せ状態で読める最小の表示情報だけを持つ。 */
+  snapshot?: {
+    customerName: string
+    customerPhone: string
+    time: string
+    count: number
+  }
+  /** サイドバーを持たない予約フローでも、画面全体を覆う。 */
+  fullScreen?: boolean
+}
 
-export function LockVeil({ onContinue, onQuit }: { onContinue: () => void; onQuit: () => void }) {
-  const heading = useRef<HTMLHeadingElement>(null)
+/** 共有端末を無操作で伏せたときだけ Shell が重ねる、Esc では閉じない面。 */
+export function LockVeil({
+  onContinue,
+  onEndSession,
+  snapshot,
+  fullScreen = false,
+}: LockVeilProps) {
+  const titleRef = useRef<HTMLHeadingElement>(null)
+  const continueRef = useRef<HTMLButtonElement>(null)
+  const endRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
-    heading.current?.focus()
+    titleRef.current?.focus()
   }, [])
 
+  const trapFocus = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key !== 'Tab') return
+    const first = continueRef.current
+    const last = endRef.current
+    if (!first || !last) return
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault()
+      last.focus()
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault()
+      first.focus()
+    }
+  }
+
   return (
-    <div className="absolute inset-0 z-40">
-      <div aria-hidden="true" className="absolute inset-0 bg-paper/85" />
+    <>
       <div
+        aria-hidden="true"
+        className={`absolute inset-x-0 ${fullScreen ? 'inset-y-0' : 'top-16 bottom-0'} z-4 bg-paper`}
+      />
+      <section
         role="dialog"
         aria-modal="true"
         aria-labelledby="lock-veil-title"
-        className="absolute inset-0 grid place-items-center"
+        onKeyDown={trapFocus}
+        className={`absolute inset-x-0 ${fullScreen ? 'inset-y-0' : 'top-16 bottom-0'} z-5 grid place-items-center p-5`}
       >
-        <div className="w-140 rounded-panel border-3 border-pine bg-surface px-10 pt-9 pb-8.5">
+        <div className="w-full max-w-140 rounded-panel border-3 border-pine bg-surface px-10 pt-9 pb-8.5 text-center shadow-lg">
           <h2
+            ref={titleRef}
             id="lock-veil-title"
-            ref={heading}
             tabIndex={-1}
-            className="text-title font-bold text-ink outline-none"
+            className="text-title font-bold text-ink"
           >
             お客様の情報を隠しています
           </h2>
-          <p className="mt-2.5 text-body text-ink-muted">
+          <p className="mt-2.5 text-body leading-relaxed text-ink-muted">
             2分間さわらなかったので伏せました。さわると元に戻ります。
           </p>
-          <div className="mt-7.5 flex gap-4">
+          {snapshot && (
+            <div className="mt-5 border-y border-line py-4 text-left text-body">
+              <p className="font-semibold">{`本日のご予約　${snapshot.count}件`}</p>
+              <p className="mt-2 font-mono text-ink-muted">{snapshot.time}</p>
+              <p className="font-mono font-semibold">{snapshot.customerName}</p>
+              <p className="font-mono text-ink-muted">{snapshot.customerPhone}</p>
+            </div>
+          )}
+          <div className="mt-7.5 flex flex-wrap justify-center gap-4">
             <button
+              ref={continueRef}
               type="button"
               onClick={onContinue}
-              className={`min-h-14 flex-1 rounded-card bg-pine px-6 text-lead font-bold text-on-pine ${focusRing}`}
+              className={`min-h-14 flex-1 rounded-card bg-pine px-6 text-lead font-bold text-on-pine ${focusRingOnPine}`}
             >
               画面にさわって続ける
             </button>
             <button
+              ref={endRef}
               type="button"
-              onClick={onQuit}
-              className={`min-h-14 rounded-card border border-line-strong bg-surface px-6 text-lead font-semibold text-ink ${focusRing}`}
+              onClick={onEndSession}
+              className={`min-h-14 flex-1 rounded-card border border-line-strong bg-surface px-6 text-lead font-bold text-ink ${focusRing}`}
             >
               業務を終える
             </button>
           </div>
         </div>
-      </div>
-    </div>
+      </section>
+    </>
   )
 }

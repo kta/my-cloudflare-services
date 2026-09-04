@@ -415,12 +415,8 @@ export type BookingInput = {
   noteInternal: string
   /** 共有端末で個人が未確認なら null。 */
   actorId: string | null
-  /**
-   * 監査に残す主体（P10）。**リクエストの入力から作らない** —— 端末が名乗った
-   * 業務セッションだけが決める（共有モードなら端末そのもの、個人モードならその本人）。
-   * 名乗りが無い経路（内部同期・端末をまだ登録していない最初の 1 回）は `system`。
-   */
-  auditActor?: { type: string; id: string | null; terminalId: string | null }
+  actorType?: 'staff' | 'terminal' | 'customer' | 'system'
+  terminalId?: string | null
   /** 1 操作でまとまった行を束ねる。同じバッチの監査は同じ値を持つ。 */
   correlationId: string
   /** 進行中の受付。確定と同じバッチで `booked` にして閉じる。 */
@@ -487,7 +483,7 @@ export function bookingStatements(db: D1Database, input: BookingInput): D1Prepar
         input.noteInternal,
         createdAt,
         createdAt,
-        input.actorId,
+        input.actorType === undefined || input.actorType === 'staff' ? input.actorId : null,
         input.organizationId,
         input.reservationId,
       ),
@@ -553,10 +549,9 @@ export function bookingStatements(db: D1Database, input: BookingInput): D1Prepar
         crypto.randomUUID(),
         input.organizationId,
         input.storeId,
-        // 名乗りが無い経路（店頭のウォークイン・お客様の Web 予約）はこれまでどおり担当。
-        input.auditActor?.type ?? 'staff',
-        input.auditActor === undefined ? input.actorId : input.auditActor.id,
-        input.auditActor?.terminalId ?? null,
+        input.actorType ?? 'staff',
+        input.actorId,
+        input.terminalId ?? null,
         input.reservationId,
         JSON.stringify({
           code: input.code,

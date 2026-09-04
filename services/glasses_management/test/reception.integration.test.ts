@@ -15,14 +15,11 @@
  * 明示的に渡し、**実時刻を読まない**。
  */
 import { env, SELF } from 'cloudflare:test'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
-  auditRowsOf,
   authed,
   BASE,
-  createTerminal,
   FIXED_NOW,
-  grantStorePermissions,
   insertBusinessHours,
   insertReservation,
   insertShift,
@@ -33,7 +30,6 @@ import {
   jstAt,
   LEDGER_DATE,
   orgId,
-  startSession,
   tokenFor,
 } from './helpers'
 
@@ -102,13 +98,14 @@ async function createWalkin(
   token: string,
   body: Json,
   idempotencyKey?: string,
+  extraHeaders: Record<string, string> = {},
 ): Promise<{ status: number; body: Json }> {
   const res = await SELF.fetch(`${BASE}/api/staff/walkins`, {
     method: 'POST',
     headers:
       idempotencyKey === undefined
-        ? authed(token)
-        : { ...authed(token), 'Idempotency-Key': idempotencyKey },
+        ? { ...authed(token), ...extraHeaders }
+        : { ...authed(token), ...extraHeaders, 'Idempotency-Key': idempotencyKey },
     body: JSON.stringify(body),
   })
   return { status: res.status, body: (await res.json().catch(() => ({}))) as Json }
@@ -139,10 +136,14 @@ async function patchWalkin(
   return { status: res.status, body: (await res.json().catch(() => ({}))) as Json }
 }
 
-async function postVisit(token: string, body: Json): Promise<{ status: number; body: Json }> {
+async function postVisit(
+  token: string,
+  body: Json,
+  extraHeaders: Record<string, string> = {},
+): Promise<{ status: number; body: Json }> {
   const res = await SELF.fetch(`${BASE}/api/staff/visits`, {
     method: 'POST',
-    headers: authed(token),
+    headers: { ...authed(token), ...extraHeaders },
     body: JSON.stringify(body),
   })
   return { status: res.status, body: (await res.json().catch(() => ({}))) as Json }
@@ -282,6 +283,46 @@ const walkinBody = (storeId: string, time: string, extra: Json = {}): Json => ({
   ...extra,
 })
 
+async function seedTerminalSession(
+  tenant: Awaited<ReturnType<typeof receptionTenant>>,
+  mode: 'shared' | 'personal',
+) {
+  const terminalId = crypto.randomUUID()
+  const sessionToken = (mode === 'shared' ? 'q' : 'r').repeat(64)
+  const digest = new Uint8Array(
+    await crypto.subtle.digest('SHA-256', new TextEncoder().encode(sessionToken)),
+  )
+  let binary = ''
+  for (const byte of digest) binary += String.fromCharCode(byte)
+  const credentialHash = btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  await env.DB.prepare(
+    "INSERT INTO terminals (id, organization_id, store_id, name, kind, auto_lock_seconds, is_active, version, created_at) VALUES (?,?,?,'銀座店 レジ横iPad','shared',120,'1',1,?)",
+  )
+    .bind(terminalId, tenant.org, tenant.storeId, FIXED_NOW)
+    .run()
+  await env.DB.prepare(
+    'INSERT INTO terminal_sessions (id, organization_id, store_id, terminal_id, staff_id, mode, credential_hash, started_at, expires_at, revoked_at, created_at) VALUES (?,?,?,?,?,?,?,?,?,NULL,?)',
+  )
+    .bind(
+      crypto.randomUUID(),
+      tenant.org,
+      tenant.storeId,
+      terminalId,
+      mode === 'personal' ? tenant.staffId : null,
+      mode,
+      credentialHash,
+      FIXED_NOW,
+      mode === 'personal' ? '2026-08-27T02:10:00.000Z' : '2026-08-28T02:08:00.000Z',
+      FIXED_NOW,
+    )
+    .run()
+  return {
+    terminalId,
+    sessionToken,
+    headers: { 'x-terminal-id': terminalId, 'x-terminal-session': sessionToken },
+  }
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
  * T-009 代表フロー
  * ═══════════════════════════════════════════════════════════════════════════ */
@@ -303,6 +344,67 @@ describe('ウォークインの受付', () => {
 
     const ledger = await readLedger(t.token, { storeId: t.storeId, date: LEDGER_DATE })
     expect(ledger.body).toMatchObject({ walkinWaitingCount: 1, nextTicketNo: 2 })
+  })
+
+  it('共有sessionはwalk-in作成の全監査を端末主体にし、invalid pairは書込みも監査も拒む', async () => {
+    const t = await receptionTenant()
+    const shared = await seedTerminalSession(t, 'shared')
+    const created = await createWalkin(
+      t.token,
+      walkinBody(t.storeId, '11:02'),
+      undefined,
+      shared.headers,
+    )
+    expect(created.status).toBe(200)
+    const audits = await env.DB.prepare(
+      "SELECT action, actor_type AS actorType, actor_id AS actorId, terminal_id AS terminalId FROM audit_events WHERE organization_id = ? AND action IN ('reservation.created','walkin.created') ORDER BY action",
+    )
+      .bind(t.org)
+      .all<{ action: string; actorType: string; actorId: string; terminalId: string }>()
+    expect(audits.results).toHaveLength(2)
+    for (const audit of audits.results) {
+      expect(audit).toMatchObject({
+        actorType: 'terminal',
+        actorId: shared.terminalId,
+        terminalId: shared.terminalId,
+      })
+    }
+
+    const denied = await createWalkin(t.token, walkinBody(t.storeId, '11:32'), undefined, {
+      'x-terminal-id': shared.terminalId,
+    })
+    expect(denied.status).toBe(403)
+    expect(denied.body).toEqual({ error: 'terminal_session_invalid' })
+    expect(await walkinRows(t.org, t.storeId, LEDGER_DATE)).toHaveLength(1)
+  })
+
+  it('個人sessionはreception stage変更を本人主体・端末付きで監査する', async () => {
+    const t = await receptionTenant()
+    const walkin = await createWalkin(t.token, walkinBody(t.storeId, '11:02'))
+    const personal = await seedTerminalSession(t, 'personal')
+    const changed = await postVisit(
+      t.token,
+      {
+        storeId: t.storeId,
+        subjectType: 'walkin',
+        subjectId: walkin.body.id,
+        stage: 'consulting',
+        occurredAt: jstAt(LEDGER_DATE, '11:05'),
+        staffId: t.staffId,
+      },
+      personal.headers,
+    )
+    expect(changed.status).toBe(200)
+    const audit = await env.DB.prepare(
+      "SELECT actor_type AS actorType, actor_id AS actorId, terminal_id AS terminalId FROM audit_events WHERE organization_id = ? AND action = 'visit.stage.changed' AND target_id = ?",
+    )
+      .bind(t.org, walkin.body.id)
+      .first<{ actorType: string; actorId: string; terminalId: string }>()
+    expect(audit).toEqual({
+      actorType: 'staff',
+      actorId: t.staffId,
+      terminalId: personal.terminalId,
+    })
   })
 
   it("同じ操作で source='walkin' の予約と枠の占有が 1 件ずつできる", async () => {
@@ -626,7 +728,7 @@ describe('工程を進める', () => {
    */
   it('同じ会社でも別の店舗の来店を進めようとすると 404 で、1 行も残らない', async () => {
     const t = await receptionTenant()
-    const otherStoreId = await insertStore(t.org, 'EYEX 新宿店')
+    const otherStoreId = await insertStore(t.org, 'EYE 新宿店')
     await insertBusinessHours(t.org, otherStoreId)
     await insertSlotRules(t.org, otherStoreId, {
       slotMinutes: 30,
@@ -651,7 +753,7 @@ describe('工程を進める', () => {
 describe('あとから結びつける', () => {
   it('同じ会社でも別店舗の予約には付け替えられない', async () => {
     const t = await receptionTenant()
-    const otherStoreId = await insertStore(t.org, 'EYEX 新宿店')
+    const otherStoreId = await insertStore(t.org, 'EYE 新宿店')
     const otherReservationId = await insertReservation(t.org, {
       storeId: otherStoreId,
       startsAt: jstAt(LEDGER_DATE, '13:00'),
@@ -745,7 +847,7 @@ describe('あとから結びつける', () => {
     expect(row?.visitCount).toBe(1)
   })
 
-  it('接客中の来店を紐づけても退店までは初回・最終来店に数えない', async () => {
+  it('接客中の来店を紐づけると来店の日付は動くが、来店回数は退店まで増えない', async () => {
     const t = await receptionTenant()
     const customerId = await seedCustomer(t.org, {
       name: '田中 花子',
@@ -772,7 +874,17 @@ describe('あとから結びつける', () => {
     )
       .bind(t.org, customerId)
       .first<{ visitCount: number; firstVisitAt: string | null; lastVisitAt: string | null }>()
-    expect(row).toEqual({ visitCount: 0, firstVisitAt: null, lastVisitAt: null })
+    /*
+     * 数え方が 2 通りあることをここで固定する。
+     *   来店回数（`visit_count`）: 退店（`done`）だけ（AC-RECEP-23）。
+     *   初回・最後のご来店: 来店済み（`arrived` / `serving` / `done`）（AC-CUST-11）。
+     * 接客中の日付まで止めていたころ、いまお店にいらしている方の「最後のご来店」に
+     * 前回の日付が出続けた（実装不足の洗い出し customers-05）。
+     */
+    expect(row?.visitCount).toBe(0)
+    // ウォークインの枠は刻みへ丸められるので 11:00 から始まる。
+    expect(row?.firstVisitAt).toBe(jstAt(LEDGER_DATE, '11:00'))
+    expect(row?.lastVisitAt).toBe(jstAt(LEDGER_DATE, '11:00'))
   })
 
   it('別テナントの担当者をウォークインへ割り当てられない', async () => {
@@ -1755,36 +1867,40 @@ describe('受付履歴の読み足しと 0 件', () => {
   })
 
   it('0 件のときは、実際に引ける件数の付いた緩和候補が同じ応答で返る', async () => {
-    const t = await receptionTenant()
-    // 今月の 1 日の受付。狭い期間（LEDGER_DATE の 1 日）で絞ると 0 件になり、
-    // 「今月まで広げる」候補で見つかる。**候補の「今月」はサーバの実時刻で決まる**ので、
-    // 固定の月を書くと月が変わった翌日に落ちる（暦日は実時刻から作る）。
-    const early = `${new Date(Date.now() + 9 * 3_600_000).toISOString().slice(0, 7)}-01`
-    await createWalkin(t.token, {
-      storeId: t.storeId,
-      purposeNote: 'フレームの相談',
-      arrivedAt: jstAt(early, '11:02'),
-      startsAt: jstAt(early, '11:00'),
-      durationMinutes: 20,
-      staffId: null,
-    })
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(FIXED_NOW))
+    try {
+      const t = await receptionTenant()
+      // 今月の頭に近い日の受付。狭い期間で絞ると 0 件になり、今月まで広げると見つかる。
+      const early = '2026-08-03'
+      await createWalkin(t.token, {
+        storeId: t.storeId,
+        purposeNote: 'フレームの相談',
+        arrivedAt: jstAt(early, '11:02'),
+        startsAt: jstAt(early, '11:00'),
+        durationMinutes: 20,
+        staffId: null,
+      })
 
-    const empty = await readHistory(t.token, {
-      storeId: t.storeId,
-      from: LEDGER_DATE,
-      to: LEDGER_DATE,
-    })
-    expect(empty.total).toBe(0)
-    const widen = empty.relaxations.find((item) => item.label.startsWith('期間を'))
-    expect(widen?.count).toBeGreaterThanOrEqual(1)
+      const empty = await readHistory(t.token, {
+        storeId: t.storeId,
+        from: LEDGER_DATE,
+        to: LEDGER_DATE,
+      })
+      expect(empty.total).toBe(0)
+      const widen = empty.relaxations.find((item) => item.label.startsWith('期間を'))
+      expect(widen?.count).toBeGreaterThanOrEqual(1)
 
-    // 候補の query をそのまま送り直すと、同じ件数がそのまま出る（推定した数字ではない）。
-    const again = await readHistory(t.token, {
-      storeId: t.storeId,
-      from: String(widen?.query.from),
-      to: String(widen?.query.to),
-    })
-    expect(again.total).toBe(widen?.count)
+      // 候補の query をそのまま送り直すと、同じ件数がそのまま出る（推定した数字ではない）。
+      const again = await readHistory(t.token, {
+        storeId: t.storeId,
+        from: String(widen?.query.from),
+        to: String(widen?.query.to),
+      })
+      expect(again.total).toBe(widen?.count)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('92 日を越える期間は 400 で断る（読める窓を黙って広げない）', async () => {
@@ -1826,68 +1942,5 @@ describe('まとめられて消えたお客様へは結びつけない', () => {
     // 断られた更新は版も customer_id も動かさない。
     const rows = await walkinRows(t.org, t.storeId, LEDGER_DATE)
     expect(rows[0]).toMatchObject({ customerId: null, version: 1 })
-  })
-})
-
-/*
- * 監査の主体（P10 `013-terminals-and-audit`）。レジ横の共有 iPad は個人ログイン無しで
- * ご来店を受けるので、**残るのは端末そのもの**でなければ「誰が受けたか」が空になる。
- * 主体は端末が名乗った業務セッション（`x-terminal-session`）だけが決める。
- */
-describe('受け付けた主体', () => {
-  it('共有モードの端末が名乗ると、ご来店と工程の監査は端末が主体になる', async () => {
-    const t = await receptionTenant()
-    await grantStorePermissions(t.org, t.storeId, `dev:${t.org}`, [
-      'settings.read',
-      'settings.manage',
-      'terminal.manage',
-    ])
-    const terminal = await createTerminal(t.token, { storeId: t.storeId, pin: '2580' })
-    const terminalId = String(terminal.body?.id)
-    const started = await startSession(t.token, terminalId, { mode: 'shared', pin: '2580' })
-    const sessionId = String(started.body?.id)
-    const named = { ...authed(t.token), 'x-terminal-session': sessionId }
-
-    const walkin = await SELF.fetch(`${BASE}/api/staff/walkins`, {
-      method: 'POST',
-      headers: named,
-      body: JSON.stringify(walkinBody(t.storeId, '11:02')),
-    })
-    expect(walkin.status).toBe(200)
-    const walkinId = ((await walkin.json()) as { id: string }).id
-    const visit = await SELF.fetch(`${BASE}/api/staff/visits`, {
-      method: 'POST',
-      headers: named,
-      body: JSON.stringify({
-        storeId: t.storeId,
-        subjectType: 'walkin',
-        subjectId: walkinId,
-        stage: 'consulting',
-        occurredAt: jstAt(LEDGER_DATE, '11:05'),
-      }),
-    })
-    expect(visit.status).toBe(200)
-
-    const rows = await auditRowsOf(t.org)
-    const created = rows.filter((row) => row.action === 'walkin.created')
-    const staged = rows.filter((row) => row.action === 'visit.stage.changed')
-    expect(created).toHaveLength(1)
-    expect(staged).toHaveLength(1)
-    for (const row of [...created, ...staged]) {
-      expect(row).toMatchObject({
-        actor_type: 'terminal',
-        actor_id: terminalId,
-        terminal_id: terminalId,
-      })
-    }
-  })
-
-  it('端末が名乗らない経路では、これまでどおり担当が主体のまま残る', async () => {
-    const t = await receptionTenant()
-    const created = await createWalkin(t.token, walkinBody(t.storeId, '11:02'))
-    expect(created.status).toBe(200)
-    const rows = (await auditRowsOf(t.org)).filter((row) => row.action === 'walkin.created')
-    expect(rows).toHaveLength(1)
-    expect(rows[0]).toMatchObject({ actor_type: 'staff', terminal_id: null })
   })
 })

@@ -1,4 +1,4 @@
-# 自己判断の記録 — EYEX予約 再構築（2026-08-28）
+# 自己判断の記録 — EYE予約 再構築（2026-08-28）
 
 発注元・依頼者に確認せずに私（実装側）が決めたことを、後から検証できるように全部並べる。
 **取り消したいものがあればこの表の行を指して言ってもらえれば戻せる。**
@@ -9,10 +9,10 @@
 
 | # | 決めたこと | 理由 | 影響 |
 |---|---|---|---|
-| A-1 | [変更] `assets/eyex.css` と `screens/HOME.html` を、PNG を正として復元・書き直した | 別セッションのコミットで旧版に巻き戻り、38 画面がサイドバー無しで描画されていた | モック 68 画面 |
+| A-1 | [変更] `assets/eye.css` と `screens/HOME.html` を、PNG を正として復元・書き直した | 別セッションのコミットで旧版に巻き戻り、38 画面がサイドバー無しで描画されていた | モック 68 画面 |
 | A-2 | [変更] サイドバーのアイコン 9 種を引き直した | 元の線画が残っていない。形はわずかに違うが意味と置き場所は変えていない | 全画面の左の柱 |
 | A-3 | [新設] `reference/`（端末のステータスバーを外した基準画像）を作った | 実装はブラウザの中で動くのでその帯を持たず、そのままでは縦にずれて比べられない | Playwright 突き合わせ |
-| A-4 | [破棄] 却下版のモック `mockups/eyex-reservation/` と、その実装の証跡（`docs/frontend/{diff,overlay,raw,reference,screens,REBUILD.md}`）を削除した | 「古い実装は全部消してよい」の指示に含まれると判断 | 台帳を eyex/ 採用へ書き直した |
+| A-4 | [破棄] 却下版のモック `mockups/eye-reservation/` と、その実装の証跡（`docs/frontend/{diff,overlay,raw,reference,screens,REBUILD.md}`）を削除した | 「古い実装は全部消してよい」の指示に含まれると判断 | 台帳を eye/ 採用へ書き直した |
 
 ## B. デザイントークン
 
@@ -32,7 +32,7 @@
 |---|---|---|---|
 | C-1 | [新設] フェーズを P0〜P10 の 11 本に割り、feature spec を `003`〜`013` に置いた | 1 フェーズが単体で使える大きさに揃えるため | 実装順・ブランチ名 |
 | C-2 | [新設] feature spec は **Draft で作り、E2E が緑になってから Approved に上げる** | validator は Approved の UC/AC に E2E を 1 対 1 で要求するので、先に Approved にすると `pnpm check` が落ちる | いま Approved は 003 だけ |
-| C-3 | [変更] 旧 spec 002 が持っていた `UC-EYEX-149` / `UC-EYEX-151` を admin へ移した（`UC-ADMIN-USERS-01/02`） | admin の業務であり、EYEX 側の spec を消すと宙に浮く | `services/admin/e2e/user-administration.spec.ts` のタグ |
+| C-3 | [変更] 旧 spec 002 が持っていた `UC-EYE-149` / `UC-EYE-151` を admin へ移した（`UC-ADMIN-USERS-01/02`） | admin の業務であり、EYE 側の spec を消すと宙に浮く | `services/admin/e2e/user-administration.spec.ts` のタグ |
 | C-4 | [破棄] 旧 `packages/contracts/src/glasses_management.ts`（1,600 行）を作り直し、admin が実際に使う 5 つだけ残した | 0 ベースの指示。旧設計のスキーマに依存する契約テスト 8 本も削除 | 契約は P1 以降で必要なぶんだけ足す |
 | C-5 | [新設] 設計文書を `design/01`〜`09` の 9 本に分けた（要件・ドメイン・テーブル・API・画面フロー・ユースケース・非機能・追跡表・未決事項） | spec.md 1 枚には収まらず、validator の分母にも入れたくないため | 14,263 行 |
 | C-6 | [新設] レビューを 3 巡（HIG/アクセシビリティ/UI → ユーザーストーリー/業務フロー/文言 → 文書間整合/実装可能性）に分け、すべて subagent が行った | 依頼どおり | 指摘は scratchpad に全文が残っている |
@@ -46,7 +46,7 @@
 | D-3 | [新設] `organizations.revision` を `text` で持ち、比較は `Number()` に通す | 文字列比較だと `'10' < '2'` が真になり、revision 10 以降が二度と更新されなくなる | 組織同期 |
 | D-4 | [新設] default-deny の除外に `/api/public/*` を足した | お客様向け Web 予約は未認証で店舗 slug からテナントを解く | 認可の入口 |
 | D-5 | [変更] たたんだサイドバーでもボタンの読み上げ名を残す（`sr-only`）。モックは `font-size:0` で消していた | アイコンだけのボタンに名前が無いのは重大な欠陥 | 見た目は変わらない |
-| D-6 | [新設] `db:seed:local` と `seed.mjs` を足し、`make init` で EYEX と 3 店舗が入るようにした | 開発と e2e の足場 | 組織 id は `org-eyex-seed` |
+| D-6 | [新設] `db:seed:local` と `seed.mjs` を足し、`make init` で EYE と 3 店舗が入るようにした | 開発と e2e の足場 | 組織 id は `eye` |
 | D-7 | [新設] Playwright の突き合わせ面を 1194×810 / `scale: 'device'` にした | 810 = 端末 834 − ステータスバー 24。ブラウザに与えられる実際の描画領域 | `playwright.config.ts` |
 | D-8 | [前提] `maxDiffPixelRatio` は「いまその画面に許している差」とし、**下げるだけで上げない**運用にした | 合否ではなく、承認された見た目からの距離を測る道具として使う | 各 mock-compare のテスト |
 
@@ -137,7 +137,7 @@
 - AC-SET-15 の E2E は 50分→60分ではなく 50分→70分で固定した — 理由: seed の刻み 30 分・片付け 10 分では空きが 30 分刻みでしか現れず、50→60 で落ちる枠が 0 件になる（予約の行が入ると変わる） — 影響: e2e/store-settings.spec.ts（「60分／2件」は PurposePanel.test.tsx が持つ）
 - AC-SET-08 の E2E は 9月30日ではなく 9月28日（月）の丸で見た — 理由: seed が 9月30日を最初から臨時のお休みにしているので、そこでは「営業日→お休み」の移り変わりを見られない（9月30日は AC-SET-09 が使う） — 影響: e2e/store-settings.spec.ts
 - AC-SET-16 / AC-SET-12 の E2E は「Given の状態を先に保存してから」本題に入る — 理由: seed の修理・部品交換は既に非公開、勤務は曜日テンプレートだけで日付に展開されていないため、AC の Given がそのままでは成立しない — 影響: e2e/store-settings.spec.ts
-- AC-SET-17 の E2E は 中村 彩 の `adminUserId` を dev グラントの `sub` に一時的に付け替えて撮り、終わりに戻す — 理由: dev グラントは組織ごとに 1 つの `sub` しか作らず、名乗り（中村 彩（スタッフ））を出すにはスタッフ行と結び付ける以外に経路が無い — 影響: e2e/store-settings.spec.ts（後始末で `user-eyex-nakamura` に戻す）
+- AC-SET-17 の E2E は 中村 彩 の `adminUserId` を dev グラントの `sub` に一時的に付け替えて撮り、終わりに戻す — 理由: dev グラントは組織ごとに 1 つの `sub` しか作らず、名乗り（中村 彩（スタッフ））を出すにはスタッフ行と結び付ける以外に経路が無い — 影響: e2e/store-settings.spec.ts（後始末で `user-eye-nakamura` に戻す）
 
 ### F-frontend-review — frontend レビュー（11 件）
 
@@ -200,7 +200,7 @@
 - 視力測定機 B は `is_active='1'` のままにし、点検の行だけ入れる — 理由: SETTINGS-EQUIPMENT の「止めています」は右の**編集中（未保存）**の下書きで、その下の「止めると影響するご予約 3件」はその下書きの影響カードである。保存済みの状態は「使えます」＋点検予定 — 影響: `seed.mjs`
 - 点検は視力測定機 B の 1 行だけにする（モックの一覧が描く 視力測定機 A 9/14・検査室 1 10/5・フィッティング台 9/14・加工室 9/1 は入れない） — 理由: TODO が「点検 1 行」と明示している。TODO が明示するところは TODO を採り、黙っているところだけモックで埋める — 影響: `seed.mjs` の `equipment_maintenance`
 - `visit_purposes.store_id` は銀座店の id を入れる（チェーン共通の NULL にしない） — 理由: 設定の「ご来店の目的」は店舗の面で、共通行を 1 店舗の画面から書き換えると他店舗へ波及する — 影響: `seed.mjs` の `visit_purposes` 6 行
-- `store_memberships` の 2 件は admin ユーザ id を `user-eyex-yamada` / `user-eyex-nakamura` とし、同じ値を `staff.admin_user_id` にも入れる — 理由: 個人ログイン（`staff_org_admin_user_idx`）が JWT の `sub` から staff 行を引けることを dev と E2E で確かめられるようにする — 影響: `seed.mjs`
+- `store_memberships` の 2 件は admin ユーザ id を `user-eye-yamada` / `user-eye-nakamura` とし、同じ値を `staff.admin_user_id` にも入れる — 理由: 個人ログイン（`staff_org_admin_user_idx`）が JWT の `sub` から staff 行を引けることを dev と E2E で確かめられるようにする — 影響: `seed.mjs`
 - 山田 大輔の権限を `store.read store.manage reservation.read reservation.write customer.read customer.write settings.read settings.manage`、中村 彩を `store.read reservation.read reservation.write customer.read settings.read` にした — 理由: TODO は「settings.manage を含む一式」「settings.read まで」としか書いていないので、`StorePermission` の 19 値から店長／スタッフの業務に要る範囲を選んだ — 影響: `seed.mjs`
 - `staff.pin_hash` は 6 名とも NULL にする（SETTINGS-STAFF は佐藤 美咲を「設定してあります」と描いている） — 理由: PIN の再設定は P10 の担当で、平文もそれらしいハッシュも seed に置きたくない。NULL は「PIN 未設定＝個人ログイン不可」という定義そのものなので嘘にならない — 影響: `seed.mjs` の `staff`
 - 銀座店の紹介文はモックの本文をそのまま入れる（実測 59 文字。モックの「78文字／200文字まで」とは合わない） — 理由: 文字数の表示は本文から計算する実装側の値で、本文のほうが正本。モック画像は直さない — 影響: `seed.mjs` の `stores.intro_text`
@@ -1057,7 +1057,7 @@
 ### I-r2-frontend-fidelity（12 件）
 
 - 一覧の「ご来店」の列を平文の等幅に戻し、色つきの丸い印（ローカルの `VisitCount`）を消した
-  — 理由: `docs/frontend/mockups/eyex/README.md` が「来店回数（.visits）はお名前の右に出す。
+  — 理由: `docs/frontend/mockups/eye/README.md` が「来店回数（.visits）はお名前の右に出す。
     30分幅の狭い帯と、**回数の列がすでにある画面には入れない**」と決めており、CUSTOMER-LIST は
     まさに回数の列を持つ面である。モックも平文で描いている。1 巡目が添えた理由（色だけで
     区別しない）は、そもそも色を使わない平文には当てはまらない。
@@ -1813,7 +1813,7 @@
 - `useRecorder` に `micDenied` を足し、マイクの口そのものが無い環境（jsdom・古いブラウザ）では立てない — 理由: 「設定でマイクをオンにする」3 手順は許可を断られたときにだけ効く助言で、口が無い端末に出しても直らない — 影響: useRecorder.ts / BookingScreen.test.tsx が壊れない
 - `useRecorder` に `retryNow()` と `retrying` を足した — 理由: EX-UPLOAD-FAILED の「もう一度送る」は 5 分の周期を待たずに送る操作で、1 巡目には押す先が無かった — 影響: useRecorder.ts / UploadFailedPanel の retry 状態
 - 24 時間を過ぎて控えを捨てたときに印を `off` へ落とすようにした — 理由: 1 巡目は控えを消しても `buffered` のままで「録音は端末に保管中」が残り続けた（AC-REC-20 の「failed に落ちた時点で端末からも消える」と食い違う） — 影響: useRecorder.ts の flush
-- **断られた（`NotAllowedError`）ときだけ EX-MIC-DENIED へ差し替える**ようにした（`NotFoundError` = マイクが刺さっていない・`NotReadableError`・API そのものが無い、は印を灰にするだけ） — 理由: 「設定 → EYEX予約 → マイクをオンにする」の 3 手順は断られたときにしか効かず、口が無い端末に出しても直らない。あわせて走らせる Chromium（マイク無し = `NotFoundError`）でも既存の e2e が全部この面に着かなくなる — 影響: useRecorder.ts / booking・mock-compare の e2e が無傷
+- **断られた（`NotAllowedError`）ときだけ EX-MIC-DENIED へ差し替える**ようにした（`NotFoundError` = マイクが刺さっていない・`NotReadableError`・API そのものが無い、は印を灰にするだけ） — 理由: 「設定 → EYE予約 → マイクをオンにする」の 3 手順は断られたときにしか効かず、口が無い端末に出しても直らない。あわせて走らせる Chromium（マイク無し = `NotFoundError`）でも既存の e2e が全部この面に着かなくなる — 影響: useRecorder.ts / booking・mock-compare の e2e が無傷
 - playwright.config.ts にマイクの用意を置くのはやめた（`--use-fake-device-for-media-capture` + `permissions: ['microphone']` を試したが、この機械では `getUserMedia` が `NotFoundError` のままだった。実測して確かめた） — 理由: 効かない設定を残さない — 影響: playwright.config.ts はコメントだけ
 - recording.spec.ts / mock-compare.spec.ts の「許す・断る」を `navigator.permissions` ではなく差し込む `getUserMedia` そのもので決めるようにした — 理由: 走らせる機械にマイクが無い以上、許可の答えではなく口の中身を作るしかない — 影響: e2e/recording.spec.ts / e2e/mock-compare.spec.ts
 - mock-compare の EX-MIC-DENIED / EX-UPLOAD-FAILED を `test.skip` から実測へ戻した — 理由: 器に載った以上ブラウザから通せる。測っていない `maxDiffPixelRatio` を置かないという 1 巡目の判断はここで解ける — 影響: e2e/mock-compare.spec.ts
@@ -1918,61 +1918,52 @@
   slug から引く。**未確認**: 公開面のレート制限は入れていない。無料枠の範囲で
   Cloudflare 側（WAF / Rate Limiting Rules）に寄せるか、アプリ側で持つかは人間の判断が要る
 
-## P9 分析 8 タブ
+## P9 分析
 
-- [新設] `AnalyticsMetric` に `overview` を足して 8 値にした。**理由**: タブは 8 つあるのに
-  `04-api.md` §3.10 は 7 値しか挙げておらず、トップを区別して要求する値が無い。
-  `07-nfr.md` §4.1 が 1 画面 1 本を上限にしているので「2 本叩いて束ねる」形にはできない
-- [新設] `metric='receptions'` を足した。**理由**: ANALYTICS-STAFF の「合計 328件」と
-  ANALYTICS-WAIT の「受付 328件」はご来店の受付（ウォークインを含む）で、
-  ANALYTICS-COUNT の 320 件（取消を含まない予約）とは**別の母数**である
-- [新設] `metric='closed'` を足した。**理由**: 定休日の 0 件（行がある）と欠測（行が無い）を
-  区別するため。`businessDays`・`pendingDays`・`isClosed` の 3 つがこの 1 metric から出る
-- [変更] `AnalyticsPoint.secondaryValue` に「人数」ではなく「率」を載せた。**理由**: Q-11 で
-  人数を書かないので空く。担当者タブの「90日以内の再来」を載せ、「—」の描き分けは `null` かどうかだけで決まる
-- [変更] `revisit_rate_90d`（率）を保存せず `revisits_90d`（分子）を保存する。**理由**: 率を日ごとに
-  保存すると期間で足したときに「率の平均」になり、日ごとの母数の違いが消える。
-  小標本抑制（分母 20 件未満）はこの分母でしか判定できない
-- [変更] 取り消しの 5 層は `analytics_daily` に `dimension='cancel_reason'` で保存した。
-  **理由**: `03-data-model.md` §11.4 の「積み上げは保存しない」は、同じ節の不変条件
-  「生データの走査を画面から行わない」と `07-nfr.md` §4.2 の CPU 10ms と両立しない。
-  「保存しない」は **`metric` を 5 つに増やさない**（`dimension` で割る）という意味に読んだ
-- [変更] **AC-ANA-21 の「26 日」は数え違い**なので、spec の具体値を seed の実測値へ直した。
-  2026年8月は暦 31 日、火曜が 4 日なので営業日は **27 日**。26 は ANALYTICS-COUNT のグラフが
-  1〜30 日の 30 本しか描いていない（8/31 が落ちている）ことに由来する。
-  定義（「分母は営業日数」）そのものは変えていない
-- [前提] Cron を 2 本目にしなかった。P7 が置いた `"55 14 * * *"` と `scheduled` ハンドラへ
-  1 行足すだけにした。**理由**: アカウント全体の Cron 枠は 5 本しかない
-- [新設] seed は、**実時刻の JST 当日が店舗の定休曜日に当たるときだけ** `kind='special'`
-  （臨時営業 10:00–19:00）を 1 行足し、その日の勤務も展開する。**理由**: 来店受付ボードの API が
-  サーバ側で `new Date()` を使うため E2E は実時刻の暦日で組み立てるしかなく、
-  そのままでは**毎週火曜に E2E が全滅する**。世界観データ（銀座店の定休は火曜）は変えていない
+- [変更] 2026年8月の営業日数を **27日**、1日あたりを `320 ÷ 27 = 11.9件` とした。
+  **理由**: 8月は31日あり、火曜の定休は4日なので、イシュー本文の26日・12.3件は8月31日の数え落としだった。
+  暦と実データを正本にし、spec・設計・seed・E2Eを同じ値へ揃えた
+- [新設] 既存5タブは `docs/frontend/mockups/eye/images/ANALYTICS-{TOP,COUNT,STAFF,WAIT,CANCEL}.png`
+  を見た目の正本として維持し、案Bはモックが無かった3タブだけに適用した。
+  **理由**: 既存モックを基本に使うという承認に従い、既存5面を別案で置き換えないため
+- [新設] トップの棒グラフは前後7日の15日分のまま、先週・今週・来週の要約だけは3週を完全に含む補助期間から作る。
+  **理由**: 中心日前後7日だけでは先週月曜や来週日曜が欠け、承認値68・72・42件を正しく計算できない。
+  表示APIはどちらも `analytics_daily` だけを読み、補助期間の点はグラフへ混ぜない
+- [変更] Cronが未来日を再集計するときは、予約予定・受付予約・取消だけを書き、`closed` や来店実績を推測して書かない。
+  **理由**: 未完了の未来日を定休日0件や実績0件として確定すると、欠測と0件を区別できなくなるため
+- [新設] `/api/staff/analytics/targets` は認可済み契約として残す一方、Web画面は各レポートの `target` を使い、
+  入場時に同じ固定値を重複取得しない。**理由**: 1タブ1リクエストの上限を守り、値の二重管理を避けるため
+- [変更] 実行日が火曜でも全E2Eが同じ結果になるよう、seedの当日用データと既存受付・台帳・Web予約テストを
+  暦に依存しない選び方へ直した。**理由**: 2026-09-01（火曜・通常は定休）に全実行すると既存20件が
+  `store_closed` などで落ち、実時刻に依存しないというテスト規約を満たしていなかったため
 
 ## P10 端末の使い分けと監査
 
-- [新設] `terminals` に `version`（integer・1 以上）を持たせた。**理由**: `03-data-model.md` §10.1 の
-  列表には無いが、`04-api.md` の `TerminalPatch` が `version` 必須で `409 version_conflict` を返し、
-  §5 の楽観ロック表も `terminals` を挙げている。**列が無いと `PATCH` が成立しない**
-- [変更] `audit_events.target_type` を**テーブル名そのまま（snake_case・複数形）**に統一した。
-  **理由**: `03-data-model.md` §10.3 の単数形の列挙（`reservation` / `customer` …）は
-  `customer_notes` / `alerts` / `store_business_hours` を表せない（`07-nfr.md` §7.2 が正）。
-  P3・P5・P7 が単数形で書いた行の綴りと、そのフェーズのテストの期待値も同じ変更で直した
-- [変更] `Terminal.name` を 1..60 にした（`03-data-model.md` の「1〜30文字」は採らない）。
-  **理由**: `04-api.md` §4.2 を契約の正とする。P7 が `Alert.body` を 120 に決めたのと同じ扱い
-- [破棄] **EX-PERMISSION の「この下書きを店長に依頼する」を画面に出さない。**
-  spec の AC-TERM-13 の Then から該当の一句を落とした。**理由**: 依頼を立てるための
-  `AlertCode` が 10 値の許可リスト（`04-api.md` §4.9）に `settings.approval_requested` を含まない。
-  **押せて何も起きないボタンを置かない。** Q-10 の答えが来たら一句を戻し、E2E を 1 本足す
-- [破棄] **`terminal.masked` の監査行を書かない。** `07-nfr.md` §7.2 の語彙には残るが、
-  伏せている間は API を叩かないという決めがあり、書くための経路が `04-api.md` §3.10 に 1 本も無い。
-  「伏せても監査は 1 行も増えない」をテストで固定した
-- [前提] **境界は `07-nfr.md` §10.3 を正とする。** 自動ロックは 120 秒ちょうどでは伏せず +1 秒で伏せる。
-  PIN の 30 秒ロックは 30 秒ちょうどはまだ入力できず +1 秒で入力できる。
-  `06-use-cases.md` IDX-TERM-07 の「120秒ちょうどで伏せ」はこれに合わせて読む
-- [前提] **`react-router` を入れず、`ADMIN` binding も足さなかった**（どちらもルール 10 の人間承認事項）。
-  画面は `App.tsx` の状態で出し分け、`05-screen-flow.md` §3.1 のルートは
-  「どの画面がどの状態か」を示す名前として読む。URL は書き換えない。
-  最初のトークンは P0 の dev グラントのまま使う。**未確認**: 本番のスタッフ認証は Q-07 のまま未決
-- [新設] 自動ロックは**経過を数えるタイマーに頼らず**、最後にさわった時刻と画面が表に戻った時刻の
-  差で判定する。**理由**: 裏に回ったタブでは時間の進みが絞られ、タイマーでは 120 秒を過ぎても発火しない。
-  読み上げのフォーカス移動（`focusin`）も「さわった」に数える（読み上げで盤面をたどると 120 秒を容易に超えるため）
+- [変更] `/start` と `/login/**` の最初のトークンを、`ADMIN` service binding経由でadminの
+  `/api/internal/domain-auth/login` / `refresh` から得る設計にした。**理由**: 認証源泉をadminへ一本化し、
+  JWTをまだ持たない業務開始画面を実際に成立させるため。設計承認後にbindingと `AUTH_PEPPER` を追加した
+- [変更] EX-PERMISSIONの「この下書きを店長に依頼する」は表示しない。**理由**: 依頼の受け取り先と
+  承認フローが未定で、押しても完了できない操作になるため。下書きは保持し、店長PINで続ける経路だけを出す
+- [新設] モックのない「設定 › 端末」は、既存の設定第2サイドバー・保存バー・行の文法をそのまま使い、
+  新規登録も同じパネル内へ置いた。**理由**: 正本モックを置き換えず、押せるが行き先のない入口を作らないため
+- [変更] `AuditTargetType` は単数のドメイン名ではなく、snake_case・複数形のテーブル名に統一した。
+  **理由**: `customer_notes` / `store_business_hours` など単数形の許可リストでは表せない監査対象を
+  fail-closeの許可リストで扱うため。既存行はmigrationで同じ綴りへ揃える
+- [新設] 条件付き更新の監査INSERTにも本更新と同じ `WHERE EXISTS` を付ける。
+  **理由**: D1 batchは0行UPDATEでも後続をcommitするため、409で起きなかった操作の監査だけが残るのを防ぐ
+- [新設] 端末設定に `version` を持たせて楽観ロックする。**理由**: 複数端末から同じ設定を保存したとき、
+  後勝ちでPINや自動ロック秒数を静かに上書きしないため
+- [新設] 自動ロックが無効な業務開始画面で時間が過ぎても、共有セッション開始直後には伏せず、
+  有効化された瞬間から待機時間を測り直す。**理由**: ログイン画面を開いたままにした時間を業務中の離席として
+  数えると、正しいPINの直後に画面が覆われるため
+- [変更] 端末idを資格情報として扱わず、開始・昇格で48 random bytesのbase64url tokenを発行し、D1には
+  SHA-256 hashだけを保存する。両端末headerは必須で、不正な片方がある要求はstaffへfallbackしない。
+  **理由**: 端末idは画面や監査から知り得る識別子であり、セッションを名乗る秘密にはならないため
+- [決定] 個人セッションは `expires_at` で個人権限を失い、その後は同じtokenを `started_at + 24h` 未満だけ
+  共有端末として認証する。24時間ちょうど、明示終了、引継ぎ、credential-less過去行は認証しない。
+  **理由**: 自動ロック後の日常業務を継続しつつ、過去行や無期限の共有fallbackを作らないため
+- [決定] PIN失敗回数は従来どおり `SHORT_LIVED` KVに置き、同時更新の完全な直列化は保証しない。
+  **理由**: 3回・30秒という通常操作の意味を保ち、Durable Objectなど新しい有料・状態部品を追加しないため
+- [変更] store向けお知らせは常に `audience='store'` で絞り、公開PATCHは既読だけにする。
+  `recording.upload_failed` の対応済み化はretry受付時でなく、録音が実際に`stored`へ遷移する同じbatchで行う。
+  **理由**: store JWTによるops通知の列挙・変更と、送信未完了の見せかけの解決を防ぐため

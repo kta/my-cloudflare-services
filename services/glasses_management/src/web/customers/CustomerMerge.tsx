@@ -10,7 +10,7 @@ import {
 import { formatPhoneDigits } from '../booking/CustomerStep'
 
 /*
- * 同じお客様をまとめる（承認済みモック docs/frontend/mockups/eyex/images/CUSTOMER-MERGE.png）。
+ * 同じお客様をまとめる（承認済みモック docs/frontend/mockups/eye/images/CUSTOMER-MERGE.png）。
  *
  * 題材: 取り消せない操作の前に、まとめたあとの姿と失うものを同じ画面で読ませる面。
  * トークン計画: 見比べ表は罫だけで組む（箱にしない）。残す側だけ 2px の緑枠と
@@ -18,7 +18,7 @@ import { formatPhoneDigits } from '../booking/CustomerStep'
  *   右は結果（緑の箱）と警告（赤の箱）の 2 枚だけ。
  * シグネチャ: 「まとめると元に戻せません」と実行ボタンが同じ視線の上にあること。
  *
- * 実測（screens/CUSTOMER-MERGE.html の <style> と assets/eyex.css）:
+ * 実測（screens/CUSTOMER-MERGE.html の <style> と assets/eye.css）:
  *   本文 padding 28px 32px・2 列 1fr / 300px・gap 28px
  *   見比べ表 3 列 108px / 1fr / 1fr。見出し行は下に padding 14px ＋ 1px の line-strong
  *   各行 min-height 96px・下に 1px の罫。項目名 15px ＋ その下に 13px の「A を残します」

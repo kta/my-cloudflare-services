@@ -6,7 +6,7 @@ import { PIN_RESET_TTL_SECONDS, setOwnPin, startPinReset } from '../src/worker/u
 import { BASE, createTenantOrganization, inviteMember, JSON_HEADERS } from './helpers/actors'
 
 /**
- * UC-EYEX-151 の期限境界。時刻は必ず注入し、ちょうど・±1 秒を固定する
+ * UC-EYE-151 の期限境界。時刻は必ず注入し、ちょうど・±1 秒を固定する
  * (実時刻に依存させない)。
  */
 

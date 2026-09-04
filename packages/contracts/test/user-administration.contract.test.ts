@@ -16,7 +16,7 @@ import {
 } from '../src/index'
 
 /**
- * UC-EYEX-149 / UC-EYEX-151 の契約。標準ロールのカタログは
+ * UC-EYE-149 / UC-EYE-151 の契約。標準ロールのカタログは
  * glasses_management の StorePermission を唯一の語彙とするため、循環 import を
  * 避けたうえで**テストで**部分集合であることを固定する。
  */

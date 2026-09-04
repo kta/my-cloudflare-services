@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "4f8296ba-f3eb-43e2-b102-302fb3d0ebb5",
+  "id": "4d5c0ff8-244e-45aa-95df-3abdf3387706",
   "prevId": "395f79a3-fbe1-4995-a37e-7bf032383612",
   "tables": {
     "alerts": {
@@ -190,9 +190,16 @@
           "notNull": true,
           "autoincrement": false
         },
+        "dimension_label": {
+          "name": "dimension_label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
         "value": {
           "name": "value",
-          "type": "real",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
@@ -239,7 +246,12 @@
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
-      "checkConstraints": {}
+      "checkConstraints": {
+        "analytics_daily_value_nonnegative_check": {
+          "name": "analytics_daily_value_nonnegative_check",
+          "value": "\"analytics_daily\".\"value\" >= 0"
+        }
+      }
     },
     "audit_events": {
       "name": "audit_events",
@@ -1992,6 +2004,15 @@
             "starts_at"
           ],
           "isUnique": false
+        },
+        "reservations_org_store_created_idx": {
+          "name": "reservations_org_store_created_idx",
+          "columns": [
+            "organization_id",
+            "store_id",
+            "created_at"
+          ],
+          "isUnique": false
         }
       },
       "foreignKeys": {},
@@ -3647,6 +3668,14 @@
             "organization_id",
             "store_id",
             "status"
+          ],
+          "isUnique": false
+        },
+        "web_bookings_status_created_idx": {
+          "name": "web_bookings_status_created_idx",
+          "columns": [
+            "status",
+            "created_at"
           ],
           "isUnique": false
         }

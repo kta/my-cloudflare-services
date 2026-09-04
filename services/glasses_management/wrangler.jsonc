@@ -29,12 +29,15 @@
   "r2_buckets": [{ "binding": "RECORDINGS", "bucket_name": "glasses-management-recordings" }],
   // 予約確定メールと管理コード発行メールは notifier へ同期送信する
   // （service binding + x-internal-key）。Queues は使わない。
-  "services": [{ "binding": "NOTIFIER", "service": "notifier" }],
-  // 日次の保守。**UTC で書く**ので 14:55 = JST 23:55（閉店後・日付が変わる前）。
+  "services": [
+    { "binding": "NOTIFIER", "service": "notifier" },
+    { "binding": "ADMIN", "service": "admin" }
+  ],
+  // 日次の保守。**UTC で書く**ので 15:00 = JST 00:00（業務日の境界）。
   // アカウント全体の Cron 枠 5 本のうち、このサービスが 1 本目を使う
   // （specs/glasses_management/design/04-api.md §3.2）。保持期限を過ぎた録音の掃除と、
   // 24 時間動かない録音を failed に落とす処理をこの 1 本の中で順に呼ぶ。
-  "triggers": { "crons": ["55 14 * * *"] }
-  // secrets（INTERNAL_KEY / JWT_SECRET / AUTH_DEV_GRANT）は vars に置かない。
+  "triggers": { "crons": ["0 15 * * *"] }
+  // secrets（INTERNAL_KEY / JWT_SECRET / AUTH_PEPPER / AUTH_DEV_GRANT）は vars に置かない。
   // dev は .dev.vars、本番は `wrangler secret put`。docs/howto/deploy.md 参照。
 }

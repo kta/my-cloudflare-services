@@ -34,3 +34,5 @@
 
 - **ルートと各サービスの `AGENTS.md` がそのscopeの正**（同階層の `CLAUDE.md` はそのシンボリックリンク）。ここの文書は AGENTS.md から必要なときだけ参照される詳細版です。
 - 迷ったら **実物のコードと `pnpm check` の結果が正**。文書と実装が食い違っていたら、それはバグ報告に値します（エージェントに「この文書、実装と違う」と言えば直します）。
+- [`howto/patent-research.md`](./howto/patent-research.md) — 典拠（Tenkyo）: 特許調査・出願支援の作業机を動かす
+- [`patent/BUDGET.md`](./patent/BUDGET.md) — 典拠の予算とキャパシティ（実測と再現手順つき）

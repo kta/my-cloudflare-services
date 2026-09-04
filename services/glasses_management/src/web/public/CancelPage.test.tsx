@@ -4,11 +4,11 @@ import { describe, expect, it, vi } from 'vitest'
 import { CancelPage, type ManagedReservation } from './CancelPage'
 
 /*
- * ご予約の確認・変更・取り消し（承認済みモック docs/frontend/mockups/eyex/images/WEB-CANCEL.png）。
+ * ご予約の確認・変更・取り消し（承認済みモック docs/frontend/mockups/eye/images/WEB-CANCEL.png）。
  *
  * この面の仕事は「番号 2 つだけで自分の予約に戻り、変更と取消の 2 つの出口だけを置く」こと。
  *
- * 実測値（screens/WEB-CANCEL.html と assets/eyex.css）:
+ * 実測値（screens/WEB-CANCEL.html と assets/eye.css）:
  *   進捗は 2 段（両方点灯）。本文の余白 32px 28px 152px。
  *   明細は上に 24px、見出し列 78px・13px、値 16px 太さ 600、ご来店の行だけ 20px `--color-pine-deep`、
  *   ご予約番号の行は等幅。期限の 1 行は上に 24px・13px `--color-ink-muted`。
@@ -21,7 +21,7 @@ const RESERVATION: ManagedReservation = {
   status: 'confirmed',
   startsAt: '2026-08-29T02:00:00.000Z', // JST 8月29日（土）11:00
   endsAt: '2026-08-29T03:00:00.000Z',
-  storeName: 'EYEX 銀座店',
+  storeName: 'EYE 銀座店',
   storePhone: '03-1234-5678',
   purposeName: '新しいメガネを作る',
   durationMinutes: 60,
@@ -151,7 +151,7 @@ describe('明細', () => {
     await lookUp()
     expect(await screen.findByRole('group', { name: 'ご来店' })).toBeVisible()
     expect(within(line('ご来店')).getByText('8月29日（土）11:00')).toBeVisible()
-    expect(within(line('店舗')).getByText('EYEX 銀座店')).toBeVisible()
+    expect(within(line('店舗')).getByText('EYE 銀座店')).toBeVisible()
     expect(within(line('ご用件')).getByText('新しいメガネを作る（約60分）')).toBeVisible()
     expect(within(line('お名前')).getByText('山口 真央 様')).toBeVisible()
     expect(within(line('ご予約番号')).getByText('EY-W-2608-0031')).toBeVisible()

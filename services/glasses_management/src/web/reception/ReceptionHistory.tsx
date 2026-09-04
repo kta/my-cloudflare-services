@@ -2,7 +2,6 @@ import type {
   LocalDate,
   ReceptionHistoryDetail,
   ReceptionHistoryEntry,
-  Recording,
   RecordingSummary,
   ReservationStatus,
   SearchRelaxation,
@@ -16,10 +15,12 @@ import { client } from '../client'
 import { dateLabel, jstClock, shiftDate } from '../ledger/metrics'
 import { VisitBadge } from '../ledger/Timetable'
 import { hasPlayableRecording, RecordingPlayer } from '../recording/RecordingPlayer'
+import { EmptyState, LoadingState } from '../shell/EmptyState'
+import { LoadFailed } from '../shell/LoadFailed'
 
 /*
  * 受付履歴の一覧・詳細・0 件（承認済みモック
- * docs/frontend/mockups/eyex/images/HISTORY-LIST.png と HISTORY-EMPTY.png）。
+ * docs/frontend/mockups/eye/images/HISTORY-LIST.png と HISTORY-EMPTY.png）。
  *
  * 題材: 店長がお客様からのお問い合わせに、その場で「いつ誰が受け、そのあと何が変わったか」を
  *   答える面と、絞りすぎて 0 件になった店長を条件 1 つで元の道へ戻す面。
@@ -28,7 +29,7 @@ import { hasPlayableRecording, RecordingPlayer } from '../recording/RecordingPla
  * シグネチャ: **左 288px の細い一覧と、右の「そのあとの変更」の時系列**／
  *   **候補の右に件数が先に出ていて、押す前に何件見つかるか分かること。**
  *
- * 実測（screens/HISTORY-LIST.html / HISTORY-EMPTY.html の <style> と assets/eyex.css）:
+ * 実測（screens/HISTORY-LIST.html / HISTORY-EMPTY.html の <style> と assets/eye.css）:
  *   `.toolbar` 56px。`.fbtn` min-height 40px / padding 0 12px / 角 8px（rounded-ctl）/
  *   13px・600（値は 400 の --ink-2。選択中は枠 2px --brand ＋ 地 --brand-tint）。
  *   「お客様名で探す」 min-height 40px / padding 0 14px。**触れるものは 44pt へ上げる。**
@@ -115,16 +116,6 @@ export type ReceptionHistoryProps = {
    * 欄が `RecordingSummary` になったらここへ 1 行で繋ぎ替える。
    */
   recording?: RecordingSummary | null
-  /**
-   * この店舗の録音（P10）。開いている 1 件のぶんを受付セッション id で引き当てる。
-   * `recording` を直に渡されたときはそちらが勝つ。
-   */
-  recordings?: readonly Recording[]
-  /**
-   * 「この録音を保全する」（UC-TERM-09 / AC-TERM-10）。**この面では確認を求めない** ——
-   * ご本人の確認（MODE-PERSONAL）を挟むかどうかは器が決める。
-   */
-  onPreserveRecording?: (recording: Recording) => void
 }
 
 type ListPhase = 'loading' | 'ready' | 'error' | 'forbidden'
@@ -290,8 +281,6 @@ export function ReceptionHistory({
   onOpenReservation,
   onStartBooking,
   recording = null,
-  recordings = [],
-  onPreserveRecording,
 }: ReceptionHistoryProps) {
   const [filters, setFilters] = useState<HistoryFilters>(() => ({
     ...defaultFilters(today),
@@ -303,6 +292,8 @@ export function ReceptionHistory({
   const [nextCursor, setNextCursor] = useState<string | null>(null)
   const [relaxations, setRelaxations] = useState<readonly SearchRelaxation[]>([])
   const [phase, setPhase] = useState<ListPhase>('loading')
+  // 読み直しの合図（LoadFailed の「もう一度読み込む」から上げる）。
+  const [reloadCount, setReloadCount] = useState(0)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [detail, setDetail] = useState<ReceptionHistoryDetail | null>(null)
   const [detailFailed, setDetailFailed] = useState(false)
@@ -351,7 +342,22 @@ export function ReceptionHistory({
     return () => {
       live = false
     }
-  }, [load])
+  }, [load, reloadCount])
+
+  /*
+   * 一覧が届いたら先頭の 1 件を選ぶ。以前は何も選ばれずに開き、
+   * 画面の 58% を占める右ペインが灰色の 1 行だけだった（UX 監査 UI-09）。
+   * 左の 1 件を押すだけで埋まるものを、その 1 タップぶん利用者に押させない。
+   * **自分で選んだあとは触らない**（絞り込みを変えたときは上の副作用が選択を外すので、
+   * そのあともう一度ここが先頭を選ぶ）。
+   */
+  const firstEntry = items[0]
+  useEffect(() => {
+    if (selectedId !== null || firstEntry === undefined) return
+    select(firstEntry)
+    // select は毎描画で作り直されるが、見たいのは「先頭が変わったか」だけである。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [firstEntry, selectedId])
 
   function select(entry: ReceptionHistoryEntry) {
     setSelectedId(entry.entryId)
@@ -497,9 +503,14 @@ export function ReceptionHistory({
         </p>
       )}
       {phase === 'error' && (
-        <p role="alert" className="px-8 py-6 text-body text-ink-muted">
-          受付履歴を読み込めませんでした。通信が切れているかもしれません。
-        </p>
+        <LoadFailed
+          what="受付履歴"
+          hint="通信が切れているかもしれません。"
+          onRetry={() => {
+            setPhase('loading')
+            setReloadCount((n) => n + 1)
+          }}
+        />
       )}
 
       {phase === 'ready' && total === 0 && (
@@ -579,8 +590,6 @@ export function ReceptionHistory({
             selected={selectedId !== null}
             staffName={staffName}
             recording={recording}
-            recordings={recordings}
-            {...(onPreserveRecording === undefined ? {} : { onPreserveRecording })}
             onOpenReservation={onOpenReservation}
           />
         </div>
@@ -611,8 +620,6 @@ function HistoryDetail({
   selected,
   staffName,
   recording,
-  recordings,
-  onPreserveRecording,
   onOpenReservation,
 }: {
   detail: ReceptionHistoryDetail | null
@@ -620,16 +627,20 @@ function HistoryDetail({
   selected: boolean
   staffName: (id: string | null) => string | null
   recording: RecordingSummary | null
-  recordings: readonly Recording[]
-  onPreserveRecording?: (recording: Recording) => void
   onOpenReservation: (reservationId: string) => void
 }) {
   if (!selected) {
+    // 空・読み込み中・失敗を形で見分ける（UX 監査 UI-10）。
     return (
-      <section aria-label="選んだ受付の中身" className="min-w-0 flex-1 bg-surface px-8 py-7">
-        <p className="text-body text-ink-muted">
-          左の 1 件をお選びください。受け付けた人とそのあとの変更がここに出ます。
-        </p>
+      <section
+        aria-label="選んだ受付の中身"
+        className="flex min-w-0 flex-1 flex-col bg-surface px-8 py-7"
+      >
+        <EmptyState
+          title="受付を選んでください"
+          note="左の 1 件を押すと、受け付けた人とそのあとの変更がここに出ます。"
+          live={false}
+        />
       </section>
     )
   }
@@ -644,28 +655,17 @@ function HistoryDetail({
   }
   if (detail === null) {
     return (
-      <section aria-label="選んだ受付の中身" className="min-w-0 flex-1 bg-surface px-8 py-7">
-        <p className="text-body text-ink-muted">受付の中身を読み込んでいます…</p>
+      <section
+        aria-label="選んだ受付の中身"
+        className="flex min-w-0 flex-1 flex-col bg-surface px-8 py-7"
+      >
+        <LoadingState label="受付の中身を読み込んでいます" rows={6} />
       </section>
     )
   }
 
   const reservation = detail.reservation
   const assigned = reservation?.assignments.find((row) => row.kind === 'staff') ?? null
-  /*
-   * この受付の録音（P10）。器が `recording` を直に渡したときはそれを描き、
-   * 渡していなければ店舗の録音から受付セッション id で引き当てる。
-   */
-  const found =
-    recordings.find(
-      (row) => row.receptionSessionId === detail.sessionId && row.state === 'stored',
-    ) ?? null
-
-  const shown: RecordingSummary | null =
-    recording ??
-    (found === null
-      ? null
-      : { id: found.id, state: found.state, durationSeconds: found.durationSeconds })
   const tag = reservation === null ? null : (resultTag(reservation.status) ?? RESULT_LABELS.settled)
   const received =
     detail.receivedBy === null
@@ -772,32 +772,10 @@ function HistoryDetail({
        * 聞けない録音（無い・端末に残ったまま・消した）のときは**見出しごと出さない**。
        * 空の節が残ると「読み込めていない」のか「もう無い」のかが手元から見分けられない。
        */}
-      {hasPlayableRecording(shown) && (
+      {hasPlayableRecording(recording) && (
         <div>
           <h3 className="m-0 mb-3 text-body font-semibold text-ink-muted">受付のときの録音</h3>
-          <RecordingPlayer recording={shown} placement="inline" />
-          {/*
-           * 保全（UC-TERM-09）。**すでに保全されている録音にボタンを出さない**
-           * （押せて何も起きない操作を置かない）。解除の経路はこの面に置かない。
-           */}
-          {found !== null &&
-            onPreserveRecording !== undefined &&
-            (found.legalHold ? (
-              <p className="mt-3 text-grid text-ink-muted">
-                この録音は保全されています。期限が来ても消えません。
-              </p>
-            ) : (
-              <button
-                type="button"
-                onClick={() => onPreserveRecording(found)}
-                className={cn(
-                  'mt-3 min-h-11 rounded-ctl border border-line-strong bg-surface px-4 text-body font-semibold text-ink',
-                  focusRing,
-                )}
-              >
-                この録音を保全する
-              </button>
-            ))}
+          <RecordingPlayer recording={recording} placement="inline" />
         </div>
       )}
     </section>

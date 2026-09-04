@@ -1,35 +1,25 @@
-/**
- * 暗証番号（PIN）の純関数。**時刻は必ず引数で受ける**（`Date.now()` を呼ばない）。
- *
- * ここには**平文の暗証番号を保存・応答・ログへ出す経路を 1 本も置かない**。
- * 照合そのものは `packages/shared` の `stretchPin` / `hashStretched` /
- * `verifyStretched` が担い、この面が持つのは「登録してよい形か」「あと何回か」
- * 「まだ待たされているか」の 3 つだけである（`04-api.md` §5・`07-nfr.md` §10.3）。
- */
+/** PIN の試行回数とロック境界。時刻はすべて呼出元から注入する。 */
 
-/** 続けて間違えられる回数。3 回目で待ちに入る。 */
-const PIN_MAX_ATTEMPTS = 3
-/** 待ち時間（秒）。境界を 2 か所に持たないよう、ここだけに書く。 */
 const PIN_LOCK_SECONDS = 30
+const MAX_PIN_FAILURES = 3
 
-/**
- * 登録を断る暗証番号かどうか。**辞書は持たない**（`04-api.md` §5）。
- * 断るのは 2 つだけ — 同じ数字の連続（`0000`）と ±1 の連番（`1234` / `4321`）。
- */
+/** 同一数字の並びと、±1 の単調連番だけを弱い PIN とする。 */
 export function isWeakPin(pin: string): boolean {
+  if (!/^\d{4,6}$/.test(pin)) return false
+  if (/^(\d)\1+$/.test(pin)) return true
+
   const digits = [...pin].map(Number)
-  const first = digits[0]
-  if (first === undefined) return false
-  const same = digits.every((digit) => digit === first)
-  const up = digits.every((digit, index) => index === 0 || digit === (digits[index - 1] ?? 0) + 1)
-  const down = digits.every((digit, index) => index === 0 || digit === (digits[index - 1] ?? 0) - 1)
-  return same || up || down
+  const step = (digits[1] ?? 0) - (digits[0] ?? 0)
+  return (
+    (step === 1 || step === -1) &&
+    digits.every((digit, index) => {
+      if (index === 0) return true
+      return digit - (digits[index - 1] ?? digit) === step
+    })
+  )
 }
 
-/**
- * 連続失敗の置き場（KV の鍵）。D1 に行を作らないので、30 秒で自然に消える。
- * 共有モードは担当を持たないので `'shared'` に落とす。
- */
+/** KV に置く、共有または個人 PIN の失敗回数キー。 */
 export function pinFailureKey(
   organizationId: string,
   terminalId: string,
@@ -38,7 +28,6 @@ export function pinFailureKey(
   return `pin:${organizationId}:${terminalId}:${staffId ?? 'shared'}`
 }
 
-/** 失敗を 1 つ数えたあとの状態。画面は `remainingAttempts` をそのまま読み上げる。 */
 export type PinFailureState = {
   attempts: number
   locked: boolean
@@ -46,23 +35,44 @@ export type PinFailureState = {
   retryAfterSeconds: number
 }
 
-/** いまの失敗回数 `attempts` に 1 つ足した状態を返す。 */
-export function nextFailureState(attempts: number): PinFailureState {
-  const next = attempts + 1
-  const locked = next >= PIN_MAX_ATTEMPTS
+export type StoredPinFailure = { attempts: number; failedAt: string }
+
+/** KVは正本ではないため、壊れた値はロックせず未試行として扱う。 */
+export function parsePinFailure(raw: string | null): StoredPinFailure | null {
+  if (raw === null) return null
+  try {
+    const value = JSON.parse(raw) as unknown
+    if (typeof value !== 'object' || value === null) return null
+    const record = value as Record<string, unknown>
+    if (
+      typeof record.attempts !== 'number' ||
+      !Number.isInteger(record.attempts) ||
+      record.attempts < 1 ||
+      record.attempts > MAX_PIN_FAILURES ||
+      typeof record.failedAt !== 'string' ||
+      !Number.isFinite(Date.parse(record.failedAt))
+    ) {
+      return null
+    }
+    return { attempts: record.attempts, failedAt: record.failedAt }
+  } catch {
+    return null
+  }
+}
+
+/** 直前の失敗回数から、次の失敗後の状態を返す。3 回目で 30 秒ロックする。 */
+export function nextFailureState(previousAttempts: number): PinFailureState {
+  const attempts = Math.min(Math.max(0, Math.floor(previousAttempts)) + 1, MAX_PIN_FAILURES)
+  const locked = attempts >= MAX_PIN_FAILURES
   return {
-    attempts: next,
+    attempts,
     locked,
-    remainingAttempts: locked ? 0 : PIN_MAX_ATTEMPTS - next,
+    remainingAttempts: locked ? 0 : MAX_PIN_FAILURES - attempts,
     retryAfterSeconds: locked ? PIN_LOCK_SECONDS : 0,
   }
 }
 
-/**
- * まだ待たされているか。**30 秒ちょうどはまだ入力できず、+1 秒で入力できる**
- * （`07-nfr.md` §10.3）。一度も失敗していない（`lockedAt === null`）なら待たない。
- */
+/** ロック開始から30秒ちょうどまでは入力を拒み、+1ms で解除する。 */
 export function isPinLocked(lockedAt: Date | null, now: Date): boolean {
-  if (lockedAt === null) return false
-  return now.getTime() - lockedAt.getTime() <= PIN_LOCK_SECONDS * 1000
+  return lockedAt !== null && now.getTime() - lockedAt.getTime() <= PIN_LOCK_SECONDS * 1000
 }

@@ -2,7 +2,7 @@ import { focusRingOnPine } from '@app/ui'
 import { jstClock } from './metrics'
 
 /*
- * 通信断の帯（承認済みモック docs/frontend/mockups/eyex/images/EX-OFFLINE.png）。
+ * 通信断の帯（承認済みモック docs/frontend/mockups/eye/images/EX-OFFLINE.png）。
  *
  * 書けないことを伝えたうえで、読むことだけは続けられる状態を保つ面。
  * 「成立したのか／していないのか／再試行できるのか」の 3 つを必ず文字で読ませる。

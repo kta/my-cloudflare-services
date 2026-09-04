@@ -1,10 +1,11 @@
 import type { APIRequestContext, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
-import { enterSharedWorkspace } from './terminal-start'
+import type { SeededTerminalSession } from './support/terminal'
+import { completeSeededTerminalStart } from './support/terminal'
 
 /**
  * 受付の録音（010-recording）の受け入れ基準を、実ブラウザと実 Worker で確かめる。
- * `vite preview` が実 workerd を動かし、D1 は `seed.mjs` が入れた EYEX 銀座店である。
+ * `vite preview` が実 workerd を動かし、D1 は `seed.mjs` が入れた EYE 銀座店である。
  *
  * 1 本の test の直前の行に `// @e2e-covers <ID>` を置く。この面は UC 9 本（UC-REC-01..09）と
  * AC 20 本（AC-REC-01..20）の **29 個**を 22 本にちょうど 1 回ずつ並べる。
@@ -37,8 +38,8 @@ import { enterSharedWorkspace } from './terminal-start'
  * （`POST /api/internal/maintenance/recordings/purge`）の `now` に固定値を注入する。
  */
 
-const ORG = 'org-eyex-seed'
-/** seed.mjs が固定 id で入れる EYEX 銀座店。 */
+const ORG = 'eye'
+/** seed.mjs が固定 id で入れる EYE 銀座店。 */
 const GINZA = '11111111-1111-4111-8111-111111111111'
 /** dev グラントが載せる `sub`。 */
 const VIEWER = `dev:${ORG}`
@@ -61,14 +62,12 @@ const RECORDING_PERMISSIONS = [
   'customer.read',
   'customer.write',
   'settings.read',
-  // 分析は seed の盤面をそのまま読むので、配り直しでも `analytics.read` を落とさない。
-  'analytics.read',
   'settings.manage',
   'recording.read',
   'recording.manage',
 ]
 /** 他組織の資格情報（AC-REC-14）。同じ端末の担当店舗だけを配り、録音は 1 本も持たない。 */
-const OTHER_ORG = 'org-eyex-other'
+const OTHER_ORG = 'org-eye-other'
 const OTHER_MEMBERSHIP_ID = '0e0e0e0e-0e0e-4e0e-8e0e-0e0e0e0e0e0e'
 
 /** seed の id は `${区分}-0000-4000-8000-${連番}`（`seed.mjs` の `uid`）。 */
@@ -153,9 +152,9 @@ const mic = (allow: boolean) => `(() => {
   }
 })()`
 
-/** 端末に残っている控え（IndexedDB `eyex-recording-outbox` / `blobs`）の録音 id。 */
+/** 端末に残っている控え（IndexedDB `eye-recording-outbox` / `blobs`）の録音 id。 */
 const READ_OUTBOX = `new Promise((resolve) => {
-  const request = indexedDB.open('eyex-recording-outbox', 1)
+  const request = indexedDB.open('eye-recording-outbox', 1)
   request.onupgradeneeded = () => {
     request.result.createObjectStore('blobs', { keyPath: 'recordingId' })
   }
@@ -181,15 +180,17 @@ type MicMode = 'granted' | 'denied'
 async function startWork(
   page: Page,
   options: { mic?: MicMode; now?: string; frozen?: boolean } = {},
-): Promise<void> {
+): Promise<SeededTerminalSession> {
   await page.addInitScript(mic((options.mic ?? 'granted') === 'granted'))
   if (options.frozen === true) await page.clock.install({ time: new Date(options.now ?? NOW) })
   else await page.clock.setFixedTime(new Date(options.now ?? NOW))
   await page.goto('/')
   await page.getByLabel('お店のコード').fill(ORG)
   await page.getByRole('button', { name: '業務を始める' }).click()
-  await enterSharedWorkspace(page)
-  await expect(page.locator('header').first()).toContainText('EYEX 銀座店')
+  const session = await completeSeededTerminalStart(page)
+  await expect(page.locator('header').first()).toContainText('EYE 銀座店')
+  expect(session).not.toBeNull()
+  return session as SeededTerminalSession
 }
 
 /**
@@ -235,14 +236,11 @@ async function proceed(page: Page): Promise<void> {
   await barNext(page).click()
 }
 
-/** 工程 1。お日にちとお時間を選ぶ。窓の外の時刻は「ほかの時刻も見る」を開いてから押す。 */
+/** 工程 1。お日にちとお時間を選ぶ。札は営業時間ぶんが全部並んでいる。 */
 async function pickDateTime(page: Page, hhmm: string): Promise<void> {
   const day = page.getByRole('button', { name: new RegExp(`^${DAY_LABEL}`) })
   const time = page.getByRole('button', { name: new RegExp(`^${hhmm} `) })
-  const more = page.getByRole('button', { name: /^ほかの時刻も見る/ })
   await day.click()
-  await expect(time.or(more).first()).toBeVisible()
-  if ((await time.count()) === 0) await more.click()
   await expect(time).toBeEnabled()
   await time.click()
   await expect(time).toHaveAttribute('aria-pressed', 'true')
@@ -310,6 +308,46 @@ async function authed(
   expect(res.status()).toBe(200)
   const { token } = (await res.json()) as { token: string }
   return { headers: { authorization: `Bearer ${token}` } }
+}
+
+/** seed の端末とスタッフ（`seed.mjs` の `uid()` は決め打ちの UUID を配る）。 */
+const RECEPTION_IPAD = 'c0100000-0000-4000-8000-000000000001'
+const SATO_MISAKI = 'c0010000-0000-4000-8000-000000000000'
+const SEED_PIN = '000000'
+
+/**
+ * 録音の保全は個人モードを求める（AC-TERM-10）。ヘッダーを持たない呼び出しは、
+ * 店舗に生きた端末セッションが無いあいだだけ従来どおり通る。e2e は D1 を 1 本しか持たず、
+ * 先に走る面が端末セッションを開くので、**この面も端末を通して個人モードへ上げる**。
+ * 共有で始めて `elevate` する順は、画面がたどる順そのものである。
+ */
+async function personalMode(
+  request: APIRequestContext,
+): Promise<{ headers: Record<string, string> }> {
+  const auth = await authed(request)
+  const started = await request.post(`/api/staff/terminals/${RECEPTION_IPAD}/sessions`, {
+    ...auth,
+    data: { mode: 'shared', pin: SEED_PIN },
+  })
+  expect(started.status(), await started.text()).toBe(200)
+  const shared = (await started.json()) as { sessionToken: string }
+  const elevated = await request.post(`/api/staff/terminals/${RECEPTION_IPAD}/elevate`, {
+    headers: {
+      ...auth.headers,
+      'x-terminal-id': RECEPTION_IPAD,
+      'x-terminal-session': shared.sessionToken,
+    },
+    data: { staffId: SATO_MISAKI, pin: SEED_PIN, reason: 'recording' },
+  })
+  expect(elevated.status(), await elevated.text()).toBe(200)
+  const personal = (await elevated.json()) as { sessionToken: string }
+  return {
+    headers: {
+      ...auth.headers,
+      'x-terminal-id': RECEPTION_IPAD,
+      'x-terminal-session': personal.sessionToken,
+    },
+  }
 }
 
 /** 録音を読める・保全できる担当店舗を配る。何度呼んでも同じ 1 行になる。 */
@@ -549,9 +587,7 @@ test('工程を戻しても録音は 1 本のまま', async ({ page, request }) 
   await startWork(page)
   await startBooking(page)
   await expect(badgeAt(page, 'bar')).toContainText('録音中', { timeout: 15_000 })
-  const sessionId = (await page.evaluate(
-    'sessionStorage.getItem("eyex.booking.session")',
-  )) as string
+  const sessionId = (await page.evaluate('sessionStorage.getItem("eye.booking.session")')) as string
   expect(sessionId).not.toBeNull()
 
   await pickDateTime(page, '13:30')
@@ -577,9 +613,7 @@ test('マイクが切られていると、直し方が 3 手順で出る', async
   await grantRecording(request)
   await startWork(page, { mic: 'denied' })
   await startBooking(page, 'denied')
-  const sessionId = (await page.evaluate(
-    'sessionStorage.getItem("eyex.booking.session")',
-  )) as string
+  const sessionId = (await page.evaluate('sessionStorage.getItem("eye.booking.session")')) as string
 
   // できないことは 1 つに絞って言い切る。受付が続けられることを同じ枠の中で言う。
   const lead = page.getByRole('alert')
@@ -588,12 +622,14 @@ test('マイクが切られていると、直し方が 3 手順で出る', async
   const how = page.getByRole('list', { name: '直し方　この iPad の「設定」で' })
   await expect(how.getByRole('listitem')).toHaveText([
     '1ホーム画面の「設定」を開く',
-    '2一覧から「EYEX予約」を選ぶ',
+    '2一覧から「EYE予約」を選ぶ',
     '3「マイク」をオンにする',
   ])
-  // 右下は灰色の「録音していません　--:--」1 か所きり。工程の帯は出さない。
+  // 右下は灰色の「録音していません」1 か所きり。工程の帯は出さない。
+  // 数えていないので時計そのものを出さない（UX 監査 REC-04。動かない `--:--` は
+  // 「止まった時計」に見えて、録れているのかどうかがかえって分からない）。
   await expect(badgeAt(page, 'floating')).toContainText('録音していません')
-  await expect(badgeAt(page, 'floating')).toContainText('--:--')
+  await expect(badgeAt(page, 'floating')).not.toContainText(':')
   await expect(badge(page)).toHaveCount(1)
   await expect(stepBar(page)).toHaveCount(0)
 
@@ -639,7 +675,7 @@ test('直したので、もう一度確かめる', async ({ page, request }) => 
   await grantRecording(request)
   await startWork(page, { mic: 'denied' })
   await startBooking(page, 'denied')
-  const before = (await page.evaluate('sessionStorage.getItem("eyex.booking.session")')) as string
+  const before = (await page.evaluate('sessionStorage.getItem("eye.booking.session")')) as string
   expect(before).not.toBeNull()
 
   /*
@@ -651,6 +687,7 @@ test('直したので、もう一度確かめる', async ({ page, request }) => 
   await page.addInitScript(mic(true))
   await page.getByRole('button', { name: '直したので、もう一度確かめる' }).click()
   await page.waitForLoadState('load')
+  await completeSeededTerminalStart(page)
 
   // 読み込み直したうえで、押した処理の中からもう一度判定する。こんどは通る。
   await page.getByRole('button', { name: /新しい予約を取る/ }).click()
@@ -661,22 +698,22 @@ test('直したので、もう一度確かめる', async ({ page, request }) => 
     page.getByRole('heading', { name: 'マイクが使えないため、録音できません' }),
   ).toHaveCount(0)
 
-  // 伺ったことは消えない。前の受付セッションは開いたまま残っている。
-  expect(await recordingsOf(request, before)).toHaveLength(0)
+  /*
+   * 読み込み直しても**同じ受付の続き**へ戻る。新しい受付が立ってしまうと、
+   * 伺った日時・ご用件・お名前がその場で消えて工程 1 からやり直しになる。
+   * 以前は続きを読む口が受付履歴の詳細（`ReceptionHistoryDetail`）を返していて
+   * 端末側が読めず、毎回ここで新しい受付が立っていた。
+   */
+  const after = (await page.evaluate('sessionStorage.getItem("eye.booking.session")')) as string
+  expect(after).toBe(before)
+  // 録り直した音も同じ受付にぶら下がる（受付が 2 つに割れていない証拠）。
+  expect(await recordingsOf(request, before)).toHaveLength(1)
+
   const still = await request.post(`/api/staff/reception-sessions/${before}/close`, {
     ...(await authed(request)),
     data: { outcome: 'discarded' },
   })
   expect(still.status(), await still.text()).toBe(200)
-
-  /*
-   * **下書きを引き直すところはまだ噛み合っていない。**読み込み直したあとの受付は
-   * `sessionStorage` の受付セッション id から続きへ戻る作りだが、その読み出しが叩く
-   * `GET /api/staff/reception-sessions/:id` は P5 が受付履歴の詳細
-   * （`ReceptionHistoryDetail`）を返す経路に変わっていて、`ReceptionSession` として
-   * 読めないため新しい受付が立つ。ここは P7 の担当（`MicDeniedPanel` と器）ではなく、
-   * 受付セッションを 1 件読む経路そのものの食い違いである。
-   */
 })
 
 // @e2e-covers AC-REC-05
@@ -687,10 +724,10 @@ test('途中で止まると「録音していません」に変わる', async ({
   await walkToConfirm(page, '15:30')
   await expect(badgeAt(page, 'floating')).toContainText('録音中')
 
-  // 入力が絶えた。印は「録音していません」「--:--」に変わる。
+  // 入力が絶えた。印は「録音していません」に変わり、時計は消える（数えていないため）。
   await page.evaluate('window.__loseRecording()')
   await expect(badgeAt(page, 'floating')).toContainText('録音していません')
-  await expect(badgeAt(page, 'floating')).toContainText('--:--')
+  await expect(badgeAt(page, 'floating')).not.toContainText(':')
 
   // 確定の操作はそのまま押せる（受付を止めない）。
   await expect(page.getByRole('button', { name: '復唱を終えて予約を確定する' })).toBeEnabled()
@@ -723,9 +760,7 @@ test('終わった録音が保管庫へ入り、保持期限が決まる', async
   await startWork(page)
   await startBooking(page)
   await expect(badgeAt(page, 'bar')).toContainText('録音中', { timeout: 15_000 })
-  const sessionId = (await page.evaluate(
-    'sessionStorage.getItem("eyex.booking.session")',
-  )) as string
+  const sessionId = (await page.evaluate('sessionStorage.getItem("eye.booking.session")')) as string
 
   await walkToConfirm(page, '16:30')
   await page.getByRole('button', { name: '復唱を終えて予約を確定する' }).click()
@@ -753,9 +788,7 @@ test('保存に失敗しても、先に予約の成立を言う', async ({ page,
   )
   await startBooking(page)
   await expect(badgeAt(page, 'bar')).toContainText('録音中', { timeout: 15_000 })
-  const sessionId = (await page.evaluate(
-    'sessionStorage.getItem("eyex.booking.session")',
-  )) as string
+  const sessionId = (await page.evaluate('sessionStorage.getItem("eye.booking.session")')) as string
 
   await walkToConfirm(page, '17:00')
   await page.getByRole('button', { name: '復唱を終えて予約を確定する' }).click()
@@ -837,7 +870,7 @@ test('もう一度送ると「録音を聞く」が出る', async ({ page, reque
   )
   await startBooking(page)
   await expect(badgeAt(page, 'bar')).toContainText('録音中', { timeout: 15_000 })
-  const walked = (await page.evaluate('sessionStorage.getItem("eyex.booking.session")')) as string
+  const walked = (await page.evaluate('sessionStorage.getItem("eye.booking.session")')) as string
   await walkToConfirm(page, '18:30')
   await page.getByRole('button', { name: '復唱を終えて予約を確定する' }).click()
   await expect(page.getByRole('heading', { name: 'ご予約は確定しています' })).toBeVisible()
@@ -1031,7 +1064,7 @@ test('保全を立てた録音は片づけで消えない', async ({ request }) 
   const after = new Date(Date.parse(stored.retainUntil ?? '') + 1000).toISOString()
 
   const held = await request.post(`/api/staff/recordings/${stored.id}/hold`, {
-    ...(await authed(request)),
+    ...(await personalMode(request)),
     data: { legalHold: true, reason: '苦情の申し立てを調べているため' },
   })
   expect(held.status(), await held.text()).toBe(200)
@@ -1044,7 +1077,7 @@ test('保全を立てた録音は片づけで消えない', async ({ request }) 
 
   // 外した瞬間に、同じ片づけで消える。
   const cleared = await request.post(`/api/staff/recordings/${stored.id}/hold`, {
-    ...(await authed(request)),
+    ...(await personalMode(request)),
     data: { legalHold: false, reason: '調べが終わったため' },
   })
   expect(cleared.status()).toBe(200)
@@ -1142,16 +1175,14 @@ test('3 回失敗するとお知らせに 1 件立つ', async ({ request }) => {
 // @e2e-covers AC-REC-20
 test('端末セッションが失効しても未送信の録音は残る', async ({ page, request }) => {
   await grantRecording(request)
-  await startWork(page, { frozen: true })
+  const terminalSession = await startWork(page, { frozen: true })
   await page.route(
     (url) => url.pathname.endsWith('/content'),
     (route) => route.fulfill({ status: 503, contentType: 'application/json', body: '{}' }),
   )
   await startBooking(page)
   await expect(badgeAt(page, 'bar')).toContainText('録音中', { timeout: 15_000 })
-  const sessionId = (await page.evaluate(
-    'sessionStorage.getItem("eyex.booking.session")',
-  )) as string
+  const sessionId = (await page.evaluate('sessionStorage.getItem("eye.booking.session")')) as string
 
   await walkToConfirm(page, '18:00')
   await page.getByRole('button', { name: '復唱を終えて予約を確定する' }).click()
@@ -1167,17 +1198,30 @@ test('端末セッションが失効しても未送信の録音は残る', async
   })
   await page.getByRole('button', { name: 'このまま続ける' }).click()
   await expect(page.getByRole('grid', { name: '予約台帳' })).toBeVisible()
-  await page.getByRole('button', { name: '業務を終える' }).click()
-  await expect(page.getByLabel('お店のコード')).toBeVisible()
+  const terminalId = await page.evaluate(() => sessionStorage.getItem('eye.active-terminal-id'))
+  expect(terminalId).not.toBeNull()
+  const authorization = await authed(request)
+  const ended = await request.delete(
+    `/api/staff/terminals/${terminalId}/sessions/${terminalSession.id}`,
+    {
+      ...authorization,
+      headers: {
+        ...authorization.headers,
+        'x-terminal-id': terminalId ?? '',
+        'x-terminal-session': terminalSession.sessionToken,
+      },
+    },
+  )
+  expect(ended.status()).toBe(200)
+  await page.reload()
+  await expect(page.getByRole('heading', { name: 'この端末はどこに置きますか？' })).toBeVisible()
   await page.clock.fastForward(400_000)
   expect((await page.evaluate(READ_OUTBOX)) as string[]).toHaveLength(1)
   expect(sent).toBe(0)
 
   // 同じ端末でもう一度業務を始めると、自動の再送が再開する（5 分の固定間隔）。
   await page.unrouteAll()
-  await page.getByLabel('お店のコード').fill(ORG)
-  await page.getByRole('button', { name: '業務を始める' }).click()
-  await enterSharedWorkspace(page)
+  await completeSeededTerminalStart(page)
   await startBooking(page)
   await expect(async () => {
     expect((await page.evaluate(READ_OUTBOX)) as string[]).toHaveLength(0)
@@ -1192,9 +1236,7 @@ test('受付をやめても記録と録音が残る', async ({ page, request }) 
   await startWork(page)
   await startBooking(page)
   await expect(badgeAt(page, 'bar')).toContainText('録音中', { timeout: 15_000 })
-  const sessionId = (await page.evaluate(
-    'sessionStorage.getItem("eyex.booking.session")',
-  )) as string
+  const sessionId = (await page.evaluate('sessionStorage.getItem("eye.booking.session")')) as string
   await pickDateTime(page, '18:30')
 
   // 確認は 2 択で、**既定は「続ける」**（やめるほうは戻せない）。

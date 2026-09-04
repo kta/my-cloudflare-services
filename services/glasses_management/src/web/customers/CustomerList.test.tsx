@@ -1,18 +1,18 @@
 import type { CustomerDetail, CustomerSummary } from '@app/contracts'
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { CustomerList, type CustomerListPhase } from './CustomerList'
 
 /*
- * 顧客台帳の一覧と右の要約（承認済みモック docs/frontend/mockups/eyex/images/CUSTOMER-LIST.png）。
+ * 顧客台帳の一覧と右の要約（承認済みモック docs/frontend/mockups/eye/images/CUSTOMER-LIST.png）。
  *
  * この面の仕事は「お名前があいまいなままでも 1 名に手繰り、選んだ 1 名の要約を
  * 一覧を閉じずに右へ出し続ける」こと。見た目の寸法は e2e の突き合わせで見るので、
  * ここでは「何が読めて、何が押せるか」を見る。
  *
- * 実測（screens/CUSTOMER-LIST.html と assets/eyex.css）:
+ * 実測（screens/CUSTOMER-LIST.html と assets/eye.css）:
  *   本文 2 ペイン `1fr 360px`。検索欄の帯 padding 16px 20px・下に 1px の罫。
  *   見出し行 34px・地 --surface-2・下に 1px の --line-strong・12px。
  *   行は 4 列 `220px 72px 132px 1fr`・gap 12px・padding 0 20px・min-height 60px。
@@ -191,10 +191,12 @@ function Harness({
   items = ROWS,
   phase,
   onRetry,
+  onSelect,
 }: {
   items?: CustomerSummary[] | null
   phase?: CustomerListPhase
   onRetry?: () => void
+  onSelect?: (id: string | null) => void
 }) {
   const [summary, setSummary] = useState<CustomerDetail | null>(null)
   return (
@@ -202,7 +204,10 @@ function Harness({
       items={items}
       phase={phase}
       summary={summary}
-      onSelect={(id) => setSummary(id === null ? null : (DETAILS[id] ?? null))}
+      onSelect={(id) => {
+        onSelect?.(id)
+        setSummary(id === null ? null : (DETAILS[id] ?? null))
+      }}
       onOpenDetail={onOpenDetail}
       onStartBooking={onStartBooking}
       onCreate={onCreate}
@@ -457,5 +462,71 @@ describe('読み込み中', () => {
     // 引き直しても答えは変わらない。押して何も変わらないボタンを置かない。
     render(<Harness items={null} phase="forbidden" onRetry={() => {}} />)
     expect(screen.queryByRole('button', { name: 'もう一度読み込む' })).not.toBeInTheDocument()
+  })
+})
+
+/*
+ * 一覧が届いたら、先頭の 1 件を自動で選ぶ。
+ *
+ * 以前は何も選ばれていない状態で開き、画面の 30% を占める右ペインが
+ * 「お客様の行をお選びください。」という灰色の 1 行だけだった。
+ * 承認済みモック `CUSTOMER-LIST.png` は田中 花子 様を選択済みで描いており、
+ * **右ペインが空の絵は 68 枚のモックに 1 枚も無い**（UX 監査 UI-09）。
+ * 左の 1 件を押すだけで埋まるものを、利用者にその 1 タップを押させない。
+ */
+describe('開いた瞬間の選択', () => {
+  it('一覧が届いたら先頭の 1 名を選び、右を埋める', async () => {
+    const onSelect = vi.fn()
+    render(<Harness onSelect={onSelect} />)
+    await waitFor(() => expect(onSelect).toHaveBeenCalledWith(ROWS[0]?.id))
+  })
+
+  it('選ばれた行に印が付く', async () => {
+    render(<Harness />)
+    await waitFor(() =>
+      expect(screen.getByRole('option', { name: new RegExp(ROWS[0]?.name ?? '') })).toHaveAttribute(
+        'aria-selected',
+        'true',
+      ),
+    )
+  })
+
+  it('1 件も無いときは何も選ばない（空状態はそのまま出す）', async () => {
+    const onSelect = vi.fn()
+    render(<Harness items={[]} onSelect={onSelect} />)
+    await waitFor(() => expect(screen.getByRole('status')).toBeInTheDocument())
+    expect(onSelect).not.toHaveBeenCalledWith(expect.any(String))
+  })
+
+  it('利用者が別の行を選んだら、その選択を勝手に戻さない', async () => {
+    const onSelect = vi.fn()
+    render(<Harness onSelect={onSelect} />)
+    await waitFor(() => expect(onSelect).toHaveBeenCalled())
+    onSelect.mockClear()
+    await userEvent.click(screen.getByRole('option', { name: new RegExp(ROWS[1]?.name ?? '') }))
+    expect(onSelect).toHaveBeenLastCalledWith(ROWS[1]?.id)
+  })
+})
+
+describe('右ペインの置き場所', () => {
+  it('読み込み中は灰色の帯を置く（文字を読まなくても空と見分けられる）', async () => {
+    render(<Harness />)
+    await waitFor(() => expect(screen.getAllByRole('option').length).toBeGreaterThan(0))
+    // 先頭が自動で選ばれ、要約が届くまでは骨組みが出る。
+    const pane = screen.getByRole('complementary', { name: '選んだお客様の要約' })
+    expect(pane.querySelectorAll('[data-skeleton-row]').length).toBeGreaterThan(0)
+    expect(pane.querySelector('[data-empty-state]')).not.toBeInTheDocument()
+  })
+
+  it('当てはまる方が 0 名になったら選択を外し、右も待ちの面に戻る', async () => {
+    render(<Harness />)
+    await waitFor(() => expect(screen.getAllByRole('option').length).toBeGreaterThan(0))
+    await search('9999')
+    const pane = screen.getByRole('complementary', { name: '選んだお客様の要約' })
+    expect(
+      within(pane).getByRole('heading', { name: 'お客様を選んでください' }),
+    ).toBeInTheDocument()
+    // 待ちの面は読み上げに割り込まない（左の「いません」のほうを読ませる）。
+    expect(within(pane).queryByRole('status')).not.toBeInTheDocument()
   })
 })

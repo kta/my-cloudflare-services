@@ -13,12 +13,12 @@ import { describe, expect, it, vi } from 'vitest'
 import { ReservationList } from './ReservationList'
 
 /*
- * 予約リスト（承認済みモック docs/frontend/mockups/eyex/images/LEDGER-LIST.png）。
+ * 予約リスト（承認済みモック docs/frontend/mockups/eye/images/LEDGER-LIST.png）。
  *
  * この面の仕事は「同じ日を時間順に読み、次に何をすべきかを左端の 1 列だけで進める」こと。
  * 押せるのは左端の 1 列と絞り込みの札だけで、ほかは読むだけである。
  *
- * 実測値（screens/LEDGER-LIST.html と assets/eyex.css）:
+ * 実測値（screens/LEDGER-LIST.html と assets/eye.css）:
  *   絞り込みの帯 = 高さ 60px・padding 0 32px・地 --surface-2、札 = min-height 44px・padding 0 16px・ピル。
  *   列幅 = 120px / 96px / 224px / 1fr / 140px・gap 16px。行 = min-height 62px・下罫 1px。
  *   時刻 18px 等幅 700、お名前 17px 700、ほか 15px。左端のボタン = min-height 46px・角 8px。
@@ -123,10 +123,12 @@ function WithFilter({
   view = DAY,
   isOffline = false,
   onCheckin,
+  onReview,
 }: {
   view?: LedgerView
   isOffline?: boolean
   onCheckin?: (reservationId: string) => void
+  onReview?: (reservationId: string) => void
 }) {
   const [filter, setFilter] = useState<LedgerFilter>('all')
   return (
@@ -136,6 +138,7 @@ function WithFilter({
       onFilterChange={setFilter}
       isOffline={isOffline}
       {...(onCheckin === undefined ? {} : { onCheckin })}
+      {...(onReview === undefined ? {} : { onReview })}
     />
   )
 }
@@ -302,6 +305,19 @@ describe('予約リスト', () => {
     await userEvent.click(within(rows[2] as HTMLElement).getByRole('button', { name: 'ご来店' }))
     expect(onCheckin).toHaveBeenCalledTimes(1)
     expect(onCheckin.mock.calls[0]?.[0]).toEqual(expect.any(String))
+  })
+
+  it('「内容を確認」を押すと、そのご予約を連れて確認の画面へ渡す', async () => {
+    /*
+     * Web から入って担当が空のご予約は、受信日の 24:00 JST を越えると日次 Cron が
+     * 黙って取り消す。この札が何もしないままだったころは、店が気づく手立てが
+     * どこにも無かった（UX 監査 NEW-05）。
+     */
+    const onReview = vi.fn()
+    render(<WithFilter onReview={onReview} />)
+    await userEvent.click(screen.getByRole('button', { name: '内容を確認' }))
+    expect(onReview).toHaveBeenCalledTimes(1)
+    expect(onReview.mock.calls[0]?.[0]).toBe('r06')
   })
 
   it('ご来店の無かった行は押せる操作を持たず「ご来店なし」と書く', () => {

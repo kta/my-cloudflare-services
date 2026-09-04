@@ -2,7 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-/** UC-EYEX-151: 本人による PIN 設定・変更。平文 PIN はブラウザから出さない。 */
+/** UC-EYE-151: 本人による PIN 設定・変更。平文 PIN はブラウザから出さない。 */
 
 const api = vi.hoisted(() => ({
   getPin: vi.fn<() => Promise<Response>>(),

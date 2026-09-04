@@ -52,7 +52,7 @@
 - AC-TERM-10: Given 共有モードで業務中, When 録音の保全を始める, Then 「録音の保全にはご本人の確認が必要です」と操作するスタッフの選択が出て、録音は削除されない。
 - AC-TERM-11: Given 個人モードへの切り替え画面でスタッフを選んでいる, When 正しい暗証番号を 4 桁入れて確定する, Then 元の操作の画面へ戻り、ヘッダーの「いまは共有モード」が消えて、その操作が実行できる。
 - AC-TERM-12: Given 個人モードに上がっている, When 2 分間さわらない, Then 共有モードへ戻り、同じ操作をもう一度始めると再び「ご本人の確認が必要です」を求められる。
-- AC-TERM-13: Given スタッフの権限で営業時間と定休日を書き換えた, When 保存を押す, Then 「この操作は店長だけができます」「設定はまだ何も変わっていません」と出て、「下書きは残っています」の下に書き換えた 2 行がそのまま読め、「店長の暗証番号で続ける」が同じ画面にある。
+- AC-TERM-13: Given スタッフの権限で営業時間と定休日を書き換えた, When 保存を押す, Then 「この操作は店長だけができます」「設定はまだ何も変わっていません」と出て、「下書きは残っています」の下に書き換えた 2 行がそのまま読め、「店長の暗証番号で続ける」が同じ画面にある。依頼の受け取り先が未定のため「この下書きを店長に依頼する」は出ない。
 - AC-TERM-14: Given 台帳を開いている, When 通信が切れる, Then 「通信が切れています」の帯といつ時点の内容かと次に自動で試す時刻が出て、台帳は読めるまま予約の確定・変更・ご来店の受付だけが止まり、打ちかけの入力は消えない。
 - AC-TERM-15: Given 共有モードで予約の日時を 11:30 から 11:00 へ変えた, When その予約の受付履歴の「そのあとの変更」を開く, Then 「ご来店時刻を 11:30 から 11:00 へ」の行がいつ・誰が と並び、その行を書き直す操作も消す操作も画面のどこにもない。
 - AC-TERM-16: Given お知らせが 3 件ある, When お知らせの画面を開く, Then 「アラート（対応が必要） 1」と「お知らせ 2」に分かれ、未読の 3 件には左の赤い縦罫のほかに「未読」の札が付き、対応が必要な 1 件が先頭に出て、「すべて既読にする」で未読の印と札が消える。
@@ -82,11 +82,14 @@
 - いつ・誰が・どの端末で・何を・変更前後どうなったかを横断して読む監査の一覧画面は作らない（モックにも `design/05-screen-flow.md` の画面一覧にも無い）。読み返しは受付履歴の 1 件からたどる形に限り、それ以外は `audit_events` を API と integration テストで確かめる。
 - 監査担当は独立した役割として持たない。役割は「店長」と「スタッフ（設定は見るだけ）」の 2 段で、監査の読み返しは店長の権限で行う（SETTINGS-STAFF の「できる役割」が 2 値しか出さない）。
 
-**不明点**:
+**追加決定**:
 
-- `[要確認: Q-07 — いまの前提で進める]` `/start` と `/login/**` は業務開始より前の画面で JWT を持たない。最初のトークンは admin に任せて得る（admin に実在する `/api/internal/domain-auth/login` `/refresh` `/pin/verify` を service binding 経由で呼び、`ADMIN` binding と `AUTH_PEPPER` を決定ブリーフ §1 に足す）（`design/09-open-questions.md` の Q-07）。
-- `[要確認: Q-10 — いまの前提で進める]` 「この下書きを店長に依頼する」で作った依頼は、お知らせ（`alerts`、`code='settings.approval_requested'`）に 1 件立て、ALERTS から承認の面へ入る。承認できるのは同じ店舗の店長だけとする。答えが来るまでこのボタンは画面に出さない（`design/09-open-questions.md` の Q-10）。この決めに合わせ、AC-TERM-13 の Then から「「この下書きを店長に依頼する」と」の一句を落とした（`AlertCode` の 10 値に `settings.approval_requested` が無く、押せて何も起きないボタンになるため）。Q-10 の答えが来たら一句を戻し、E2E を 1 本足す。
-- `[要確認: Q-06 — いまの前提で進める]` 自動ロック 120 秒と個人モードの寿命 120 秒は、WCAG 2.2.1（時間制限）の「必須（essential）」として免除を主張する（伏せるだけで打ちかけの入力は消えないため）。読み上げでの移動も「さわった」に数える（読み上げで盤面をたどると 120 秒を容易に超えるため）（`design/09-open-questions.md` の Q-06）。
+- Q-07: `/start` と `/login/**` の最初のトークンは、admin に実在する `/api/internal/domain-auth/login` / `refresh` を `ADMIN` service binding 経由で呼んで得る。PIN はドメイン側で `AUTH_PEPPER` を使って照合し、平文を保存・記録しない（`design/09-open-questions.md` の Q-07）。
+- Q-10: 依頼の受け取り先と承認フローが別featureで決まるまで、「この下書きを店長に依頼する」は画面に出さない。このfeatureでは下書きを残したまま店長PINで個人モードへ上げる経路だけを提供する（`design/09-open-questions.md` の Q-10）。
+- Q-06: 自動ロック120秒と個人モードの寿命120秒は、WCAG 2.2.1（時間制限）の「必須（essential）」として扱う。伏せても打ちかけの入力は消さず、pointer・keyboard・focusによる読み上げ移動をすべて操作として数える（`design/09-open-questions.md` の Q-06）。
+- 端末セッションの認証は、開始・個人モード昇格の応答で一度だけ返す64文字のランダムtokenと端末idの組を使う。D1にはSHA-256 hashだけを置き、片方だけ・形式違反・別端末・別組織・失効済みの組はJWTのstaffへ戻さず拒否する。
+- 個人モードの権限は `expires_at` で終える。自動ロック後も同じ端末として日常業務を続ける最小fallbackは、同じ有効tokenを持つ行を `started_at + 24時間` 未満だけ共有端末として扱う（ちょうど24時間では失効）。明示終了と別セッションによる引継ぎは、このfallbackも失効させる。tokenの無い過去行は認証に使わない。
+- 暗証番号の3回失敗・30秒待機は引き続き `SHORT_LIVED` KVに置く。単一キーへの同時更新を直列化する部品は追加せず、同時試行時の厳密な直列性は保証しない。通常の順次操作について3回目で待機になる意味を正本とする。
 
 ## 2. HOW
 
@@ -103,7 +106,7 @@
 - `services/glasses_management/src/web/mode/` — 個人モードへの切り替え
 - `services/glasses_management/src/web/alerts/` — お知らせとアラートの一覧
 - `services/glasses_management/src/web/shell/` — 自動ロックの覆いと伏せ字、通信断の帯、権限不足の面
-- `services/glasses_management/test/terminals.integration.test.ts` / `test/terminal-session.time.test.ts` / `test/audit.integration.test.ts` / `test/permissions.test.ts` / `test/tenant-isolation.test.ts`
+- `services/glasses_management/test/terminals.integration.test.ts` / `test/terminal-session.time.test.ts` / `test/audit.test.ts` / `test/audit-alerts.integration.test.ts` / `test/permissions.test.ts`
 - `packages/contracts/test/glasses_management.contract.test.ts`
 - `services/glasses_management/e2e/terminals.spec.ts`
 
@@ -125,22 +128,22 @@
 
 ## 3. TASKS
 
-- [ ] T-001: `packages/contracts/test/glasses_management.contract.test.ts` に端末・セッション・再認証・監査・お知らせのスキーマのテストを足す（Red）。暗証番号は 4〜6 桁の数字だけ、応答にハッシュが載らないことを固定する。
-- [ ] T-002: `services/glasses_management/test/terminal-session.time.test.ts` を書く（Red）。自動ロック 120 秒ちょうどと +1 秒、個人モードの期限ちょうどと +1 秒、連続失敗 3 回目ちょうどと 30 秒明けを固定時刻で書く。画面が裏に回ったまま 120 秒 +1 秒が過ぎて表に戻った場合も足す。
-- [ ] T-003: `services/glasses_management/test/terminals.integration.test.ts` を書く（Red）。置き場所の一覧と状態、共有・個人それぞれの開始、暗証番号の誤りと 30 秒の待ち、業務の終了。
-- [ ] T-004: `services/glasses_management/test/audit.integration.test.ts` を書く（Red）。共有モードは端末・個人モードは本人が主体になること、変更前後が残ること、更新と削除の経路が無いこと。
-- [ ] T-005: `services/glasses_management/test/permissions.test.ts` に新ルートの行を足す（Red）。共有モードのままの「ご本人の確認が必要」な操作が 403、期限切れが 401 で、取り違えないことを固定する。
-- [ ] T-006: `services/glasses_management/test/tenant-isolation.test.ts` に端末・セッション・お知らせの越境と、入力に組織 ID を混ぜた偽装を足す（Red）。
-- [ ] T-007: `packages/contracts/src/glasses_management.ts` に Zod を足す（Green）。
-- [ ] T-008: `services/glasses_management/src/worker/db/schema.ts` に `terminals` と `terminal_sessions` を足し、マイグレーションを生成してローカルへ当てる。
-- [ ] T-009: `services/glasses_management/src/worker/domain/terminal-session.ts` と `src/worker/domain/pin.ts` を純関数で実装する（時刻は引数で注入）。
-- [ ] T-010: `services/glasses_management/src/worker/domain/audit.ts` を実装し、書き込み系ルートの `db.batch()` に監査の追記を入れる。版や枠の条件が付くバッチでは、監査の追記にも本処理と同じ `WHERE EXISTS` のガードを付け、条件が外れたときに監査が 1 行も増えないことを `audit.integration.test.ts` で確かめる。
-- [ ] T-011: `services/glasses_management/src/worker/index.ts` に端末・セッション・再認証・監査・お知らせのルートと `requirePersonalMode()` を足す。
-- [ ] T-012: `services/glasses_management/src/web/start/` と `src/web/login/` を実装する。パス 1 の計画は「主役は 1 画面に 1 つ（誰の番号か、どの置き場所か）／テンキーは右 420px に固定し 1 キー 72pt ／状態は色だけで伝えず必ず文字を添える／説明文は 2 つまで・各 1 行／**空いた場所を埋めるために要素を足さない**」。押せない「確定」には押せない理由を持たせる。
-- [ ] T-013: `services/glasses_management/src/web/mode/` を実装する。上のバーに「いまは共有モード」を出し、昇格後は元の操作へ戻す。
-- [ ] T-014: `services/glasses_management/src/web/shell/` に自動ロックの覆いと伏せ字、通信断の帯、権限不足の面を足す。下書きを保つのはこの層で行う。自動ロックは経過を数えるタイマーに頼らず、最後にさわった時刻と画面が表に戻った時刻の差で判定する（裏に回ったタブでは時間の進みが絞られるため）。共有端末の入力欄は、前の利用者の値を候補に出さない。
-- [ ] T-015: `services/glasses_management/src/web/alerts/` と左の柱のバッジを実装する。「対応が必要」と「お知らせ」を分けて数え、未読には「未読」の札を添える。件数は裸の数字として置かず、入口の読み上げ名を「お知らせ 3件」にする。お知らせに添えた操作が成功したらその 1 件を対応済みにする。
-- [ ] T-015b: 「設定 › 端末」（端末の一覧・使い方の決め直し・暗証番号の作り直し・自動で伏せるまでの時間）を実装する。EX-PERMISSION の「この下書きを店長に依頼する」は、依頼の受け取り先が決まる（Q-10）まで画面に出さない。押せるのに何も起きないボタンを置かない。
-- [ ] T-016: `src/web/start/`・`src/web/login/`・`src/web/mode/`・`src/web/alerts/`・`src/web/shell/` の `*.test.tsx` を書く（Red → Green）。
-- [ ] T-017: `services/glasses_management/e2e/terminals.spec.ts` に `// @e2e-covers` を付けて、この spec の受け入れ基準と 1 対 1 で対応させる。
-- [ ] T-018: `pnpm --filter @app/glasses_management e2e` と `pnpm check` を緑にし、モック画像との突き合わせを `e2e/mock-compare.spec.ts` に足したうえでステータスを Approved に上げる。
+- [x] T-001: `packages/contracts/test/glasses_management.contract.test.ts` に端末・セッション・再認証・監査・お知らせのスキーマのテストを足す（Red）。暗証番号は 4〜6 桁の数字だけ、応答にハッシュが載らないことを固定する。
+- [x] T-002: `services/glasses_management/test/terminal-session.time.test.ts` を書く（Red）。自動ロック 120 秒ちょうどと +1 秒、個人モードの期限ちょうどと +1 秒、連続失敗 3 回目ちょうどと 30 秒明けを固定時刻で書く。画面が裏に回ったまま 120 秒 +1 秒が過ぎて表に戻った場合も足す。
+- [x] T-003: `services/glasses_management/test/terminals.integration.test.ts` を書く（Red）。置き場所の一覧と状態、共有・個人それぞれの開始、暗証番号の誤りと 30 秒の待ち、業務の終了。
+- [x] T-004: `services/glasses_management/test/audit.test.ts` と `test/audit-alerts.integration.test.ts` を書く（Red）。共有モードは端末・個人モードは本人が主体になること、変更前後が残ること、更新と削除の経路が無いこと。
+- [x] T-005: `services/glasses_management/test/permissions.test.ts` に新ルートの行を足す（Red）。共有モードのままの「ご本人の確認が必要」な操作が 403、期限切れが 401 で、取り違えないことを固定する。
+- [x] T-006: `services/glasses_management/test/terminals.integration.test.ts` と `test/audit-alerts.integration.test.ts` に端末・セッション・お知らせのテナント越境を足す（Red）。
+- [x] T-007: `packages/contracts/src/glasses_management.ts` に Zod を足す（Green）。
+- [x] T-008: `services/glasses_management/src/worker/db/schema.ts` に `terminals` と `terminal_sessions` を足し、マイグレーションを生成してローカルへ当てる。
+- [x] T-009: `services/glasses_management/src/worker/domain/terminal-session.ts` と `src/worker/domain/pin.ts` を純関数で実装する（時刻は引数で注入）。
+- [x] T-010: `services/glasses_management/src/worker/domain/audit.ts` を実装し、書き込み系ルートの `db.batch()` に監査の追記を入れる。版や枠の条件が付くバッチでは、監査の追記にも本処理と同じ `WHERE EXISTS` のガードを付け、条件が外れたときに監査が 1 行も増えないことを integration テストで確かめる。
+- [x] T-011: `services/glasses_management/src/worker/index.ts` に端末・セッション・再認証・監査・お知らせのルートと `requirePersonalMode()` を足す。
+- [x] T-012: `services/glasses_management/src/web/start/` と `src/web/login/` を実装する。パス 1 の計画は「主役は 1 画面に 1 つ（誰の番号か、どの置き場所か）／テンキーは右 420px に固定し 1 キー 72pt ／状態は色だけで伝えず必ず文字を添える／説明文は 2 つまで・各 1 行／**空いた場所を埋めるために要素を足さない**」。押せない「確定」には押せない理由を持たせる。
+- [x] T-013: `services/glasses_management/src/web/mode/` を実装する。上のバーに「いまは共有モード」を出し、昇格後は元の操作へ戻す。
+- [x] T-014: `services/glasses_management/src/web/shell/` に自動ロックの覆いと伏せ字、通信断の帯、権限不足の面を足す。下書きを保つのはこの層で行う。自動ロックは経過を数えるタイマーに頼らず、最後にさわった時刻と画面が表に戻った時刻の差で判定する（裏に回ったタブでは時間の進みが絞られるため）。共有端末の入力欄は、前の利用者の値を候補に出さない。
+- [x] T-015: `services/glasses_management/src/web/alerts/` と左の柱のバッジを実装する。「対応が必要」と「お知らせ」を分けて数え、未読には「未読」の札を添える。件数は裸の数字として置かず、入口の読み上げ名を「お知らせ 3件」にする。お知らせに添えた操作が成功したらその 1 件を対応済みにする。
+- [x] T-015b: 「設定 › 端末」（端末の一覧・新規登録・使い方の決め直し・暗証番号の作り直し・自動で伏せるまでの時間）を実装する。EX-PERMISSION の「この下書きを店長に依頼する」は、依頼の受け取り先が決まる（Q-10）まで画面に出さない。押せるのに何も起きないボタンを置かない。
+- [x] T-016: `src/web/start/`・`src/web/login/`・`src/web/mode/`・`src/web/alerts/`・`src/web/shell/` の `*.test.tsx` を書く（Red → Green）。
+- [x] T-017: `services/glasses_management/e2e/terminals.spec.ts` に `// @e2e-covers` を付けて、この spec の受け入れ基準と 1 対 1 で対応させる。
+- [x] T-018: `pnpm --filter @app/glasses_management e2e` と `pnpm check` を緑にし、モック画像との突き合わせを `e2e/mock-compare.spec.ts` / `e2e/terminal-mock-compare.spec.ts` に足したうえでステータスを Approved に上げる。

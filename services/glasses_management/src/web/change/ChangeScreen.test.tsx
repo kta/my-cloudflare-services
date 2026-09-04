@@ -529,3 +529,66 @@ describe('版の競合の解き方', () => {
     })
   })
 })
+
+/*
+ * 台帳の詳細から「変更する」「取り消す」を押して来たとき、押した予約をそのまま開く。
+ * 予約 id を持ってこないと、受話器を持ったままの利用者がまっさらな検索画面に降ろされ、
+ * いま画面に出ていたお名前を打ち直すことになる（UX 監査 NEW-02）。
+ */
+describe('台帳から予約を持って開く', () => {
+  it('initialReservationId を渡すと、検索を通らずその予約の日時変更から始まる', async () => {
+    show({ initialReservationId: RESERVATION_ID, initialStep: 'datetime' })
+    expect(
+      await screen.findByRole('heading', { name: 'お日にちはこのままでよろしいですか？' }),
+    ).toBeInTheDocument()
+    // 押した予約がそのまま対象になっている。
+    expect(screen.getByText('田中 花子 様')).toBeInTheDocument()
+  })
+
+  it('initialStep に cancel を渡すと、その予約の取り消しから始まる', async () => {
+    show({ initialReservationId: RESERVATION_ID, initialStep: 'cancel' })
+    expect(
+      await screen.findByRole('heading', { name: 'この予約を取り消します' }),
+    ).toBeInTheDocument()
+  })
+
+  it('何も渡さなければ、これまでどおり検索から始まる', async () => {
+    show()
+    expect(
+      await screen.findByRole('heading', { name: 'お客様を伺って探します' }),
+    ).toBeInTheDocument()
+  })
+})
+
+/*
+ * 検索の結果が届いたら、先頭の 1 件を選んで右を埋める。
+ * 以前は何も選ばれずに開き、画面の 53% を占める右ペインが
+ * 「左のご予約をお選びください。」という灰色の 1 行だけだった（UX 監査 UI-09）。
+ * 承認済みモック `CHANGE-SEARCH.png` は EY-2608-0142 を選択済みで描いている。
+ */
+describe('検索した直後の選択', () => {
+  it('結果が届いたら先頭の 1 件を選び、右を埋める', async () => {
+    show()
+    await waitForRows()
+    // 「左のご予約をお選びください。」の空状態ではなく、1 件の中身が出ている。
+    expect(screen.queryByText(/左のご予約をお選びください/)).toBeNull()
+  })
+
+  it('1 件も無いときは何も選ばず、空状態をそのまま出す', async () => {
+    searchAnswer = () => ({ items: [], nextCursor: null, total: 0, relaxations: [] })
+    show()
+    await waitFor(() =>
+      expect(screen.getByText(/この条件では、ご予約が見つかりませんでした/)).toBeInTheDocument(),
+    )
+    // 何も選ばれていないので、1 件の中身は出ない。
+    expect(screen.queryByText('田中 花子 様')).toBeNull()
+  })
+
+  it('台帳から予約を持って来たときは、その予約が対象のまま（先頭で上書きしない）', async () => {
+    show({ initialReservationId: RESERVATION_ID, initialStep: 'datetime' })
+    expect(
+      await screen.findByRole('heading', { name: 'お日にちはこのままでよろしいですか？' }),
+    ).toBeInTheDocument()
+    expect(screen.getByText('田中 花子 様')).toBeInTheDocument()
+  })
+})

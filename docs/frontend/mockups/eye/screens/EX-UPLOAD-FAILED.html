@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EYE予約 — 録音の保存に失敗した</title>
+<link rel="stylesheet" href="../assets/eye.css">
+<style>
+  .wrap { height: 100%; display: grid; grid-template-columns: 1fr 372px; }
+  .main { padding: 40px 44px; min-width: 0; }
+  .side { border-left: 1px solid var(--line); background: var(--surface); padding: 40px 32px; }
+
+  .head { display: flex; align-items: center; gap: 18px; }
+  .head .mark { flex: none; width: 60px; height: 60px; border-radius: 50%; background: var(--brand);
+                color: var(--on-brand); display: grid; place-items: center; font-size: 28px; }
+  .head h2 { margin: 0; font-size: 23px; }
+  .head p { margin: 4px 0 0; font-size: 13px; color: var(--ink-2); }
+  .head p b { font: 700 16px var(--mono); color: var(--ink); margin-left: 6px; }
+
+  .lead { border-left: 6px solid var(--alert); }
+  .lead h3 { margin: 0; font-size: 16px; color: var(--alert); }
+  .lead p { margin: 8px 0 0; font-size: 16px; line-height: 1.6; }
+
+  .sum dt { font-size: 13px; color: var(--ink-2); margin-top: 22px; }
+  .sum dt:first-of-type { margin-top: 0; }
+  .sum dd { margin: 2px 0 0; font-size: 16px; font-weight: 600; }
+
+  .float { position: absolute; right: 20px; bottom: 20px; display: flex; align-items: center; gap: 14px;
+           padding: 12px 18px; border-radius: var(--r-l); background: var(--surface); border: 1px solid var(--line-strong); }
+  .float .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--ink-3); }
+</style>
+</head>
+<body>
+<div class="caption">
+  <h1>録音の保存に失敗した</h1>
+  <p>予約は成立している。失敗したのは録音の保存だけであることを言い切り、端末に残っていること・自動で送り直すことを示す。</p>
+</div>
+
+<main class="device" id="screen">
+  <div class="statusbar"><span>11:15</span><span>EYE 銀座店</span><span>Wi‑Fi　弱い</span></div>
+
+  <header class="appbar">
+    <button class="homebtn" aria-label="トップへ">⌂</button>
+    <div class="storename">EYE 銀座店<small>新しい予約を取る</small></div>
+    <div class="barbtns">
+      <button class="barbtn"><b>予約台帳</b></button>
+      <button class="barbtn"><b>トップへ戻る</b></button>
+    </div>
+  </header>
+
+  <div class="body">
+    <div class="wrap">
+      <section class="main stack lg">
+        <div class="head">
+          <span class="mark" aria-hidden="true">✓</span>
+          <div>
+            <h2>ご予約は確定しています</h2>
+            <p>予約番号<b>EY-2608-0187</b>　台帳にも入っています</p>
+          </div>
+        </div>
+
+        <div class="card warn lead">
+          <h3>保存できなかったのは、この受付の録音だけです</h3>
+          <p>店内の通信が弱く、録音（03:24）をお店の保管庫へ送れませんでした。録音は、この iPad の中に残っています。</p>
+        </div>
+
+        <div>
+          <div class="actions">
+            <button class="btn primary big">このまま続ける</button>
+            <button class="btn big">もう一度送る</button>
+          </div>
+          <p class="small muted" style="margin:14px 2px 0">11:20 に自動でもう一度送ります。操作は要りません。</p>
+        </div>
+      </section>
+
+      <aside class="side">
+        <h3 style="margin:0 0 4px;font-size:16px">確定したご予約</h3>
+        <dl class="sum" style="margin:0">
+          <dt>ご来店日時</dt><dd>8月27日（木）14:00 〜 15:00</dd>
+          <dt>ご来店の目的</dt><dd>メガネを新しく作る</dd>
+          <dt>お客様</dt><dd>中井 さくら 様</dd>
+          <dt>担当と場所</dt><dd>佐藤 美咲／視力測定機 A</dd>
+        </dl>
+      </aside>
+    </div>
+
+    <div class="float">
+      <span class="dot" aria-hidden="true"></span>
+      <b style="font-size:15px">録音は端末に保管中</b>
+      <span class="mono" style="font-size:15px;color:var(--ink-2)">03:24</span>
+    </div>
+  </div>
+</main>
+</body>
+</html>

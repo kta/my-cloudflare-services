@@ -372,7 +372,7 @@ migration の番号は `0007_*.sql`（`03-data-model.md` §12 のフェーズ表
     面は下地（`--color-paper`）と白（`--color-surface`）の 2 段だけ。角は 8/12/16px。書体は iOS 既定の 1 書体。
   - シグネチャ: **下端に固定した全幅 56px の緑 1 枚**と、その上に 6 本の細い進捗の帯。
 - **見るモック**: WEB-01-STORE / WEB-02-PURPOSE / WEB-03-DATETIME / WEB-04-FORM / WEB-05-CONFIRM /
-  WEB-06-DONE / WEB-CANCEL（`docs/frontend/mockups/eyex/images/`。実測は 390×844。
+  WEB-06-DONE / WEB-CANCEL（`docs/frontend/mockups/eye/images/`。実測は 390×844。
   実装が持つのは**ステータスバーを外した 390×800**）
 - **実測値（7 面に共通）**
   | 部位 | 値 |
@@ -685,7 +685,7 @@ migration の番号は `0007_*.sql`（`03-data-model.md` §12 のフェーズ表
     `test.describe` を挟まない。空行は可）。`test.only` / `test.skip` / `test.fixme` は traceability が落ちる。
   - ファイル名は**この 2 つでなければならない**。`playwright.config.ts` の `iphone` project は
     `/web-booking\.spec\.ts$/` にだけ一致し、`ipad` project は `web-booking.spec.ts` を除外する。
-  - seed の値は世界観データに合わせる: 組織 `eyex` / 店舗 `ginza`（`EYEX 銀座店`）/
+  - seed の値は世界観データに合わせる: 組織 `eye` / 店舗 `ginza`（`EYE 銀座店`）/
     ご来店 2026-08-29（土）11:00 / 山口 真央 / `080-2345-6789` / `m.yamaguchi@example.jp` /
     ご予約番号 `EY-W-2608-0031`。受付条件は 10:30–18:00 / 2 時間先から / 30 日先まで / お店が確かめてから確定する。
   - 全 36 個が埋まったら spec の `- ステータス: Draft` を `Approved` に上げる。
@@ -705,10 +705,10 @@ migration の番号は `0007_*.sql`（`03-data-model.md` §12 のフェーズ表
   - **先に `playwright.config.ts` を直す。** いまの `ipad` project は `web-booking.spec.ts` と
     `mock-compare.spec.ts` しか除外していないので、新しい `mock-compare-web.spec.ts` が
     1194×834 でも走って必ず落ちる。
-  - 基準画像は `docs/frontend/mockups/eyex/reference/` 側（ステータスバーを外した派生物）。
+  - 基準画像は `docs/frontend/mockups/eye/reference/` 側（ステータスバーを外した派生物）。
     既に 8 枚そろっている（WEB-01〜06 / WEB-CANCEL は 780×1600 = 390×800 @2x、
     SETTINGS-WEB は 2388×1620 = 1194×810 @2x）。作り直すときは
-    `node docs/frontend/mockups/eyex/reference.mjs WEB` と `... SETTINGS-WEB`。
+    `node docs/frontend/mockups/eye/reference.mjs WEB` と `... SETTINGS-WEB`。
   - `toHaveScreenshot('<画面ID>.png', { scale: 'device', maxDiffPixelRatio: <いま許している差> })`。
     **`scale: 'device'` を必ず付ける**（既定の `'css'` だと寸法が合わない）。
   - 残っている差が何かを 1 行ずつコメントに書く（0.2 の「わざと違うところ」6 件がそのまま差になる）。

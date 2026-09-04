@@ -8,17 +8,18 @@ import type {
   VisitBoard as VisitBoardShape,
 } from '@app/contracts'
 import { toJstDateString } from '@app/shared'
-import { cn, focusRing } from '@app/ui'
+import { cn, focusRing, UndoBar } from '@app/ui'
 import { useCallback, useEffect, useState } from 'react'
+import { BOARD_STAGES } from '../../worker/domain/visit-board'
 import { client } from '../client'
 import { currentPowerLabel, pdLabel } from '../customers/CustomerList'
 import { OfflineBanner } from '../ledger/OfflineBanner'
 import { type CheckinLastVisit, CheckinPanel, type CheckinSubject } from './CheckinPanel'
 import { LinkCustomerPanel } from './LinkCustomerPanel'
-import { VisitBoard } from './VisitBoard'
+import { STAGE_LABELS, VisitBoard } from './VisitBoard'
 
 /*
- * 来店受付の器（承認済みモック docs/frontend/mockups/eyex/images/RECEPTION-JOURNEY.png ／
+ * 来店受付の器（承認済みモック docs/frontend/mockups/eye/images/RECEPTION-JOURNEY.png ／
  * RECEPTION-CHECKIN.png）。
  *
  * **URL による画面の切り替えを持ち込まない**（この製品に router は無い）。行き先は `App` の
@@ -52,6 +53,8 @@ export type ReceptionScreenProps = {
   initialCheckinId?: string
   /** 業務の期限が切れた（401）とき。 */
   onSessionExpired?: () => void
+  /** Shell が検知した通信断。書込み操作を先に止める。 */
+  isOffline?: boolean
 }
 
 export function ReceptionScreen({
@@ -60,6 +63,7 @@ export function ReceptionScreen({
   onOpenLedger,
   initialCheckinId,
   onSessionExpired,
+  isOffline: shellOffline = false,
 }: ReceptionScreenProps) {
   const [date] = useState<LocalDate>(() => initialDate ?? toJstDateString(new Date()))
   const [scope, setScope] = useState<'active' | 'all'>('active')
@@ -171,6 +175,37 @@ export function ReceptionScreen({
   }, [checkinId])
 
   /** 工程を 1 行足す。**追記だけ**なので、どの操作もこの 1 本を通る。 */
+  /*
+   * 直前に積んだ工程を、数秒だけ戻せるようにしておく（UX 監査 NEW-04）。
+   * 押す前に確認を挟むと、1 日に何十回も押す操作が毎回止まる。だから押させてから、
+   * **戻す行を 1 本足して**打ち消す（`visit_events` は追記だけで、盤面は
+   * 「いまの工程より右は記録があっても空に戻す」ので、前の工程を積み直せば戻る）。
+   */
+  const [undoable, setUndoable] = useState<{
+    row: Pick<VisitBoardRow, 'subjectType' | 'subjectId'>
+    back: 'received' | VisitBoardCell['stage']
+    message: string
+  } | null>(null)
+
+  /**
+   * 押す前に立っていた工程。**盤面がいま描いている姿から読む** —— 追記だけの
+   * `visit_events` では「1 つ前」をサーバに聞けないので、押した列より左で最後に
+   * 済んでいる列を戻り先にする。左に 1 つも無ければ「受付」まで戻す。
+   */
+  function previousStage(
+    row: VisitBoardRow,
+    stage: VisitBoardCell['stage'] | 'left',
+  ): 'received' | VisitBoardCell['stage'] {
+    const target = BOARD_STAGES.indexOf(stage as (typeof BOARD_STAGES)[number])
+    const cut = target < 0 ? BOARD_STAGES.length : target
+    const done = row.cells.filter(
+      (cell) =>
+        cell.state !== 'empty' &&
+        BOARD_STAGES.indexOf(cell.stage as (typeof BOARD_STAGES)[number]) < cut,
+    )
+    return done[done.length - 1]?.stage ?? 'received'
+  }
+
   const addVisitEvent = useCallback(
     async (
       row: Pick<VisitBoardRow, 'subjectType' | 'subjectId'>,
@@ -214,7 +249,7 @@ export function ReceptionScreen({
   )
 
   /** 一度は読めていて、いまの取り直しだけが落ちている（＝通信断）。 */
-  const offline = failed === 'error' && board !== null
+  const offline = shellOffline || (failed === 'error' && board !== null)
 
   /*
    * 受け付ける面は**盤面が届いてから**開く。予定時刻との差の 1 行はサーバの `serverNow`
@@ -228,6 +263,7 @@ export function ReceptionScreen({
         attentions={attentionsOf(customer)}
         lastVisit={lastVisitOf(customer)}
         busy={busy}
+        isOffline={offline}
         onBack={() => {
           setCheckinId(null)
           setReturnTo(reservation.id)
@@ -301,7 +337,7 @@ export function ReceptionScreen({
        * **いつ時点の姿か**と**いま書けないこと**を文字で言う。60 秒ごとの取り直しが
        * そのまま自動再試行になるので、次に試す時刻も出す（台帳と同じ帯を使う）。
        */}
-      {offline && (
+      {offline && !shellOffline && (
         <OfflineBanner
           lastServerNow={board.serverNow}
           nextRetryAt={new Date(
@@ -321,22 +357,48 @@ export function ReceptionScreen({
         notice={notice}
         focusSubjectId={returnTo}
         onAdvance={(row, cell) => {
-          addVisitEvent(row, cell.stage).catch(() =>
-            setNotice('記録できませんでした。もう一度お試しください。'),
-          )
+          if (offline) return
+          const back = previousStage(row, cell.stage)
+          addVisitEvent(row, cell.stage)
+            .then(() =>
+              setUndoable({
+                row,
+                back,
+                message: `${row.displayName}を「${STAGE_LABELS[cell.stage as (typeof BOARD_STAGES)[number]] ?? cell.stage}」へ進めました。`,
+              }),
+            )
+            .catch(() => setNotice('記録できませんでした。もう一度お試しください。'))
         }}
         onLeave={(row) => {
-          addVisitEvent(row, 'left').catch(() =>
-            setNotice('記録できませんでした。もう一度お試しください。'),
-          )
+          if (offline) return
+          const back = previousStage(row, 'left')
+          addVisitEvent(row, 'left')
+            .then(() =>
+              setUndoable({ row, back, message: `${row.displayName}のご来店を終えました。` }),
+            )
+            .catch(() => setNotice('記録できませんでした。もう一度お試しください。'))
         }}
         onOpenCheckin={(row) => {
           setReturnTo(null)
           setCheckinId(row.subjectId)
         }}
         onLinkCustomer={setLinking}
+        isOffline={offline}
         {...(onOpenLedger === undefined ? {} : { onReceiveVisit: onOpenLedger })}
       />
+      {undoable !== null && (
+        <UndoBar
+          message={undoable.message}
+          onUndo={() => {
+            const back = undoable
+            setUndoable(null)
+            addVisitEvent(back.row, back.back).catch(() =>
+              setNotice('元に戻せませんでした。もう一度お試しください。'),
+            )
+          }}
+          onDismiss={() => setUndoable(null)}
+        />
+      )}
       {linking !== null && (
         <LinkCustomerPanel
           storeId={storeId}

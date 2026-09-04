@@ -363,7 +363,7 @@
   - トークン計画: 選んだ札だけが `--color-pine` の 3px 罫 + `--color-pine-soft`。押せない札は
     `--color-surface-2` + `--color-ink-faint` に沈め、**必ず「定休」「満席」の文字を添える**。
   - シグネチャ: 右 372px の要約が、伺えていない欄を「このあと伺います」と言い切って空けておくこと。
-- **見るモック**: `docs/frontend/mockups/eyex/images/BOOK-01-DATETIME.png`
+- **見るモック**: `docs/frontend/mockups/eye/images/BOOK-01-DATETIME.png`
   - 本文と要約は **1fr / 372px** の 2 列、境目に 1px の罫。本文の余白 36px 44px、要約 36px 28px。
   - カレンダーは 7 列・間 8px、日の札は**最小高 58px**・角 8px・文字 18px/600、曜日見出し 12px。
     選択中は 3px の緑罫 + `--color-pine-soft`。定休は `--color-surface-2` + 10px の「定休」。

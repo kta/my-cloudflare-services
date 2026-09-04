@@ -14,7 +14,6 @@ import { cn, focusRing, focusRingOnPine } from '@app/ui'
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { client } from '../client'
 import { WalkinPanel } from '../reception/WalkinPanel'
-import { maskView } from '../shell/mask'
 import { dateLabel, nowChipLabel, shiftDate } from './metrics'
 import { OfflineBanner } from './OfflineBanner'
 import { ReservationDetail, type ReservationDetailPhase } from './ReservationDetail'
@@ -22,9 +21,9 @@ import { ReservationList } from './ReservationList'
 import { Timetable } from './Timetable'
 
 /*
- * 予約台帳の器（承認済みモック docs/frontend/mockups/eyex/images/LEDGER-STAFF.png）。
+ * 予約台帳の器（承認済みモック docs/frontend/mockups/eye/images/LEDGER-STAFF.png）。
  *
- * 実測（LEDGER-STAFF.html と assets/eyex.css）:
+ * 実測（LEDGER-STAFF.html と assets/eye.css）:
  *   日付の帯   = ‹ ／ 2026年8月27日（木） ／ 本日 ／ ›（上のバーの中央のピル）
  *   ツールバー = セグメント 2 つ（`.segmented` padding 3px・ボタン padding 0 16px）
  *   現在の札   = `.nowchip` min-height 32px・padding 0 12px・ピル・--alert の枠と文字
@@ -74,17 +73,26 @@ export type LedgerScreenProps = {
    * 予約リストの「ご来店」を押したとき。ご予約のお客様を受け付ける入口はここ 1 つで、
    * 器（`App`）が来店受付の面をその 1 件で開く。
    */
-  onOpenCheckin?: (reservationId: string) => void
+  onOpenCheckin: (reservationId: string) => void
+  /**
+   * 予約リストの「内容を確認」。**必須**にしてある —— 任意にすると渡し忘れが
+   * 型で捕まらず、Web からのご予約が確認待ちのまま 24:00 を越えて黙って消える
+   * （UX 監査 NEW-05）。
+   */
+  onOpenReview: (reservationId: string) => void
+  /**
+   * 詳細の「変更する」「取り消す」。**`onOpenCheckin` と同じく必須**にしてある ——
+   * 任意にしていたときは器が 1 つも渡さず、押しても何も起きないボタンが 3 つ並んでいた。
+   */
+  onOpenChange: (reservationId: string) => void
+  onOpenCancel: (reservationId: string) => void
   /**
    * 業務の期限が切れた（401）とき。台帳を開いたまま切れると、そのままでは
    * 通信断の帯が出て「再接続を試す」を押し続ける行き止まりになるので、外へ知らせる。
    */
   onSessionExpired?: () => void
-  /**
-   * 自動で伏せているあいだ（P10 / AC-TERM-12）。お客様のお名前を伏せ、
-   * **60 秒ごとの取り直しも止める**（伏せている間は API を叩かない）。
-   */
-  masked?: boolean
+  /** Shell が検知した通信断。最後に読めた台帳は残し、書込みを止める。 */
+  isOffline?: boolean
 }
 
 export function LedgerScreen({
@@ -96,8 +104,11 @@ export function LedgerScreen({
   onBarCenter,
   onOpenSettings,
   onOpenCheckin,
+  onOpenReview,
+  onOpenChange,
+  onOpenCancel,
   onSessionExpired,
-  masked = false,
+  isOffline: shellOffline = false,
 }: LedgerScreenProps) {
   const [date, setDate] = useState<LocalDate>(() => initialDate ?? toJstDateString(new Date()))
   const [axis, setAxis] = useState<LedgerAxis>('staff')
@@ -195,14 +206,12 @@ export function LedgerScreen({
   // 60 秒ごとに取り直す。開いたままの iPad の線と札が朝の時刻で止まらないための唯一の
   // 手立てであり、通信が切れている間はそのまま自動再試行になる（UC-LEDGER-09 主フロー 3）。
   useEffect(() => {
-    // 伏せているあいだは取り直さない。表に戻った器が読み直す。
-    if (masked) return
     const timer = setInterval(() => {
       setAutoRound((count) => count + 1)
       setReload((count) => count + 1)
     }, RELOAD_INTERVAL_MS)
     return () => clearInterval(timer)
-  }, [masked])
+  }, [])
 
   // 名簿は日付を動かしても変わらないので、店舗 1 つにつき 1 度だけ読む。
   useEffect(() => {
@@ -271,7 +280,7 @@ export function LedgerScreen({
   // 操作の状態もその日・その並べ方へ戻し、届いていない日を出しているふりをしない。
   // 権限が無い・期限が切れたのに古い台帳を出し続けない。通信断だけが
   // 「読めたものをそのまま残す」。
-  const offline = failed === 'error' && data !== null
+  const offline = shellOffline || (failed === 'error' && data !== null)
   useEffect(() => {
     if (!offline || data === null) return
     setDate(data.date)
@@ -286,9 +295,7 @@ export function LedgerScreen({
   // 尋ねた日・並べ方・かたちと届いた応答が食い違っている間は、古い台帳を出さない。
   const fresh =
     data !== null && data.date === date && data.axis === axis && data.view === mode ? data : null
-  // 伏せているあいだは帯も一覧も同じ値から描く（覆いが半透明なので透けて見える）。
-  const visible = offline ? data : fresh
-  const shown = masked && visible !== null ? maskView(visible) : visible
+  const shown = offline ? data : fresh
   // 「本日」の行き先も本日かどうかの判定も、応答の `serverNow` から出す。
   const today = data === null ? date : toJstDateString(new Date(data.serverNow))
   // 通信が切れている間は「現在 11:08」を出さない。届いていない以上いま何時かは分からず、
@@ -367,7 +374,7 @@ export function LedgerScreen({
         )}
       </div>
 
-      {offline && data !== null && (
+      {offline && !shellOffline && data !== null && (
         <OfflineBanner
           lastServerNow={data.serverNow}
           nextRetryAt={new Date(
@@ -427,12 +434,12 @@ export function LedgerScreen({
                 filter={filter}
                 onFilterChange={setFilter}
                 isOffline={offline}
-                {...(onOpenCheckin === undefined ? {} : { onCheckin: onOpenCheckin })}
+                onCheckin={onOpenCheckin}
+                onReview={onOpenReview}
               />
             ))
           ) : (
             <Timetable
-              masked={masked}
               view={shown}
               selectedReservationId={openId}
               onSelectEntry={(entry) => setOpenId(entry === null ? null : entry.reservationId)}
@@ -463,6 +470,9 @@ export function LedgerScreen({
               anchor={anchor}
               isOffline={offline}
               onClose={() => setOpenId(null)}
+              onCheckIn={() => onOpenCheckin(openId)}
+              onChange={() => onOpenChange(openId)}
+              onCancel={() => onOpenCancel(openId)}
             />
           )}
         </div>

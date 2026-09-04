@@ -12,7 +12,7 @@ import { messageForError } from '../lib/errorMessages'
 import { toast } from '../store/toast'
 
 /**
- * 利用者・標準ロール・担当店舗の管理(UC-EYEX-149)。
+ * 利用者・標準ロール・担当店舗の管理(UC-EYE-149)。
  *
  * 一覧・検索・権限差分の提示と、標準ロール/担当店舗の変更、PIN 再設定の開始。
  * 組織はサーバが JWT から決めるので、画面から組織 ID を送ることはない。

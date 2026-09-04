@@ -28,8 +28,15 @@ import type { RecordingBadgeState } from './RecordingBadge'
 
 /** 自動の再送は 5 分の固定間隔（EX-UPLOAD-FAILED の「11:15 → 11:20」）。 */
 const RETRY_MS = 300_000
-/** 経過時間を数え直す間隔。1 秒ごとに描き直す必要は無い（読むための数ではない）。 */
-const RECOMPUTE_MS = 30_000
+/*
+ * 経過時間を数え直す間隔。
+ *
+ * **表示の粒度と揃える。** 画面は `mm:ss` と秒まで出す（`RecordingBadge` の `elapsedLabel`）
+ * ので、ここを 30 秒にすると 30 秒のうち 29 秒は秒の桁が凍り、
+ * 見ている人には「録音が止まっている」としか読めない（実測: 実時間 88 秒で表示は 4 通りだけ）。
+ * 秒を出すなら 1 秒ごとに数える。粒度を落としたいなら、先に表示のほうを「約1分」に変える。
+ */
+const RECOMPUTE_MS = 1_000
 /** 24 時間送れないままの控えは捨てる（サーバも保守の経路で `failed` に落とす）。 */
 const ABANDON_MS = 86_400_000
 /** 音の重さ。60 分でも約 14MB に収まる（モノラル・AAC 32kbps）。 */
@@ -134,7 +141,7 @@ export type Recorder = {
 /**
  * **断られた**ときだけ、理由と直し方の面（EX-MIC-DENIED）へ差し替える。
  * `NotAllowedError` は利用者か OS が「使わせない」と答えた印で、そのときだけ
- * 「設定 →「EYEX予約」→「マイク」をオンにする」の 3 手順が効く。
+ * 「設定 →「EYE予約」→「マイク」をオンにする」の 3 手順が効く。
  *
  * ほかの断り方（`NotFoundError` = マイクが刺さっていない、`NotReadableError` =
  * ほかが掴んでいる、`navigator.mediaDevices` そのものが無い古いブラウザ）は、
@@ -187,7 +194,7 @@ function defaultCreateRecorder(
   return { recorder: handle, contentType }
 }
 
-const OUTBOX_DB = 'eyex-recording-outbox'
+const OUTBOX_DB = 'eye-recording-outbox'
 const OUTBOX_STORE = 'blobs'
 
 /** IndexedDB を 1 回だけ開く。使えない端末では控えを持たない（送れたら送るだけ）。 */
@@ -473,7 +480,7 @@ export function useRecorder({
       })
   }, [state, receptionSessionId, storeId, use])
 
-  // 経過時間。読むための数ではないので 30 秒ごとに数え直す。
+  // 経過時間。秒まで表示するので 1 秒ごとに数え直す（RECOMPUTE_MS）。
   useEffect(() => {
     if (state !== 'recording') return
     const timer = setInterval(() => {

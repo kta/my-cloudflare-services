@@ -14,9 +14,9 @@ import { emptyDraft, nextButtonLabel, type StepGuard } from './steps'
 
 /*
  * 工程 2「ご来店の目的」（承認済みモック
- * docs/frontend/mockups/eyex/images/BOOK-02-PURPOSE.png と BOOK-02b-PURPOSE-CONFLICT.png）。
+ * docs/frontend/mockups/eye/images/BOOK-02-PURPOSE.png と BOOK-02b-PURPOSE-CONFLICT.png）。
  *
- * 実測（screens/BOOK-02*.html の <style> と assets/eyex.css）:
+ * 実測（screens/BOOK-02*.html の <style> と assets/eye.css）:
  *   目的の札は 3 列・間 12px・最小高 96px・角 12px、題 17px/600、所要 13px、
  *   「✓ 選んでいます」12px/600。「お取りする時間」は 4 列・間 14px・最小高 64px。
  *   警告の箱は内側 24px 26px、見出し 21px、理由 15px（下 20px）、代替の札は最小高 56px・18px。

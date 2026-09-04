@@ -1,26 +1,53 @@
 import type { AppType } from '@app/glasses_management'
 import { auth } from '@app/shared'
 import { hc } from 'hono/client'
-import { loadTerminal } from './terminal/terminalState'
 
-/*
- * 型のついた Hono RPC クライアント。API は同じオリジンにある（1 つの Worker が
- * SPA と API を配る）ので base は '/' でよい。`authFetch` が bearer を付ける。
- *
- * それに加えて、この端末が開いている業務を `x-terminal-session` で名乗る（P10）。
- * 監査の主体（共有モードなら端末そのもの・個人モードならその本人）はサーバがこの
- * 名乗りだけから決める —— **担当 id を本文で送らせない**（送れると誰でも他人の名前で
- * 残せる）。まだ業務が始まっていない画面は名乗るものが無いので、何も付けない。
- */
-const terminalFetch: typeof fetch = (input, init) => {
-  const sessionId = loadTerminal()?.sessionId ?? null
-  if (sessionId === null) return auth.authFetch(input, init)
-  const headers = new Headers(init?.headers)
-  headers.set('x-terminal-session', sessionId)
-  return auth.authFetch(input, { ...init, headers })
+export const TERMINAL_ID_KEY = 'eye.active-terminal-id'
+export const TERMINAL_SESSION_KEY = 'eye.active-terminal-session'
+
+export function storeTerminalSession(terminalId: string, sessionToken: string): void {
+  sessionStorage.setItem(TERMINAL_ID_KEY, terminalId)
+  sessionStorage.setItem(TERMINAL_SESSION_KEY, sessionToken)
 }
 
-export const client = hc<AppType>('/', { fetch: terminalFetch })
+export function clearTerminalSession(): void {
+  sessionStorage.removeItem(TERMINAL_ID_KEY)
+  sessionStorage.removeItem(TERMINAL_SESSION_KEY)
+}
+
+// 型のついた Hono RPC クライアント。API は同じオリジンにある（1 つの Worker が
+// SPA と API を配る）ので base は '/' でよい。`authFetch` が bearer を付ける。
+export const domainFetch = async (input: RequestInfo | URL, init: RequestInit = {}) => {
+  const headers = new Headers(init.headers)
+  const terminalId = sessionStorage.getItem(TERMINAL_ID_KEY)
+  const terminalSession = sessionStorage.getItem(TERMINAL_SESSION_KEY)
+  if (terminalId !== null && terminalSession !== null) {
+    headers.set('x-terminal-id', terminalId)
+    headers.set('x-terminal-session', terminalSession)
+  }
+  const response = await auth.authFetch(input, { ...init, headers })
+  if (response.status === 403) {
+    const failure = (await response
+      .clone()
+      .json()
+      .catch(() => null)) as {
+      error?: unknown
+      subject?: unknown
+    } | null
+    if (
+      failure?.error === 'personal_mode_required' &&
+      typeof failure.subject === 'string' &&
+      failure.subject !== '設定の変更'
+    ) {
+      window.dispatchEvent(
+        new CustomEvent('eye:personal-mode-required', { detail: { subject: failure.subject } }),
+      )
+    }
+  }
+  return response
+}
+
+export const client = hc<AppType>('/', { fetch: domainFetch })
 
 /**
  * いま業務をしている人の `sub`（JWT の本文から読むだけ。署名はサーバが確かめる）。

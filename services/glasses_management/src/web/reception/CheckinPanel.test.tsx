@@ -4,10 +4,10 @@ import { describe, expect, it, vi } from 'vitest'
 import { CheckinPanel, type CheckinPanelProps } from './CheckinPanel'
 
 /*
- * ご来店の受け付け（承認済みモック docs/frontend/mockups/eyex/images/RECEPTION-CHECKIN.png
+ * ご来店の受け付け（承認済みモック docs/frontend/mockups/eye/images/RECEPTION-CHECKIN.png
  * と screens/RECEPTION-CHECKIN.html）。
  *
- * 実測（RECEPTION-CHECKIN.html の <style> と assets/eyex.css）:
+ * 実測（RECEPTION-CHECKIN.html の <style> と assets/eye.css）:
  *   .chk    = 1fr 320px／.main padding 28px 32px・段の間 24px／.side 左罫 1px・padding 28px 24px
  *   見出しの 1 行 = 13px --brand-dark・下に 10px
  *   .who    = padding 22px・丸 56×56・名前 26px/700・ふりがな 13px・dl は 3 等分

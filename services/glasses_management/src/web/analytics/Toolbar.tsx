@@ -1,115 +1,100 @@
-import { cn, focusRing } from '@app/ui'
-import { monthLabel } from './describe'
+import { focusRing } from '@app/ui'
+import type { AnalyticsTabKey } from './tabs'
 
-/*
- * 分析のツールバー（承認済みモック ANALYTICS-TOP.png の 56px の帯）。
- * 見出し・「対象の期間」・期間の札・「適用」・右端の「店舗：銀座店 ▾」。
- *
- * **ここは下書きを変えるだけで、集計は「適用」を押したときにしか起きない。**
- * 期間や店舗を選び替えた瞬間にサーバを叩くと、店長が選び終える前に古い数字が
- * 何度も入れ替わって読めなくなる。
- */
-
-/** 期間の札と店舗の札は同じ見た目（高さ 44px・角 12px・縁 1px）。 */
-const PILL =
-  'min-h-11 rounded-card border border-line-strong bg-surface px-3 text-lead font-bold text-ink'
-
-export type ToolbarProps = {
-  title: string
-  /** 期間の札を 2 つ並べるか（取り消しだけ）。 */
-  range: boolean
-  months: readonly string[]
-  startMonth: string
+export type AnalyticsSelection = {
+  tab: AnalyticsTabKey
   month: string
+  startMonth?: string
   storeId: string
-  stores: readonly { id: string; name: string }[]
-  onStartMonthChange: (month: string) => void
-  onMonthChange: (month: string) => void
-  onStoreChange: (storeId: string) => void
-  onApply: () => void
+  granularity?: 'day' | 'month' | 'hour' | 'weekday'
+  countBy?: 'visit_date' | 'received_date'
 }
+export type AnalyticsStoreOption = { id: string; label: string }
 
 export function Toolbar({
-  title,
-  range,
+  tabLabel,
+  draft,
   months,
-  startMonth,
-  month,
-  storeId,
-  stores,
-  onStartMonthChange,
+  storeOptions,
   onMonthChange,
+  onStartMonthChange,
   onStoreChange,
   onApply,
-}: ToolbarProps) {
+}: {
+  tabLabel: string
+  draft: AnalyticsSelection
+  months: readonly string[]
+  storeOptions: readonly AnalyticsStoreOption[]
+  onMonthChange: (month: string) => void
+  onStartMonthChange: (month: string) => void
+  onStoreChange: (storeId: string) => void
+  onApply: () => void
+}) {
+  const option = (month: string) => (
+    <option key={month} value={month}>
+      {month.slice(0, 4)}年{Number(month.slice(5, 7))}月
+    </option>
+  )
+  const startMonths = months.filter((month) => month <= draft.month)
+  const endMonths = months.filter((month) => month >= (draft.startMonth ?? draft.month))
   return (
-    <div className="flex flex-wrap items-center gap-2.5 border-b border-line bg-surface px-4 py-1.5">
-      <h2 className="text-title font-bold text-ink">{title}</h2>
+    <div className="flex min-h-14 flex-wrap items-center gap-2.5 border-line border-b bg-surface px-4 py-1.5">
+      <h2 className="text-lead font-bold text-ink">{tabLabel}</h2>
       <span className="text-grid text-ink-muted">対象の期間</span>
-      {range ? (
+      {draft.tab === 'cancel' ? (
         <>
           <select
-            aria-label="対象の期間（開始）"
-            className={cn(PILL, focusRing)}
-            value={startMonth}
-            onChange={(e) => onStartMonthChange(e.target.value)}
+            aria-label="開始月"
+            value={draft.startMonth}
+            onChange={(event) => onStartMonthChange(event.target.value)}
+            className={`min-h-11 rounded-card border border-line-strong bg-surface px-3.5 text-body font-semibold text-ink ${focusRing}`}
           >
-            {months.map((value) => (
-              <option key={value} value={value}>
-                {monthLabel(value)}
-              </option>
-            ))}
+            {startMonths.map(option)}
           </select>
-          <span className="text-grid text-ink-muted">−</span>
+          <span aria-hidden="true" className="text-body text-ink-muted">
+            −
+          </span>
           <select
-            aria-label="対象の期間（終了）"
-            className={cn(PILL, focusRing)}
-            value={month}
-            onChange={(e) => onMonthChange(e.target.value)}
+            id="analytics-month"
+            aria-label="終了月"
+            value={draft.month}
+            onChange={(event) => onMonthChange(event.target.value)}
+            className={`min-h-11 rounded-card border border-line-strong bg-surface px-3.5 text-body font-semibold text-ink ${focusRing}`}
           >
-            {/* 開始より前の終了月は選べない（選べると空の期間ができる）。 */}
-            {months
-              .filter((value) => value >= startMonth)
-              .map((value) => (
-                <option key={value} value={value}>
-                  {monthLabel(value)}
-                </option>
-              ))}
+            {endMonths.map(option)}
           </select>
         </>
       ) : (
         <select
+          id="analytics-month"
           aria-label="対象の期間"
-          className={cn(PILL, focusRing)}
-          value={month}
-          onChange={(e) => onMonthChange(e.target.value)}
+          value={draft.month}
+          onChange={(event) => onMonthChange(event.target.value)}
+          className={`min-h-11 rounded-card border border-line-strong bg-surface px-3.5 text-body font-semibold text-ink ${focusRing}`}
         >
-          {months.map((value) => (
-            <option key={value} value={value}>
-              {monthLabel(value)}
-            </option>
-          ))}
+          {months.map(option)}
         </select>
       )}
       <button
         type="button"
         onClick={onApply}
-        className={cn(
-          'min-h-11 rounded-card bg-pine px-5 text-lead font-bold text-on-pine',
-          focusRing,
-        )}
+        className={`min-h-11 rounded-card bg-pine px-5.5 text-body font-semibold text-on-pine ${focusRing}`}
       >
         適用
       </button>
+      <label htmlFor="analytics-store" className="sr-only">
+        店舗
+      </label>
       <select
+        id="analytics-store"
         aria-label="店舗"
-        className={cn(PILL, 'ml-auto', focusRing)}
-        value={storeId}
-        onChange={(e) => onStoreChange(e.target.value)}
+        value={draft.storeId}
+        onChange={(event) => onStoreChange(event.target.value)}
+        className={`ml-auto min-h-11 rounded-card border border-line-strong bg-surface px-3.5 text-body font-semibold text-ink ${focusRing}`}
       >
-        {stores.map((store) => (
+        {storeOptions.map((store) => (
           <option key={store.id} value={store.id}>
-            店舗：{store.name}
+            {store.label}
           </option>
         ))}
       </select>

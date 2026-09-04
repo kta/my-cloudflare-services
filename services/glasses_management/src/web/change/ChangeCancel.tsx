@@ -5,13 +5,13 @@ import { formatPhoneDigits } from '../booking/CustomerStep'
 import { dateLabel, jstClock } from '../ledger/metrics'
 
 /*
- * 予約の取り消し（承認済みモック docs/frontend/mockups/eyex/images/CHANGE-CANCEL.png）。
+ * 予約の取り消し（承認済みモック docs/frontend/mockups/eye/images/CHANGE-CANCEL.png）。
  *
  * この面の仕事は「取り消しは戻せない」ことを先に読ませ、理由を 1 つ選ぶまで実行させないこと。
  * 既定の操作は「取り消さずに戻る」— 面に入った直後の焦点もそこに置き、そのボタンから
  * 「この予約を取り消します」「まだ取り消していません」が読めるように結ぶ（AC-CHANGE-21）。
  *
- * 実測（screens/CHANGE-CANCEL.html の <style> と assets/eyex.css）:
+ * 実測（screens/CHANGE-CANCEL.html の <style> と assets/eye.css）:
  *   .cancel  = padding 36px 44px。h2 18px ＋ 補足 13px（左に 10px）
  *   .target  = --alert-tint の 4 列（250px 1fr 1fr 1fr）・gap 20px・padding 22px 24px
  *              左は 24px/1.3 の日時 ＋ 13px の「所要 60分」、右 3 つは dt 12px / dd 17px/600 ＋ 補足 13px
@@ -65,6 +65,7 @@ type ChangeCancelProps = {
   onBack: () => void
   onCancel: (reason: CancelReason) => void
   phase?: ChangeCancelPhase
+  isOffline?: boolean
 }
 
 /** 「8月27日（木）」。年をまたぐ知らせは出さないので年を落とす。 */
@@ -84,7 +85,13 @@ function Fact({ term, value, note }: { term: string; value: string; note: string
   )
 }
 
-export function ChangeCancel({ target, onBack, onCancel, phase = 'ready' }: ChangeCancelProps) {
+export function ChangeCancel({
+  target,
+  onBack,
+  onCancel,
+  phase = 'ready',
+  isOffline = false,
+}: ChangeCancelProps) {
   const [reason, setReason] = useState<CancelReason | null>(null)
   const backRef = useRef<HTMLButtonElement>(null)
   const headingId = useId()
@@ -246,11 +253,13 @@ export function ChangeCancel({ target, onBack, onCancel, phase = 'ready' }: Chan
         </p>
         <button
           type="button"
-          disabled={reason === null}
+          disabled={reason === null || isOffline}
           aria-label={
-            reason === null
-              ? 'この予約を取り消す（取り消しの理由を選ぶと押せます）'
-              : 'この予約を取り消す'
+            isOffline
+              ? 'この予約を取り消す（通信が戻ると押せます）'
+              : reason === null
+                ? 'この予約を取り消す（取り消しの理由を選ぶと押せます）'
+                : 'この予約を取り消す'
           }
           onClick={() => {
             if (reason !== null) onCancel(reason)

@@ -38,7 +38,7 @@ import {
 } from './steps'
 
 /*
- * 受付の器（承認済みモック docs/frontend/mockups/eyex/images/BOOK-01-DATETIME.png ほか 12 面）。
+ * 受付の器（承認済みモック docs/frontend/mockups/eye/images/BOOK-01-DATETIME.png ほか 12 面）。
  *
  * 5 工程が同じ器の上で動き、いまどの工程にいるか・録音がどこにあるかが工程を移っても
  * 変わらない状態にする。
@@ -71,17 +71,19 @@ export type BookingScreenProps = {
    * 工程 4 のお名前・ふりがな・お電話番号をこれで埋め、打ち直させない。
    * 新しい受付（再開ではない）のときだけ効く。
    */
-  initialCustomer?: { name: string; kana: string; phone: string | null }
+  initialCustomer?: { id?: string; name: string; kana: string; phone: string | null }
   /** 受付を閉じた／あとで続けるでトップへ戻る。 */
   onExit: () => void
   /** 完了の面の「台帳で見る」。省くとトップへ戻る。 */
   onOpenLedger?: () => void
   /** 業務の期限が切れた（401）。 */
   onSessionExpired?: () => void
+  /** Shell が検知した通信断。書込みは下書きを保ったまま止める。 */
+  isOffline?: boolean
 }
 
 /** 端末に置くのはこの 1 つだけ。お名前・お電話番号は置かない（§6.6）。 */
-const SESSION_KEY = 'eyex.booking.session'
+const SESSION_KEY = 'eye.booking.session'
 const MS_PER_MINUTE = 60_000
 /** 仮の押さえの残り時間を数え直す間隔。端末の時計は読まず、器の時刻を 1 秒ずつ進める。 */
 const TICK_MS = 1_000
@@ -100,9 +102,14 @@ const CONFLICT_DONE_STEPS = ['customer'] as const
 /**
  * 受けかけの受付を読む。**`hc<AppType>` にこの読み口がまだ無い**ので、
  * 契約のスキーマで受け取り直す。読めない・形が違うときは新しい受付を始める。
+ *
+ * 末尾の `/draft` を落とさない —— `/api/staff/reception-sessions/:id` は
+ * 受付履歴の詳細（`ReceptionHistoryDetail`）を返す別の口で、下書きを持たない。
+ * そちらを叩いていたころは `safeParse` が必ず落ち、タブが捨てられて戻るたびに
+ * 伺った内容が消えて工程 1 からやり直しになっていた。
  */
 async function readReceptionSession(sessionId: string): Promise<ReceptionSession | null> {
-  const res = await auth.authFetch(`/api/staff/reception-sessions/${sessionId}`)
+  const res = await auth.authFetch(`/api/staff/reception-sessions/${sessionId}/draft`)
   if (!res.ok) return null
   const parsed = ReceptionSession.safeParse(await res.json())
   return parsed.success ? parsed.data : null
@@ -122,6 +129,7 @@ export function BookingScreen({
   onExit,
   onOpenLedger,
   onSessionExpired,
+  isOffline: shellOffline = false,
 }: BookingScreenProps) {
   const clock = useMemo(() => now ?? new Date().toISOString(), [now])
   const titleId = useId()
@@ -137,6 +145,8 @@ export function BookingScreen({
           nameTyped: initialCustomer.name,
           kanaTyped: initialCustomer.kana,
           phoneTyped: initialCustomer.phone ?? '',
+          // 顧客台帳の「ご予約を取る」から来たときは、その 1 名で決まっている。
+          customerId: initialCustomer.id ?? null,
         },
   )
   const [confirming, setConfirming] = useState(false)
@@ -181,6 +191,7 @@ export function BookingScreen({
    * 400/409 は通信の問題ではない）。台帳と同じ考え方で、読めているものは消さずに残す。
    */
   const [offline, setOffline] = useState(false)
+  const isOffline = offline || shellOffline
   /*
    * 工程 1 を始めた時点で作り、成功するまで同じ値を送る（`04-api.md` §6.1）。
    * 枠を取られて選び直したときだけ作り直す —— 中身が変わるので、同じ鍵では
@@ -409,6 +420,7 @@ export function BookingScreen({
     nameTyped: draft.nameTyped,
     kanaTyped: draft.kanaTyped,
     noteTyped: draft.noteTyped,
+    customerId: draft.customerId,
     notes,
   }
 
@@ -523,6 +535,10 @@ export function BookingScreen({
             durationMinutes,
             staffId: chosenStaffId,
             equipmentIds: chosenEquipmentIds,
+            // 候補から選んだ 1 名をご予約に結び付ける。載せていなかったころ、
+            // 予約行の `customer_id` は NULL のままで、台帳の帯にお名前も来店回数も
+            // 出ず、来店回数も一生増えなかった（AC-CUST-24 / 25、AC-CUST-10 / 11）。
+            ...(draft.customerId === null ? {} : { customerId: draft.customerId }),
             noteCustomer: draft.noteTyped,
             source: 'phone',
             ...(hold === null ? {} : { holdId: hold.id }),
@@ -895,7 +911,7 @@ export function BookingScreen({
               staffName,
               equipmentNames,
             }}
-            isOffline={offline}
+            isOffline={isOffline}
             onBookAgain={bookAgain}
             onOpenLedger={onOpenLedger ?? onExit}
           />
@@ -947,7 +963,7 @@ export function BookingScreen({
         ) : step === 'slot' ? (
           <SlotStep
             availability={board}
-            phase={offline ? 'offline' : boardPhase}
+            phase={isOffline ? 'offline' : boardPhase}
             axis={axis}
             onAxisChange={setAxis}
             purposeLabel={purposeLabel}
@@ -971,6 +987,9 @@ export function BookingScreen({
                 nameTyped: next.nameTyped,
                 kanaTyped: next.kanaTyped,
                 noteTyped: next.noteTyped,
+                // 選んだ 1 名は下書きに置く。サーバに残るので、タブを捨てて戻っても
+                // 結び付けが消えない（実装不足の洗い出し customers-01）。
+                customerId: next.customerId,
               }))
             }}
             soFar={{
@@ -983,7 +1002,7 @@ export function BookingScreen({
             writer={writer}
             now={clock}
             onLookup={onCustomerLookup}
-            isOffline={offline}
+            isOffline={isOffline}
           />
         ) : (
           <ConfirmStep
@@ -1000,7 +1019,7 @@ export function BookingScreen({
             now={tick}
             renewalsUsed={draft.holdRenewals ?? 0}
             phase={bookingFailed ? 'error' : 'ready'}
-            isOffline={offline}
+            isOffline={isOffline}
             onJumpTo={(target) =>
               setStep(
                 (['datetime', 'purpose', 'slot', 'customer'] as const)[target - 1] ?? 'datetime',
@@ -1059,7 +1078,7 @@ export function BookingScreen({
             step === 'confirm' && conflict === null ? (
               <ConfirmAction
                 confirming={booking}
-                isOffline={offline}
+                isOffline={isOffline}
                 onConfirm={() => {
                   confirmBooking().catch(() => setBookingFailed(true))
                 }}

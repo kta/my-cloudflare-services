@@ -1,4 +1,13 @@
-import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
+import { sql } from 'drizzle-orm'
+import {
+  check,
+  index,
+  integer,
+  real,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from 'drizzle-orm/sqlite-core'
 
 /*
  * D1 は SQLite。このリポジトリの決め:
@@ -13,8 +22,7 @@ import { index, integer, real, sqliteTable, text, uniqueIndex } from 'drizzle-or
  * P0（基盤）の 3 つに、P1（店舗の受付条件）の 16 と P2（枠の一次排他）の 1、
  * P3（電話・店頭からの予約受付）の 3 と P4（顧客台帳）の 4、
  * P5（来店受付とウォークイン）の 2 と P7（受付の録音）の 2、
- * P8（お客様向け Web 予約）の 2 と P9（分析）の 1、
- * P10（端末の使い分けと監査）の 2 を足した 36 表がここにある。
+ * P8（お客様向け Web 予約）の 2 を足した 33 表がここにある。
  */
 
 /**
@@ -502,6 +510,8 @@ export const reservations = sqliteTable(
     ),
     // 顧客詳細の「次のご予約」と来店回数の再計算。
     index('reservations_org_customer_start_idx').on(t.organizationId, t.customerId, t.startsAt),
+    // 分析の「受付日」集計を JST 範囲で読む。
+    index('reservations_org_store_created_idx').on(t.organizationId, t.storeId, t.createdAt),
   ],
 )
 
@@ -1117,6 +1127,46 @@ export const alerts = sqliteTable(
   ],
 )
 
+/**
+ * 分析の唯一の日次集計表。画面は生の業務表ではなくこの表だけを読む。
+ * metric / dimension / key の許可語彙は contracts の AnalyticsDaily* で入口を
+ * 固定し、D1 は日次 upsert の一意性だけを担保する（FK は置かない）。
+ */
+export const analyticsDaily = sqliteTable(
+  'analytics_daily',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    storeId: text('store_id').notNull(),
+    date: text('date').notNull(), // JST 'YYYY-MM-DD'
+    metric: text('metric').notNull(),
+    dimension: text('dimension').notNull(),
+    dimensionKey: text('dimension_key').notNull(),
+    // ロールアップ時点の名称。無効化・削除後も分析表示を保つ。
+    dimensionLabel: text('dimension_label').notNull(),
+    value: integer('value').notNull(),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (t) => [
+    check('analytics_daily_value_nonnegative_check', sql`${t.value} >= 0`),
+    uniqueIndex('analytics_daily_org_store_date_metric_dim_idx').on(
+      t.organizationId,
+      t.storeId,
+      t.date,
+      t.metric,
+      t.dimension,
+      t.dimensionKey,
+    ),
+    index('analytics_daily_org_store_metric_date_idx').on(
+      t.organizationId,
+      t.storeId,
+      t.metric,
+      t.date,
+    ),
+  ],
+)
+
 /* ───────────────────────────────────────────────────────────────────────────
  * P8 お客様向け Web 予約（0007_*.sql）
  * 店舗ごとに「出す・出さない／何を出すか／いつまで受けるか」を持つ 1 表と、
@@ -1130,7 +1180,7 @@ export const alerts = sqliteTable(
  * Web 予約の公開設定。**1 店舗 1 行**（SETTINGS-WEB の保存先）。
  *
  * **行が無い店舗は「未公開」として読む**（is_published='0' と同じ）。
- * 「ご案内のページ eyex.jp/ginza」はこの表に持たない（stores.slug から組み立てる）。
+ * 「ご案内のページ eye.jp/ginza」はこの表に持たない（stores.slug から組み立てる）。
  *
  * opens_at < closes_at。この帯は store_business_hours の内側でなくてよい
  * （Web だけ受付を狭められる）。'HH:MM' の文字列比較で大小を見るので、
@@ -1216,83 +1266,17 @@ export const webBookings = sqliteTable(
     uniqueIndex('web_bookings_org_public_code_idx').on(t.organizationId, t.publicCode),
     // LEDGER-LIST の「確認待ち 1件」・ALERTS の「Web予約が2件、確認待ちです」。
     index('web_bookings_org_store_status_idx').on(t.organizationId, t.storeId, t.status),
+    // scheduled の pending 自動取消を受信日時順で範囲走査する。
+    index('web_bookings_status_created_idx').on(t.status, t.createdAt),
   ],
 )
 
 /**
- * 日次の集計（P9 分析）。**画面はこの 1 表しか読まない** — 生データ
- * （reservations / visit_events / walk_ins）の走査を画面から行わない。
+ * 店内端末の置き場所。端末ごとの共有 PIN と自動ロック秒数をここに持つ。
  *
- * 1 行 = 店舗 × 暦日（JST） × metric × 切り口。value は real で、件数も
- * 中央値（秒）も同じ列に入る。**率は保存しない**（期間で足したときに
- * 「率の平均」になり、日ごとの母数の違いが消える）。再来は分子
- * （metric='revisits_90d'）だけを保存し、分母は同じ dimension_key の
- * 'receptions' を使って読み出し時に割る。小標本抑制（分母 20 件未満）は
- * この分母でしか判定できない。
- *
- * metric='closed' は「その日を集計した」印を兼ねる（1=定休・臨時休業／
- * 0=営業日）。定休日の 0 件（value=0 の行がある）と欠測（行が無い）を
- * これで区別する。「1日あたり」の分母（営業日数）と「まだ集計中です」の
- * 日数もここから出る。
- *
- * metric='guests'（人数）は書かない。何人のお客様かを数える経路が無く、
- * 画面にも「名」を出さない（Q-11 のいまの前提）。
- *
- * 語彙は packages/contracts の AnalyticsDailyMetric / AnalyticsDimension を
- * 単一ソースにし、**D1 に CHECK 制約を書かない**（語彙が増えるたびに
- * テーブル再作成のマイグレーションが出るのを避ける）。
- */
-export const analyticsDaily = sqliteTable(
-  'analytics_daily',
-  {
-    id: text('id').primaryKey(),
-    organizationId: text('organization_id').notNull(),
-    storeId: text('store_id').notNull(),
-    date: text('date').notNull(), // 'YYYY-MM-DD'（JST の暦日）
-    metric: text('metric').notNull(), // AnalyticsDailyMetric の 8 値
-    dimension: text('dimension').notNull(), // AnalyticsDimension の 6 値
-    dimensionKey: text('dimension_key').notNull(), // total は ''、hour は '14'、担当未定は 'unassigned'
-    value: real('value').notNull(), // 件数・秒・0/1。率は入れない
-    createdAt: text('created_at').notNull(),
-    updatedAt: text('updated_at').notNull(),
-  },
-  (t) => [
-    // 日次 upsert の一意鍵。同じ日を数え直しても 2 行目を作らせない。
-    uniqueIndex('analytics_daily_org_store_date_metric_dim_idx').on(
-      t.organizationId,
-      t.storeId,
-      t.date,
-      t.metric,
-      t.dimension,
-      t.dimensionKey,
-    ),
-    // タブ 1 枚ぶんの読み出し（metric を決めて期間で引く）。
-    index('analytics_daily_org_store_metric_date_idx').on(
-      t.organizationId,
-      t.storeId,
-      t.metric,
-      t.date,
-    ),
-  ],
-)
-
-/* ───────────────────────────────────────────────────────────────────────────
- * P10 端末の使い分けと監査（013-terminals-and-audit）
- * 同じアプリを「持ち歩く個人の iPad」と「レジ横に据え置く共有の iPad」の
- * どちらとしても使う。端末そのものを操作の主体にできるので、共有モードでは
- * 個人ログイン無しで日常業務が回り、責任の残る操作の前だけ個人モードへ上げる。
- * 監査（audit_events）とお知らせ（alerts）は P3 / P7 の表をそのまま使い、
- * ここでは作り直さない。
- * ─────────────────────────────────────────────────────────────────────────── */
-
-/**
- * 店舗に置く iPad の 1 台。共有（レジ横・受付台）のときだけ端末側に暗証番号の
- * ハッシュを持ち、個人の端末は本人（staff.pin_hash）で照合する。
- * `auto_lock_seconds` の既定は 120 だが、DDL の DEFAULT に意味を持たせない決めなので
- * アプリ層が入れる。`version` は楽観ロックで、PATCH が合わなければ 409 を返す。
- *
- * 「つながっているか」は列に持たない。`last_seen_at` が 5 分以内かどうかで
- * 毎回計算する（状態を 2 か所に持つと必ずずれる）。
+ * PIN は `hmac$<base64>` のハッシュだけを保存し、NULL は共有PINが未設定であることを表す。
+ * terminal_sessions との外部キーは張らない。端末の無効化後も監査・セッションを残すため、
+ * 参照の整合性はアプリ層で守る。
  */
 export const terminals = sqliteTable(
   'terminals',
@@ -1300,28 +1284,25 @@ export const terminals = sqliteTable(
     id: text('id').primaryKey(),
     organizationId: text('organization_id').notNull(),
     storeId: text('store_id').notNull(),
-    name: text('name').notNull(), // '銀座店 レジ横iPad'（1〜60文字）
+    name: text('name').notNull(),
     kind: text('kind').notNull(), // 'shared' | 'personal'
-    placeNote: text('place_note'), // 'レジの右側　固定スタンド'
-    deviceLabel: text('device_label'), // 'EYEX-iPad-07'
-    pinHash: text('pin_hash'), // 共有端末の店舗共通 PIN。平文は保存しない
-    autoLockSeconds: integer('auto_lock_seconds').notNull(), // 既定 120（30〜1800）
-    lastSeenAt: text('last_seen_at'), // ISO8601 (UTC)。一度もつながっていなければ NULL
+    placeNote: text('place_note'),
+    deviceLabel: text('device_label'),
+    pinHash: text('pin_hash'),
+    autoLockSeconds: integer('auto_lock_seconds').notNull(),
+    lastSeenAt: text('last_seen_at'),
     isActive: text('is_active').notNull(), // '0' | '1'
-    version: integer('version').notNull(), // 1 以上。PATCH のたびに +1
+    version: integer('version').notNull(),
     createdAt: text('created_at').notNull(),
   },
   (t) => [
-    // LOGIN-SHARED の置き場所一覧（作成の古い順に並べる）。
+    // LOGIN-SHARED の置き場所一覧を、店舗内の作成順で読む。
     index('terminals_org_store_created_idx').on(t.organizationId, t.storeId, t.createdAt),
   ],
 )
 
 /**
- * 端末で開いている業務。`mode='personal'` のときだけ `staff_id` が入る。
- * 寿命は `expires_at`（開始 + `auto_lock_seconds`）で、業務を終えたときと
- * 置き場所を別の端末に引き継がれたときは `revoked_at` を書いて**行は残す**
- * （いつ誰から誰へ移ったかを監査から追えるようにするため）。
+ * 端末で業務中の共有・個人モード。失効・終了は行を消さず revoked_at に記録する。
  */
 export const terminalSessions = sqliteTable(
   'terminal_sessions',
@@ -1330,21 +1311,28 @@ export const terminalSessions = sqliteTable(
     organizationId: text('organization_id').notNull(),
     storeId: text('store_id').notNull(),
     terminalId: text('terminal_id').notNull(),
-    staffId: text('staff_id'), // 'shared' では NULL
+    staffId: text('staff_id'),
     mode: text('mode').notNull(), // 'shared' | 'personal'
-    startedAt: text('started_at').notNull(), // ISO8601 (UTC)
-    expiresAt: text('expires_at').notNull(), // started_at + auto_lock_seconds
-    revokedAt: text('revoked_at'), // 業務の終了・引き継ぎ・失効で埋める
+    // 平文の bearer token は保存しない。既存 0009 行との互換のため NULL 可。
+    credentialHash: text('credential_hash'),
+    startedAt: text('started_at').notNull(),
+    expiresAt: text('expires_at').notNull(),
+    revokedAt: text('revoked_at'),
     createdAt: text('created_at').notNull(),
   },
   (t) => [
-    // 1 端末の「いま誰が使っているか」（新しい順に 1 本目を見る）。
+    // 端末の現行セッション候補を started_at の新しい順に読む。
     index('terminal_sessions_org_terminal_started_idx').on(
       t.organizationId,
       t.terminalId,
       t.startedAt,
     ),
-    // 期限切れの掃除。
+    index('terminal_sessions_org_terminal_credential_idx').on(
+      t.organizationId,
+      t.terminalId,
+      t.credentialHash,
+    ),
+    // scheduled の期限切れ掃除は組織ごとの expires_at 範囲走査。
     index('terminal_sessions_org_expires_idx').on(t.organizationId, t.expiresAt),
   ],
 )

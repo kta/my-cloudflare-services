@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { PurposeStep } from './PurposeStep'
 
 /*
- * 工程 2「ご用件を選ぶ」（承認済みモック docs/frontend/mockups/eyex/images/WEB-02-PURPOSE.png）。
+ * 工程 2「ご用件を選ぶ」（承認済みモック docs/frontend/mockups/eye/images/WEB-02-PURPOSE.png）。
  *
  * 実測（screens/WEB-02-PURPOSE.html の <style>）:
  *   並び 間 10px・上 28px、1 件は最小高 60px・padding 0 16px・角 12px・16px/600

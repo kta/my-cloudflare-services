@@ -6,13 +6,13 @@ import { type HistoryFilters, ReceptionHistory } from './ReceptionHistory'
 
 /*
  * 受付履歴の一覧・詳細・0 件（承認済みモック
- * docs/frontend/mockups/eyex/images/HISTORY-LIST.png と HISTORY-EMPTY.png）。
+ * docs/frontend/mockups/eye/images/HISTORY-LIST.png と HISTORY-EMPTY.png）。
  *
  * 一覧の仕事は「いつ誰が受け、そのあと何が変わったか」をその場で答えられること、
  * 0 件の仕事は「絞りすぎた店長を、条件を 1 つ緩めるだけで元の道へ戻す」こと。
  * 見た目の寸法は e2e の突き合わせで見るので、ここでは「何が読めて、何が押せるか」を見る。
  *
- * 実測（screens/HISTORY-LIST.html / HISTORY-EMPTY.html の <style> と assets/eyex.css）:
+ * 実測（screens/HISTORY-LIST.html / HISTORY-EMPTY.html の <style> と assets/eye.css）:
  *   `.toolbar` 56px。`.fbtn` min-height 40px / padding 0 12px / 角 8px / 13px・600
  *   （値は 400 の --ink-2。選択中は枠 2px --brand ＋ 地 --brand-tint）。
  *   「お客様名で探す」 min-height 40px / padding 0 14px。
@@ -371,8 +371,10 @@ describe('受付履歴', () => {
     await userEvent.click(screen.getByRole('button', { name: /結果/ }))
     await userEvent.click(screen.getByRole('button', { name: '取消' }))
     await userEvent.type(screen.getByRole('searchbox', { name: 'お客様名で探す' }), '田中')
-    await waitFor(() => expect(asked.at(-1)?.searchParams.get('name')).toBe('田中'))
-    const last = asked.at(-1)
+    // 先頭の 1 件を自動で選ぶので、`asked` の末尾は詳細の要求になる。一覧の要求だけを見る。
+    const listCalls = () => asked.filter((url) => url.pathname === '/api/staff/reception-sessions')
+    await waitFor(() => expect(listCalls().at(-1)?.searchParams.get('name')).toBe('田中'))
+    const last = listCalls().at(-1)
     expect(last?.searchParams.get('status')).toBe('cancelled')
     expect(last?.searchParams.get('from')).toBe('2026-08-21')
     expect(last?.searchParams.get('to')).toBe('2026-08-27')
@@ -392,12 +394,14 @@ describe('受付履歴', () => {
     expect(screen.getByRole('searchbox', { name: 'お客様名で探す' })).toHaveValue('田中')
   })
 
-  it('選択中の行は aria-current="true" を持つ', async () => {
+  it('選択中の行は aria-current="true" を持ち、選び直すと移る', async () => {
     await opened()
-    const first = rows()[0] as HTMLElement
-    expect(first).not.toHaveAttribute('aria-current')
-    await userEvent.click(first)
+    // 開いた瞬間に先頭が選ばれている（UX 監査 UI-09）。
     await waitFor(() => expect(rows()[0]).toHaveAttribute('aria-current', 'true'))
+    const second = rows()[1] as HTMLElement
+    await userEvent.click(second)
+    await waitFor(() => expect(rows()[1]).toHaveAttribute('aria-current', 'true'))
+    expect(rows()[0]).not.toHaveAttribute('aria-current')
   })
 
   it('録音の欄はこのフェーズでは出さない', async () => {
@@ -538,58 +542,29 @@ describe('受付履歴が 0 件', () => {
 })
 
 /*
- * 録音の保全（P10 UC-TERM-09 / AC-TERM-10）。この面が持つのは入口だけで、
- * ご本人の確認（MODE-PERSONAL）を挟むかどうかは器が決める。
+ * 一覧が届いたら、先頭の 1 件を選んで右を埋める。
+ * 以前は何も選ばれずに開き、画面の 58% を占める右ペインが
+ * 「左の 1 件をお選びください。」という灰色の 1 行だけだった（UX 監査 UI-09）。
+ * 左の 12 件のうち先頭を選ぶだけで埋まるものを、利用者にその 1 タップを押させない。
  */
-describe('録音の保全', () => {
-  const RECORDING = {
-    id: 'f0000000-0000-4000-8000-000000000001',
-    code: 'RC-260827-0001',
-    receptionSessionId: HANAKO.sessionId as string,
-    reservationId: NON_NULL_RESERVATION.id,
-    state: 'stored' as const,
-    contentType: 'audio/mp4' as const,
-    durationSeconds: 192,
-    bytes: 1024,
-    retainUntil: at('2026-11-27', '11:08'),
-    legalHold: false,
-    uploadAttempts: 1,
-    createdAt: at('2026-08-27', '11:08'),
-  }
-
-  function openWith(recordings: (typeof RECORDING)[], onPreserve = preserve) {
-    render(
-      <ReceptionHistory
-        storeId={STORE_ID}
-        today={TODAY}
-        staff={STAFF}
-        onOpenReservation={openReservation}
-        onStartBooking={startBooking}
-        recordings={recordings}
-        onPreserveRecording={onPreserve}
-      />,
-    )
-  }
-
-  const preserve = vi.fn()
-
-  it('保全されていない録音には「この録音を保全する」が出て、押すとその 1 本を器へ渡す', async () => {
-    preserve.mockClear()
-    openWith([RECORDING])
-    await screen.findByRole('group', { name: '受付の一覧' })
-    await userEvent.click(rows()[0] as HTMLElement)
-    const button = await screen.findByRole('button', { name: 'この録音を保全する' })
-    await userEvent.click(button)
-    expect(preserve).toHaveBeenCalledWith(RECORDING)
+describe('開いた瞬間の選択', () => {
+  it('一覧が届いたら先頭の 1 件を選び、右を埋める', async () => {
+    await opened()
+    await waitFor(() => expect(screen.queryByText(/左の 1 件をお選びください/)).toBeNull())
   })
 
-  it('すでに保全された録音にはボタンを出さず、保全されていることを字で言う', async () => {
-    openWith([{ ...RECORDING, legalHold: true }])
-    await screen.findByRole('group', { name: '受付の一覧' })
-    await userEvent.click(rows()[0] as HTMLElement)
-    expect(
-      await screen.findByText('この録音は保全されています。期限が来ても消えません。'),
-    ).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'この録音を保全する' })).toBeNull()
+  it('選ばれた行に印が付く', async () => {
+    await opened()
+    await waitFor(() => expect(rows()[0]).toHaveAttribute('aria-current', 'true'))
+  })
+
+  it('利用者が別の行を選んだら、その選択を勝手に戻さない', async () => {
+    await opened()
+    await waitFor(() => expect(rows()[0]).toHaveAttribute('aria-current', 'true'))
+    const second = rows()[1]
+    if (second === undefined) throw new Error('2 件目が無い')
+    await userEvent.click(second)
+    expect(second).toHaveAttribute('aria-current', 'true')
+    expect(rows()[0]).not.toHaveAttribute('aria-current')
   })
 })

@@ -1,366 +1,401 @@
-import type { AnalyticsMetric, AnalyticsReport } from '@app/contracts'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { AnalyticsScreen } from './AnalyticsScreen'
+import { describe, expect, it, vi } from 'vitest'
+import { type AnalyticsPresentationReport, AnalyticsScreen } from './AnalyticsScreen'
+import type { AnalyticsSelection } from './Toolbar'
 
-/*
- * 分析の器（P9 T-012）。承認済みモック ANALYTICS-TOP.png の
- * タブ帯（8 つ）＋ツールバー（対象の期間・適用・店舗）を立て、
- * **「適用」を押したときだけ集計する**ことをここで固定する。
- */
+const STORE_ID = 'd0000000-0000-4000-8000-000000000001'
+type SimplePresentationReport = Extract<
+  AnalyticsPresentationReport,
+  { tab: 'source' | 'visits' | 'purpose' }
+>
 
-const GINZA = '11111111-2222-4333-8444-555555555555'
-const MARUNOUCHI = '11111111-2222-4333-8444-666666666666'
-const STORES = [
-  { id: GINZA, name: '銀座店' },
-  { id: MARUNOUCHI, name: '丸の内店' },
-]
-/** JST 2026-08-27（木）11:08。モックの時刻。 */
-const NOW = '2026-08-27T02:08:00.000Z'
-
-const TABS = [
-  'トップ',
-  '予約数',
-  '予約の入口',
-  '取り消し',
-  '来店回数',
-  '担当者',
-  'ご来店の目的',
-  'お待ち時間',
-]
-
-function json(body: unknown, status = 200) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { 'content-type': 'application/json' },
-  })
-}
-
-/** 店舗と期間で数字が変わる、形だけの応答。 */
-function report(params: URLSearchParams, empty: boolean, rich = false): AnalyticsReport {
-  const metric = params.get('metric') as AnalyticsMetric
-  const from = params.get('from') ?? '2026-08-01'
-  const to = params.get('to') ?? '2026-08-31'
-  const base = params.get('storeId') === MARUNOUCHI ? 5 : 12
-  const month = Number(from.slice(5, 7))
+function report(
+  tab: SimplePresentationReport['tab'],
+  overrides: Partial<SimplePresentationReport> = {},
+): SimplePresentationReport {
   return {
-    metric,
-    from,
-    to,
-    granularity: params.get('granularity') === 'month' ? 'month' : 'day',
-    countBy: 'visit_date',
-    series: empty
-      ? [{ name: '件数', pattern: 'solid', points: [] }]
-      : [
-          {
-            name: '件数',
-            pattern: 'solid',
-            points: [
-              {
-                key: `${from.slice(0, 7)}-20`,
-                label: '8/20',
-                value: base + month,
-                secondaryValue: null,
-                isClosed: false,
-                isOverTarget: false,
-              },
-              ...(rich
-                ? [
-                    {
-                      key: `${from.slice(0, 7)}-25`,
-                      label: '8/25',
-                      value: 0,
-                      secondaryValue: null,
-                      isClosed: true,
-                      isOverTarget: false,
-                    },
-                  ]
-                : []),
-            ],
-          },
-        ],
-    summary: empty
-      ? []
-      : [{ label: '合計', value: String(base + month), unit: '件', isOverTarget: false }],
-    target: null,
-    suppressed: false,
-    businessDays: 27,
-    pendingDays: rich ? 2 : 0,
+    tab,
+    definition: '2026年8月／ご来店日を基準に、取消を除くご予約 320件を数えます',
+    series: [
+      {
+        name: 'お電話',
+        pattern: 'solid',
+        tone: 'pine',
+        points: [{ label: 'お電話', value: 136, secondaryValue: null }],
+      },
+      {
+        name: '店頭',
+        pattern: 'hatch',
+        tone: 'pine',
+        points: [{ label: '店頭', value: 70, secondaryValue: null }],
+      },
+      {
+        name: 'Web予約',
+        pattern: 'dot',
+        tone: 'web',
+        points: [{ label: 'Web予約', value: 84, secondaryValue: null }],
+      },
+      {
+        name: 'ウォークイン',
+        pattern: 'solid',
+        tone: 'walkin',
+        points: [{ label: 'ウォークイン', value: 30, secondaryValue: null }],
+      },
+    ],
+    summary: [
+      { label: '8月の合計', value: '320', unit: '件', isOverTarget: false },
+      { label: '最も多い入口', value: 'お電話', unit: '136 件', isOverTarget: false },
+      { label: 'その割合', value: '42.5', unit: '%', isOverTarget: false },
+    ],
+    ...overrides,
   }
 }
 
-type Options = { empty?: boolean; status?: number; hold?: boolean; rich?: boolean }
+describe('AnalyticsScreen', () => {
+  it('8タブを固定順で出し、予約の入口はグラフ1つ・定義1行・まとめ3項目で読む', () => {
+    render(
+      <AnalyticsScreen
+        storeId={STORE_ID}
+        initialTab="source"
+        reports={{ source: report('source') }}
+      />,
+    )
 
-function mockApi(options: Options = {}) {
-  const calls: URLSearchParams[] = []
-  let release: (() => void) | null = null
-  const handler = vi.fn(async (input: RequestInfo | URL) => {
-    const url = new URL(String(input), 'http://localhost')
-    if (url.pathname === '/api/staff/analytics/targets') {
-      return json({ waitMinutes: 8, cancellationRatePercent: 10, revisitWindowDays: 90 })
-    }
-    if (url.pathname === '/api/staff/analytics') {
-      calls.push(url.searchParams)
-      if (options.status) return json({ error: 'boom' }, options.status)
-      if (options.hold) {
-        await new Promise<void>((resolve) => {
-          release = resolve
-        })
-      }
-      return json(report(url.searchParams, options.empty === true, options.rich === true))
-    }
-    return json({ error: 'not_found' }, 404)
-  })
-  vi.stubGlobal('fetch', handler)
-  return { calls, release: () => release?.() }
-}
-
-function renderScreen() {
-  render(<AnalyticsScreen storeId={GINZA} stores={STORES} now={NOW} />)
-}
-
-async function openScreen() {
-  renderScreen()
-  await waitFor(() => expect(screen.getByTestId('definition')).toBeInTheDocument())
-}
-
-beforeEach(() => {
-  // `?tab=` は replaceState で残るので、テストの間で持ち越さない。
-  window.history.replaceState(null, '', '/')
-  mockApi()
-})
-
-afterEach(() => {
-  vi.unstubAllGlobals()
-})
-
-describe('タブ', () => {
-  it('8 つのタブが決まった並びで出る', async () => {
-    await openScreen()
-    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(TABS)
+    const tabs = Array.from(
+      screen.getByRole('tablist', { name: '分析の内訳を選ぶ' }).querySelectorAll('[role="tab"]'),
+    )
+    expect(tabs.map((tab) => tab.textContent)).toEqual([
+      'トップ',
+      '予約数',
+      '予約の入口',
+      '取り消し',
+      '来店回数',
+      '担当者',
+      'ご来店の目的',
+      'お待ち時間',
+    ])
+    expect(screen.getByRole('tab', { name: '予約の入口' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getAllByRole('img')).toHaveLength(1)
+    expect(screen.getByText(/ご来店日を基準に/)).toBeInTheDocument()
+    expect(screen.getByText('8月の合計')).toBeInTheDocument()
+    expect(screen.getByText('最も多い入口')).toBeInTheDocument()
+    expect(screen.getByText('その割合')).toBeInTheDocument()
+    expect(
+      within(screen.getByRole('list', { name: '予約の入口のまとめ' })).getAllByRole('listitem'),
+    ).toHaveLength(3)
+    expect(screen.getAllByText('Web予約').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('ウォークイン').length).toBeGreaterThan(0)
   })
 
-  it('いま開いているタブが読み上げで分かる（aria-selected）', async () => {
-    await openScreen()
-    expect(screen.getByRole('tab', { name: 'トップ' })).toHaveAttribute('aria-selected', 'true')
-    await userEvent.click(screen.getByRole('tab', { name: '担当者' }))
-    expect(screen.getByRole('tab', { name: '担当者' })).toHaveAttribute('aria-selected', 'true')
-    expect(screen.getByRole('tab', { name: 'トップ' })).toHaveAttribute('aria-selected', 'false')
+  it('矢印でタブへ移動し、Enterで来店回数を選択する', async () => {
+    const user = userEvent.setup()
+    render(
+      <AnalyticsScreen
+        storeId={STORE_ID}
+        initialTab="source"
+        reports={{
+          source: report('source'),
+          visits: report('visits', {
+            summary: [
+              { label: '8月の合計', value: '328', unit: '件', isOverTarget: false },
+              { label: '最も多い回数帯', value: '3〜5回', unit: '99 件', isOverTarget: false },
+              { label: 'その割合', value: '30.2', unit: '%', isOverTarget: false },
+            ],
+          }),
+        }}
+      />,
+    )
+
+    const source = screen.getByRole('tab', { name: '予約の入口' })
+    source.focus()
+    await user.keyboard('{ArrowRight}{ArrowRight}')
+    expect(screen.getByRole('tab', { name: '来店回数' })).toHaveFocus()
+    await user.keyboard('{Enter}')
+    expect(screen.getByRole('tab', { name: '来店回数' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByText('最も多い回数帯')).toBeInTheDocument()
   })
 
-  it('押しても何も出ないタブが 1 つも無い（8 つすべてでグラフ 1 つと定義の 1 行が出る）', async () => {
-    await openScreen()
-    for (const name of TABS) {
-      await userEvent.click(screen.getByRole('tab', { name }))
-      await waitFor(() => expect(screen.getAllByRole('img')).toHaveLength(1))
-      expect(screen.getByTestId('definition').textContent).toBeTruthy()
-    }
-  })
-})
+  it('Home・End・Spaceでタブを移動して、ご来店の目的の横棒を選択する', async () => {
+    const user = userEvent.setup()
+    render(
+      <AnalyticsScreen
+        storeId={STORE_ID}
+        initialTab="source"
+        reports={{
+          source: report('source'),
+          purpose: report('purpose', {
+            series: [
+              {
+                name: 'メガネを新しく作る',
+                pattern: 'solid',
+                tone: 'pine',
+                points: [{ label: 'メガネを新しく作る', value: 126, secondaryValue: null }],
+              },
+              {
+                name: '今のメガネを調整したい',
+                pattern: 'hatch',
+                tone: 'pine',
+                points: [{ label: '今のメガネを調整したい', value: 28, secondaryValue: null }],
+              },
+            ],
+            summary: [
+              { label: '8月の合計', value: '320', unit: '件', isOverTarget: false },
+              {
+                label: '最も多い目的',
+                value: 'メガネを新しく作る',
+                unit: '126 件',
+                isOverTarget: false,
+              },
+              { label: 'その割合', value: '39.4', unit: '%', isOverTarget: false },
+            ],
+          }),
+        }}
+      />,
+    )
 
-describe('ツールバー', () => {
-  it('対象の期間を変えるだけでは数字が変わらない', async () => {
-    const api = mockApi()
-    await openScreen()
-    expect(api.calls).toHaveLength(1)
-    const shown = screen.getByTestId('summary-value').textContent
-    await userEvent.selectOptions(screen.getByLabelText('対象の期間'), '2026-07')
-    expect(api.calls).toHaveLength(1)
-    expect(screen.getByTestId('summary-value').textContent).toBe(shown)
-  })
-
-  it('適用を押したときにだけ集計し直す', async () => {
-    const api = mockApi()
-    await openScreen()
-    await userEvent.click(screen.getByRole('tab', { name: '予約数' }))
-    await waitFor(() => expect(api.calls).toHaveLength(2))
-    await userEvent.selectOptions(screen.getByLabelText('対象の期間'), '2026-07')
-    expect(api.calls).toHaveLength(2)
-    await userEvent.click(screen.getByRole('button', { name: '適用' }))
-    await waitFor(() => expect(api.calls).toHaveLength(3))
-    expect(api.calls[2]?.get('from')).toBe('2026-07-01')
-    expect(api.calls[2]?.get('to')).toBe('2026-07-31')
-  })
-
-  it('トップは当月のあいだ本日を中心に前後7日を要求する（月の初日から末日ではない）', async () => {
-    const api = mockApi()
-    await openScreen()
-    // 見出しが「本日を中心に前後7日」と言う以上、要求する期間もそれでなければならない。
-    expect(api.calls[0]?.get('from')).toBe('2026-08-20')
-    expect(api.calls[0]?.get('to')).toBe('2026-09-03')
-  })
-
-  it('トップでも別の月を適用すれば、その月の初日から末日を要求する', async () => {
-    // 「対象の期間」の札はトップにも出ている。押しても何も起きない札は置かない
-    //（AC-ANA-03・AC-ANA-15・AC-ANA-19 はトップで別の月を適用したときの面を言う）。
-    const api = mockApi()
-    await openScreen()
-    await userEvent.selectOptions(screen.getByLabelText('対象の期間'), '2026-07')
-    await userEvent.click(screen.getByRole('button', { name: '適用' }))
-    await waitFor(() => expect(api.calls).toHaveLength(2))
-    expect(api.calls[1]?.get('from')).toBe('2026-07-01')
-    expect(api.calls[1]?.get('to')).toBe('2026-07-31')
-    // 当月へ戻せば、また本日を中心に前後 7 日へ戻る。
-    await userEvent.selectOptions(screen.getByLabelText('対象の期間'), '2026-08')
-    await userEvent.click(screen.getByRole('button', { name: '適用' }))
-    await waitFor(() => expect(api.calls).toHaveLength(3))
-    expect(api.calls[2]?.get('from')).toBe('2026-08-20')
-    expect(api.calls[2]?.get('to')).toBe('2026-09-03')
+    screen.getByRole('tab', { name: '予約の入口' }).focus()
+    await user.keyboard('{End}')
+    expect(screen.getByRole('tab', { name: 'お待ち時間' })).toHaveFocus()
+    await user.keyboard(
+      '{Home}{ArrowRight}{ArrowRight}{ArrowRight}{ArrowRight}{ArrowRight}{ArrowRight}{Space}',
+    )
+    expect(screen.getByRole('tab', { name: 'ご来店の目的' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    )
+    expect(screen.getByRole('img')).toHaveAccessibleName(/目的ごとの予約数/)
+    expect(screen.getByText('今のメガネを調整したい')).toBeInTheDocument()
   })
 
-  it('取り消しのタブだけ期間の札が 2 つ並ぶ', async () => {
-    await openScreen()
-    expect(screen.getByLabelText('対象の期間')).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('tab', { name: '取り消し' }))
-    await waitFor(() => expect(screen.getByLabelText('対象の期間（開始）')).toBeInTheDocument())
-    expect(screen.getByLabelText('対象の期間（終了）')).toBeInTheDocument()
-    expect(screen.queryByLabelText('対象の期間')).not.toBeInTheDocument()
-    await userEvent.click(screen.getByRole('tab', { name: '担当者' }))
-    await waitFor(() => expect(screen.getByLabelText('対象の期間')).toBeInTheDocument())
-  })
+  it('下書きの期間は適用まで表示を変えず、読み込み中と失敗時は前のグラフを残さない', async () => {
+    const user = userEvent.setup()
+    let reject: ((reason?: unknown) => void) | undefined
+    const loadReport = vi.fn(
+      () =>
+        new Promise<AnalyticsPresentationReport>((_, onReject) => {
+          reject = onReject
+        }),
+    )
+    render(
+      <AnalyticsScreen
+        storeId={STORE_ID}
+        initialTab="source"
+        reports={{ source: report('source') }}
+        loadReport={loadReport}
+      />,
+    )
 
-  it('店舗を変えて適用すると、その店舗の数字に入れ替わる', async () => {
-    const api = mockApi()
-    await openScreen()
-    expect(screen.getByTestId('summary-value')).toHaveTextContent('20')
-    await userEvent.selectOptions(screen.getByLabelText('店舗'), MARUNOUCHI)
-    await userEvent.click(screen.getByRole('button', { name: '適用' }))
-    await waitFor(() => expect(screen.getByTestId('summary-value')).toHaveTextContent('13'))
-    expect(api.calls[1]?.get('storeId')).toBe(MARUNOUCHI)
-  })
-})
+    await user.selectOptions(screen.getByLabelText('対象の期間'), '2026-07')
+    expect(screen.getByText('320')).toBeInTheDocument()
+    expect(loadReport).not.toHaveBeenCalled()
 
-describe('定義の 1 行', () => {
-  it('何を・いつを基準に・どれだけの母数で数えたかが 1 行で読める', async () => {
-    await openScreen()
-    const text = screen.getByTestId('definition').textContent ?? ''
-    expect(text).toContain('2026年8月')
-    expect(text).toContain('ご来店日')
-    expect(text).toContain('営業日数27日')
-    expect(text).toContain('20件')
-    expect(text).not.toContain('名')
-  })
-})
-
-describe('読み込み中', () => {
-  it('読み込んでいる間は前の数字を残さず、読み込み中であることを出す', async () => {
-    const api = mockApi({ hold: true })
-    renderScreen()
-    expect(await screen.findByRole('status')).toHaveTextContent('読み込んでいます')
-    expect(screen.queryByTestId('summary-value')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '適用' }))
+    expect(loadReport).toHaveBeenCalledWith({ storeId: STORE_ID, tab: 'source', month: '2026-07' })
+    expect(screen.getByRole('status')).toHaveTextContent('読み込んでいます…')
     expect(screen.queryByRole('img')).not.toBeInTheDocument()
-    api.release()
-  })
-})
 
-describe('空', () => {
-  it('期間に 1 件も無ければ、その事実だけを 1 行で出す', async () => {
-    mockApi({ empty: true })
-    renderScreen()
-    expect(await screen.findByText('この期間に数えられるご予約はありません。')).toBeInTheDocument()
+    reject?.(new Error('offline'))
+    expect(await screen.findByText('分析を読み込めませんでした。')).toBeInTheDocument()
     expect(screen.queryByRole('img')).not.toBeInTheDocument()
   })
-})
 
-describe('エラー', () => {
-  it('読めなかったときは理由と次の行動を出し、グラフの枠を残さない', async () => {
-    mockApi({ status: 500 })
-    renderScreen()
-    const alert = await screen.findByRole('alert')
-    expect(alert).toHaveTextContent('数字を読み込めませんでした')
-    expect(alert).toHaveTextContent('もう一度')
-    expect(screen.queryByRole('img')).not.toBeInTheDocument()
-    expect(within(alert).getByRole('button', { name: 'もう一度読み込む' })).toBeInTheDocument()
-  })
-})
+  it('後から適用した結果を、先に始めた読み込みが上書きしない', async () => {
+    const user = userEvent.setup()
+    const pending: Array<{ resolve: (value: AnalyticsPresentationReport) => void }> = []
+    const loadReport = vi.fn(
+      () =>
+        new Promise<AnalyticsPresentationReport>((resolve) => {
+          pending.push({ resolve })
+        }),
+    )
+    render(
+      <AnalyticsScreen
+        storeId={STORE_ID}
+        initialTab="source"
+        reports={{ source: report('source') }}
+        loadReport={loadReport}
+      />,
+    )
 
-describe('品質フロア', () => {
-  it('どのタブでも、グラフが読み上げの文（最も多い日と件数・定休日の 0 件・未集計）を持つ', async () => {
-    mockApi({ rich: true })
-    renderScreen()
-    await waitFor(() => expect(screen.getByTestId('definition')).toBeInTheDocument())
-    for (const name of TABS) {
-      await userEvent.click(screen.getByRole('tab', { name }))
-      await waitFor(() => expect(screen.getAllByRole('img')).toHaveLength(1))
-      const label = screen.getByRole('img').getAttribute('aria-label') ?? ''
-      // どのタブでも文として終わり、定休日の 0 件と未集計の日が読まれる。
-      expect(label).toMatch(/。$/)
-      expect(label.length).toBeGreaterThan(0)
-      if (name === 'お待ち時間') {
-        // 時間帯の面だけは日の概念を持たないので、最も長い時間帯と目安を読む。
-        expect(label).toContain('目安 8分')
-        continue
-      }
-      expect(label).toContain('最も多いのは')
-      expect(label).toContain('8/25は定休日で0件')
-      expect(label).toContain('2日ぶんはまだ集計中')
-    }
-  })
+    await user.selectOptions(screen.getByLabelText('対象の期間'), '2026-07')
+    await user.click(screen.getByRole('button', { name: '適用' }))
+    await user.selectOptions(screen.getByLabelText('対象の期間'), '2026-06')
+    await user.click(screen.getByRole('button', { name: '適用' }))
 
-  it('未集計の日があることは、読み上げの文だけでなく画面の 1 行にも出る', async () => {
-    mockApi({ rich: true })
-    renderScreen()
-    expect(await screen.findByText('2日ぶんはまだ集計中です')).toBeInTheDocument()
-  })
+    pending[1]?.resolve(
+      report('source', {
+        summary: [
+          { label: '8月の合計', value: '222', unit: '件', isOverTarget: false },
+          { label: '最も多い入口', value: '店頭', unit: '100 件', isOverTarget: false },
+          { label: 'その割合', value: '45.0', unit: '%', isOverTarget: false },
+        ],
+      }),
+    )
+    expect(await screen.findByText('222')).toBeInTheDocument()
 
-  it('タブ・期間・店舗・適用が、キーボードだけで順にたどれる', async () => {
-    await openScreen()
-    screen.getByRole('tab', { name: 'トップ' }).focus()
-    await userEvent.tab()
-    expect(document.activeElement).toBe(screen.getByRole('tab', { name: '予約数' }))
-    for (let step = 0; step < 7; step += 1) await userEvent.tab()
-    expect(document.activeElement).toBe(screen.getByLabelText('対象の期間'))
-    await userEvent.tab()
-    expect(document.activeElement).toBe(screen.getByRole('button', { name: '適用' }))
+    pending[0]?.resolve(
+      report('source', {
+        summary: [
+          { label: '8月の合計', value: '111', unit: '件', isOverTarget: false },
+          { label: '最も多い入口', value: 'お電話', unit: '90 件', isOverTarget: false },
+          { label: 'その割合', value: '40.0', unit: '%', isOverTarget: false },
+        ],
+      }),
+    )
+    await waitFor(() => expect(screen.getByText('222')).toBeInTheDocument())
+    expect(screen.queryByText('111')).not.toBeInTheDocument()
   })
 
-  it('触れるものはどれも 44pt 以上の高さを持つ（min-h の指定を必ず持つ）', async () => {
-    await openScreen()
-    const touchables = [
-      ...screen.getAllByRole('tab'),
-      screen.getByLabelText('対象の期間'),
-      screen.getByLabelText('店舗'),
-      screen.getByRole('button', { name: '適用' }),
-    ]
-    for (const node of touchables) {
-      expect(node.className).toMatch(/min-h-11/)
-    }
-  })
-})
+  it('店舗の下書きは適用まで表示を変えず、適用時に選択した店舗を読み込む', async () => {
+    const user = userEvent.setup()
+    const loadReport = vi.fn(async () => report('source'))
+    render(
+      <AnalyticsScreen
+        storeId={STORE_ID}
+        storeOptions={[
+          { id: STORE_ID, label: '銀座店' },
+          { id: 'd0000000-0000-4000-8000-000000000002', label: '新宿店' },
+        ]}
+        initialTab="source"
+        reports={{ source: report('source') }}
+        loadReport={loadReport}
+      />,
+    )
 
-describe('権限', () => {
-  it('analytics.read を持たないと「この画面は店長だけがご覧になれます」が出て、通信の失敗と取り違えない', async () => {
-    vi.unstubAllGlobals()
-    mockApi({ status: 403 })
+    expect(screen.getByRole('option', { name: '新宿店' })).toBeEnabled()
+    await user.selectOptions(screen.getByLabelText('店舗'), 'd0000000-0000-4000-8000-000000000002')
+    expect(screen.getByText('320')).toBeInTheDocument()
+    expect(loadReport).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: '適用' }))
+    expect(loadReport).toHaveBeenCalledWith({
+      storeId: 'd0000000-0000-4000-8000-000000000002',
+      tab: 'source',
+      month: '2026-08',
+    })
+  })
+
+  it('未適用の期間と店舗はタブを切り替えても取得条件へ混ぜず、適用後にだけ使う', async () => {
+    const user = userEvent.setup()
+    const otherStore = 'd0000000-0000-4000-8000-000000000002'
+    const loadReport = vi.fn(async (selection: AnalyticsSelection) => {
+      if (selection.tab !== 'source' && selection.tab !== 'visits' && selection.tab !== 'purpose')
+        throw new Error('unexpected tab')
+      return report(selection.tab)
+    })
+    render(
+      <AnalyticsScreen
+        storeId={STORE_ID}
+        storeOptions={[
+          { id: STORE_ID, label: '銀座店' },
+          { id: otherStore, label: '新宿店' },
+        ]}
+        initialTab="source"
+        reports={{ source: report('source') }}
+        loadReport={loadReport}
+      />,
+    )
+
+    await user.selectOptions(screen.getByLabelText('対象の期間'), '2026-07')
+    await user.selectOptions(screen.getByLabelText('店舗'), otherStore)
+    await user.click(screen.getByRole('tab', { name: '来店回数' }))
+
+    expect(loadReport).toHaveBeenLastCalledWith({
+      storeId: STORE_ID,
+      tab: 'visits',
+      month: '2026-08',
+    })
+    await screen.findByRole('img')
+
+    await user.click(screen.getByRole('button', { name: '適用' }))
+    expect(loadReport).toHaveBeenLastCalledWith({
+      storeId: otherStore,
+      tab: 'visits',
+      month: '2026-07',
+    })
+  })
+
+  it('403では理由と戻る操作を示す', async () => {
+    const user = userEvent.setup()
     const onBack = vi.fn()
-    render(<AnalyticsScreen storeId={GINZA} stores={STORES} now={NOW} onBack={onBack} />)
-    await screen.findByText('この画面は店長だけがご覧になれます')
-    // 通信の失敗の言い方（もう一度読み込む）は出さない。直し方が違う。
-    expect(screen.queryByRole('button', { name: 'もう一度読み込む' })).not.toBeInTheDocument()
-    // タブや期間を操作させても意味が無いので、本文だけを差し替える。
-    expect(screen.queryAllByRole('tab')).toHaveLength(0)
-    await userEvent.click(screen.getByRole('button', { name: '前の画面に戻る' }))
-    expect(onBack).toHaveBeenCalledTimes(1)
-  })
-})
+    render(
+      <AnalyticsScreen
+        storeId={STORE_ID}
+        initialTab="source"
+        reports={{ source: report('source') }}
+        loadReport={async () => {
+          throw new Error('forbidden')
+        }}
+        onBack={onBack}
+      />,
+    )
 
-describe('狭い画面', () => {
-  it('グラフは自分の横スクロールの中に収まり、本文を横に動かさない', async () => {
-    await openScreen()
-    const scroll = screen.getByTestId('chart-scroll')
-    expect(scroll.className).toContain('overflow-x-auto')
-    // 図そのものは縮めず（min-w-fit）、はみ出したぶんだけ枠の中で送る。
-    expect(within(scroll).getByRole('img').className).toContain('min-w-fit')
+    await user.click(screen.getByRole('button', { name: '適用' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'この店舗の分析を見る権限がありません。',
+    )
+    await user.click(screen.getByRole('button', { name: '戻る' }))
+    expect(onBack).toHaveBeenCalledOnce()
   })
 
-  it('列は横軸のラベルより狭くつぶれない（min-w-0 を持たない）', async () => {
-    await openScreen()
-    for (const column of screen.getAllByTestId('column')) {
-      expect(column.className).not.toContain('min-w-0')
-    }
-    for (const label of screen.getAllByTestId('column-label')) {
-      expect(label.className).toContain('whitespace-nowrap')
-    }
+  it('取り消しは終了月の5か月前から始め、開始月→終了月の順で選べる', () => {
+    render(
+      <AnalyticsScreen
+        storeId={STORE_ID}
+        initialTab="cancel"
+        initialMonth="2026-08"
+        reports={{}}
+      />,
+    )
+
+    const selects = screen.getAllByRole('combobox')
+    const start = screen.getByLabelText('開始月')
+    const end = screen.getByLabelText('終了月')
+    expect(start).toHaveValue('2026-03')
+    expect(end).toHaveValue('2026-08')
+    expect(within(start).getByRole('option', { name: '2026年3月' })).toBeInTheDocument()
+    expect(selects.indexOf(start)).toBeLessThan(selects.indexOf(end))
+  })
+
+  it('取り消しの開始月を終了月より後には選べない', async () => {
+    const user = userEvent.setup()
+    render(
+      <AnalyticsScreen
+        storeId={STORE_ID}
+        initialTab="cancel"
+        initialMonth="2026-08"
+        reports={{}}
+      />,
+    )
+
+    await user.selectOptions(screen.getByLabelText('開始月'), '2026-08')
+    const end = screen.getByLabelText('終了月')
+    expect(end).toHaveValue('2026-08')
+    expect(within(end).queryByRole('option', { name: '2026年3月' })).not.toBeInTheDocument()
+  })
+
+  it('取り消しタブへ移ると終了月の5か月前を開始月にして読み込む', async () => {
+    const user = userEvent.setup()
+    const loadReport = vi.fn(async () => report('source'))
+    render(
+      <AnalyticsScreen
+        storeId={STORE_ID}
+        initialTab="source"
+        initialMonth="2026-08"
+        reports={{ source: report('source') }}
+        loadReport={loadReport}
+      />,
+    )
+
+    await user.click(screen.getByRole('tab', { name: '取り消し' }))
+    expect(loadReport).toHaveBeenCalledWith({
+      storeId: STORE_ID,
+      tab: 'cancel',
+      month: '2026-08',
+      startMonth: '2026-03',
+      granularity: undefined,
+      countBy: undefined,
+    })
   })
 })

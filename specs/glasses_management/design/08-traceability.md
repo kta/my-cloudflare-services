@@ -2,7 +2,7 @@
 
 - サービス: `glasses_management`（`@app/glasses_management`）
 - UC/AC の**定義の正本**: `specs/glasses_management/features/<NNN>-<slug>/spec.md`（11 本）
-- 画面 ID の正本: `design/05-screen-flow.md` §3 と `docs/frontend/mockups/eyex/screens/*.html`（68 枚）
+- 画面 ID の正本: `design/05-screen-flow.md` §3 と `docs/frontend/mockups/eye/screens/*.html`（68 枚）
 - E2E の正本: `services/glasses_management/e2e/*.spec.ts`
 - validator: `scripts/check-e2e-traceability.mjs`（`pnpm run test:traceability`）
 
@@ -546,7 +546,7 @@ test('ヘルスチェックは認証なしで ok を返す', async ({ request })
 | feature spec | 11 本 |
 | うち Approved | **1 本**（`003-service-foundation`） |
 | うち Draft | **10 本**（`004` 〜 `013`） |
-| うち Superseded | 0 本（旧 `002-eyex-reservation-product` はディレクトリごと存在しない） |
+| うち Superseded | 0 本（旧 `002-eye-reservation-product` はディレクトリごと存在しない） |
 | UC/AC の総数 | **363 件** |
 | うち validator の分母（Approved） | **5 件**（`AC-FOUND-01` 〜 `AC-FOUND-05`） |
 | E2E に対応済みの ID | **5 件**（`e2e/foundation.spec.ts`） |
@@ -586,6 +586,6 @@ node scripts/check-e2e-traceability.mjs
 4. **1 つの ID を 2 本の test で受け持たない。** `Duplicate E2E mapping` になる。逆に、
    1 本の test が複数の ID を受け持つのは正しい（`// @e2e-covers` の 1 行に空白で並べる）。
 5. **画面 ID を変えたら本書の「画面ID」列を直す。** 画面 ID の正本は `design/05-screen-flow.md` §3 と
-   `docs/frontend/mockups/eyex/screens/*.html` であり、本書はその参照にすぎない。
+   `docs/frontend/mockups/eye/screens/*.html` であり、本書はその参照にすぎない。
 6. **`spec.md` の文面と本書の「内容」列がずれたら、`spec.md` を正として本書を直す。**
    本書の要約は 20 字に落とした地図であり、判断の根拠にはしない。

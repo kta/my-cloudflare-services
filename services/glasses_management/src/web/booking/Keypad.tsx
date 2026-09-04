@@ -1,12 +1,12 @@
 import { focusRing, focusRingOnPine } from '@app/ui'
 
 /*
- * テンキー（承認済みモック docs/frontend/mockups/eyex/images/BOOK-04c-KEYPAD.png）。
+ * テンキー（承認済みモック docs/frontend/mockups/eye/images/BOOK-04c-KEYPAD.png）。
  *
  * 受話器を持ったまま片手で打つための盤。**キーは 72pt** で、44pt の下限より大きく取る
  * （`design/06-use-cases.md` IDX-BOOK-08 の検証点）。
  *
- * 実測値（screens/BOOK-04c-KEYPAD.html と assets/eyex.css の `.keypad` / `.key`）:
+ * 実測値（screens/BOOK-04c-KEYPAD.html と assets/eye.css の `.keypad` / `.key`）:
  *   3 列 × 96px・間 12px、キーの高さ 72px、角 12px、数字 28px。
  *   最下段は「削除」「0」「完了」で、確定キーだけが `--color-pine` の塗り。
  *

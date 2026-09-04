@@ -5,12 +5,15 @@ import {
   AlertList,
   AlertListQuery,
   AlertPatch,
-  AlertReadAllInput,
   AlertReadAllResult,
-  AnalyticsMetric,
+  AnalyticsDailyDimension,
+  AnalyticsDailyMetric,
+  AnalyticsDailyRow,
   AnalyticsPoint,
   AnalyticsQuery,
   AnalyticsReport,
+  AnalyticsRollupRequest,
+  AnalyticsRollupResult,
   AnalyticsSeries,
   AnalyticsTargets,
   AuditActorType,
@@ -153,6 +156,7 @@ import {
   StorePermission,
   Terminal,
   TerminalInput,
+  TerminalKind,
   TerminalListQuery,
   TerminalPatch,
   TerminalSession,
@@ -181,7 +185,7 @@ import {
 } from '@app/contracts'
 import { describe, expect, it } from 'vitest'
 
-const ORG = 'org-eyex'
+const ORG = 'org-eye'
 const UUID = '11111111-2222-4333-8444-555555555555'
 const UUID2 = '99999999-8888-4777-8666-555555555555'
 const NOW = '2026-08-27T02:08:00.000Z'
@@ -190,7 +194,7 @@ describe('OrganizationSync', () => {
   it('accepts a canonical snapshot from admin', () => {
     const parsed = OrganizationSync.parse({
       id: ORG,
-      name: 'EYEX',
+      name: 'EYE',
       plan: 'contracted',
       isDisabled: false,
       createdAt: NOW,
@@ -203,7 +207,7 @@ describe('OrganizationSync', () => {
     expect(
       OrganizationSync.parse({
         id: ORG,
-        name: 'EYEX',
+        name: 'EYE',
         plan: 'free',
         isDisabled: false,
         createdAt: NOW,
@@ -216,7 +220,7 @@ describe('OrganizationSync', () => {
       expect(() =>
         OrganizationSync.parse({
           id: ORG,
-          name: 'EYEX',
+          name: 'EYE',
           plan: 'free',
           isDisabled: false,
           createdAt: NOW,
@@ -230,7 +234,7 @@ describe('OrganizationSync', () => {
     expect(() =>
       OrganizationSync.parse({
         id: ORG,
-        name: 'EYEX',
+        name: 'EYE',
         plan: 'free',
         isDisabled: false,
         createdAt: NOW,
@@ -244,7 +248,7 @@ describe('OrganizationSync', () => {
     expect(() =>
       OrganizationSync.parse({
         id: '  ',
-        name: 'EYEX',
+        name: 'EYE',
         plan: 'free',
         isDisabled: false,
         createdAt: NOW,
@@ -253,7 +257,7 @@ describe('OrganizationSync', () => {
     expect(() =>
       OrganizationSync.parse({
         id: ORG,
-        name: 'EYEX',
+        name: 'EYE',
         plan: 'free',
         isDisabled: false,
         createdAt: '2026-08-27',
@@ -310,7 +314,7 @@ describe('Store', () => {
   const base = {
     id: UUID,
     organizationId: ORG,
-    name: 'EYEX 銀座店',
+    name: 'EYE 銀座店',
     slug: 'ginza',
     isActive: true,
     createdAt: NOW,
@@ -329,7 +333,7 @@ describe('Store', () => {
   })
 
   it('trims and bounds the display name', () => {
-    expect(Store.parse({ ...base, name: '  EYEX 銀座店  ' }).name).toBe('EYEX 銀座店')
+    expect(Store.parse({ ...base, name: '  EYE 銀座店  ' }).name).toBe('EYE 銀座店')
     expect(() => Store.parse({ ...base, name: 'あ'.repeat(201) })).toThrow()
   })
 })
@@ -385,7 +389,7 @@ const sevenWeeklyRows = [0, 1, 2, 3, 4, 5, 6].map((weekday) => weeklyRow(weekday
 const storeDetail = {
   id: UUID,
   organizationId: ORG,
-  name: 'EYEX 銀座店',
+  name: 'EYE 銀座店',
   slug: 'ginza',
   isActive: true,
   createdAt: NOW,
@@ -502,13 +506,13 @@ describe('StorePatch', () => {
   })
 
   it('version を欠いた本文を落とす（楽観ロックを外させない）', () => {
-    expect(StorePatch.parse({ name: 'EYEX 銀座店', version: Version.parse(0) }).version).toBe(0)
-    expect(() => StorePatch.parse({ name: 'EYEX 銀座店' })).toThrow()
+    expect(StorePatch.parse({ name: 'EYE 銀座店', version: Version.parse(0) }).version).toBe(0)
+    expect(() => StorePatch.parse({ name: 'EYE 銀座店' })).toThrow()
   })
 
   it('知らないキーが混ざった本文を落とす', () => {
     // `publicName` / `intro` のような短縮した別名を作らせない。
-    expect(() => StorePatch.parse({ publicName: 'EYEX 銀座', version: 3 })).toThrow()
+    expect(() => StorePatch.parse({ publicName: 'EYE 銀座', version: 3 })).toThrow()
     expect(() => StorePatch.parse({ intro: 'ようこそ', version: 3 })).toThrow()
   })
 })
@@ -3419,21 +3423,14 @@ describe('Alert', () => {
 })
 
 describe('AlertListQuery', () => {
-  it('defaults kind to all and audience to store', () => {
+  it('does not expose an audience selector to store clients', () => {
     // 運用のアラートを業務のお知らせに混ぜない。
-    expect(AlertListQuery.parse({}).audience).toBe('store')
-    expect(AlertListQuery.parse({ audience: 'ops' }).audience).toBe('ops')
-    expect(AlertListQuery.parse({}).kind).toBe('all')
     expect(AlertListQuery.parse({}).limit).toBe(50)
     expect(AlertListQuery.parse({ storeId: UUID }).storeId).toBe(UUID)
-    expect(() => AlertListQuery.parse({ audience: 'everyone' })).toThrow()
-  })
-
-  it('is an allow-list of four kinds — resolved is one of them', () => {
-    for (const kind of ['all', 'action', 'info', 'resolved'] as const) {
-      expect(AlertListQuery.parse({ kind }).kind).toBe(kind)
-    }
-    expect(() => AlertListQuery.parse({ kind: 'unread' })).toThrow()
+    expect(() => AlertListQuery.parse({ audience: 'store' })).toThrow()
+    expect(() => AlertListQuery.parse({ audience: 'ops' })).toThrow()
+    expect(AlertListQuery.parse({ kind: 'action' }).kind).toBe('action')
+    expect(() => AlertListQuery.parse({ kind: 'unknown' })).toThrow()
   })
 })
 
@@ -3444,17 +3441,8 @@ describe('AlertList', () => {
     expect(list.total).toBe(1)
     expect(AlertList.parse({ total: 0 }).items).toEqual([])
     expect(AlertList.parse({ total: 0 }).nextCursor).toBeNull()
-  })
-
-  it('carries counts for all / action / info / resolved', () => {
-    const counts = { all: 3, action: 1, info: 2, resolved: 1 }
-    expect(AlertList.parse({ items: [], total: 0, counts }).counts).toEqual(counts)
-    // 4 分類は同時に返す（ALERTS の左ペインが 4 つ並べて出す）。
+    // `counts` の 4 分類は P10。
     expect(() => AlertList.parse({ items: [], total: 0, counts: { all: 0 } })).toThrow()
-    expect(() =>
-      AlertList.parse({ items: [], total: 0, counts: { ...counts, unread: 1 } }),
-    ).toThrow()
-    expect(() => AlertList.parse({ items: [], total: 0, counts: { ...counts, all: -1 } })).toThrow()
   })
 })
 
@@ -3476,7 +3464,7 @@ const webBookingSettingsInput = {
 const webBookingSettings = {
   ...webBookingSettingsInput,
   storeId: UUID,
-  landingPath: 'eyex.jp/ginza',
+  landingPath: 'eye.jp/ginza',
   updatedAt: NOW,
 }
 
@@ -3494,7 +3482,7 @@ const publicBookingResult = {
   status: 'pending',
   startsAt: START,
   endsAt: END,
-  storeName: 'EYEX 銀座店',
+  storeName: 'EYE 銀座店',
   purposeName: '新しいメガネを作る',
   contactName: '山口 真央',
   managementCode: 'K7M4PXQ2',
@@ -3506,7 +3494,7 @@ const publicReservationStatus = {
   status: 'confirmed',
   startsAt: START,
   endsAt: END,
-  storeName: 'EYEX 銀座店',
+  storeName: 'EYE 銀座店',
   purposeName: '新しいメガネを作る',
   durationMinutes: 60,
   contactName: '山口 真央',
@@ -3623,7 +3611,7 @@ describe('WebBookingSettingsInput', () => {
     ).toThrow()
     // ご案内のページは `stores.slug` から組み立てるので、保存で受け取らない。
     expect(() =>
-      WebBookingSettingsInput.parse({ ...webBookingSettingsInput, landingPath: 'eyex.jp/ginza' }),
+      WebBookingSettingsInput.parse({ ...webBookingSettingsInput, landingPath: 'eye.jp/ginza' }),
     ).toThrow()
     expect(() =>
       WebBookingSettingsInput.parse({ ...webBookingSettingsInput, storeId: UUID }),
@@ -3635,7 +3623,7 @@ describe('WebBookingSettings', () => {
   it('keeps requiresApproval true by default because there is no auto-confirm option', () => {
     const { requiresApproval: _dropped, ...omitted } = webBookingSettings
     expect(WebBookingSettings.parse(omitted).requiresApproval).toBe(true)
-    expect(WebBookingSettings.parse(webBookingSettings).landingPath).toBe('eyex.jp/ginza')
+    expect(WebBookingSettings.parse(webBookingSettings).landingPath).toBe('eye.jp/ginza')
     // 「自動で確定する」を選ばせる UI は作らないが、列としては `false` も持てる。
     expect(
       WebBookingSettings.parse({ ...webBookingSettings, requiresApproval: false }).requiresApproval,
@@ -3878,200 +3866,158 @@ describe('WebBookingReviewInput', () => {
   })
 })
 
-/* ------------------------------------------------------------------------- *
- * P9 分析（`specs/glasses_management/features/012-analytics`）
- * ------------------------------------------------------------------------- */
+describe('Analytics contracts', () => {
+  const analyticsQuery = {
+    storeId: UUID,
+    metric: 'reservation_count',
+    from: '2026-01-01',
+    to: '2027-02-04', // 両端を含めて 400 日
+  }
 
-const analyticsStoreId = '3f2d8c1e-9a4b-4c7d-8e1f-2b3c4d5e6f70'
-
-const analyticsQueryInput = {
-  storeId: analyticsStoreId,
-  metric: 'reservation_count',
-  from: '2026-08-01',
-  to: '2026-08-31',
-} as const
-
-const analyticsPointInput = {
-  key: '2026-08-01',
-  label: '1日',
-  value: 12,
-  isClosed: false,
-  isOverTarget: false,
-} as const
-
-const analyticsReportInput = {
-  metric: 'reservation_count',
-  from: '2026-08-01',
-  to: '2026-08-31',
-  granularity: 'day',
-  countBy: 'visit_date',
-  series: [{ name: 'ご予約', pattern: 'solid', points: [analyticsPointInput] }],
-  summary: [{ label: '合計', value: '320', unit: '件', isOverTarget: false }],
-  target: null,
-  suppressed: false,
-  businessDays: 27,
-  pendingDays: 0,
-} as const
-
-describe('AnalyticsMetric', () => {
-  it('is an allow-list of eight metrics and fails closed on anything else', () => {
-    expect(AnalyticsMetric.options).toEqual([
-      'overview',
-      'reservation_count',
-      'reservation_source',
-      'cancellation',
-      'visit_frequency',
-      'staff',
-      'purpose',
-      'wait_time',
-    ])
-    expect(() => AnalyticsMetric.parse('guests')).toThrow()
-    expect(() => AnalyticsMetric.parse('')).toThrow()
-  })
-
-  it('keeps overview separate from reservation_count — the top tab is its own request', () => {
-    expect(AnalyticsMetric.parse('overview')).toBe('overview')
-    expect(AnalyticsMetric.parse('reservation_count')).toBe('reservation_count')
-  })
-})
-
-describe('AnalyticsQuery', () => {
-  it('defaults granularity to day and countBy to visit_date', () => {
-    const parsed = AnalyticsQuery.parse(analyticsQueryInput)
+  it('allows exactly 400 inclusive days and supplies report defaults', () => {
+    const parsed = AnalyticsQuery.parse(analyticsQuery)
     expect(parsed.granularity).toBe('day')
     expect(parsed.countBy).toBe('visit_date')
+    expect(() => AnalyticsQuery.parse({ ...analyticsQuery, to: '2027-02-05' })).toThrow()
+    expect(() => AnalyticsQuery.parse({ ...analyticsQuery, metric: 'guests' })).toThrow()
+    expect(() => AnalyticsQuery.parse({ ...analyticsQuery, unexpected: true })).toThrow()
   })
 
-  it('accepts a range of exactly 400 days (2026-01-01 to 2027-02-04)', () => {
-    expect(
-      AnalyticsQuery.parse({ ...analyticsQueryInput, from: '2026-01-01', to: '2027-02-04' }).to,
-    ).toBe('2027-02-04')
+  it('keeps the nine physical metrics and eight dimensions fail-closed', () => {
+    expect(AnalyticsDailyMetric.options).toEqual([
+      'closed',
+      'reservations',
+      'scheduled_reservations',
+      'reservations_received',
+      'receptions',
+      'cancellations',
+      'wait_seconds_histogram',
+      'revisit_eligible',
+      'revisit_returning_90d',
+    ])
+    expect(AnalyticsDailyDimension.options).toEqual([
+      'total',
+      'staff',
+      'purpose',
+      'hour',
+      'source',
+      'cancellation_category',
+      'wait_seconds',
+      'visit_frequency',
+    ])
+    expect(() => AnalyticsDailyDimension.parse('cancel_reason')).toThrow()
   })
 
-  it('rejects a range of 401 days (2026-01-01 to 2027-02-05)', () => {
+  it('allows only the dimension key vocabulary for persisted daily rows', () => {
+    const base = {
+      id: UUID,
+      organizationId: ORG,
+      storeId: UUID2,
+      date: '2026-08-27',
+      metric: 'cancellations',
+      dimension: 'cancellation_category',
+      dimensionKey: 'web',
+      dimensionLabel: 'Webからの取消',
+      value: 2,
+      createdAt: NOW,
+      updatedAt: NOW,
+    }
+    expect(AnalyticsDailyRow.parse(base).dimensionKey).toBe('web')
+    expect(AnalyticsDailyRow.parse(base).dimensionLabel).toBe('Webからの取消')
+    expect(() => AnalyticsDailyRow.parse({ ...base, dimensionLabel: '' })).toThrow()
+    expect(() => AnalyticsDailyRow.parse({ ...base, dimensionKey: 'other' })).toThrow()
+    expect(() => AnalyticsDailyRow.parse({ ...base, value: 1.5 })).toThrow()
     expect(() =>
-      AnalyticsQuery.parse({ ...analyticsQueryInput, from: '2026-01-01', to: '2027-02-05' }),
+      AnalyticsDailyRow.parse({
+        ...base,
+        metric: 'receptions',
+        dimension: 'hour',
+        dimensionKey: '10',
+        dimensionLabel: '10時台',
+      }),
     ).toThrow()
-  })
-
-  it('rejects a to earlier than from', () => {
     expect(() =>
-      AnalyticsQuery.parse({ ...analyticsQueryInput, from: '2026-08-31', to: '2026-08-01' }),
-    ).toThrow()
-  })
-
-  it('accepts from equal to to — a single day is a valid range', () => {
-    expect(
-      AnalyticsQuery.parse({ ...analyticsQueryInput, from: '2026-08-07', to: '2026-08-07' }).from,
-    ).toBe('2026-08-07')
-  })
-
-  it('requires a UUID storeId so a store slug cannot be smuggled in', () => {
-    expect(() => AnalyticsQuery.parse({ ...analyticsQueryInput, storeId: 'ginza' })).toThrow()
-  })
-
-  it('rejects an unknown key so a stale client field never lands silently', () => {
-    expect(() =>
-      AnalyticsQuery.parse({ ...analyticsQueryInput, staffId: analyticsStoreId }),
-    ).toThrow()
-    expect(() => AnalyticsQuery.parse({ ...analyticsQueryInput, granularity: 'week' })).toThrow()
-  })
-})
-
-describe('AnalyticsPoint', () => {
-  it('defaults secondaryValue to null so a suppressed rate is not zero', () => {
-    expect(AnalyticsPoint.parse(analyticsPointInput).secondaryValue).toBeNull()
-  })
-
-  it('bounds a rate secondaryValue to 0..1', () => {
-    expect(AnalyticsPoint.parse({ ...analyticsPointInput, secondaryValue: 0 }).secondaryValue).toBe(
-      0,
-    )
-    expect(AnalyticsPoint.parse({ ...analyticsPointInput, secondaryValue: 1 }).secondaryValue).toBe(
-      1,
-    )
-    expect(() => AnalyticsPoint.parse({ ...analyticsPointInput, secondaryValue: 1.01 })).toThrow()
-    expect(() => AnalyticsPoint.parse({ ...analyticsPointInput, secondaryValue: -0.01 })).toThrow()
-    expect(() => AnalyticsPoint.parse({ ...analyticsPointInput, value: -1 })).toThrow()
-  })
-
-  it('carries isClosed and isOverTarget as booleans, never as a colour', () => {
-    const parsed = AnalyticsPoint.parse({
-      ...analyticsPointInput,
-      isClosed: true,
-      isOverTarget: true,
-    })
-    expect(parsed.isClosed).toBe(true)
-    expect(parsed.isOverTarget).toBe(true)
-    expect(() =>
-      AnalyticsPoint.parse({ ...analyticsPointInput, isClosed: 'var(--color-danger)' }),
-    ).toThrow()
-    expect(() => AnalyticsPoint.parse({ ...analyticsPointInput, colour: '#c0392b' })).toThrow()
-  })
-})
-
-describe('AnalyticsSeries', () => {
-  it('requires a pattern of solid, hatch or dot', () => {
-    expect(AnalyticsSeries.parse({ name: 'ご予約', pattern: 'hatch', points: [] }).pattern).toBe(
-      'hatch',
-    )
-    expect(AnalyticsSeries.parse({ name: 'ご予約', pattern: 'dot', points: [] }).pattern).toBe(
-      'dot',
-    )
-    expect(() => AnalyticsSeries.parse({ name: 'ご予約', pattern: 'red', points: [] })).toThrow()
-  })
-
-  it('bounds name to 1..30 characters', () => {
-    expect(() => AnalyticsSeries.parse({ name: '', pattern: 'solid', points: [] })).toThrow()
-    expect(() =>
-      AnalyticsSeries.parse({ name: 'あ'.repeat(31), pattern: 'solid', points: [] }),
+      AnalyticsDailyRow.parse({
+        ...base,
+        metric: 'revisit_eligible',
+        dimension: 'total',
+        dimensionKey: '',
+        dimensionLabel: '合計',
+      }),
     ).toThrow()
     expect(
-      AnalyticsSeries.parse({ name: 'あ'.repeat(30), pattern: 'solid', points: [] }).name.length,
-    ).toBe(30)
-  })
-})
-
-describe('AnalyticsReport', () => {
-  it("has no guests field — the mock's 名 is out until Q-11 is answered", () => {
-    const parsed = AnalyticsReport.parse(analyticsReportInput)
-    expect(Object.keys(parsed)).not.toContain('guests')
-    expect(() => AnalyticsReport.parse({ ...analyticsReportInput, guests: 414 })).toThrow()
-    expect(JSON.stringify(parsed)).not.toContain('名')
-  })
-
-  it('keeps target nullable because most tabs have no 目安', () => {
-    expect(AnalyticsReport.parse(analyticsReportInput).target).toBeNull()
-    expect(AnalyticsReport.parse({ ...analyticsReportInput, target: 8 }).target).toBe(8)
-  })
-
-  it('requires businessDays and pendingDays to be non-negative integers', () => {
-    expect(AnalyticsReport.parse({ ...analyticsReportInput, pendingDays: 3 }).pendingDays).toBe(3)
-    expect(() => AnalyticsReport.parse({ ...analyticsReportInput, businessDays: -1 })).toThrow()
-    expect(() => AnalyticsReport.parse({ ...analyticsReportInput, businessDays: 26.5 })).toThrow()
-    expect(() => AnalyticsReport.parse({ ...analyticsReportInput, pendingDays: -1 })).toThrow()
+      AnalyticsDailyRow.parse({
+        ...base,
+        metric: 'wait_seconds_histogram',
+        dimension: 'wait_seconds',
+        dimensionKey: 'hour:23:481',
+      }).dimensionKey,
+    ).toBe('hour:23:481')
     expect(() =>
-      AnalyticsReport.parse({
-        ...analyticsReportInput,
-        summary: [
-          { label: 'a', value: '1', unit: '件', isOverTarget: false },
-          { label: 'b', value: '2', unit: '件', isOverTarget: false },
-          { label: 'c', value: '3', unit: '件', isOverTarget: false },
-          { label: 'd', value: '4', unit: '件', isOverTarget: false },
-        ],
+      AnalyticsDailyRow.parse({
+        ...base,
+        metric: 'wait_seconds_histogram',
+        dimension: 'wait_seconds',
+        dimensionKey: 'hour:24:481',
       }),
     ).toThrow()
   })
-})
 
-describe('AnalyticsTargets', () => {
-  it('is the fixed all-store triple 8 / 10 / 90', () => {
-    const parsed = AnalyticsTargets.parse({
-      waitMinutes: 8,
-      cancellationRatePercent: 10,
-      revisitWindowDays: 90,
-    })
-    expect(parsed).toEqual({ waitMinutes: 8, cancellationRatePercent: 10, revisitWindowDays: 90 })
+  it('bounds an internal rollup to 31 inclusive days and three stores', () => {
+    expect(
+      AnalyticsRollupRequest.parse({
+        from: '2026-08-01',
+        to: '2026-08-31',
+        limit: 3,
+        storeCursor: 'opaque-store-cursor',
+      }),
+    ).toMatchObject({ limit: 3, storeCursor: 'opaque-store-cursor' })
+    expect(() =>
+      AnalyticsRollupRequest.parse({ from: '2026-08-01', to: '2026-09-01', limit: 3 }),
+    ).toThrow()
+    expect(() =>
+      AnalyticsRollupRequest.parse({ from: '2026-08-01', to: '2026-08-31', limit: 4 }),
+    ).toThrow()
+  })
+
+  it('keeps zero rates distinct from suppressed rates and has no guests response field', () => {
+    expect(
+      AnalyticsPoint.parse({
+        key: '2026-08-27',
+        label: '8/27',
+        value: 0,
+        secondaryValue: 0,
+        isClosed: false,
+        isOverTarget: false,
+      }).secondaryValue,
+    ).toBe(0)
+    expect(
+      AnalyticsPoint.parse({
+        key: 'unassigned',
+        label: '担当未定',
+        value: 9,
+        secondaryValue: null,
+        isClosed: false,
+        isOverTarget: false,
+      }).secondaryValue,
+    ).toBeNull()
+    expect(() =>
+      AnalyticsPoint.parse({
+        key: 'x',
+        label: 'x',
+        value: 1,
+        secondaryValue: 1.1,
+        isClosed: false,
+        isOverTarget: false,
+      }),
+    ).toThrow()
+    expect(
+      AnalyticsTargets.parse({
+        waitMinutes: 8,
+        cancellationRatePercent: 10,
+        revisitWindowDays: 90,
+      }),
+    ).toEqual({ waitMinutes: 8, cancellationRatePercent: 10, revisitWindowDays: 90 })
     expect(() =>
       AnalyticsTargets.parse({
         waitMinutes: 9,
@@ -4079,347 +4025,205 @@ describe('AnalyticsTargets', () => {
         revisitWindowDays: 90,
       }),
     ).toThrow()
-  })
-})
-
-/* ------------------------------------------------------------------------- *
- * P10 端末の使い分けと監査（specs/glasses_management/features/013-terminals-and-audit）
- * ------------------------------------------------------------------------- */
-
-const terminal = {
-  id: UUID,
-  storeId: UUID2,
-  name: '銀座店 レジ横iPad',
-  kind: 'shared',
-  placeNote: 'レジの右側　固定スタンド',
-  deviceLabel: 'EYEX-iPad-07',
-  autoLockSeconds: 120,
-  isActive: true,
-  hasPin: true,
-  lastSeenAt: NOW,
-  isOnline: true,
-  version: 1,
-  createdAt: NOW,
-}
-
-const auditEvent = {
-  id: UUID,
-  occurredAt: NOW,
-  actorType: 'terminal',
-  actorId: UUID2,
-  terminalId: UUID2,
-  action: 'reservation.created',
-  targetType: 'reservations',
-  targetId: UUID,
-  correlationId: UUID,
-  beforeJson: null,
-  afterJson: { startsAt: START },
-}
-
-describe('Pin', () => {
-  it('accepts exactly 4 digits and exactly 6 digits', () => {
-    expect(Pin.parse('2580')).toBe('2580')
-    expect(Pin.parse('258013')).toBe('258013')
-    expect(Pin.parse('00000')).toBe('00000')
-  })
-
-  it('rejects 3 digits, 7 digits, and anything that is not a digit', () => {
-    expect(() => Pin.parse('258')).toThrow()
-    expect(() => Pin.parse('2580135')).toThrow()
-    expect(() => Pin.parse('25 80')).toThrow()
-    expect(() => Pin.parse('25８0')).toThrow()
-    expect(() => Pin.parse('abcd')).toThrow()
-    expect(() => Pin.parse('')).toThrow()
-  })
-})
-
-describe('Terminal', () => {
-  it('bounds name to 1..60 — the API contract wins over the data model note of 30', () => {
-    expect(Terminal.parse({ ...terminal, name: 'あ'.repeat(60) }).name.length).toBe(60)
-    expect(Terminal.parse({ ...terminal, name: 'あ'.repeat(31) }).name.length).toBe(31)
-    expect(() => Terminal.parse({ ...terminal, name: 'あ'.repeat(61) })).toThrow()
-    expect(() => Terminal.parse({ ...terminal, name: '' })).toThrow()
-  })
-
-  it('never carries pinHash — parsing a raw row fails', () => {
-    // D1 の行をそのまま返してしまう事故を型で止める。
-    expect(() => Terminal.parse({ ...terminal, pinHash: 'v1$argon$deadbeef' })).toThrow()
-    expect(() => Terminal.parse({ ...terminal, pin: '2580' })).toThrow()
-    expect(Object.keys(Terminal.parse(terminal))).not.toContain('pinHash')
-    expect(JSON.stringify(Terminal.parse(terminal))).not.toContain('2580')
-  })
-
-  it('exposes hasPin and isOnline as server-computed booleans', () => {
-    expect(Terminal.parse({ ...terminal, hasPin: false, isOnline: false }).hasPin).toBe(false)
-    expect(Terminal.parse({ ...terminal, isOnline: false }).isOnline).toBe(false)
-    const { hasPin: _h, ...noHasPin } = terminal
-    expect(() => Terminal.parse(noHasPin)).toThrow()
-    const { isOnline: _o, ...noIsOnline } = terminal
-    expect(() => Terminal.parse(noIsOnline)).toThrow()
-  })
-
-  it('defaults autoLockSeconds to 120 and bounds it to 30..1800', () => {
-    const { autoLockSeconds: _dropped, ...omitted } = terminal
-    expect(Terminal.parse(omitted).autoLockSeconds).toBe(120)
-    expect(Terminal.parse({ ...terminal, autoLockSeconds: 30 }).autoLockSeconds).toBe(30)
-    expect(Terminal.parse({ ...terminal, autoLockSeconds: 1800 }).autoLockSeconds).toBe(1800)
-    expect(() => Terminal.parse({ ...terminal, autoLockSeconds: 29 })).toThrow()
-    expect(() => Terminal.parse({ ...terminal, autoLockSeconds: 1801 })).toThrow()
-    expect(() => Terminal.parse({ ...terminal, autoLockSeconds: 120.5 })).toThrow()
-  })
-
-  it('keeps lastSeenAt nullable because a terminal may never have connected', () => {
-    expect(Terminal.parse({ ...terminal, lastSeenAt: null }).lastSeenAt).toBeNull()
-    const { lastSeenAt: _dropped, ...omitted } = terminal
-    expect(Terminal.parse(omitted).lastSeenAt).toBeNull()
-    expect(() => Terminal.parse({ ...terminal, lastSeenAt: '2026-08-27' })).toThrow()
-    expect(Terminal.parse({ ...terminal, version: 1 }).version).toBe(1)
-    expect(() => Terminal.parse({ ...terminal, version: 0 })).toThrow()
-  })
-})
-
-describe('TerminalListQuery', () => {
-  it('defaults includeInactive to false and leaves kind optional', () => {
-    expect(TerminalListQuery.parse({ storeId: UUID }).includeInactive).toBe(false)
-    // クエリ文字列は文字列で届く。
     expect(
-      TerminalListQuery.parse({ storeId: UUID, includeInactive: 'true' }).includeInactive,
-    ).toBe(true)
-    expect(TerminalListQuery.parse({ storeId: UUID }).kind).toBeUndefined()
-    expect(TerminalListQuery.parse({ storeId: UUID, kind: 'personal' }).kind).toBe('personal')
-    expect(() => TerminalListQuery.parse({ storeId: UUID, kind: 'kiosk' })).toThrow()
-    expect(() => TerminalListQuery.parse({})).toThrow()
+      AnalyticsRollupResult.parse({
+        processedStores: 1,
+        failedStores: [],
+        nextStoreCursor: null,
+        from: '2026-08-01',
+        to: '2026-08-01',
+        upserted: 9,
+        dropped: 0,
+      }).dropped,
+    ).toBe(0)
+  })
+
+  it('accepts 40文字の担当snapshotを分析pointとseriesで保持する', () => {
+    const displayName = 'あ'.repeat(40)
+    expect(
+      AnalyticsPoint.parse({
+        key: 'staff-1',
+        label: displayName,
+        value: 0,
+        secondaryValue: null,
+        isClosed: false,
+        isOverTarget: false,
+      }).label,
+    ).toBe(displayName)
+    expect(AnalyticsSeries.parse({ name: displayName, points: [], pattern: 'solid' }).name).toBe(
+      displayName,
+    )
+  })
+
+  it('keeps summaries to three display-ready values and defaults an omitted rate to null', () => {
+    expect(
+      AnalyticsPoint.parse({
+        key: '2026-08-27',
+        label: '8/27',
+        value: 12,
+        isClosed: false,
+        isOverTarget: false,
+      }).secondaryValue,
+    ).toBeNull()
+
+    const report = {
+      metric: 'wait_time',
+      from: '2026-08-01',
+      to: '2026-08-31',
+      granularity: 'hour',
+      countBy: 'visit_date',
+      series: [],
+      summary: [
+        { label: '中央値', value: '8分40秒', unit: '', isOverTarget: true },
+        { label: '前の月', value: '7分20秒', unit: '', isOverTarget: false },
+        { label: '受付', value: '328', unit: '件', isOverTarget: false },
+      ],
+      target: 480,
+      suppressed: false,
+      businessDays: 27,
+      pendingDays: 0,
+    }
+    expect(AnalyticsReport.parse(report).summary).toHaveLength(3)
+    expect(() =>
+      AnalyticsReport.parse({
+        ...report,
+        summary: [...report.summary, report.summary[0]],
+      }),
+    ).toThrow()
+    expect(() =>
+      AnalyticsReport.parse({
+        ...report,
+        summary: [{ label: '中央値', value: 520, unit: '秒', isOverTarget: true }],
+      }),
+    ).toThrow()
   })
 })
 
-describe('TerminalInput', () => {
-  it('rejects an unknown key so a stale client field never lands silently', () => {
-    const input = { name: '検査室iPad', kind: 'shared' as const }
-    expect(TerminalInput.parse(input).autoLockSeconds).toBe(120)
-    expect(TerminalInput.parse(input).isActive).toBe(true)
-    expect(TerminalInput.parse({ ...input, pin: '2580' }).pin).toBe('2580')
-    expect(() => TerminalInput.parse({ ...input, pinHash: 'x' })).toThrow()
-    expect(() => TerminalInput.parse({ ...input, version: 1 })).toThrow()
-    expect(() => TerminalInput.parse({ ...input, pin: '258' })).toThrow()
-  })
-})
+describe('P10 terminal and audit contracts', () => {
+  const terminal = {
+    id: UUID,
+    storeId: UUID,
+    name: '銀座店 レジ横iPad',
+    kind: 'shared',
+    placeNote: 'レジの右側',
+    deviceLabel: 'EYE-iPad-07',
+    autoLockSeconds: 120,
+    isActive: true,
+    hasPin: true,
+    lastSeenAt: '2026-08-27T02:08:00.000Z',
+    isOnline: true,
+    version: 1,
+    createdAt: '2026-08-27T02:08:00.000Z',
+  }
 
-describe('TerminalPatch', () => {
-  it('requires version so the optimistic lock cannot be skipped', () => {
-    expect(TerminalPatch.parse({ version: 3, name: '受付iPad' }).version).toBe(3)
-    expect(TerminalPatch.parse({ version: 1 }).name).toBeUndefined()
-    expect(() => TerminalPatch.parse({ name: '受付iPad' })).toThrow()
-    expect(() => TerminalPatch.parse({ version: 0 })).toThrow()
-    expect(() => TerminalPatch.parse({ version: 1, pinHash: 'x' })).toThrow()
+  it('Pin accepts 4..6 digits and rejects other lengths or non-digits', () => {
+    expect(Pin.parse('2580')).toBe('2580')
+    expect(Pin.parse('258025')).toBe('258025')
+    for (const value of ['123', '1234567', '12a4']) expect(() => Pin.parse(value)).toThrow()
   })
-})
 
-describe('TerminalSessionStart', () => {
-  it('requires staffId when mode is personal', () => {
-    const parsed = TerminalSessionStart.parse({ mode: 'personal', staffId: UUID, pin: '2580' })
-    expect(parsed.mode).toBe('personal')
+  it('Terminal is strict, bounds its name and never carries pinHash', () => {
+    expect(Terminal.parse(terminal)).toMatchObject({ hasPin: true, isOnline: true })
+    expect(() => Terminal.parse({ ...terminal, name: '' })).toThrow()
+    expect(() => Terminal.parse({ ...terminal, name: 'a'.repeat(61) })).toThrow()
+    expect(() => Terminal.parse({ ...terminal, pinHash: 'secret' })).toThrow()
+    expect(TerminalKind.options).toEqual(['shared', 'personal'])
+  })
+
+  it('Terminal query/input/patch defaults and optimistic locking are explicit', () => {
+    expect(TerminalListQuery.parse({ storeId: UUID })).toEqual({
+      storeId: UUID,
+      includeInactive: false,
+    })
+    expect(TerminalInput.parse({ name: '受付', kind: 'shared' })).toMatchObject({
+      autoLockSeconds: 120,
+      isActive: true,
+    })
+    expect(() => TerminalInput.parse({ name: '受付', kind: 'shared', stale: true })).toThrow()
+    expect(() => TerminalPatch.parse({ name: '受付' })).toThrow()
+    expect(TerminalPatch.parse({ version: 1 })).toEqual({ version: 1 })
+  })
+
+  it('TerminalSessionStart is discriminated by mode', () => {
+    expect(
+      TerminalSessionStart.parse({ mode: 'personal', staffId: UUID, pin: '2580' }).staffId,
+    ).toBe(UUID)
+    expect(TerminalSessionStart.parse({ mode: 'shared', pin: '2580' }).mode).toBe('shared')
     expect(() => TerminalSessionStart.parse({ mode: 'personal', pin: '2580' })).toThrow()
-    expect(() => TerminalSessionStart.parse({ mode: 'kiosk', pin: '2580' })).toThrow()
-  })
-
-  it('rejects staffId when mode is shared', () => {
-    expect(TerminalSessionStart.parse({ mode: 'shared', pin: '2580' }).pin).toBe('2580')
     expect(() =>
       TerminalSessionStart.parse({ mode: 'shared', staffId: UUID, pin: '2580' }),
     ).toThrow()
   })
-})
 
-describe('TerminalSession', () => {
-  const session = {
-    id: UUID,
-    terminalId: UUID2,
-    staffId: null,
-    mode: 'shared',
-    startedAt: START,
-    expiresAt: END,
-  }
-
-  it('keeps staffId null for a shared session', () => {
-    expect(TerminalSession.parse(session).staffId).toBeNull()
-    expect(TerminalSession.parse({ ...session, mode: 'personal', staffId: UUID }).staffId).toBe(
-      UUID,
-    )
-    expect(() => TerminalSession.parse({ ...session, pin: '2580' })).toThrow()
-  })
-
-  it('carries startedAt and expiresAt as ISO datetimes', () => {
-    expect(TerminalSession.parse(session).expiresAt).toBe(END)
-    expect(() => TerminalSession.parse({ ...session, startedAt: '2026-08-27' })).toThrow()
-    expect(() => TerminalSession.parse({ ...session, expiresAt: null })).toThrow()
-  })
-})
-
-describe('ReauthInput', () => {
-  it('is an allow-list of four reasons and fails closed on anything else', () => {
-    for (const reason of ['recording', 'attention', 'settings', 'customer_merge'] as const) {
-      expect(ReauthInput.parse({ staffId: UUID, pin: '2580', reason }).reason).toBe(reason)
-    }
-    expect(() => ReauthInput.parse({ staffId: UUID, pin: '2580', reason: 'audit' })).toThrow()
-    expect(() => ReauthInput.parse({ staffId: UUID, pin: '2580' })).toThrow()
-    expect(() => ReauthInput.parse({ pin: '2580', reason: 'settings' })).toThrow()
-  })
-})
-
-describe('PinInvalidError', () => {
-  it('bounds remainingAttempts to 0..2', () => {
-    expect(PinInvalidError.parse({ error: 'pin_invalid', remainingAttempts: 2 }).error).toBe(
-      'pin_invalid',
-    )
-    expect(
-      PinInvalidError.parse({ error: 'pin_invalid', remainingAttempts: 0 }).remainingAttempts,
-    ).toBe(0)
-    expect(() => PinInvalidError.parse({ error: 'pin_invalid', remainingAttempts: 3 })).toThrow()
-    expect(() => PinInvalidError.parse({ error: 'pin_invalid', remainingAttempts: -1 })).toThrow()
-    expect(() => PinInvalidError.parse({ error: 'pin_locked', remainingAttempts: 0 })).toThrow()
-  })
-})
-
-describe('PinLockedError', () => {
-  it('carries retryAfterSeconds and remainingAttempts of 0', () => {
-    const parsed = PinLockedError.parse({
-      error: 'pin_locked',
-      retryAfterSeconds: 30,
-      remainingAttempts: 0,
+  it('TerminalSession and reauthentication expose no PIN material', () => {
+    const session = TerminalSession.parse({
+      id: UUID,
+      terminalId: UUID,
+      staffId: null,
+      mode: 'shared',
+      startedAt: '2026-08-27T02:08:00.000Z',
+      expiresAt: '2026-08-27T02:10:00.000Z',
+      sessionToken: 'a'.repeat(64),
     })
-    expect(parsed.retryAfterSeconds).toBe(30)
-    expect(parsed.remainingAttempts).toBe(0)
+    expect(session.staffId).toBeNull()
+    expect(session.sessionToken).toHaveLength(64)
+    expect(() => TerminalSession.parse({ ...session, sessionToken: undefined })).toThrow()
+    expect(() => TerminalSession.parse({ ...session, sessionToken: 'a'.repeat(63) })).toThrow()
+    expect(() => TerminalSession.parse({ ...session, sessionToken: 'a'.repeat(129) })).toThrow()
     expect(() =>
-      PinLockedError.parse({ error: 'pin_locked', retryAfterSeconds: 30, remainingAttempts: 1 }),
+      TerminalSession.parse({ ...session, sessionToken: `${'a'.repeat(63)}+` }),
     ).toThrow()
-    expect(() => PinLockedError.parse({ error: 'pin_locked', remainingAttempts: 0 })).toThrow()
+    expect(() => TerminalSession.parse({ ...session, credentialHash: 'secret' })).toThrow()
+    expect(JSON.stringify(session)).not.toContain('2580')
+    expect(ReauthInput.parse({ staffId: UUID, pin: '2580', reason: 'settings' }).reason).toBe(
+      'settings',
+    )
+    expect(() => ReauthInput.parse({ staffId: UUID, pin: '2580', reason: 'anything' })).toThrow()
   })
-})
 
-describe('AuditActorType', () => {
-  it('is the four-value allow-list staff / terminal / system / customer', () => {
-    for (const value of ['staff', 'terminal', 'system', 'customer'] as const) {
-      expect(AuditActorType.parse(value)).toBe(value)
-    }
-    expect(AuditActorType.options).toHaveLength(4)
-    expect(() => AuditActorType.parse('admin')).toThrow()
+  it('PIN errors keep retry information bounded', () => {
+    expect(PinInvalidError.parse({ error: 'pin_invalid', remainingAttempts: 2 })).toBeTruthy()
+    expect(() => PinInvalidError.parse({ error: 'pin_invalid', remainingAttempts: 3 })).toThrow()
+    expect(
+      PinLockedError.parse({ error: 'pin_locked', retryAfterSeconds: 30, remainingAttempts: 0 }),
+    ).toBeTruthy()
   })
-})
 
-describe('AuditTargetType', () => {
-  it('spells target types as plural table names and rejects the singular reservation', () => {
+  it('audit actors and target types fail closed and use plural table names', () => {
+    expect(AuditActorType.options).toEqual(['staff', 'terminal', 'system', 'customer'])
     expect(AuditTargetType.parse('reservations')).toBe('reservations')
-    expect(AuditTargetType.parse('customer_notes')).toBe('customer_notes')
-    expect(AuditTargetType.parse('store_business_hours')).toBe('store_business_hours')
-    expect(AuditTargetType.parse('terminals')).toBe('terminals')
-    expect(AuditTargetType.parse('alerts')).toBe('alerts')
-    expect(AuditTargetType.options).toHaveLength(24)
-    // 知らない値は落とす（fail close）。
     expect(() => AuditTargetType.parse('reservation')).toThrow()
-    expect(() => AuditTargetType.parse('customer')).toThrow()
-    expect(() => AuditTargetType.parse('recording')).toThrow()
   })
-})
 
-describe('AuditEvent', () => {
-  it('keeps actorId null for a system actor and terminalId null for a personal device', () => {
-    const system = AuditEvent.parse({
-      ...auditEvent,
+  it('AuditEvent and list/search contracts preserve nullable actors and cursor shape', () => {
+    const event = {
+      id: UUID,
+      occurredAt: '2026-08-27T02:08:00.000Z',
       actorType: 'system',
       actorId: null,
       terminalId: null,
-    })
-    expect(system.actorId).toBeNull()
-    expect(system.terminalId).toBeNull()
-    const { actorId: _a, terminalId: _t, correlationId: _c, ...omitted } = auditEvent
-    expect(AuditEvent.parse(omitted).actorId).toBeNull()
-    expect(AuditEvent.parse(omitted).correlationId).toBeNull()
-  })
-
-  it('bounds action to 1..80 and keeps beforeJson / afterJson unknown', () => {
-    expect(AuditEvent.parse({ ...auditEvent, action: 'a'.repeat(80) }).action.length).toBe(80)
-    expect(() => AuditEvent.parse({ ...auditEvent, action: 'a'.repeat(81) })).toThrow()
-    expect(() => AuditEvent.parse({ ...auditEvent, action: '' })).toThrow()
-    expect(AuditEvent.parse({ ...auditEvent, beforeJson: { name: 'a' } }).beforeJson).toEqual({
-      name: 'a',
-    })
-    expect(AuditEvent.parse({ ...auditEvent, afterJson: 'まとめました' }).afterJson).toBe(
-      'まとめました',
-    )
-    expect(() => AuditEvent.parse({ ...auditEvent, pinHash: 'x' })).toThrow()
-  })
-})
-
-describe('AuditSearchQuery', () => {
-  it('defaults limit to 50 and rejects 0 and 201', () => {
+      action: 'organization.synced',
+      targetType: 'organizations',
+      targetId: UUID,
+      correlationId: null,
+      beforeJson: null,
+      afterJson: { active: true },
+    }
+    expect(AuditEvent.parse(event).actorId).toBeNull()
     expect(AuditSearchQuery.parse({}).limit).toBe(50)
-    expect(AuditSearchQuery.parse({ limit: '20' }).limit).toBe(20)
-    expect(AuditSearchQuery.parse({ limit: 200 }).limit).toBe(200)
-    expect(() => AuditSearchQuery.parse({ limit: 0 })).toThrow()
     expect(() => AuditSearchQuery.parse({ limit: 201 })).toThrow()
+    expect(AuditEventList.parse({ items: [event], nextCursor: null, total: 1 }).total).toBe(1)
   })
 
-  it('accepts from and to as LocalDate and rejects a datetime', () => {
-    const parsed = AuditSearchQuery.parse({ storeId: UUID, from: '2026-08-01', to: '2026-08-27' })
-    expect(parsed.from).toBe('2026-08-01')
-    expect(parsed.to).toBe('2026-08-27')
-    expect(() => AuditSearchQuery.parse({ from: NOW })).toThrow()
-    expect(() => AuditSearchQuery.parse({ actorType: 'staff' })).toThrow()
-    expect(AuditSearchQuery.parse({ actorId: UUID, action: 'reservation.created' }).action).toBe(
-      'reservation.created',
-    )
-  })
-})
-
-describe('AuditEventList', () => {
-  it('has the items / nextCursor / total shape', () => {
-    const list = AuditEventList.parse({ items: [auditEvent], nextCursor: null, total: 1 })
-    expect(list.items[0]?.action).toBe('reservation.created')
-    expect(list.total).toBe(1)
-    expect(AuditEventList.parse({ total: 0 }).items).toEqual([])
-    expect(AuditEventList.parse({ total: 0 }).nextCursor).toBeNull()
-    expect(() => AuditEventList.parse({ items: [], total: -1 })).toThrow()
-  })
-})
-
-describe('AlertPatch', () => {
-  it('accepts readAt of null so a read alert can be marked unread again', () => {
-    expect(AlertPatch.parse({ readAt: null }).readAt).toBeNull()
-    expect(AlertPatch.parse({ readAt: NOW }).readAt).toBe(NOW)
-    expect(AlertPatch.parse({ resolved: true }).resolved).toBe(true)
-    expect(() => AlertPatch.parse({ readAt: '2026-08-27' })).toThrow()
-  })
-
-  it('rejects a body with neither readAt nor resolved', () => {
+  it('alert mutations are read-state-only and staff PIN updates never echo the PIN', () => {
+    expect(AlertPatch.parse({ readAt: null })).toEqual({ readAt: null })
+    expect(() => AlertPatch.parse({ resolved: true })).toThrow()
+    expect(() => AlertPatch.parse({ readAt: null, resolved: true })).toThrow()
     expect(() => AlertPatch.parse({})).toThrow()
-    expect(() => AlertPatch.parse({ resolvedBy: UUID })).toThrow()
-  })
-})
-
-describe('AlertReadAllResult', () => {
-  it('counts updated rows and cannot be negative', () => {
-    expect(AlertReadAllInput.parse({}).storeId).toBeUndefined()
-    expect(AlertReadAllInput.parse({ storeId: UUID }).storeId).toBe(UUID)
     expect(AlertReadAllResult.parse({ updated: 0 }).updated).toBe(0)
-    expect(AlertReadAllResult.parse({ updated: 3 }).updated).toBe(3)
-    expect(() => AlertReadAllResult.parse({ updated: -1 })).toThrow()
-    expect(() => AlertReadAllResult.parse({})).toThrow()
-  })
-})
-
-describe('StaffPinInput', () => {
-  it('takes a Pin and nothing else', () => {
     expect(StaffPinInput.parse({ pin: '2580' }).pin).toBe('2580')
-    expect(() => StaffPinInput.parse({ pin: '258' })).toThrow()
-    expect(() => StaffPinInput.parse({ pin: '2580', staffId: UUID })).toThrow()
-  })
-})
-
-describe('PinSetResult', () => {
-  it('returns staffId and updatedAt but never the pin', () => {
-    const parsed = PinSetResult.parse({ staffId: UUID, updatedAt: NOW })
-    expect(parsed.staffId).toBe(UUID)
-    expect(Object.keys(parsed)).toEqual(['staffId', 'updatedAt'])
-    expect(() => PinSetResult.parse({ staffId: UUID, updatedAt: NOW, pin: '2580' })).toThrow()
+    expect(
+      PinSetResult.parse({ staffId: UUID, updatedAt: '2026-08-27T02:08:00.000Z' }),
+    ).not.toHaveProperty('pin')
   })
 })

@@ -5,12 +5,12 @@ import {
   AlertPatch,
   AlertReadAllInput,
   AlertReadAllResult,
-  type AnalyticsMetric,
   AnalyticsQuery,
   AnalyticsReport,
   AnalyticsRollupRequest,
   AnalyticsRollupResult,
   AnalyticsTargets,
+  AuditEvent,
   AuditEventList,
   AuditSearchQuery,
   AvailabilityQuery,
@@ -50,6 +50,8 @@ import {
   IssueTokenRequest,
   LedgerQuery,
   LedgerView,
+  LoginRequest,
+  LoginResponse,
   MaintenanceQuery,
   NotificationJob,
   NotificationResult,
@@ -95,6 +97,8 @@ import {
   RecordingRetainedError,
   type RecordingState,
   RecordingStatePatch,
+  RefreshRequest,
+  RefreshResponse,
   ReservationCancelInput,
   ReservationChangeHistory,
   ReservationChangeInput,
@@ -175,6 +179,7 @@ import { and, asc, eq, gte, inArray, isNull, lt, lte, or } from 'drizzle-orm'
 import { type DrizzleD1Database, drizzle } from 'drizzle-orm/d1'
 import { type Context, Hono, type MiddlewareHandler } from 'hono'
 import { except } from 'hono/combine'
+import { getCookie, setCookie } from 'hono/cookie'
 import { HTTPException } from 'hono/http-exception'
 import {
   type AvailabilityDayRows,
@@ -203,10 +208,13 @@ import {
   webBookingSettings,
 } from './db/schema'
 import { slotLockRequests, slotLockStatements, UNASSIGNED_TARGET_KEY } from './db/slot-locks'
-import { ANALYTICS_TARGETS, addDays } from './domain/analytics'
-import { buildReport, type DailyRow } from './domain/analytics-report'
-import { type AnalyticsRow, rollupDay } from './domain/analytics-rollup'
-import { type AuditActor, auditInsert, changedFields, resolveActor } from './domain/audit'
+import { analyticsStoredMetrics, buildAnalyticsReport } from './domain/analytics-report'
+import {
+  type AnalyticsReservation,
+  type AnalyticsVisitEvent,
+  rollupAnalyticsDay,
+} from './domain/analytics-rollup'
+import { resolveActor } from './domain/audit'
 import {
   type AvailabilityInput,
   computeAvailability,
@@ -261,7 +269,13 @@ import {
   shortLivedKey,
   verifyManagementCode,
 } from './domain/management-code'
-import { isPinLocked, isWeakPin, nextFailureState, pinFailureKey } from './domain/pin'
+import {
+  isPinLocked,
+  isWeakPin,
+  nextFailureState,
+  parsePinFailure,
+  pinFailureKey,
+} from './domain/pin'
 import { issueTicket, verifyTicket } from './domain/playback'
 import { buildHistoryList, type ReceptionHistoryRow } from './domain/reception-history'
 import { nextRecordingCode, nextState, r2KeyFor, uploadFailedAlert } from './domain/recording'
@@ -291,7 +305,12 @@ import {
   validateHoursInput,
   warnBusinessHours,
 } from './domain/store-settings'
-import { expiresAtFrom, isOnline, isSessionLive } from './domain/terminal-session'
+import {
+  expiresAtFrom,
+  isOnline,
+  sessionAuthorizationAt,
+  sharedExpiresAtFrom,
+} from './domain/terminal-session'
 import { type BoardSubjectRow, buildBoard, planBoardSteps } from './domain/visit-board'
 import { jstVisitDate, nextTicketNo, waitedMinutes } from './domain/walkin'
 import {
@@ -320,22 +339,23 @@ export type Bindings = {
   RECORDINGS: R2Bucket
   /** 予約確定メール等の同期送信先（notifier）。Queues は使わない。 */
   NOTIFIER: Fetcher
+  /** 認証の正本。初回ログイン・refresh・本人PIN照合はadminへ委譲する。 */
+  ADMIN: Fetcher
   /** /api/internal/* を守る共有鍵（admin からの service binding 呼び出し）。 */
   INTERNAL_KEY: string
   /** アクセス JWT の HS256 署名鍵。admin（認証の正本）と同じ値。 */
   JWT_SECRET: string
-  /**
-   * 暗証番号のハッシュに混ぜる pepper（`wrangler secret put AUTH_PEPPER`）。
-   * **binding ではなく secret** なので `wrangler.jsonc` の `vars` には置かない。
-   */
+  /** PINハッシュ用のpepper。本番はwrangler secret、devだけ.dev.vars。 */
   AUTH_PEPPER: string
   /**
-   * お客様のご予約ページの公開ドメイン（`eyex.jp`）。SETTINGS-WEB の「ご案内のページ」を
+   * お客様のご予約ページの公開ドメイン（`eye.jp`）。SETTINGS-WEB の「ご案内のページ」を
    * `stores.slug` と繋いで組み立てるためだけに使う。**この値を表に持たない。**
    */
   PUBLIC_WEB_ORIGIN?: string
   /** credential 無しの dev トークングラントを開ける。本番では設定しない。 */
   AUTH_DEV_GRANT?: string
+  /** integration test の基準時刻。本番では設定せず、実時刻を使う。 */
+  TEST_NOW?: string
 }
 
 type Env = { Bindings: Bindings; Variables: AuthVariables }
@@ -430,39 +450,9 @@ const toJstMinutes = (instant: string): number =>
     ((Date.parse(instant) + JST_OFFSET_MS) % (MINUTES_PER_DAY * MS_PER_MINUTE)) / MS_PER_MINUTE,
   )
 
-/** query から受け取る店舗 id の形。契約（`Uuid`）と同じものを認可の前に見る。 */
-const UUID_PATTERN = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
-
 /** 空白区切りの許可リストに含まれるか。知らない語は届かない（同期で fail close 済み）。 */
 const allows = (permissions: string, perm: StorePermission): boolean =>
   permissions.split(' ').includes(perm)
-
-/**
- * その店舗でその権限を持っているか。パスに `:storeId` を持たない面
- * （`/api/staff/terminals/:terminalId`）は、**行を引いてからその行の店舗で**
- * 見直す必要がある —— `requireStorePermission()` は `:storeId` が無いと
- * 「組織のどこかの店舗で持っているか」までしか見ないので、これが無いと
- * 銀座店の店長が新宿店の端末の名前と暗証番号を書き換えられる。
- */
-async function grantedOnStore(
-  db: Db,
-  org: string,
-  sub: string,
-  storeId: string,
-  perm: StorePermission,
-): Promise<boolean> {
-  const rows = await db
-    .select({ permissions: storeMemberships.permissions })
-    .from(storeMemberships)
-    .where(
-      and(
-        eq(storeMemberships.organizationId, org),
-        eq(storeMemberships.userId, sub),
-        eq(storeMemberships.storeId, storeId),
-      ),
-    )
-  return rows.some((row) => allows(row.permissions, perm))
-}
 
 /**
  * お客様に読み上げていただく Web のご予約番号（`EY-W-2608-0006`）。
@@ -496,38 +486,13 @@ async function findStore(db: Db, org: string, storeId: string) {
  */
 function requireStorePermission(
   perm: StorePermission,
-  options: { storeIdFrom?: 'param' | 'query' } = {},
+  input: { storeIdFrom?: 'param' | 'query' } = {},
 ): MiddlewareHandler<Env> {
-  const from = options.storeIdFrom ?? 'param'
   return async (c, next) => {
     const db = drizzle(c.env.DB)
     const { org, sub } = c.get('auth')
-    if (from === 'query') {
-      // query で受ける面（分析）。**入力検証が認可より先**なので、店舗を書いていない
-      // 要求は 400（403 にすると「権限が無い」と読めてしまう）。
-      const raw = c.req.query('storeId')
-      if (raw === undefined || !UUID_PATTERN.test(raw)) {
-        return c.json({ error: 'bad_request' }, 400)
-      }
-      // **店舗の存在を先に引かない。** 他組織の店舗 id を渡されたとき、404 と 403 の
-      // 違いでその店舗が在ることを漏らさないためである（membership が無ければ一律 403）。
-      const granted = await db
-        .select({ permissions: storeMemberships.permissions })
-        .from(storeMemberships)
-        .where(
-          and(
-            eq(storeMemberships.organizationId, org),
-            eq(storeMemberships.userId, sub),
-            eq(storeMemberships.storeId, raw),
-          ),
-        )
-      if (!granted.some((row) => allows(row.permissions, perm))) {
-        return c.json({ error: 'forbidden' }, 403)
-      }
-      await next()
-      return
-    }
-    const storeId: string | undefined = c.req.param('storeId')
+    const storeId: string | undefined =
+      input.storeIdFrom === 'query' ? c.req.query('storeId') : c.req.param('storeId')
     if (storeId !== undefined && !(await findStore(db, org, storeId))) {
       return c.json({ error: 'not_found' }, 404)
     }
@@ -546,6 +511,169 @@ function requireStorePermission(
     }
     await next()
   }
+}
+
+/**
+ * 責任の残る操作は、同じJWTでも生きた個人モードの端末セッションを要求する。
+ *
+ * 端末機能より前からある API は、端末をまだ登録していない店舗でも使い続けられるよう、
+ * `whenTerminalIsActive` のときだけヘッダー無しを従来の個人操作として扱う。新しい端末 UI は
+ * `domainFetch()` が必ずヘッダーを付けるため、共有端末からの責任操作はここで確実に止まる。
+ */
+const TERMINAL_SESSION_TOKEN = /^[A-Za-z0-9_-]{64,128}$/
+
+function base64Url(bytes: Uint8Array): string {
+  let binary = ''
+  for (const byte of bytes) binary += String.fromCharCode(byte)
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+async function sessionCredential(): Promise<{ token: string; hash: string }> {
+  const bytes = crypto.getRandomValues(new Uint8Array(48))
+  const token = base64Url(bytes)
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token))
+  return { token, hash: base64Url(new Uint8Array(digest)) }
+}
+
+async function hashSessionToken(token: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token))
+  return base64Url(new Uint8Array(digest))
+}
+
+type AuthenticatedTerminalSession = {
+  id: string
+  storeId: string
+  terminalId: string
+  staffId: string | null
+  mode: 'shared' | 'personal'
+  credentialHash: string
+  startedAt: string
+  expiresAt: string
+  authorization: 'shared' | 'personal'
+}
+
+function terminalSessionInvalid(c: Context<Env>): never {
+  throw new HTTPException(403, {
+    res: c.json({ error: 'terminal_session_invalid' }, 403),
+  })
+}
+
+async function authenticatedTerminalSession(
+  c: Context<Env>,
+  scope: { terminalId?: string; storeId?: string; sessionId?: string } = {},
+): Promise<AuthenticatedTerminalSession> {
+  const terminalId = c.req.header('x-terminal-id')
+  const token = c.req.header('x-terminal-session')
+  if (terminalId === undefined || token === undefined || !TERMINAL_SESSION_TOKEN.test(token)) {
+    return terminalSessionInvalid(c)
+  }
+  if (scope.terminalId !== undefined && terminalId !== scope.terminalId) {
+    return terminalSessionInvalid(c)
+  }
+  const credentialHash = await hashSessionToken(token)
+  const clauses = [
+    's.organization_id = ?',
+    's.terminal_id = ?',
+    's.credential_hash = ?',
+    's.revoked_at IS NULL',
+    "t.is_active = '1'",
+  ]
+  const params: unknown[] = [c.get('auth').org, terminalId, credentialHash]
+  if (scope.storeId !== undefined) {
+    clauses.push('s.store_id = ?')
+    params.push(scope.storeId)
+  }
+  if (scope.sessionId !== undefined) {
+    clauses.push('s.id = ?')
+    params.push(scope.sessionId)
+  }
+  const row = await c.env.DB.prepare(
+    'SELECT s.id, s.store_id AS storeId, s.terminal_id AS terminalId, s.staff_id AS staffId, s.mode, s.credential_hash AS credentialHash, s.started_at AS startedAt, s.expires_at AS expiresAt, s.revoked_at AS revokedAt ' +
+      'FROM terminal_sessions s INNER JOIN terminals t ON t.organization_id = s.organization_id AND t.id = s.terminal_id ' +
+      `WHERE ${clauses.join(' AND ')} ORDER BY s.started_at DESC LIMIT 1`,
+  )
+    .bind(...params)
+    .first<{
+      id: string
+      storeId: string
+      terminalId: string
+      staffId: string | null
+      mode: 'shared' | 'personal'
+      credentialHash: string
+      startedAt: string
+      expiresAt: string
+      revokedAt: string | null
+    }>()
+  if (row === null) return terminalSessionInvalid(c)
+  const authorization = sessionAuthorizationAt(row, new Date(c.env.TEST_NOW ?? Date.now()))
+  if (authorization === null) return terminalSessionInvalid(c)
+  return { ...row, authorization }
+}
+
+function requirePersonalMode(
+  subject = '設定の変更',
+  input: { whenTerminalIsActive?: boolean } = {},
+): MiddlewareHandler<Env> {
+  return async (c, next) => {
+    const terminalId = c.req.header('x-terminal-id')
+    const sessionToken = c.req.header('x-terminal-session')
+    if (terminalId === undefined && sessionToken === undefined) {
+      if (input.whenTerminalIsActive) {
+        await next()
+        return
+      }
+      return c.json({ error: 'personal_mode_required', subject }, 403)
+    }
+    const session = await authenticatedTerminalSession(c)
+    if (session.authorization !== 'personal') {
+      return c.json({ error: 'personal_mode_required', subject }, 403)
+    }
+    await next()
+  }
+}
+
+type OperationActor = {
+  actorType: 'staff' | 'terminal'
+  actorId: string | null
+  terminalId: string | null
+}
+
+/** 端末ヘッダーを信用せず、同じ組織・店舗のセッションから操作主体を解決する。 */
+async function operationActor(
+  c: Context<Env>,
+  storeId: string,
+  fallbackStaffId: string | null,
+): Promise<OperationActor> {
+  const terminalId = c.req.header('x-terminal-id')
+  const sessionToken = c.req.header('x-terminal-session')
+  if (terminalId === undefined && sessionToken === undefined) {
+    return { actorType: 'staff', actorId: fallbackStaffId, terminalId: null }
+  }
+  const session = await authenticatedTerminalSession(c, { storeId })
+  if (session.authorization === 'personal' && session.staffId !== null) {
+    const actor = resolveActor({
+      mode: 'personal',
+      staffId: session.staffId,
+      terminalId: session.terminalId,
+    })
+    return { actorType: 'staff', actorId: actor.subjectId, terminalId: actor.terminalId }
+  }
+  if (session.authorization === 'shared') {
+    const actor = resolveActor({ mode: 'shared', staffId: null, terminalId: session.terminalId })
+    return { actorType: 'terminal', actorId: actor.subjectId, terminalId: actor.terminalId }
+  }
+  return terminalSessionInvalid(c)
+}
+
+/** headerless legacyを許すstaff APIでも、端末headerが一方でもあればpairを必ず検証する。 */
+async function validateTerminalPairWhenPresent(c: Context<Env>, storeId: string): Promise<void> {
+  if (
+    c.req.header('x-terminal-id') === undefined &&
+    c.req.header('x-terminal-session') === undefined
+  ) {
+    return
+  }
+  await authenticatedTerminalSession(c, { storeId })
 }
 
 /**
@@ -1118,8 +1246,16 @@ function toReport(input: {
 const handwritingKey = (org: string, customerId: string, noteId: string): string =>
   `notes/${org}/${customerId}/${noteId}.svg`
 
-/** 接客を終えた 1 語。来店3列はすべて `done` の予約だけから書き戻す。 */
-const VISITED_STATUSES = "('done')"
+/*
+ * 「ご来店になった」と数える状態。
+ *
+ * **`done` だけでは足りない。**`AC-CUST-11` は「最後のご来店」を
+ * **来店済み（`arrived` / `serving` / `done`）の予約の最終 `starts_at`」と定めている。
+ * `done` だけで数えていたころ、いまお店にいらしている方（`arrived` / `serving`）の
+ * 「最後のご来店」が前回のまま止まり、一覧・要約・重複の警告に古い日付が出続けた
+ * （実装不足の洗い出し customers-05）。来店回数（`visit_count`）も同じ数え方をする。
+ */
+const VISITED_STATUSES = "('arrived', 'serving', 'done')"
 
 /** 一覧・詳細・候補が同じ形で読む列。別名は契約の欄名に揃える。 */
 const CUSTOMER_COLUMNS =
@@ -1700,6 +1836,66 @@ app.post('/api/auth/token', zValidator('json', IssueTokenRequest), async (c) => 
   return c.json({ token })
 })
 
+const REFRESH_COOKIE = 'refresh_token'
+
+async function adminAuthFetch(env: Bindings, path: string, body: unknown) {
+  return env.ADMIN.fetch(`https://admin.internal${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-internal-key': env.INTERNAL_KEY },
+    body: JSON.stringify(body),
+  })
+}
+
+/** 本番の初回トークンは認証の正本adminから受け取り、refresh tokenだけcookie境界へ移す。 */
+app.post('/api/auth/login', zValidator('json', LoginRequest), async (c) => {
+  const response = await adminAuthFetch(
+    c.env,
+    '/api/internal/domain-auth/login',
+    c.req.valid('json'),
+  )
+  const body = await response.json().catch(() => null)
+  if (!response.ok || body === null) {
+    return new Response(JSON.stringify(body ?? { error: 'auth_unavailable' }), {
+      status: response.status,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+  const parsed = LoginResponse.parse(body)
+  setCookie(c, REFRESH_COOKIE, parsed.refreshToken, {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'Strict',
+    path: '/api/auth',
+  })
+  const { refreshToken: _omit, ...publicBody } = parsed
+  return c.json(publicBody)
+})
+
+app.post('/api/auth/refresh', async (c) => {
+  const refreshToken = getCookie(c, REFRESH_COOKIE)
+  if (refreshToken === undefined) return c.json({ error: 'unauthorized' }, 401)
+  const response = await adminAuthFetch(
+    c.env,
+    '/api/internal/domain-auth/refresh',
+    RefreshRequest.parse({ refreshToken }),
+  )
+  const body = await response.json().catch(() => null)
+  if (!response.ok || body === null) {
+    return new Response(JSON.stringify(body ?? { error: 'auth_unavailable' }), {
+      status: response.status,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+  const parsed = RefreshResponse.parse(body)
+  setCookie(c, REFRESH_COOKIE, parsed.refreshToken, {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'Strict',
+    path: '/api/auth',
+  })
+  return c.json({ token: parsed.token })
+})
+
 // ルートはチェーンする。`typeof routes` が RPC クライアントの型になる。
 
 /* ───────────────────────────────────────────────────────────────────────────
@@ -1970,11 +2166,8 @@ function auditRow(
     /** 組織そのものへの操作（受付履歴の閲覧）だけ null になる。 */
     storeId: string | null
     actorId: string | null
-    /**
-     * P10 の主体。共有端末からの操作は端末そのものが主体になる
-     * （`013-terminals-and-audit`）。渡さない経路は担当そのままの `staff` に落ちる。
-     */
-    actor?: AuditActor
+    actorType?: 'staff' | 'terminal'
+    terminalId?: string | null
     action: string
     targetType: string
     targetId: string
@@ -1999,11 +2192,6 @@ function auditRow(
       : input.appliedVisitEventId !== undefined
         ? [input.organizationId, input.appliedVisitEventId]
         : []
-  const actor: AuditActor = input.actor ?? {
-    type: 'staff',
-    id: input.actorId,
-    terminalId: null,
-  }
   return db
     .prepare(
       'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
@@ -2013,9 +2201,9 @@ function auditRow(
       crypto.randomUUID(),
       input.organizationId,
       input.storeId,
-      actor.type,
-      actor.id,
-      actor.terminalId,
+      input.actorType ?? 'staff',
+      input.actorId,
+      input.terminalId ?? null,
       input.action,
       input.targetType,
       input.targetId,
@@ -2510,15 +2698,16 @@ async function readableRecording(
 /**
  * 録音の監査 1 行。`auditRow()` と分けてあるのは `actor_type` が動くからである —
  * 保管の完了と 24 時間放置の打ち切りは**人が押した操作ではない**ので `system` で残す。
- * 端末欄は P10 まで NULL（`013-terminals-and-audit`）。
+ * P10 の端末操作では、検証済みセッションから端末欄も残す。
  */
 function recordingAudit(
   db: D1Database,
   input: {
     organizationId: string
     storeId: string
-    actorType: 'staff' | 'system'
+    actorType: 'staff' | 'system' | 'terminal'
     actorId: string | null
+    terminalId?: string | null
     action: string
     recordingId: string
     after: unknown
@@ -2529,7 +2718,7 @@ function recordingAudit(
   return db
     .prepare(
       'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
-        "VALUES (?,?,?,?,?,NULL,?,'recordings',?,NULL,?,?,?)",
+        "VALUES (?,?,?,?,?,?,?,'recordings',?,NULL,?,?,?)",
     )
     .bind(
       crypto.randomUUID(),
@@ -2537,6 +2726,7 @@ function recordingAudit(
       input.storeId,
       input.actorType,
       input.actorId,
+      input.terminalId ?? null,
       input.action,
       input.recordingId,
       JSON.stringify(input.after),
@@ -2598,7 +2788,7 @@ async function raiseUploadFailedAlert(
   const existing = await db
     .prepare(
       "SELECT id FROM alerts WHERE organization_id = ? AND code = 'recording.upload_failed' " +
-        'AND target_id = ? AND resolved_at IS NULL LIMIT 1',
+        "AND audience = 'store' AND target_id = ? AND resolved_at IS NULL LIMIT 1",
     )
     .bind(input.organizationId, input.recordingId)
     .first<{ id: string }>()
@@ -2627,6 +2817,39 @@ async function raiseUploadFailedAlert(
       input.occurredAt,
     )
     .run()
+}
+
+/** `stored` 遷移と同じ D1 batch で、対応する未解決 alert と追記監査を閉じる。 */
+function resolveUploadFailedAlertStatements(
+  db: D1Database,
+  input: {
+    organizationId: string
+    storeId: string
+    recordingId: string
+    resolvedAt: string
+  },
+): D1PreparedStatement[] {
+  const correlationId = crypto.randomUUID()
+  const predicate =
+    "organization_id = ? AND store_id = ? AND audience = 'store' AND code = 'recording.upload_failed' AND target_id = ? AND resolved_at IS NULL"
+  return [
+    db
+      .prepare(
+        'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
+          `SELECT id, organization_id, store_id, 'system', NULL, NULL, 'alert.resolved', 'alerts', id, json_object('resolvedAt',resolved_at), json_object('resolvedAt',?), ?, ? FROM alerts WHERE ${predicate}`,
+      )
+      .bind(
+        input.resolvedAt,
+        correlationId,
+        input.resolvedAt,
+        input.organizationId,
+        input.storeId,
+        input.recordingId,
+      ),
+    db
+      .prepare(`UPDATE alerts SET resolved_at = ?, resolved_by = NULL WHERE ${predicate}`)
+      .bind(input.resolvedAt, input.organizationId, input.storeId, input.recordingId),
+  ]
 }
 
 /** 一覧の続き。並べ方に結び付いた不透明な値（`(時刻, id)` の複合カーソル）。 */
@@ -2811,8 +3034,8 @@ async function purgeRecordings(
  * 「無い slug」と「非公開の slug」は status も body も同じにする（`04-api.md` §3.12）。
  * ─────────────────────────────────────────────────────────────────────────── */
 
-/** ご案内のページの前置き（`eyex.jp/ginza`）。表には持たず、slug から組み立てる。 */
-const PUBLIC_ORIGIN_FALLBACK = 'eyex.jp'
+/** ご案内のページの前置き（`eye.jp/ginza`）。表には持たず、slug から組み立てる。 */
+const PUBLIC_ORIGIN_FALLBACK = 'eye.jp'
 
 /**
  * 公開面の 404。**存在しない slug と非公開の店舗で body まで同じにする。**
@@ -3266,22 +3489,39 @@ async function applyWebPublications(
     }
     const alert = autoCancelledAlert({ publicCode: row.publicCode })
     // お客様の予約が消える唯一の自動処理なので、台帳・Web・お知らせを 1 バッチで書く。
-    await env.DB.batch([
+    const results = await env.DB.batch([
       env.DB.prepare(
         "UPDATE web_bookings SET status = 'cancelled', cancelled_at = ?, updated_at = ? " +
           "WHERE organization_id = ? AND id = ? AND status = 'pending'",
       ).bind(nowIso, nowIso, row.organizationId, row.id),
       env.DB.prepare(
         "UPDATE reservations SET status = 'cancelled', cancelled_at = ?, cancel_reason = 'store', " +
-          'updated_at = ?, version = version + 1 WHERE organization_id = ? AND id = ?',
-      ).bind(nowIso, nowIso, row.organizationId, row.reservationId),
+          'updated_at = ?, version = version + 1 WHERE organization_id = ? AND id = ? ' +
+          "AND status NOT IN ('cancelled','no_show') AND EXISTS (" +
+          'SELECT 1 FROM web_bookings WHERE organization_id = ? AND id = ? ' +
+          "AND status = 'cancelled' AND cancelled_at = ?)",
+      ).bind(
+        nowIso,
+        nowIso,
+        row.organizationId,
+        row.reservationId,
+        row.organizationId,
+        row.id,
+        nowIso,
+      ),
       env.DB.prepare(
-        'DELETE FROM reservation_slot_locks WHERE organization_id = ? AND reservation_id = ?',
-      ).bind(row.organizationId, row.reservationId),
+        'DELETE FROM reservation_slot_locks WHERE organization_id = ? AND reservation_id = ? ' +
+          'AND EXISTS (SELECT 1 FROM web_bookings WHERE organization_id = ? AND id = ? ' +
+          "AND status = 'cancelled' AND cancelled_at = ?)",
+      ).bind(row.organizationId, row.reservationId, row.organizationId, row.id, nowIso),
       env.DB.prepare(
         'INSERT INTO alerts (id, organization_id, store_id, code, severity, audience, title, body, ' +
           'target_type, target_id, occurred_at, read_at, resolved_at, resolved_by, created_at) ' +
-          "VALUES (?,?,?,?,?,?,?,?,'reservation',?,?,NULL,NULL,NULL,?)",
+          "SELECT ?,?,?,?,?,?,?,?,'reservation',?,?,NULL,NULL,NULL,? " +
+          'WHERE EXISTS (SELECT 1 FROM web_bookings WHERE organization_id = ? AND id = ? ' +
+          "AND status = 'cancelled' AND cancelled_at = ?) " +
+          'AND NOT EXISTS (SELECT 1 FROM alerts WHERE organization_id = ? AND code = ? ' +
+          "AND target_type = 'reservation' AND target_id = ?)",
       ).bind(
         crypto.randomUUID(),
         row.organizationId,
@@ -3294,534 +3534,311 @@ async function applyWebPublications(
         row.reservationId,
         nowIso,
         nowIso,
+        row.organizationId,
+        row.id,
+        nowIso,
+        row.organizationId,
+        alert.code,
+        row.reservationId,
       ),
     ])
+    if ((results[0]?.meta.changes ?? 0) === 0) {
+      skipped += 1
+      continue
+    }
     autoCancelled += 1
   }
   // **自動で取り消した件数を他の数に混ぜない**（0 でないことが単独で読めるようにする）。
   return { applied: found.results.length, skipped, autoCancelled }
 }
 
-/** JST の暦日 `YYYY-MM-DD` の始まり（UTC の ISO8601）。JST は +9 時間の固定オフセット。 */
-function jstDayStart(date: string): string {
-  return new Date(Date.parse(`${date}T00:00:00.000Z`) - 9 * 3_600_000).toISOString()
-}
+type AnalyticsStore = { id: string; organizationId: string }
 
-/** 保持期限の下限。当月を含めて 25 か月（= 24 か月前の 1 日）より前の行は消す。 */
-function analyticsRetentionFloor(today: string): string {
-  const [y, m] = today.split('-').map(Number)
-  const months = (y as number) * 12 + ((m as number) - 1) - 24
-  return `${Math.floor(months / 12)}-${String((months % 12) + 1).padStart(2, '0')}-01`
-}
-
-/**
- * 1 店舗 1 日分の生データを読み、`rollupDay()`（純関数）に渡して行を作る。
- * **画面はこの結果（`analytics_daily`）しか読まない**ので、生データの走査はここだけ。
- */
-async function rollupStoreDay(
-  env: Bindings,
-  store: { id: string; organizationId: string },
-  date: string,
-): Promise<{ rows: AnalyticsRow[]; dropped: number }> {
-  const dayStart = jstDayStart(date)
-  const dayEnd = jstDayStart(addDays(date, 1))
-
-  const [hours, exceptions, dayReservations, walkInRows, events] = await Promise.all([
-    env.DB.prepare(
-      'SELECT weekday, is_closed AS isClosed FROM store_business_hours WHERE organization_id = ? AND store_id = ?',
-    )
-      .bind(store.organizationId, store.id)
-      .all<{ weekday: number; isClosed: string }>(),
-    env.DB.prepare(
-      'SELECT date, kind FROM store_calendar_exceptions WHERE organization_id = ? AND store_id = ? AND date = ?',
-    )
-      .bind(store.organizationId, store.id, date)
-      .all<{ date: string; kind: string }>(),
-    env.DB.prepare(
-      'SELECT id, source, status, starts_at AS startsAt, created_at AS createdAt, ' +
-        'cancel_reason AS cancelReason, customer_id AS customerId FROM reservations ' +
-        'WHERE organization_id = ? AND store_id = ? AND ((starts_at >= ? AND starts_at < ?) ' +
-        'OR (created_at >= ? AND created_at < ?))',
-    )
-      .bind(store.organizationId, store.id, dayStart, dayEnd, dayStart, dayEnd)
-      .all<{
-        id: string
-        source: string
-        status: string
-        startsAt: string
-        createdAt: string
-        cancelReason: string | null
-        customerId: string | null
-      }>(),
-    env.DB.prepare(
-      'SELECT id, reservation_id AS reservationId, arrived_at AS arrivedAt FROM walk_ins ' +
-        'WHERE organization_id = ? AND store_id = ? AND visit_date = ?',
-    )
-      .bind(store.organizationId, store.id, date)
-      .all<{ id: string; reservationId: string; arrivedAt: string }>(),
-    env.DB.prepare(
-      'SELECT subject_type AS subjectType, subject_id AS subjectId, stage, ' +
-        'occurred_at AS occurredAt, staff_id AS staffId FROM visit_events ' +
-        'WHERE organization_id = ? AND store_id = ? AND occurred_at >= ? AND occurred_at < ?',
-    )
-      .bind(store.organizationId, store.id, dayStart, dayEnd)
-      .all<{
-        subjectType: string
-        subjectId: string
-        stage: string
-        occurredAt: string
-        staffId: string | null
-      }>(),
-  ])
-
-  const reservationIds = dayReservations.results.map((row) => row.id)
-  const placeholders = reservationIds.map(() => '?').join(',')
-  const assignments =
-    reservationIds.length === 0
-      ? { results: [] as { reservationId: string; kind: string; targetId: string | null }[] }
-      : await env.DB.prepare(
-          'SELECT reservation_id AS reservationId, kind, target_id AS targetId ' +
-            `FROM reservation_assignments WHERE organization_id = ? AND reservation_id IN (${placeholders})`,
-        )
-          .bind(store.organizationId, ...reservationIds)
-          .all<{ reservationId: string; kind: string; targetId: string | null }>()
-  const purposes =
-    reservationIds.length === 0
-      ? { results: [] as { reservationId: string; purposeId: string }[] }
-      : await env.DB.prepare(
-          'SELECT reservation_id AS reservationId, purpose_id AS purposeId ' +
-            `FROM reservation_purposes WHERE organization_id = ? AND reservation_id IN (${placeholders})`,
-        )
-          .bind(store.organizationId, ...reservationIds)
-          .all<{ reservationId: string; purposeId: string }>()
-
-  // 再来は「その日の来店客の、その日より後 90 日以内の来店」。窓の外は読まない。
-  const customerIds = [
-    ...new Set(
-      dayReservations.results.flatMap((row) => (row.customerId === null ? [] : [row.customerId])),
-    ),
-  ]
-  const laterVisits =
-    customerIds.length === 0
-      ? []
-      : (
-          await env.DB.prepare(
-            'SELECT customer_id AS customerId, starts_at AS startsAt FROM reservations ' +
-              'WHERE organization_id = ? AND store_id = ? AND starts_at >= ? AND starts_at < ? ' +
-              `AND status NOT IN ('cancelled','no_show') AND customer_id IN (${customerIds.map(() => '?').join(',')})`,
-          )
-            .bind(
-              store.organizationId,
-              store.id,
-              dayEnd,
-              jstDayStart(addDays(date, 91)),
-              ...customerIds,
-            )
-            .all<{ customerId: string; startsAt: string }>()
-        ).results.map((row) => ({
-          customerId: row.customerId,
-          date: toJstDateString(row.startsAt),
-        }))
-
-  const visitCounts =
-    customerIds.length === 0
-      ? []
-      : (
-          await env.DB.prepare(
-            'SELECT id AS customerId, visit_count AS visitCount FROM customers ' +
-              `WHERE organization_id = ? AND id IN (${customerIds.map(() => '?').join(',')})`,
-          )
-            .bind(store.organizationId, ...customerIds)
-            .all<{ customerId: string; visitCount: number }>()
-        ).results
-
-  return rollupDay({
-    organizationId: store.organizationId,
-    storeId: store.id,
-    date,
-    businessHours: hours.results,
-    calendarExceptions: exceptions.results,
-    reservations: dayReservations.results,
-    reservationAssignments: assignments.results,
-    reservationPurposes: purposes.results,
-    walkIns: walkInRows.results,
-    visitEvents: events.results,
-    laterVisits,
-    customerVisitCounts: visitCounts,
-  })
-}
-
-/**
- * 日次集計。当日分と前日分（既定 `days=2`）を数え直して upsert し、保持期限より
- * 古い行を消す。**1 店舗が失敗しても残りを止めない**（`failed` に数えて次へ進む）。
- */
-async function rollupAnalytics(
-  env: Bindings,
-  input: { now: Date; days: number; ahead: number; limit: number },
-): Promise<{
-  stores: number
-  days: number
-  rows: number
-  deleted: number
-  dropped: number
-  failed: number
-}> {
-  const nowIso = input.now.toISOString()
-  const today = toJstDateString(input.now)
-  // 過去（数え直し）と先（入り具合）の両方を書く。**先を書かないとトップの未来側の
-  // 棒と「来週」が永久に 0 になる**（画面は `analytics_daily` しか読まないため）。
-  const dates = [
-    ...Array.from({ length: input.days }, (_, i) => addDays(today, -i)),
-    ...Array.from({ length: input.ahead }, (_, i) => addDays(today, i + 1)),
-  ]
-
-  const stores = await env.DB.prepare(
-    "SELECT id, organization_id AS organizationId FROM stores WHERE is_active = '1' " +
-      'ORDER BY created_at ASC LIMIT ?1',
-  )
-    .bind(input.limit)
-    .all<{ id: string; organizationId: string }>()
-
-  let written = 0
-  let dropped = 0
-  let failed = 0
-  for (const store of stores.results) {
-    try {
-      for (const date of dates) {
-        const result = await rollupStoreDay(env, store, date)
-        dropped += result.dropped
-        // 一意 index の 6 列で衝突させる。同じ日を何度数え直しても 2 行目を作らない。
-        const statements = result.rows.map((row) =>
-          env.DB.prepare(
-            'INSERT INTO analytics_daily (id, organization_id, store_id, date, metric, dimension, ' +
-              'dimension_key, value, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?) ' +
-              'ON CONFLICT (organization_id, store_id, date, metric, dimension, dimension_key) ' +
-              'DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at',
-          ).bind(
-            crypto.randomUUID(),
-            row.organizationId,
-            row.storeId,
-            row.date,
-            row.metric,
-            row.dimension,
-            row.dimensionKey,
-            row.value,
-            nowIso,
-            nowIso,
-          ),
-        )
-        for (let i = 0; i < statements.length; i += 50) {
-          const chunk = statements.slice(i, i + 50)
-          if (chunk.length === 0) continue
-          await env.DB.batch(chunk as [D1PreparedStatement, ...D1PreparedStatement[]])
-        }
-        written += result.rows.length
-      }
-    } catch (err) {
-      // 1 店舗の壊れで他店の朝礼を止めない。次の実行で拾い直す。
-      console.error('analytics rollup failed', store.id, err)
-      failed += 1
-    }
-  }
-
-  const purged = await env.DB.prepare('DELETE FROM analytics_daily WHERE date < ?1')
-    .bind(analyticsRetentionFloor(today))
-    .run()
-
-  return {
-    stores: stores.results.length,
-    days: dates.length,
-    rows: written,
-    deleted: purged.meta.changes ?? 0,
-    dropped,
-    failed,
-  }
-}
-
-/* ───────────────────────────────────────────────────────────────────────────
- * P10 端末の使い分けと監査（`013-terminals-and-audit`）
- *
- * 平文の暗証番号はここに 1 度も置かない。受け取った値はその場でストレッチして
- * pepper で HMAC にし、保存も応答もログ出力もしない（`07-nfr.md` §7.1）。
- * ─────────────────────────────────────────────────────────────────────────── */
-
-/**
- * サーバ側のストレッチ回数。パスワード（クライアント 600k）と違い、暗証番号は
- * テンキーしか無い端末から生の 4〜6 桁が届くのでサーバで伸ばす。
- * **Workers Free の CPU 10ms に収まる回数**にとどめ、強度は pepper（HMAC）で担う。
- */
-const PIN_STRETCH_ITERATIONS = 10_000
-/**
- * 連続失敗の置き場（KV）の寿命。**Workers KV の下限が 60 秒**なので 60 を渡し、
- * 「30 秒ちょうどはまだ入力できない」の境界は `isPinLocked()` が時刻で見る
- * （寿命に境界を任せない）。
- */
-const PIN_FAILURE_TTL_SECONDS = 60
-
-/** 昇格が要る用件 4 語。画面はこの語をそのまま読み上げる。 */
-const ELEVATE_SUBJECT = {
-  recording: '録音の保全',
-  attention: '注意ごとの公開',
-  settings: '設定の変更',
-  customer_merge: 'お客様のおまとめ',
-} as const
-
-/** 暗証番号 → 保存形式。**戻り値以外のどこにも平文を残さない。** */
-async function pinHashOf(
-  pin: string,
-  org: string,
-  subjectId: string,
-  pepper: string,
-): Promise<string> {
-  return hashStretched(await stretchPin(pin, org, subjectId, PIN_STRETCH_ITERATIONS), pepper)
-}
-
-/** 保存済みハッシュとの照合。未設定（NULL）は「合わない」— 401 pin_invalid に落ちる。 */
-async function pinMatches(
-  pin: string,
-  org: string,
-  subjectId: string,
-  pepper: string,
-  storedHash: string | null,
-): Promise<boolean> {
-  if (storedHash === null) return false
-  return verifyStretched(
-    await stretchPin(pin, org, subjectId, PIN_STRETCH_ITERATIONS),
-    pepper,
-    storedHash,
-  )
-}
-
-/** 失敗回数の控え。D1 に行を作らず、KV にだけ置いて自然に消えるようにする。 */
-type PinFailureRecord = { attempts: number; lockedAt: string | null }
-
-async function readPinFailure(kv: KVNamespace, key: string): Promise<PinFailureRecord | null> {
-  const raw = await kv.get(key)
-  if (raw === null) return null
-  const parsed: unknown = JSON.parse(raw)
-  if (typeof parsed !== 'object' || parsed === null) return null
-  const record = parsed as Partial<PinFailureRecord>
-  return {
-    attempts: typeof record.attempts === 'number' ? record.attempts : 0,
-    lockedAt: typeof record.lockedAt === 'string' ? record.lockedAt : null,
-  }
-}
-
-/** 端末で開いている業務 1 本。主体を決める材料でもある。 */
-type SessionRow = {
+type AnalyticsRawReservation = {
   id: string
+  organizationId: string
   storeId: string
-  terminalId: string
-  staffId: string | null
-  mode: string
-  expiresAt: string
-  revokedAt: string | null
+  customerId: string | null
+  source: 'phone' | 'counter' | 'web' | 'walkin'
+  status: 'confirmed' | 'arrived' | 'serving' | 'done' | 'cancelled' | 'no_show'
+  startsAt: string
+  createdAt: string
+  cancelReason: 'customer' | 'store' | 'duplicate' | 'no_show' | null
 }
 
-const SESSION_COLUMNS =
-  'SELECT id, store_id AS storeId, terminal_id AS terminalId, staff_id AS staffId, mode, ' +
-  'expires_at AS expiresAt, revoked_at AS revokedAt FROM terminal_sessions '
-
-/** 1 端末で生きている業務（新しい順）。**期限ちょうどはまだ生きている。** */
-async function liveSessionsOf(
-  db: D1Database,
-  org: string,
-  terminalId: string,
-  now: Date,
-): Promise<SessionRow[]> {
-  const { results } = await db
-    .prepare(
-      `${SESSION_COLUMNS}WHERE organization_id = ? AND terminal_id = ? AND revoked_at IS NULL ` +
-        'ORDER BY started_at DESC, rowid DESC',
-    )
-    .bind(org, terminalId)
-    .all<SessionRow>()
-  return results.filter((row) => isSessionLive(row, now))
+function analyticsDates(from: string, to: string): string[] {
+  const dates: string[] = []
+  for (let date = from; date <= to; date = addJstDays(date, 1)) dates.push(date)
+  return dates
 }
 
-/** `x-terminal-session` が指す業務。他テナントの id は「無い」として扱う。 */
-async function sessionFromHeader(c: Context<Env>, org: string): Promise<SessionRow | null> {
-  const headerId = c.req.header('x-terminal-session')
-  if (headerId === undefined || !UUID_PATTERN.test(headerId)) return null
-  const row = await c.env.DB.prepare(`${SESSION_COLUMNS}WHERE organization_id = ? AND id = ?`)
-    .bind(org, headerId)
-    .first<SessionRow>()
-  return row ?? null
+function analyticsRetentionCutoff(date: string): string {
+  const value = new Date(`${date.slice(0, 7)}-01T00:00:00.000Z`)
+  value.setUTCMonth(value.getUTCMonth() - 24)
+  return value.toISOString().slice(0, 10)
 }
 
-/**
- * 「いま生きています」を残す。`isOnline` は列に状態を持たず `last_seen_at` の
- * 古さだけで決まるので、**端末が名乗って叩いたときにここで 1 回だけ**触る
- * （一覧に並ぶ他の端末は触らない —— 触ると全台がいつまでも「つながっています」になる）。
- */
-async function touchNamedTerminal(c: Context<Env>, org: string, now: Date): Promise<void> {
-  const named = await sessionFromHeader(c, org)
-  if (named === null || !isSessionLive(named, now)) return
-  await c.env.DB.prepare(
-    'UPDATE terminals SET last_seen_at = ? WHERE organization_id = ? AND id = ?',
-  )
-    .bind(now.toISOString(), org, named.terminalId)
-    .run()
+function analyticsPreviousMonthRange(date: string): { from: string; to: string } {
+  const monthStart = new Date(`${date.slice(0, 7)}-01T00:00:00.000Z`)
+  monthStart.setUTCMonth(monthStart.getUTCMonth() - 1)
+  const from = monthStart.toISOString().slice(0, 10)
+  const next = new Date(monthStart)
+  next.setUTCMonth(next.getUTCMonth() + 1)
+  next.setUTCDate(next.getUTCDate() - 1)
+  return { from, to: next.toISOString().slice(0, 10) }
 }
 
-/**
- * 監査に残す主体を決める。**リクエストの入力から作らない。**
- *
- * 見るのは 2 つだけ — 端末が名乗った `x-terminal-session` と、その端末で開いている業務。
- * どちらも無ければ `system`（端末を 1 台も登録していない最初の 1 回がここを通る）。
- */
-async function actorOf(
-  c: Context<Env>,
-  org: string,
-  terminalId: string | null,
-  now: Date,
-): Promise<AuditActor> {
-  const named = await sessionFromHeader(c, org)
-  if (named !== null && isSessionLive(named, now)) return resolveActor(named)
-  if (terminalId === null) return resolveActor(null)
-  return resolveActor((await liveSessionsOf(c.env.DB, org, terminalId, now))[0] ?? null)
+/** トップの15日グラフを保ったまま、先週〜来週を月曜〜日曜で欠けずに読む。 */
+function analyticsOverviewWeekRange(from: string, to: string): { from: string; to: string } {
+  const dates = analyticsDates(from, to)
+  const center = dates[Math.floor(dates.length / 2)] ?? from
+  const weekday = new Date(`${center}T00:00:00.000Z`).getUTCDay()
+  const monday = addJstDays(center, -((weekday + 6) % 7))
+  return { from: addJstDays(monday, -7), to: addJstDays(monday, 13) }
 }
 
-/**
- * 書き込みの主体（P10）。端末が名乗っていればそれが主体で、名乗りが無い経路
- * （まだ端末を登録していない・保守の経路・テスト）はこれまでどおりその担当のままにする
- * —— ここで `system` に落とすと、受付履歴の「誰が」が空になる。
- */
-async function writerActor(
-  c: Context<Env>,
-  org: string,
-  actorId: string | null,
-  now: Date,
-): Promise<AuditActor> {
-  const actor = await actorOf(c, org, null, now)
-  return actor.type === 'system' ? { type: 'staff', id: actorId, terminalId: null } : actor
+function encodeAnalyticsStoreCursor(storeId: string): string {
+  return btoa(storeId)
 }
 
-/**
- * 責任の残る操作の前に個人モードを要求する。
- *
- * 見るのは**端末が名乗った `x-terminal-session` だけ**である。名乗りが無い主体
- * （端末をまだ 1 台も登録していない最初の 1 回・保守の経路）は `system` として通す —
- * ここで止めると、最初の 1 台が永久に登録できない。名乗った業務が共有モードや
- * 期限切れなら **403 `personal_mode_required`**（401 にしない。切れているのは
- * 端末セッションであって JWT ではない）。
- */
-function requirePersonalMode(subject: string): MiddlewareHandler<Env> {
-  return async (c, next) => {
-    const { org } = c.get('auth')
-    const named = await sessionFromHeader(c, org)
-    if (named === null) {
-      await next()
-      return
-    }
-    if (named.mode !== 'personal' || !isSessionLive(named, new Date())) {
-      return c.json({ error: 'personal_mode_required', subject }, 403)
-    }
-    await next()
-  }
-}
+// 最初のページがcatch-up中であることをKVに持つ内部cursor。UUID cursor と区別して、
+// 次回も先頭の同じ3店舗を再処理する。
+const ANALYTICS_RETRY_FIRST_PAGE_CURSOR = btoa('analytics:retry-first-page')
 
-/** D1 の 1 行 → 契約の `Terminal`。**`pin_hash` は 1 度も外へ出さない。** */
-function toTerminal(row: typeof terminals.$inferSelect, now: Date) {
-  return {
-    id: row.id,
-    storeId: row.storeId,
-    name: row.name,
-    kind: row.kind as 'shared' | 'personal',
-    placeNote: row.placeNote ?? '',
-    deviceLabel: row.deviceLabel ?? '',
-    autoLockSeconds: row.autoLockSeconds,
-    isActive: isOn(row.isActive),
-    hasPin: row.pinHash !== null,
-    lastSeenAt: row.lastSeenAt,
-    isOnline: isOnline(row.lastSeenAt, now),
-    version: row.version,
-    createdAt: row.createdAt,
-  }
-}
-
-/** 開いた業務 → 契約の `TerminalSession`。 */
-function toSession(row: {
-  id: string
-  terminalId: string
-  staffId: string | null
-  mode: string
-  startedAt: string
-  expiresAt: string
-}) {
-  return {
-    id: row.id,
-    terminalId: row.terminalId,
-    staffId: row.staffId,
-    mode: row.mode as 'shared' | 'personal',
-    startedAt: row.startedAt,
-    expiresAt: row.expiresAt,
-  }
-}
-
-/**
- * 暗証番号が合わなかったときの応答。**入力された値は残さない**（監査に載せるのは
- * 端末 id と担当 id まで）。3 回目で 30 秒の待ちに入る。
- */
-async function rejectPin(
-  c: Context<Env>,
-  input: {
-    org: string
-    storeId: string
-    terminalId: string
-    staffId: string | null
-    now: Date
-    record: PinFailureRecord | null
-  },
-) {
-  const state = nextFailureState(input.record?.attempts ?? 0)
-  const key = pinFailureKey(input.org, input.terminalId, input.staffId)
-  await c.env.SHORT_LIVED.put(
-    key,
-    JSON.stringify({
-      attempts: state.locked ? 0 : state.attempts,
-      lockedAt: state.locked ? input.now.toISOString() : null,
-    } satisfies PinFailureRecord),
-    { expirationTtl: PIN_FAILURE_TTL_SECONDS },
-  )
-  await auditInsert(c.env.DB, {
-    organizationId: input.org,
-    storeId: input.storeId,
-    actor: { type: 'terminal', id: input.terminalId, terminalId: input.terminalId },
-    action: 'terminal.pin.failed',
-    targetType: 'terminals',
-    targetId: input.terminalId,
-    after: { staffId: input.staffId, remainingAttempts: state.remainingAttempts },
-    correlationId: crypto.randomUUID(),
-    occurredAt: input.now.toISOString(),
-  }).run()
-  if (state.locked) {
-    return c.json(
-      {
-        error: 'pin_locked' as const,
-        retryAfterSeconds: state.retryAfterSeconds,
-        remainingAttempts: 0 as const,
-      },
-      429,
-    )
-  }
-  return c.json({ error: 'pin_invalid' as const, remainingAttempts: state.remainingAttempts }, 401)
-}
-
-/** 監査の続き読み（`(occurred_at, rowid)` の複合カーソル）。**OFFSET を使わない。** */
-type AuditCursor = { occurredAt: string; rowid: number }
-
-function encodeAuditCursor(cursor: AuditCursor): string {
-  return btoa(`${cursor.occurredAt}|${cursor.rowid}`)
-}
-
-function decodeAuditCursor(raw: string): AuditCursor | null {
+function decodeAnalyticsStoreCursor(cursor: string | undefined): string | null {
+  if (cursor === undefined) return null
+  if (cursor === ANALYTICS_RETRY_FIRST_PAGE_CURSOR) return null
   try {
-    const [occurredAt, rowid] = atob(raw).split('|')
-    if (occurredAt === undefined || rowid === undefined) return null
-    return { occurredAt, rowid: Number(rowid) }
+    const storeId = atob(cursor)
+    return /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(storeId) ? storeId : null
   } catch {
     return null
+  }
+}
+
+function isAnalyticsClosed(
+  date: string,
+  businessHours: readonly { weekday: number; isClosed: string }[],
+  exceptions: readonly { date: string; kind: string }[],
+): boolean {
+  const exception = exceptions.find((row) => row.date === date)
+  if (exception) return exception.kind === 'closed'
+  const weekday = new Date(`${date}T00:00:00.000Z`).getUTCDay()
+  return businessHours.find((row) => row.weekday === weekday)?.isClosed !== '0'
+}
+
+/**
+ * 最大 3 店舗・31 日を、各店舗ごとの bulk read と JSON upsert で再計算する。
+ * 生表はここだけが読む。表示 API は analytics_daily に閉じる。
+ */
+export async function rollupAnalytics(
+  env: Pick<Bindings, 'DB'>,
+  input: {
+    from: string
+    to: string
+    limit: number
+    storeCursor?: string
+    now: Date
+    completedThrough?: string
+  },
+) {
+  const cursorId = decodeAnalyticsStoreCursor(input.storeCursor)
+  if (
+    input.storeCursor !== undefined &&
+    input.storeCursor !== ANALYTICS_RETRY_FIRST_PAGE_CURSOR &&
+    cursorId === null
+  )
+    throw new HTTPException(400, { message: 'invalid_cursor' })
+  // 対象店舗が無効化されても、analytics_daily の保持期限だけは全体で必ず進める。
+  await env.DB.prepare('DELETE FROM analytics_daily WHERE date < ?1')
+    .bind(analyticsRetentionCutoff(toJstDateString(input.now)))
+    .run()
+  const storeRows = await env.DB.prepare(
+    "SELECT id, organization_id AS organizationId FROM stores WHERE is_active = '1' " +
+      'AND (?1 IS NULL OR id > ?1) ORDER BY id ASC LIMIT ?2',
+  )
+    .bind(cursorId, input.limit + 1)
+    .all<AnalyticsStore>()
+  const page = storeRows.results.slice(0, input.limit)
+  const lastStore = page.at(-1)
+  const pageNextStoreCursor =
+    storeRows.results.length > input.limit && lastStore !== undefined
+      ? encodeAnalyticsStoreCursor(lastStore.id)
+      : null
+  let upserted = 0
+  let dropped = 0
+  const failedStores: string[] = []
+  let retryCurrentPage = false
+
+  for (const store of page) {
+    try {
+      let storeFrom = input.from
+      let storeTo = input.to
+      if (input.completedThrough !== undefined) {
+        const lastClosed = await env.DB.prepare(
+          "SELECT MAX(date) AS date FROM analytics_daily WHERE organization_id = ?1 AND store_id = ?2 AND metric = 'closed' AND date <= ?3",
+        )
+          .bind(store.organizationId, store.id, input.completedThrough)
+          .first<{ date: string | null }>()
+        storeFrom = lastClosed?.date == null ? input.from : addJstDays(lastClosed.date, 1)
+        // 両端を含め最大31日。遅延分が残れば同じページを次回も処理する。
+        storeTo = addJstDays(storeFrom, 30) < input.to ? addJstDays(storeFrom, 30) : input.to
+      }
+      const lower = toInstant(addJstDays(storeFrom, -90), 0)
+      const windowStart = toInstant(storeFrom, 0)
+      const upper = toInstant(addJstDays(storeTo, 1), 0)
+      // 最終日の23:59受付→翌日相談開始も待ち時間へ入れる。
+      const eventUpper = toInstant(addJstDays(storeTo, 2), 0)
+      const [rawReservations, businessHours, exceptions, rawEvents, staffRows] = await Promise.all([
+        env.DB.prepare(
+          'SELECT id, organization_id AS organizationId, store_id AS storeId, customer_id AS customerId, source, status, starts_at AS startsAt, created_at AS createdAt, cancel_reason AS cancelReason ' +
+            'FROM reservations WHERE organization_id = ?1 AND store_id = ?2 AND ((starts_at >= ?3 AND starts_at < ?4) OR (created_at >= ?5 AND created_at < ?4))',
+        )
+          .bind(store.organizationId, store.id, lower, upper, windowStart)
+          .all<AnalyticsRawReservation>(),
+        env.DB.prepare(
+          'SELECT weekday, is_closed AS isClosed FROM store_business_hours WHERE organization_id = ?1 AND store_id = ?2',
+        )
+          .bind(store.organizationId, store.id)
+          .all<{ weekday: number; isClosed: string }>(),
+        env.DB.prepare(
+          'SELECT date, kind FROM store_calendar_exceptions WHERE organization_id = ?1 AND store_id = ?2 AND date >= ?3 AND date <= ?4',
+        )
+          .bind(store.organizationId, store.id, storeFrom, storeTo)
+          .all<{ date: string; kind: string }>(),
+        env.DB.prepare(
+          'SELECT organization_id AS organizationId, store_id AS storeId, subject_id AS subjectId, stage, occurred_at AS occurredAt ' +
+            'FROM visit_events WHERE organization_id = ?1 AND store_id = ?2 AND occurred_at >= ?3 AND occurred_at < ?4',
+        )
+          .bind(store.organizationId, store.id, windowStart, eventUpper)
+          .all<AnalyticsVisitEvent>(),
+        env.DB.prepare(
+          'SELECT id, display_name AS label, is_active AS isActive FROM staff WHERE organization_id = ?1 AND store_id = ?2 ORDER BY sort_order ASC, id ASC',
+        )
+          .bind(store.organizationId, store.id)
+          .all<{ id: string; label: string; isActive: string }>(),
+      ])
+      const reservationIds = [...new Set(rawReservations.results.map((row) => row.id))]
+      const reservationIdsJson = JSON.stringify(reservationIds)
+      const currentDoneReservationIds = rawReservations.results
+        .filter(
+          (row) => row.status === 'done' && row.startsAt >= windowStart && row.startsAt < upper,
+        )
+        .map((row) => row.id)
+      const currentDoneReservationIdsJson = JSON.stringify(currentDoneReservationIds)
+      const [purposeRows, assignmentRows, priorVisitRows] = await Promise.all([
+        reservationIds.length === 0
+          ? Promise.resolve({
+              results: [] as { reservationId: string; purposeId: string; label: string }[],
+            })
+          : env.DB.prepare(
+              "SELECT rp.reservation_id AS reservationId, rp.purpose_id AS purposeId, COALESCE(p.name_internal, 'ご来店') AS label " +
+                'FROM reservation_purposes rp LEFT JOIN visit_purposes p ON p.organization_id = rp.organization_id AND p.id = rp.purpose_id ' +
+                'WHERE rp.organization_id = ?1 AND rp.reservation_id IN (SELECT value FROM json_each(?2))',
+            )
+              .bind(store.organizationId, reservationIdsJson)
+              .all<{ reservationId: string; purposeId: string; label: string }>(),
+        reservationIds.length === 0
+          ? Promise.resolve({ results: [] as { reservationId: string; staffId: string | null }[] })
+          : env.DB.prepare(
+              "SELECT reservation_id AS reservationId, target_id AS staffId FROM reservation_assignments WHERE organization_id = ?1 AND kind = 'staff' AND reservation_id IN (SELECT value FROM json_each(?2))",
+            )
+              .bind(store.organizationId, reservationIdsJson)
+              .all<{ reservationId: string; staffId: string | null }>(),
+        currentDoneReservationIds.length === 0
+          ? Promise.resolve({
+              results: [] as { reservationId: string; visitCountBefore: number }[],
+            })
+          : env.DB.prepare(
+              "SELECT target.id AS reservationId, COUNT(prior.id) AS visitCountBefore FROM reservations AS target LEFT JOIN reservations AS prior ON prior.organization_id = target.organization_id AND prior.customer_id = target.customer_id AND prior.status = 'done' AND prior.starts_at < target.starts_at WHERE target.organization_id = ?1 AND target.id IN (SELECT value FROM json_each(?2)) GROUP BY target.id",
+            )
+              .bind(store.organizationId, currentDoneReservationIdsJson)
+              .all<{ reservationId: string; visitCountBefore: number }>(),
+      ])
+      const purposes = new Map<string, string[]>()
+      const purposeLabels = new Map<string, string>()
+      for (const row of purposeRows.results)
+        purposes.set(row.reservationId, [...(purposes.get(row.reservationId) ?? []), row.purposeId])
+      for (const row of purposeRows.results) purposeLabels.set(row.purposeId, row.label)
+      const staffByReservation = new Map<string, string | null>()
+      for (const row of assignmentRows.results)
+        if (!staffByReservation.has(row.reservationId))
+          staffByReservation.set(row.reservationId, row.staffId)
+      const visitCountsBefore = new Map(
+        priorVisitRows.results.map((row) => [row.reservationId, row.visitCountBefore]),
+      )
+      const reservations: AnalyticsReservation[] = rawReservations.results.map((row) => ({
+        ...row,
+        staffId: staffByReservation.get(row.id) ?? null,
+        purposeIds: purposes.get(row.id) ?? [],
+        purposeLabels: Object.fromEntries(purposeLabels),
+        visitCountBefore: row.status === 'done' ? (visitCountsBefore.get(row.id) ?? 0) : null,
+      }))
+      const rows = analyticsDates(storeFrom, storeTo).flatMap((date) => {
+        const result = rollupAnalyticsDay({
+          organizationId: store.organizationId,
+          storeId: store.id,
+          date,
+          now: input.now,
+          completedThrough: input.completedThrough,
+          isClosed: isAnalyticsClosed(date, businessHours.results, exceptions.results),
+          reservations,
+          visitEvents: rawEvents.results,
+          staff: staffRows.results.map((staff) => ({
+            id: staff.id,
+            label: staff.label,
+            isActive: staff.isActive === '1',
+          })),
+        })
+        dropped += result.dropped.cancellationReservationIds.length
+        return result.rows
+      })
+      const nowIso = input.now.toISOString()
+      const json = JSON.stringify(
+        rows.map((row) => ({
+          ...row,
+          id: crypto.randomUUID(),
+          createdAt: nowIso,
+          updatedAt: nowIso,
+        })),
+      )
+      const writes = [
+        env.DB.prepare(
+          'DELETE FROM analytics_daily WHERE organization_id = ?1 AND store_id = ?2 AND date >= ?3 AND date <= ?4',
+        ).bind(store.organizationId, store.id, storeFrom, storeTo),
+      ]
+      if (rows.length > 0) {
+        writes.splice(
+          1,
+          0,
+          env.DB.prepare(
+            'INSERT INTO analytics_daily (id, organization_id, store_id, date, metric, dimension, dimension_key, dimension_label, value, created_at, updated_at) ' +
+              "SELECT json_extract(value, '$.id'), json_extract(value, '$.organizationId'), json_extract(value, '$.storeId'), json_extract(value, '$.date'), json_extract(value, '$.metric'), json_extract(value, '$.dimension'), json_extract(value, '$.dimensionKey'), json_extract(value, '$.dimensionLabel'), json_extract(value, '$.value'), json_extract(value, '$.createdAt'), json_extract(value, '$.updatedAt') FROM json_each(?1) WHERE 1 " +
+              'ON CONFLICT(organization_id, store_id, date, metric, dimension, dimension_key) DO UPDATE SET dimension_label = excluded.dimension_label, value = excluded.value, updated_at = excluded.updated_at',
+          ).bind(json),
+        )
+      }
+      await env.DB.batch(writes)
+      upserted += rows.length
+      if (input.completedThrough !== undefined && storeTo < input.completedThrough)
+        retryCurrentPage = true
+    } catch (err) {
+      console.error('analytics rollup failed', { storeId: store.id }, err)
+      failedStores.push(store.id)
+      if (input.completedThrough !== undefined) retryCurrentPage = true
+    }
+  }
+  const nextStoreCursor = retryCurrentPage
+    ? (input.storeCursor ?? ANALYTICS_RETRY_FIRST_PAGE_CURSOR)
+    : pageNextStoreCursor
+  return {
+    processedStores: page.length,
+    failedStores,
+    nextStoreCursor,
+    from: input.from,
+    to: input.to,
+    upserted,
+    dropped,
   }
 }
 
@@ -3859,30 +3876,6 @@ const routes = app
           revision: row.revision,
         },
       })
-    // 配信が実際に効いたときだけ監査に残す。**端末セッションが 1 本も無い経路**なので
-    // 主体は `system`（誰の名前でもない）。組織そのものへの操作なので store_id は NULL。
-    if (existing !== undefined) {
-      const changed = changedFields(
-        {
-          name: existing.name,
-          plan: existing.plan ?? 'free',
-          isDisabled: existing.isDisabled === '1',
-        },
-        { name: row.name, plan: row.plan, isDisabled: row.isDisabled === '1' },
-      )
-      await auditInsert(c.env.DB, {
-        organizationId: incoming.id,
-        storeId: null,
-        actor: resolveActor(null),
-        action: 'organization.synced',
-        targetType: 'organizations',
-        targetId: incoming.id,
-        before: changed.before,
-        after: changed.after,
-        correlationId: crypto.randomUUID(),
-        occurredAt: new Date().toISOString(),
-      }).run()
-    }
     return c.json(OrganizationSync.parse(incoming), 200)
   })
 
@@ -3910,8 +3903,12 @@ const routes = app
       .insert(storeMemberships)
       .values(row)
       .onConflictDoUpdate({
-        target: storeMemberships.id,
-        set: { storeId: row.storeId, userId: row.userId, permissions: row.permissions },
+        target: [
+          storeMemberships.organizationId,
+          storeMemberships.userId,
+          storeMemberships.storeId,
+        ],
+        set: { id: row.id, permissions: row.permissions },
       })
     return c.json(membership, 200)
   })
@@ -3939,6 +3936,662 @@ const routes = app
           createdAt: r.createdAt,
         })),
       ),
+    )
+  })
+
+  /* --- 端末と業務セッション（P10） -------------------------------------- */
+
+  .get('/api/staff/terminals', zValidator('query', TerminalListQuery), async (c) => {
+    const { org } = c.get('auth')
+    const query = c.req.valid('query')
+    if (!(await findStore(drizzle(c.env.DB), org, query.storeId))) {
+      return c.json({ error: 'not_found' }, 404)
+    }
+    const terminalIdHeader = c.req.header('x-terminal-id')
+    const terminalSessionHeader = c.req.header('x-terminal-session')
+    if (terminalIdHeader !== undefined || terminalSessionHeader !== undefined) {
+      const session = await authenticatedTerminalSession(c, { storeId: query.storeId })
+      await c.env.DB.prepare(
+        'UPDATE terminals SET last_seen_at = ? WHERE organization_id = ? AND store_id = ? AND id = ?',
+      )
+        .bind(
+          new Date(c.env.TEST_NOW ?? Date.now()).toISOString(),
+          org,
+          query.storeId,
+          session.terminalId,
+        )
+        .run()
+    }
+    const clauses = ['organization_id = ?', 'store_id = ?']
+    const params: unknown[] = [org, query.storeId]
+    if (!query.includeInactive) clauses.push("is_active = '1'")
+    if (query.kind !== undefined) {
+      clauses.push('kind = ?')
+      params.push(query.kind)
+    }
+    const rows = await c.env.DB.prepare(
+      'SELECT id, store_id AS storeId, name, kind, place_note AS placeNote, ' +
+        'device_label AS deviceLabel, pin_hash AS pinHash, auto_lock_seconds AS autoLockSeconds, ' +
+        'last_seen_at AS lastSeenAt, is_active AS isActive, version, created_at AS createdAt ' +
+        `FROM terminals WHERE ${clauses.join(' AND ')} ORDER BY created_at ASC`,
+    )
+      .bind(...params)
+      .all<{
+        id: string
+        storeId: string
+        name: string
+        kind: 'shared' | 'personal'
+        placeNote: string | null
+        deviceLabel: string | null
+        pinHash: string | null
+        autoLockSeconds: number
+        lastSeenAt: string | null
+        isActive: string
+        version: number
+        createdAt: string
+      }>()
+    const now = new Date(c.env.TEST_NOW ?? Date.now())
+    return c.json(
+      Terminal.array().parse(
+        rows.results.map((row) => ({
+          id: row.id,
+          storeId: row.storeId,
+          name: row.name,
+          kind: row.kind,
+          placeNote: row.placeNote ?? '',
+          deviceLabel: row.deviceLabel ?? '',
+          autoLockSeconds: row.autoLockSeconds,
+          isActive: row.isActive === '1',
+          hasPin: row.pinHash !== null,
+          lastSeenAt: row.lastSeenAt,
+          isOnline: isOnline(row.lastSeenAt, now),
+          version: row.version,
+          createdAt: row.createdAt,
+        })),
+      ),
+    )
+  })
+
+  .post(
+    '/api/staff/terminals/:terminalId/sessions',
+    zValidator('json', TerminalSessionStart),
+    async (c) => {
+      const { org } = c.get('auth')
+      const terminalId = c.req.param('terminalId')
+      const input = c.req.valid('json')
+      const terminal = await c.env.DB.prepare(
+        "SELECT id, store_id AS storeId, pin_hash AS pinHash, auto_lock_seconds AS autoLockSeconds FROM terminals WHERE organization_id = ? AND id = ? AND is_active = '1'",
+      )
+        .bind(org, terminalId)
+        .first<{ id: string; storeId: string; pinHash: string | null; autoLockSeconds: number }>()
+      if (terminal === null) return c.json({ error: 'not_found' }, 404)
+
+      const staffId = input.mode === 'personal' ? input.staffId : null
+      let storedHash = terminal.pinHash
+      if (staffId !== null) {
+        const member = await c.env.DB.prepare(
+          "SELECT pin_hash AS pinHash FROM staff WHERE organization_id = ? AND store_id = ? AND id = ? AND is_active = '1'",
+        )
+          .bind(org, terminal.storeId, staffId)
+          .first<{ pinHash: string | null }>()
+        if (member === null) return c.json({ error: 'not_found' }, 404)
+        storedHash = member.pinHash
+      }
+
+      const failureKey = pinFailureKey(org, terminalId, staffId)
+      const now = new Date(c.env.TEST_NOW ?? Date.now())
+      const nowIso = now.toISOString()
+      const rawFailure = await c.env.SHORT_LIVED.get(failureKey)
+      const failure = parsePinFailure(rawFailure)
+      // Workers KV のTTL下限は60秒。値の時刻で30秒境界を守り、物理削除は60秒に任せる。
+      const previous =
+        failure !== null && now.getTime() - Date.parse(failure.failedAt) <= 30_000
+          ? failure.attempts
+          : 0
+      if (
+        failure !== null &&
+        failure.attempts >= 3 &&
+        isPinLocked(new Date(failure.failedAt), now)
+      ) {
+        const elapsedSeconds = Math.floor((now.getTime() - Date.parse(failure.failedAt)) / 1000)
+        return c.json(
+          {
+            error: 'pin_locked',
+            retryAfterSeconds: Math.max(1, 30 - elapsedSeconds),
+            remainingAttempts: 0,
+          },
+          429,
+        )
+      }
+
+      const stretched = await stretchPin(
+        input.pin,
+        org,
+        staffId ?? terminalId,
+        c.env.TEST_NOW === undefined ? undefined : 1,
+      )
+      const verified =
+        storedHash !== null && (await verifyStretched(stretched, c.env.AUTH_PEPPER, storedHash))
+      if (!verified) {
+        const state = nextFailureState(previous)
+        await c.env.SHORT_LIVED.put(
+          failureKey,
+          JSON.stringify({ attempts: state.attempts, failedAt: nowIso }),
+          { expirationTtl: 60 },
+        )
+        await c.env.DB.prepare(
+          'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
+            "VALUES (?,?,?,'terminal',?,?, 'terminal.pin.failed','terminals',?,NULL,?,?,?)",
+        )
+          .bind(
+            crypto.randomUUID(),
+            org,
+            terminal.storeId,
+            terminalId,
+            terminalId,
+            terminalId,
+            JSON.stringify({ staffId, remainingAttempts: state.remainingAttempts }),
+            crypto.randomUUID(),
+            nowIso,
+          )
+          .run()
+        if (state.locked) {
+          return c.json({ error: 'pin_locked', retryAfterSeconds: 30, remainingAttempts: 0 }, 429)
+        }
+        return c.json({ error: 'pin_invalid', remainingAttempts: state.remainingAttempts }, 401)
+      }
+
+      await c.env.SHORT_LIVED.delete(failureKey)
+      const sessionId = crypto.randomUUID()
+      const expiresAt =
+        input.mode === 'shared'
+          ? sharedExpiresAtFrom(now)
+          : expiresAtFrom(now, terminal.autoLockSeconds)
+      const correlationId = crypto.randomUUID()
+      const credential = await sessionCredential()
+      // stale read を置かず、既存行の終了監査→全 revoke→新規行→開始監査を1 batchにする。
+      const result = await c.env.DB.batch([
+        c.env.DB.prepare(
+          'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
+            "SELECT id, organization_id, store_id, ?, ?, terminal_id, 'terminal.session.ended', 'terminals', terminal_id, NULL, json_object('reason','taken_over','sessionId',id), ?, ? FROM terminal_sessions " +
+            'WHERE organization_id = ? AND terminal_id = ? AND revoked_at IS NULL',
+        ).bind(
+          input.mode === 'personal' ? 'staff' : 'terminal',
+          staffId ?? terminalId,
+          correlationId,
+          nowIso,
+          org,
+          terminalId,
+        ),
+        c.env.DB.prepare(
+          'UPDATE terminal_sessions SET revoked_at = ? WHERE organization_id = ? AND terminal_id = ? AND revoked_at IS NULL',
+        ).bind(nowIso, org, terminalId),
+        c.env.DB.prepare(
+          'INSERT INTO terminal_sessions (id, organization_id, store_id, terminal_id, staff_id, mode, credential_hash, started_at, expires_at, revoked_at, created_at) ' +
+            "SELECT ?,?,?,?,?,?,?,?,?,NULL,? WHERE EXISTS (SELECT 1 FROM terminals WHERE organization_id = ? AND id = ? AND is_active = '1')",
+        ).bind(
+          sessionId,
+          org,
+          terminal.storeId,
+          terminalId,
+          staffId,
+          input.mode,
+          credential.hash,
+          nowIso,
+          expiresAt,
+          nowIso,
+          org,
+          terminalId,
+        ),
+        c.env.DB.prepare(
+          'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
+            "SELECT ?,?,?,?,?,?,?,'terminals',?,NULL,?,?,? WHERE EXISTS (SELECT 1 FROM terminal_sessions WHERE organization_id = ? AND id = ? AND credential_hash = ? AND revoked_at IS NULL)",
+        ).bind(
+          crypto.randomUUID(),
+          org,
+          terminal.storeId,
+          input.mode === 'personal' ? 'staff' : 'terminal',
+          staffId ?? terminalId,
+          terminalId,
+          'terminal.session.started',
+          terminalId,
+          JSON.stringify({ mode: input.mode, sessionId }),
+          correlationId,
+          nowIso,
+          org,
+          sessionId,
+          credential.hash,
+        ),
+        c.env.DB.prepare(
+          "UPDATE terminals SET last_seen_at = ? WHERE organization_id = ? AND id = ? AND is_active = '1'",
+        ).bind(nowIso, org, terminalId),
+      ])
+      if ((result[2]?.meta.changes ?? 0) === 0) return c.json({ error: 'not_found' }, 404)
+      return c.json(
+        TerminalSession.parse({
+          id: sessionId,
+          terminalId,
+          staffId,
+          mode: input.mode,
+          startedAt: nowIso,
+          expiresAt,
+          sessionToken: credential.token,
+        }),
+      )
+    },
+  )
+
+  .post(
+    '/api/staff/terminals',
+    requireStorePermission('terminal.manage', { storeIdFrom: 'query' }),
+    requirePersonalMode(),
+    zValidator('json', TerminalInput),
+    async (c) => {
+      const { org } = c.get('auth')
+      const storeId = c.req.query('storeId')
+      if (!storeId || !(await findStore(drizzle(c.env.DB), org, storeId))) {
+        return c.json({ error: 'not_found' }, 404)
+      }
+      const input = c.req.valid('json')
+      if (input.pin !== undefined && isWeakPin(input.pin)) {
+        return c.json({ error: 'weak_pin' }, 400)
+      }
+      const id = crypto.randomUUID()
+      const nowIso = new Date(c.env.TEST_NOW ?? Date.now()).toISOString()
+      const pinHash =
+        input.pin === undefined
+          ? null
+          : await hashStretched(
+              await stretchPin(input.pin, org, id, c.env.TEST_NOW === undefined ? undefined : 1),
+              c.env.AUTH_PEPPER,
+            )
+      const correlationId = crypto.randomUUID()
+      const actor = await operationActor(c, storeId, c.get('auth').sub)
+      await c.env.DB.batch([
+        c.env.DB.prepare(
+          'INSERT INTO terminals (id, organization_id, store_id, name, kind, place_note, device_label, pin_hash, auto_lock_seconds, last_seen_at, is_active, version, created_at) VALUES (?,?,?,?,?,?,?,?,?,NULL,?,1,?)',
+        ).bind(
+          id,
+          org,
+          storeId,
+          input.name,
+          input.kind,
+          input.placeNote,
+          input.deviceLabel,
+          pinHash,
+          input.autoLockSeconds,
+          flag(input.isActive),
+          nowIso,
+        ),
+        c.env.DB.prepare(
+          'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
+            "VALUES (?,?,?,?,?,?,'terminal.created','terminals',?,NULL,?,?,?)",
+        ).bind(
+          crypto.randomUUID(),
+          org,
+          storeId,
+          actor.actorType,
+          actor.actorId,
+          actor.terminalId,
+          id,
+          JSON.stringify({ name: input.name, kind: input.kind, hasPin: pinHash !== null }),
+          correlationId,
+          nowIso,
+        ),
+      ])
+      return c.json(
+        Terminal.parse({
+          id,
+          storeId,
+          name: input.name,
+          kind: input.kind,
+          placeNote: input.placeNote,
+          deviceLabel: input.deviceLabel,
+          autoLockSeconds: input.autoLockSeconds,
+          isActive: input.isActive,
+          hasPin: pinHash !== null,
+          lastSeenAt: null,
+          isOnline: false,
+          version: 1,
+          createdAt: nowIso,
+        }),
+      )
+    },
+  )
+
+  .patch(
+    '/api/staff/terminals/:terminalId',
+    requireStorePermission('terminal.manage'),
+    requirePersonalMode(),
+    zValidator('json', TerminalPatch),
+    async (c) => {
+      const { org, sub } = c.get('auth')
+      const terminalId = c.req.param('terminalId')
+      const input = c.req.valid('json')
+      const current = await c.env.DB.prepare(
+        'SELECT id, store_id AS storeId, name, kind, place_note AS placeNote, device_label AS deviceLabel, pin_hash AS pinHash, auto_lock_seconds AS autoLockSeconds, last_seen_at AS lastSeenAt, is_active AS isActive, version, created_at AS createdAt FROM terminals WHERE organization_id = ? AND id = ?',
+      )
+        .bind(org, terminalId)
+        .first<{
+          id: string
+          storeId: string
+          name: string
+          kind: 'shared' | 'personal'
+          placeNote: string | null
+          deviceLabel: string | null
+          pinHash: string | null
+          autoLockSeconds: number
+          lastSeenAt: string | null
+          isActive: string
+          version: number
+          createdAt: string
+        }>()
+      if (current === null) return c.json({ error: 'not_found' }, 404)
+      if (
+        !(await permittedStores(drizzle(c.env.DB), org, sub, 'terminal.manage')).includes(
+          current.storeId,
+        )
+      ) {
+        return c.json({ error: 'forbidden' }, 403)
+      }
+      if (input.pin !== undefined && isWeakPin(input.pin)) {
+        return c.json({ error: 'weak_pin' }, 400)
+      }
+      const nextPinHash =
+        input.pin === undefined
+          ? current.pinHash
+          : await hashStretched(
+              await stretchPin(
+                input.pin,
+                org,
+                terminalId,
+                c.env.TEST_NOW === undefined ? undefined : 1,
+              ),
+              c.env.AUTH_PEPPER,
+            )
+      const next = {
+        name: input.name ?? current.name,
+        kind: input.kind ?? current.kind,
+        placeNote: input.placeNote ?? current.placeNote ?? '',
+        deviceLabel: input.deviceLabel ?? current.deviceLabel ?? '',
+        autoLockSeconds: input.autoLockSeconds ?? current.autoLockSeconds,
+        isActive: input.isActive ?? current.isActive === '1',
+        hasPin: nextPinHash !== null,
+      }
+      const nowIso = new Date(c.env.TEST_NOW ?? Date.now()).toISOString()
+      const guard =
+        'EXISTS (SELECT 1 FROM terminals WHERE organization_id = ? AND id = ? AND version = ?)'
+      const actor = await operationActor(c, current.storeId, sub)
+      const update = c.env.DB.prepare(
+        'UPDATE terminals SET name = ?, kind = ?, place_note = ?, device_label = ?, pin_hash = ?, auto_lock_seconds = ?, is_active = ?, version = version + 1 WHERE organization_id = ? AND id = ? AND version = ?',
+      ).bind(
+        next.name,
+        next.kind,
+        next.placeNote,
+        next.deviceLabel,
+        nextPinHash,
+        next.autoLockSeconds,
+        flag(next.isActive),
+        org,
+        terminalId,
+        input.version,
+      )
+      const writes: Statement[] = [
+        c.env.DB.prepare(
+          'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
+            `SELECT ?, ?, ?, ?, ?, ?, 'terminal.updated', 'terminals', ?, ?, ?, ?, ? WHERE ${guard}`,
+        ).bind(
+          crypto.randomUUID(),
+          org,
+          current.storeId,
+          actor.actorType,
+          actor.actorId,
+          actor.terminalId,
+          terminalId,
+          JSON.stringify({
+            name: current.name,
+            kind: current.kind,
+            placeNote: current.placeNote ?? '',
+            deviceLabel: current.deviceLabel ?? '',
+            autoLockSeconds: current.autoLockSeconds,
+            isActive: current.isActive === '1',
+            hasPin: current.pinHash !== null,
+          }),
+          JSON.stringify(next),
+          crypto.randomUUID(),
+          nowIso,
+          org,
+          terminalId,
+          input.version,
+        ),
+      ]
+      if (!next.isActive) {
+        writes.push(
+          c.env.DB.prepare(
+            'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
+              "SELECT s.id, s.organization_id, s.store_id, ?, ?, ?, 'terminal.session.ended', 'terminals', s.terminal_id, NULL, json_object('reason','terminal_inactivated','sessionId',s.id), ?, ? FROM terminal_sessions s " +
+              'WHERE s.organization_id = ? AND s.terminal_id = ? AND s.revoked_at IS NULL ' +
+              `AND ${guard}`,
+          ).bind(
+            actor.actorType,
+            actor.actorId,
+            actor.terminalId,
+            crypto.randomUUID(),
+            nowIso,
+            org,
+            terminalId,
+            org,
+            terminalId,
+            input.version,
+          ),
+          c.env.DB.prepare(
+            'UPDATE terminal_sessions SET revoked_at = ? WHERE organization_id = ? AND terminal_id = ? AND revoked_at IS NULL ' +
+              `AND ${guard}`,
+          ).bind(nowIso, org, terminalId, org, terminalId, input.version),
+        )
+      }
+      writes.push(update)
+      const result = await c.env.DB.batch(writes)
+      if ((result.at(-1)?.meta.changes ?? 0) === 0) {
+        return c.json({ error: 'version_conflict', current: current.version }, 409)
+      }
+      return c.json(
+        Terminal.parse({
+          id: terminalId,
+          storeId: current.storeId,
+          ...next,
+          lastSeenAt: current.lastSeenAt,
+          isOnline: isOnline(current.lastSeenAt, new Date(c.env.TEST_NOW ?? Date.now())),
+          version: input.version + 1,
+          createdAt: current.createdAt,
+        }),
+      )
+    },
+  )
+
+  .delete('/api/staff/terminals/:terminalId/sessions/:sessionId', async (c) => {
+    const { org } = c.get('auth')
+    const nowIso = new Date(c.env.TEST_NOW ?? Date.now()).toISOString()
+    const terminalId = c.req.param('terminalId')
+    const sessionId = c.req.param('sessionId')
+    const session = await authenticatedTerminalSession(c, { terminalId, sessionId })
+    const actorType =
+      session.authorization === 'personal' && session.staffId !== null ? 'staff' : 'terminal'
+    const actorId = actorType === 'staff' ? session.staffId : terminalId
+    const guard =
+      'organization_id = ? AND terminal_id = ? AND id = ? AND credential_hash = ? AND revoked_at IS NULL'
+    const result = await c.env.DB.batch([
+      c.env.DB.prepare(
+        'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
+          `SELECT ?,?,?,?,?,?, 'terminal.session.ended','terminals',?,NULL,?,?,? WHERE EXISTS (SELECT 1 FROM terminal_sessions WHERE ${guard})`,
+      ).bind(
+        crypto.randomUUID(),
+        org,
+        session.storeId,
+        actorType,
+        actorId,
+        terminalId,
+        terminalId,
+        JSON.stringify({ sessionId, reason: 'ended' }),
+        crypto.randomUUID(),
+        nowIso,
+        org,
+        terminalId,
+        sessionId,
+        session.credentialHash,
+      ),
+      c.env.DB.prepare(`UPDATE terminal_sessions SET revoked_at = ? WHERE ${guard}`).bind(
+        nowIso,
+        org,
+        terminalId,
+        sessionId,
+        session.credentialHash,
+      ),
+    ])
+    if ((result[1]?.meta.changes ?? 0) === 0) return terminalSessionInvalid(c)
+    return c.json({ id: sessionId, deleted: true })
+  })
+
+  .post('/api/staff/terminals/:terminalId/elevate', zValidator('json', ReauthInput), async (c) => {
+    const { org } = c.get('auth')
+    const terminalId = c.req.param('terminalId')
+    const input = c.req.valid('json')
+    const now = new Date(c.env.TEST_NOW ?? Date.now())
+    const nowIso = now.toISOString()
+    const authenticated = await authenticatedTerminalSession(c, { terminalId })
+    if (authenticated.mode !== 'shared' || authenticated.authorization !== 'shared') {
+      return c.json({ error: 'personal_mode_required' }, 403)
+    }
+    const terminal = await c.env.DB.prepare(
+      'SELECT auto_lock_seconds AS autoLockSeconds FROM terminals WHERE organization_id = ? AND store_id = ? AND id = ?',
+    )
+      .bind(org, authenticated.storeId, terminalId)
+      .first<{ autoLockSeconds: number }>()
+    if (terminal === null) return terminalSessionInvalid(c)
+    const current = { ...authenticated, autoLockSeconds: terminal.autoLockSeconds }
+    const member = await c.env.DB.prepare(
+      "SELECT pin_hash AS pinHash FROM staff WHERE organization_id = ? AND store_id = ? AND id = ? AND is_active = '1'",
+    )
+      .bind(org, current.storeId, input.staffId)
+      .first<{ pinHash: string | null }>()
+    if (member === null) return c.json({ error: 'not_found' }, 404)
+    const failureKey = pinFailureKey(org, terminalId, input.staffId)
+    const failure = parsePinFailure(await c.env.SHORT_LIVED.get(failureKey))
+    const previous =
+      failure !== null && now.getTime() - Date.parse(failure.failedAt) <= 30_000
+        ? failure.attempts
+        : 0
+    if (failure !== null && previous >= 3 && isPinLocked(new Date(failure.failedAt), now)) {
+      const elapsedSeconds = Math.floor((now.getTime() - Date.parse(failure.failedAt)) / 1000)
+      return c.json(
+        {
+          error: 'pin_locked',
+          retryAfterSeconds: Math.max(1, 30 - elapsedSeconds),
+          remainingAttempts: 0,
+        },
+        429,
+      )
+    }
+    const stretched = await stretchPin(
+      input.pin,
+      org,
+      input.staffId,
+      c.env.TEST_NOW === undefined ? undefined : 1,
+    )
+    if (
+      member.pinHash === null ||
+      !(await verifyStretched(stretched, c.env.AUTH_PEPPER, member.pinHash))
+    ) {
+      const state = nextFailureState(previous)
+      await c.env.SHORT_LIVED.put(
+        failureKey,
+        JSON.stringify({ attempts: state.attempts, failedAt: nowIso }),
+        { expirationTtl: 60 },
+      )
+      await c.env.DB.prepare(
+        "INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) VALUES (?,?,?,'terminal',?,?,'terminal.pin.failed','terminals',?,NULL,?,?,?)",
+      )
+        .bind(
+          crypto.randomUUID(),
+          org,
+          current.storeId,
+          terminalId,
+          terminalId,
+          terminalId,
+          JSON.stringify({ staffId: input.staffId, remainingAttempts: state.remainingAttempts }),
+          crypto.randomUUID(),
+          nowIso,
+        )
+        .run()
+      return state.locked
+        ? c.json({ error: 'pin_locked', retryAfterSeconds: 30, remainingAttempts: 0 }, 429)
+        : c.json({ error: 'pin_invalid', remainingAttempts: state.remainingAttempts }, 401)
+    }
+    await c.env.SHORT_LIVED.delete(failureKey)
+    const sessionId = crypto.randomUUID()
+    const expiresAt = expiresAtFrom(now, current.autoLockSeconds)
+    const credential = await sessionCredential()
+    const guard =
+      "organization_id = ? AND terminal_id = ? AND id = ? AND credential_hash = ? AND mode = 'shared' AND revoked_at IS NULL AND expires_at > ?"
+    const result = await c.env.DB.batch([
+      c.env.DB.prepare(
+        'INSERT INTO terminal_sessions (id, organization_id, store_id, terminal_id, staff_id, mode, credential_hash, started_at, expires_at, revoked_at, created_at) ' +
+          `SELECT ?,?,?,?,?,'personal',?,?,?,NULL,? WHERE EXISTS (SELECT 1 FROM terminal_sessions WHERE ${guard})`,
+      ).bind(
+        sessionId,
+        org,
+        current.storeId,
+        terminalId,
+        input.staffId,
+        credential.hash,
+        nowIso,
+        expiresAt,
+        nowIso,
+        org,
+        terminalId,
+        current.id,
+        current.credentialHash,
+        nowIso,
+      ),
+      c.env.DB.prepare(
+        'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
+          `SELECT ?,?,?, 'staff',?,?, 'terminal.mode.elevated','terminals',?,NULL,?,?,? WHERE EXISTS (SELECT 1 FROM terminal_sessions WHERE ${guard})`,
+      ).bind(
+        crypto.randomUUID(),
+        org,
+        current.storeId,
+        input.staffId,
+        terminalId,
+        terminalId,
+        JSON.stringify({ reason: input.reason }),
+        crypto.randomUUID(),
+        nowIso,
+        org,
+        terminalId,
+        current.id,
+        current.credentialHash,
+        nowIso,
+      ),
+      c.env.DB.prepare(`UPDATE terminal_sessions SET revoked_at = ? WHERE ${guard}`).bind(
+        nowIso,
+        org,
+        terminalId,
+        current.id,
+        current.credentialHash,
+        nowIso,
+      ),
+    ])
+    if ((result[2]?.meta.changes ?? 0) === 0) return terminalSessionInvalid(c)
+    return c.json(
+      TerminalSession.parse({
+        id: sessionId,
+        terminalId,
+        staffId: input.staffId,
+        mode: 'personal',
+        startedAt: nowIso,
+        expiresAt,
+        sessionToken: credential.token,
+      }),
     )
   })
 
@@ -4376,6 +5029,54 @@ const routes = app
       const member = await oneStaffMember(db, org, storeId, staffId)
       if (!member) return c.json({ error: 'not_found' }, 404)
       return c.json(StaffMember.parse(member))
+    },
+  )
+
+  .put(
+    '/api/staff/stores/:storeId/staff/:staffId/pin',
+    requireStorePermission('settings.manage'),
+    requirePersonalMode('スタッフの暗証番号の再設定'),
+    zValidator('json', StaffPinInput),
+    async (c) => {
+      const { org } = c.get('auth')
+      const storeId = c.req.param('storeId')
+      const staffId = c.req.param('staffId')
+      const input = c.req.valid('json')
+      const member = await c.env.DB.prepare(
+        'SELECT id FROM staff WHERE organization_id = ? AND store_id = ? AND id = ?',
+      )
+        .bind(org, storeId, staffId)
+        .first()
+      if (member === null) return c.json({ error: 'not_found' }, 404)
+      if (isWeakPin(input.pin)) return c.json({ error: 'weak_pin' }, 400)
+
+      const nowIso = new Date(c.env.TEST_NOW ?? Date.now()).toISOString()
+      const pinHash = await hashStretched(
+        await stretchPin(input.pin, org, staffId, c.env.TEST_NOW === undefined ? undefined : 1),
+        c.env.AUTH_PEPPER,
+      )
+      const actor = await operationActor(c, storeId, c.get('auth').sub)
+      await c.env.DB.batch([
+        c.env.DB.prepare(
+          'UPDATE staff SET pin_hash = ?, pin_updated_at = ?, updated_at = ? WHERE organization_id = ? AND store_id = ? AND id = ?',
+        ).bind(pinHash, nowIso, nowIso, org, storeId, staffId),
+        c.env.DB.prepare(
+          "INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) VALUES (?,?,?,?,?,?,?,'staff',?,NULL,?,?,?)",
+        ).bind(
+          crypto.randomUUID(),
+          org,
+          storeId,
+          actor.actorType,
+          actor.actorId,
+          actor.terminalId,
+          'staff.pin.updated',
+          staffId,
+          JSON.stringify({ pinUpdatedAt: nowIso }),
+          crypto.randomUUID(),
+          nowIso,
+        ),
+      ])
+      return c.json(PinSetResult.parse({ staffId, updatedAt: nowIso }))
     },
   )
 
@@ -5448,6 +6149,7 @@ const routes = app
         Math.max(now.getTime(), Date.parse(reservation.updatedAt) + 1),
       ).toISOString()
       const actorId = await actorStaffId(db, org, reservation.storeId, sub)
+      const actor = await operationActor(c, reservation.storeId, actorId)
       const statements = buildChangeBatch({
         db: c.env.DB,
         organizationId: org,
@@ -5488,9 +6190,9 @@ const routes = app
           { kind: 'staff', targetId: staffMember?.id ?? null },
           ...units.map((unit) => ({ kind: 'equipment' as const, targetId: unit.id })),
         ],
-        actorId,
-        // 主体は端末が名乗った業務セッションだけが決める（P10）。
-        auditActor: await writerActor(c, org, actorId, now),
+        actorId: actor.actorId,
+        actorType: actor.actorType,
+        terminalId: actor.terminalId,
         correlationId: crypto.randomUUID(),
         // 監査は追記専用。平文のお名前・お電話番号を入れない（`07-nfr.md` §6.6）。
         audit: {
@@ -5606,6 +6308,7 @@ const routes = app
       const now = new Date()
       const nowIso = now.toISOString()
       const actorId = await actorStaffId(db, org, found.storeId, sub)
+      const actor = await operationActor(c, found.storeId, actorId)
       const walkin = await c.env.DB.prepare(
         'SELECT id FROM walk_ins WHERE organization_id = ? AND reservation_id = ?',
       )
@@ -5636,8 +6339,9 @@ const routes = app
           version: input.version,
           reason: input.reason,
           now,
-          actorId,
-          auditActor: await writerActor(c, org, actorId, now),
+          actorId: actor.actorId,
+          actorType: actor.actorType,
+          terminalId: actor.terminalId,
           correlationId: crypto.randomUUID(),
           audit: { before: { status: found.status } },
         }),
@@ -5680,7 +6384,6 @@ const routes = app
       'SELECT a.action, a.before_json AS beforeJson, a.after_json AS afterJson, ' +
         'a.occurred_at AS occurredAt, COALESCE(s.display_name, t.name) AS actorName FROM audit_events a ' +
         'LEFT JOIN staff s ON s.organization_id = a.organization_id AND s.id = a.actor_id ' +
-        // 共有端末の操作は端末そのものが主体なので、名前は `terminals` から引く（P10）。
         'LEFT JOIN terminals t ON t.organization_id = a.organization_id AND t.id = a.actor_id ' +
         'WHERE a.organization_id = ? AND a.target_id = ? ORDER BY a.occurred_at, a.id',
     )
@@ -5915,6 +6618,7 @@ const routes = app
     const reservationId = crypto.randomUUID()
     const correlationId = crypto.randomUUID()
     const actorId = await actorStaffId(db, org, input.storeId, sub)
+    const actor = await operationActor(c, input.storeId, actorId)
     // 予期しない失敗（D1 の一時障害など）でも `in_progress` を残さない。残すと同じ
     // `Idempotency-Key` の再送が 24 時間ずっと 409 `idempotency_conflict` になり、
     // 伺った内容を持ったままの端末が確定できなくなる（`04-api.md` §6.2 の④）。
@@ -5956,7 +6660,7 @@ const routes = app
         version: FIRST_VERSION,
         createdAt: now.toISOString(),
         updatedAt: now.toISOString(),
-        createdBy: actorId,
+        createdBy: actor.actorType === 'staff' ? actor.actorId : null,
         cancelledAt: null,
         cancelReason: null,
       })
@@ -5983,9 +6687,9 @@ const routes = app
           slotRules,
           noteCustomer: input.noteCustomer,
           noteInternal: input.noteInternal,
-          actorId,
-          // 主体は端末が名乗った業務セッションだけが決める（P10 `013-terminals-and-audit`）。
-          auditActor: await writerActor(c, org, actorId, now),
+          actorId: actor.actorId,
+          actorType: actor.actorType,
+          terminalId: actor.terminalId,
           correlationId,
           receptionSessionId,
           idempotency: idempotencyKey === null ? null : { key: idempotencyKey, response: detail },
@@ -6059,18 +6763,27 @@ const routes = app
     const startedAt = new Date().toISOString()
     const id = crypto.randomUUID()
     const actorId = await actorStaffId(db, org, storeId, sub)
+    const actor = await operationActor(c, storeId, actorId)
     await c.env.DB.prepare(
-      'INSERT INTO reception_sessions (id, organization_id, store_id, reservation_id, terminal_id, actor_id, started_at, ended_at, outcome, draft_json, created_at) VALUES (?,?,?,NULL,NULL,?,?,NULL,NULL,NULL,?)',
+      'INSERT INTO reception_sessions (id, organization_id, store_id, reservation_id, terminal_id, actor_id, started_at, ended_at, outcome, draft_json, created_at) VALUES (?,?,?,NULL,?,?,?,NULL,NULL,NULL,?)',
     )
-      .bind(id, org, storeId, actorId, startedAt, startedAt)
+      .bind(
+        id,
+        org,
+        storeId,
+        actor.terminalId,
+        actor.actorType === 'staff' ? actor.actorId : null,
+        startedAt,
+        startedAt,
+      )
       .run()
     return c.json(
       ReceptionSession.parse({
         id,
         storeId,
         reservationId: null,
-        terminalId: null,
-        actorId,
+        terminalId: actor.terminalId,
+        actorId: actor.actorType === 'staff' ? actor.actorId : null,
         startedAt,
         endedAt: null,
         outcome: null,
@@ -6107,6 +6820,23 @@ const routes = app
       return c.json(ReceptionSession.parse({ ...toReceptionSession(row), draft }))
     },
   )
+
+  /**
+   * 受けかけの受付を読み直す（端末が下書きから続きを伺うため）。
+   *
+   * 隣の `GET /api/staff/reception-sessions/:sessionId` と分けているのは、
+   * **あちらが受付履歴の詳細（`ReceptionHistoryDetail`）を返すから**である。
+   * 受付の面が欲しいのは伺った内容そのもの（`draft`）で、履歴の詳細は下書きを持たない。
+   * 1 本にまとめようとして片方の形で返していたため、端末側の `safeParse` が必ず落ち、
+   * iPadOS の Safari がタブを捨てて戻るたびに工程 1 からやり直しになっていた。
+   */
+  .get('/api/staff/reception-sessions/:sessionId/draft', async (c) => {
+    const db = drizzle(c.env.DB)
+    const org = c.get('auth').org
+    const row = await findReceptionSession(db, org, c.req.param('sessionId'))
+    if (row === null) return c.json({ error: 'not_found' }, 404)
+    return c.json(ReceptionSession.parse(toReceptionSession(row)))
+  })
 
   /**
    * 受付をやめる（BOOK の「入力をやめる」）。**受ける結果は `discarded` だけ**である。
@@ -6965,8 +7695,7 @@ const routes = app
     const endsAt = new Date(Date.parse(startsAt) + durationMinutes * MS_PER_MINUTE).toISOString()
 
     const actorId = await actorStaffId(db, org, input.storeId, sub)
-    // 共有端末からのご来店受付は端末そのものが主体になる（P10）。
-    const walkinActor = await writerActor(c, org, actorId, new Date())
+    const actor = await operationActor(c, input.storeId, actorId)
     const correlationId = crypto.randomUUID()
 
     for (let attempt = 1; attempt <= WALKIN_TICKET_ATTEMPTS; attempt += 1) {
@@ -7018,7 +7747,9 @@ const routes = app
               },
               noteCustomer: '',
               noteInternal: '',
-              actorId,
+              actorId: actor.actorId,
+              actorType: actor.actorType,
+              terminalId: actor.terminalId,
               correlationId,
               receptionSessionId: null,
               idempotency:
@@ -7049,8 +7780,9 @@ const routes = app
             auditRow(c.env.DB, {
               organizationId: org,
               storeId: input.storeId,
-              actorId,
-              actor: walkinActor,
+              actorId: actor.actorId,
+              actorType: actor.actorType,
+              terminalId: actor.terminalId,
               action: 'walkin.created',
               targetType: 'walk_ins',
               targetId: walkinId,
@@ -7421,8 +8153,7 @@ const routes = app
     const eventId = crypto.randomUUID()
     const correlationId = crypto.randomUUID()
     const actorId = await actorStaffId(db, org, input.storeId, sub)
-    // 工程の進みも、共有端末からなら端末が主体（P10）。
-    const visitActor = await writerActor(c, org, actorId, new Date())
+    const actor = await operationActor(c, input.storeId, actorId)
     const eventApplied: Guard = {
       condition: 'EXISTS (SELECT 1 FROM visit_events WHERE organization_id = ? AND id = ?)',
       params: [org, eventId],
@@ -7499,8 +8230,9 @@ const routes = app
       auditRow(c.env.DB, {
         organizationId: org,
         storeId: input.storeId,
-        actorId,
-        actor: visitActor,
+        actorId: actor.actorId,
+        actorType: actor.actorType,
+        terminalId: actor.terminalId,
         action: 'visit.stage.changed',
         targetType: input.subjectType === 'walkin' ? 'walk_ins' : 'reservations',
         targetId: input.subjectId,
@@ -7676,7 +8408,8 @@ const routes = app
     const db = drizzle(c.env.DB)
     const { org, sub } = c.get('auth')
     const query = validQuery(c, ReceptionHistoryQuery, c.req.query())
-    const now = new Date()
+    // テストだけは固定された世界観の時刻を注入する。本番では未設定なので実時刻のまま。
+    const now = new Date(c.env.TEST_NOW ?? Date.now())
 
     /*
      * 読む窓は「絞り込みの期間」と「今月」の広いほう。緩和候補（`buildRelaxations`）が
@@ -7862,7 +8595,6 @@ const routes = app
             'SELECT a.action, a.before_json AS beforeJson, a.after_json AS afterJson, a.occurred_at AS occurredAt, ' +
               'COALESCE(s.display_name, t.name) AS actorName FROM audit_events a ' +
               'LEFT JOIN staff s ON s.organization_id = a.organization_id AND s.id = a.actor_id ' +
-              // 共有端末の操作は端末が主体なので、名前は `terminals` から引く（P10）。
               'LEFT JOIN terminals t ON t.organization_id = a.organization_id AND t.id = a.actor_id ' +
               `WHERE a.organization_id = ? AND a.target_id IN (${targets.map(() => '?').join(',')}) ` +
               'ORDER BY a.occurred_at, a.id',
@@ -7870,8 +8602,14 @@ const routes = app
             .bind(org, ...targets)
             .all<AuditChangeRecord>()
 
-    const receivedBy =
-      session?.actorId === undefined || session?.actorId === null
+    const receivedBy = session?.terminalId
+      ? ((
+          await db
+            .select({ name: terminals.name })
+            .from(terminals)
+            .where(and(eq(terminals.organizationId, org), eq(terminals.id, session.terminalId)))
+        )[0]?.name ?? null)
+      : session?.actorId === undefined || session?.actorId === null
         ? null
         : ((
             await db
@@ -7916,6 +8654,11 @@ const routes = app
     const { org, sub } = c.get('auth')
     const input = c.req.valid('json')
     if (!(await findStore(db, org, input.storeId))) return c.json({ error: 'not_found' }, 404)
+    const actor = await operationActor(
+      c,
+      input.storeId,
+      await actorStaffId(db, org, input.storeId, sub),
+    )
     // 受付は org **と店舗**で引く。店舗を落とすと、他店の受付に録音をぶら下げられる。
     const session = (
       await db
@@ -7939,7 +8682,6 @@ const routes = app
     if (existing !== null) return c.json(Recording.parse(toRecording(existing)))
 
     const id = crypto.randomUUID()
-    const actorId = await actorStaffId(db, org, input.storeId, sub)
     const correlationId = crypto.randomUUID()
     // 鍵は `id` から決まる。端末から受けないので、再送が保管庫に二重に置かれない。
     const r2Key = r2KeyFor({
@@ -7993,8 +8735,9 @@ const routes = app
           recordingAudit(c.env.DB, {
             organizationId: org,
             storeId: input.storeId,
-            actorType: 'staff',
-            actorId,
+            actorType: actor.actorType,
+            actorId: actor.actorId,
+            terminalId: actor.terminalId,
             action: 'recording.started',
             recordingId: id,
             after: { code, receptionSessionId: input.receptionSessionId },
@@ -8029,6 +8772,7 @@ const routes = app
     const recordingId = c.req.param('recordingId')
     const row = await findRecording(c.env.DB, org, recordingId)
     if (row === null) return c.json({ error: 'not_found' }, 404)
+    await validateTerminalPairWhenPresent(c, row.storeId)
     if (row.state === 'deleted') return c.json({ error: 'invalid_transition' }, 409)
 
     // `audio/mp4; codecs=...` で届くので、媒体の型だけを見る。
@@ -8132,6 +8876,12 @@ const routes = app
         correlationId: crypto.randomUUID(),
         occurredAt: nowIso,
       }),
+      ...resolveUploadFailedAlertStatements(c.env.DB, {
+        organizationId: org,
+        storeId: row.storeId,
+        recordingId,
+        resolvedAt: nowIso,
+      }),
     ])
 
     return c.json(
@@ -8163,6 +8913,7 @@ const routes = app
       const recordingId = c.req.param('recordingId')
       const row = await findRecording(c.env.DB, org, recordingId)
       if (row === null) return c.json({ error: 'not_found' }, 404)
+      await validateTerminalPairWhenPresent(c, row.storeId)
       const input = c.req.valid('json')
       const moved = nextState(row.state as RecordingState, input.state)
       if (!moved.ok) return c.json({ error: 'invalid_transition' }, 409)
@@ -8226,6 +8977,16 @@ const routes = app
           }),
         )
       }
+      if (moved.state === 'stored') {
+        statements.push(
+          ...resolveUploadFailedAlertStatements(c.env.DB, {
+            organizationId: org,
+            storeId: row.storeId,
+            recordingId,
+            resolvedAt: nowIso,
+          }),
+        )
+      }
       await c.env.DB.batch(statements)
 
       if (moved.state === 'failed' && attempts >= RECORDING_ALERT_ATTEMPTS) {
@@ -8269,6 +9030,7 @@ const routes = app
     const recordingId = c.req.param('recordingId')
     const row = await findRecording(c.env.DB, org, recordingId)
     if (row === null) return c.json({ error: 'not_found' }, 404)
+    await validateTerminalPairWhenPresent(c, row.storeId)
     // **戻せるのは `failed` からだけ**にする。`nextState()` は `recording → uploading` も
     // 許すが、それは端末が録り終えて送り始める辺であって「もう一度送る」ではない。
     // まだ録っている録音をここで `uploading` にすると、送り終える前にサーバが送信中を名乗る。
@@ -8367,6 +9129,7 @@ const routes = app
       const { org, sub } = c.get('auth')
       const row = await readableRecording(c, 'recording.read')
       if (row === null || row.state !== 'stored') return c.json({ error: 'not_found' }, 404)
+      await validateTerminalPairWhenPresent(c, row.storeId)
 
       const now = new Date()
       const nowIso = now.toISOString()
@@ -8462,15 +9225,39 @@ const routes = app
   .post(
     '/api/staff/recordings/:recordingId/hold',
     requireStorePermission('recording.manage'),
+    requirePersonalMode('録音の保全', { whenTerminalIsActive: true }),
     zValidator('json', RecordingHoldInput),
     async (c) => {
       const db = drizzle(c.env.DB)
       const { org, sub } = c.get('auth')
       const row = await readableRecording(c, 'recording.manage')
       if (row === null) return c.json({ error: 'not_found' }, 404)
+      const now = new Date(c.env.TEST_NOW ?? Date.now())
+      if (
+        c.req.header('x-terminal-id') === undefined &&
+        c.req.header('x-terminal-session') === undefined
+      ) {
+        const active = await c.env.DB.prepare(
+          "SELECT 1 FROM terminal_sessions WHERE organization_id = ? AND store_id = ? AND revoked_at IS NULL AND ((mode = 'shared' AND expires_at > ?) OR (mode = 'personal' AND started_at > ?)) LIMIT 1",
+        )
+          .bind(
+            org,
+            row.storeId,
+            now.toISOString(),
+            new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString(),
+          )
+          .first()
+        if (active !== null) {
+          return c.json({ error: 'personal_mode_required', subject: '録音の保全' }, 403)
+        }
+      }
       const input = c.req.valid('json')
-      const nowIso = new Date().toISOString()
-      const actorId = await actorStaffId(db, org, row.storeId, sub)
+      const nowIso = now.toISOString()
+      const actor = await operationActor(
+        c,
+        row.storeId,
+        await actorStaffId(db, org, row.storeId, sub),
+      )
 
       await c.env.DB.batch([
         c.env.DB.prepare(
@@ -8479,8 +9266,9 @@ const routes = app
         recordingAudit(c.env.DB, {
           organizationId: org,
           storeId: row.storeId,
-          actorType: 'staff',
-          actorId,
+          actorType: actor.actorType,
+          actorId: actor.actorId,
+          terminalId: actor.terminalId,
           action: input.legalHold ? 'recording.hold_set' : 'recording.hold_cleared',
           recordingId: row.id,
           after: { legalHold: input.legalHold, reason: input.reason },
@@ -8507,6 +9295,7 @@ const routes = app
       const { org, sub } = c.get('auth')
       const row = await readableRecording(c, 'recording.manage')
       if (row === null) return c.json({ error: 'not_found' }, 404)
+      await validateTerminalPairWhenPresent(c, row.storeId)
       // まだ保管庫に入っていない録音には消す実体が無い。期限も決まっていないので、
       // `recording_retained`（いつから消せるか）を返しようがない。
       if (row.retainUntil === null) return c.json({ error: 'invalid_transition' }, 409)
@@ -8552,46 +9341,130 @@ const routes = app
     },
   )
 
-  /**
-   * お知らせの一覧（ALERTS ／ サイドバーの「お知らせ 3」）。
-   *
-   * P7 が返すのは `{ items, nextCursor, total }` までで、4 分類のタブと `counts` は
-   * P10（`013-terminals-and-audit`）が足す。既定を `audience='store'` にするのは、
-   * 運用のアラート（notifier の失敗など）を業務のお知らせに混ぜると
-   * 「対応が必要」の意味が薄まるからである。
-   */
+  .get(
+    '/api/staff/audit',
+    requireStorePermission('audit.read', { storeIdFrom: 'query' }),
+    zValidator('query', AuditSearchQuery),
+    async (c) => {
+      const { org, sub } = c.get('auth')
+      const query = c.req.valid('query')
+      const allowed = await permittedStores(drizzle(c.env.DB), org, sub, 'audit.read')
+      if (query.storeId !== undefined && !allowed.includes(query.storeId)) {
+        return c.json({ error: 'forbidden' }, 403)
+      }
+      if (allowed.length === 0) return c.json({ error: 'forbidden' }, 403)
+      const clauses = [
+        'organization_id = ?',
+        query.storeId === undefined
+          ? `store_id IN (${allowed.map(() => '?').join(',')})`
+          : 'store_id = ?',
+      ]
+      const params: unknown[] = [org, ...(query.storeId === undefined ? allowed : [query.storeId])]
+      if (query.from !== undefined) {
+        clauses.push('occurred_at >= ?')
+        params.push(`${query.from}T00:00:00.000+09:00`)
+      }
+      if (query.to !== undefined) {
+        const after = new Date(`${query.to}T00:00:00.000+09:00`)
+        after.setUTCDate(after.getUTCDate() + 1)
+        clauses.push('occurred_at < ?')
+        params.push(after.toISOString())
+      }
+      if (query.actorId !== undefined) {
+        clauses.push('actor_id = ?')
+        params.push(query.actorId)
+      }
+      if (query.action !== undefined) {
+        clauses.push('action = ?')
+        params.push(query.action)
+      }
+      const cursor = decodePageCursor(query.cursor)
+      if (cursor !== null) {
+        clauses.push('(occurred_at < ? OR (occurred_at = ? AND id < ?))')
+        params.push(cursor.at, cursor.at, cursor.id)
+      }
+      const where = clauses.join(' AND ')
+      const result = await c.env.DB.batch([
+        c.env.DB.prepare(`SELECT COUNT(*) AS total FROM audit_events WHERE ${where}`).bind(
+          ...params,
+        ),
+        c.env.DB.prepare(
+          'SELECT id, occurred_at AS occurredAt, actor_type AS actorType, actor_id AS actorId, terminal_id AS terminalId, action, target_type AS targetType, target_id AS targetId, correlation_id AS correlationId, before_json AS beforeJson, after_json AS afterJson ' +
+            `FROM audit_events WHERE ${where} ORDER BY occurred_at DESC, id DESC LIMIT ?`,
+        ).bind(...params, query.limit + 1),
+      ])
+      const raw = (result[1]?.results ?? []) as Array<{
+        id: string
+        occurredAt: string
+        beforeJson: string | null
+        afterJson: string | null
+      }>
+      const found = raw.map((row) => ({
+        ...row,
+        beforeJson: row.beforeJson === null ? null : JSON.parse(row.beforeJson),
+        afterJson: row.afterJson === null ? null : JSON.parse(row.afterJson),
+      }))
+      const items = found.slice(0, query.limit)
+      const last = items.at(-1)
+      return c.json(
+        AuditEventList.parse({
+          items: AuditEvent.array().parse(items),
+          nextCursor:
+            found.length > query.limit && last !== undefined
+              ? encodePageCursor(last.occurredAt, last.id)
+              : null,
+          total: ((result[0]?.results ?? []) as { total: number }[])[0]?.total ?? 0,
+        }),
+      )
+    },
+  )
+
   .get('/api/staff/alerts', zValidator('query', AlertListQuery), async (c) => {
-    const org = c.get('auth').org
+    const { org, sub } = c.get('auth')
     const query = c.req.valid('query')
-    const clauses = ['audience = ?']
-    const params: unknown[] = [org, query.audience]
-    if (query.storeId !== undefined) {
-      clauses.push('store_id = ?')
-      params.push(query.storeId)
+    const assigned = await c.env.DB.prepare(
+      'SELECT store_id AS storeId FROM store_memberships WHERE organization_id = ? AND user_id = ?',
+    )
+      .bind(org, sub)
+      .all<{ storeId: string }>()
+    const storeIds = assigned.results.map((row) => row.storeId)
+    if (query.storeId !== undefined && !storeIds.includes(query.storeId)) {
+      return c.json({ error: 'forbidden' }, 403)
     }
-    const scope = `organization_id = ? AND ${clauses.join(' AND ')}`
-    // 4 分類。「対応済み」だけは**本日（JST）に片付いたもの**を数える
-    // （右ペインの見出しが「本日」なので、昨日片付けたものは残らない）。
-    const today = toJstDateString(new Date())
-    const resolvedToday = 'resolved_at >= ? AND resolved_at < ?'
-    const resolvedParams = [jstDayStart(today), jstDayStart(addDays(today, 1))]
-    const kindClause: Record<'all' | 'action' | 'info' | 'resolved', string> = {
+    const selected = query.storeId === undefined ? storeIds : [query.storeId]
+    if (selected.length === 0) {
+      return c.json(
+        AlertList.parse({
+          items: [],
+          nextCursor: null,
+          total: 0,
+          counts: { all: 0, action: 0, info: 0, resolved: 0 },
+        }),
+      )
+    }
+    const base = `organization_id = ? AND audience = 'store' AND store_id IN (${selected.map(() => '?').join(',')})`
+    const params: unknown[] = [org, ...selected]
+    const now = new Date(c.env.TEST_NOW ?? Date.now())
+    const today = toJstDateString(now)
+    const dayStart = new Date(`${today}T00:00:00.000+09:00`).toISOString()
+    const dayEndDate = new Date(`${today}T00:00:00.000+09:00`)
+    dayEndDate.setUTCDate(dayEndDate.getUTCDate() + 1)
+    const dayEnd = dayEndDate.toISOString()
+    const kinds = {
       all: 'resolved_at IS NULL',
       action: "resolved_at IS NULL AND severity = 'action'",
       info: "resolved_at IS NULL AND severity = 'info'",
-      resolved: resolvedToday,
-    }
-    const kindParams = query.kind === 'resolved' ? resolvedParams : []
-    const where = `${scope} AND ${kindClause[query.kind]}`
+      resolved: 'resolved_at >= ? AND resolved_at < ?',
+    } as const
+    const kindClause = kinds[query.kind]
+    const kindParams = query.kind === 'resolved' ? [dayStart, dayEnd] : []
+    const where = `${base} AND ${kindClause}`
 
     // 新しい順。続きは `(occurred_at, id)` を降順にたどる。
     const cursor = decodePageCursor(query.cursor)
     const page = cursor === null ? '' : ' AND (occurred_at < ? OR (occurred_at = ? AND id < ?))'
     const pageParams = cursor === null ? [] : [cursor.at, cursor.at, cursor.id]
 
-    // 数えるのは `audience='store'` の行だけ（運用のアラートは業務の数に混ぜない）。
-    const countScope = scope.replace('audience = ?', "audience = 'store'")
-    const countParams = params.filter((_, index) => index !== 1)
     const read = await c.env.DB.batch([
       c.env.DB.prepare(`SELECT COUNT(*) AS total FROM alerts WHERE ${where}`).bind(
         ...params,
@@ -8604,20 +9477,18 @@ const routes = app
           'ORDER BY occurred_at DESC, id DESC LIMIT ?',
       ).bind(...params, ...kindParams, ...pageParams, query.limit + 1),
       c.env.DB.prepare(
-        `SELECT COUNT(*) AS n FROM alerts WHERE ${countScope} AND ${kindClause.all}`,
-      ).bind(...countParams),
+        `SELECT COUNT(*) AS n FROM alerts WHERE ${base} AND resolved_at IS NULL`,
+      ).bind(...params),
       c.env.DB.prepare(
-        `SELECT COUNT(*) AS n FROM alerts WHERE ${countScope} AND ${kindClause.action}`,
-      ).bind(...countParams),
+        `SELECT COUNT(*) AS n FROM alerts WHERE ${base} AND resolved_at IS NULL AND severity = 'action'`,
+      ).bind(...params),
       c.env.DB.prepare(
-        `SELECT COUNT(*) AS n FROM alerts WHERE ${countScope} AND ${kindClause.info}`,
-      ).bind(...countParams),
+        `SELECT COUNT(*) AS n FROM alerts WHERE ${base} AND resolved_at IS NULL AND severity = 'info'`,
+      ).bind(...params),
       c.env.DB.prepare(
-        `SELECT COUNT(*) AS n FROM alerts WHERE ${countScope} AND ${kindClause.resolved}`,
-      ).bind(...countParams, ...resolvedParams),
+        `SELECT COUNT(*) AS n FROM alerts WHERE ${base} AND resolved_at >= ? AND resolved_at < ?`,
+      ).bind(...params, dayStart, dayEnd),
     ])
-    const countAt = (index: number): number =>
-      ((read[index]?.results ?? []) as { n: number }[])[0]?.n ?? 0
 
     const found = (read[1]?.results ?? []) as { id: string; occurredAt: string }[]
     const items = found.slice(0, query.limit)
@@ -8631,108 +9502,81 @@ const routes = app
             : null,
         total: ((read[0]?.results ?? []) as { total: number }[])[0]?.total ?? 0,
         counts: {
-          all: countAt(2),
-          action: countAt(3),
-          info: countAt(4),
-          resolved: countAt(5),
+          all: ((read[2]?.results ?? []) as { n: number }[])[0]?.n ?? 0,
+          action: ((read[3]?.results ?? []) as { n: number }[])[0]?.n ?? 0,
+          info: ((read[4]?.results ?? []) as { n: number }[])[0]?.n ?? 0,
+          resolved: ((read[5]?.results ?? []) as { n: number }[])[0]?.n ?? 0,
         },
       }),
     )
   })
 
-  /**
-   * お知らせ 1 件の更新（既読・対応済み）。**列は足さない** — `alerts` の
-   * `read_at` / `resolved_at` / `resolved_by` に書くだけである。
-   * 「誰が片付けたか」は個人モードのときだけ残る（共有端末は null）。
-   */
   .patch('/api/staff/alerts/:alertId', zValidator('json', AlertPatch), async (c) => {
-    const { org } = c.get('auth')
+    const { org, sub } = c.get('auth')
     const alertId = c.req.param('alertId')
+    const input = c.req.valid('json')
     const row = await c.env.DB.prepare(
-      'SELECT id, store_id AS storeId, read_at AS readAt, resolved_at AS resolvedAt ' +
-        'FROM alerts WHERE organization_id = ? AND id = ?',
+      "SELECT store_id AS storeId, read_at AS readAt, resolved_at AS resolvedAt FROM alerts WHERE organization_id = ? AND id = ? AND audience = 'store'",
     )
       .bind(org, alertId)
-      .first<{ id: string; storeId: string; readAt: string | null; resolvedAt: string | null }>()
+      .first<{ storeId: string; readAt: string | null; resolvedAt: string | null }>()
     if (row === null) return c.json({ error: 'not_found' }, 404)
-    const patch = c.req.valid('json')
-    const now = new Date()
-    const nowIso = now.toISOString()
-    const session = await sessionFromHeader(c, org)
-    const resolvedBy =
-      session !== null && session.mode === 'personal' && isSessionLive(session, now)
-        ? session.staffId
-        : null
-    const readAt = patch.readAt === undefined ? row.readAt : patch.readAt
-    const resolvedAt =
-      patch.resolved === undefined ? row.resolvedAt : patch.resolved ? nowIso : null
-    const actor = await actorOf(c, org, null, now)
-    const correlationId = crypto.randomUUID()
-    const writes = [
+    const assigned = await c.env.DB.prepare(
+      'SELECT 1 FROM store_memberships WHERE organization_id = ? AND store_id = ? AND user_id = ?',
+    )
+      .bind(org, row.storeId, sub)
+      .first()
+    if (assigned === null) return c.json({ error: 'forbidden' }, 403)
+    const nowIso = new Date(c.env.TEST_NOW ?? Date.now()).toISOString()
+    const readAt = input.readAt === undefined ? row.readAt : input.readAt
+    const actor = await operationActor(c, row.storeId, sub)
+    await c.env.DB.batch([
       c.env.DB.prepare(
-        'UPDATE alerts SET read_at = ?, resolved_at = ?, resolved_by = ? WHERE organization_id = ? AND id = ?',
-      ).bind(readAt, resolvedAt, resolvedAt === null ? null : resolvedBy, org, alertId),
-    ]
-    if (patch.readAt !== undefined && patch.readAt !== row.readAt) {
-      writes.push(
-        auditInsert(c.env.DB, {
-          organizationId: org,
-          storeId: row.storeId,
-          actor,
-          action: 'alert.read',
-          targetType: 'alerts',
-          targetId: alertId,
-          after: { readAt },
-          correlationId,
-          occurredAt: nowIso,
-        }),
-      )
-    }
-    if (patch.resolved !== undefined) {
-      writes.push(
-        auditInsert(c.env.DB, {
-          organizationId: org,
-          storeId: row.storeId,
-          actor,
-          action: 'alert.resolved',
-          targetType: 'alerts',
-          targetId: alertId,
-          after: { resolved: patch.resolved, resolvedBy: resolvedAt === null ? null : resolvedBy },
-          correlationId,
-          occurredAt: nowIso,
-        }),
-      )
-    }
-    await c.env.DB.batch(writes)
+        "UPDATE alerts SET read_at = ? WHERE organization_id = ? AND id = ? AND audience = 'store'",
+      ).bind(readAt, org, alertId),
+      c.env.DB.prepare(
+        'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+      ).bind(
+        crypto.randomUUID(),
+        org,
+        row.storeId,
+        actor.actorType,
+        actor.actorId,
+        actor.terminalId,
+        'alert.read',
+        'alerts',
+        alertId,
+        JSON.stringify({ readAt: row.readAt, resolvedAt: row.resolvedAt }),
+        JSON.stringify({ readAt, resolvedAt: row.resolvedAt }),
+        crypto.randomUUID(),
+        nowIso,
+      ),
+    ])
     const updated = await c.env.DB.prepare(
-      'SELECT id, code, severity, audience, title, body, target_type AS targetType, ' +
-        'target_id AS targetId, occurred_at AS occurredAt, read_at AS readAt, ' +
-        'resolved_at AS resolvedAt, resolved_by AS resolvedBy FROM alerts ' +
-        'WHERE organization_id = ? AND id = ?',
+      "SELECT id, code, severity, audience, title, body, target_type AS targetType, target_id AS targetId, occurred_at AS occurredAt, read_at AS readAt, resolved_at AS resolvedAt, resolved_by AS resolvedBy FROM alerts WHERE organization_id = ? AND id = ? AND audience = 'store'",
     )
       .bind(org, alertId)
       .first()
     return c.json(Alert.parse(updated))
   })
 
-  /**
-   * 「すべて既読にする」。**選択中の店舗の未読だけ**を埋める。
-   * 0 件でも 200 で返す（押した結果が読めるようにする）。既読は監査に残さない。
-   */
   .post('/api/staff/alerts/read-all', zValidator('json', AlertReadAllInput), async (c) => {
-    const { org } = c.get('auth')
+    const { org, sub } = c.get('auth')
     const input = c.req.valid('json')
-    const nowIso = new Date().toISOString()
-    const params: unknown[] = [nowIso, org]
-    let where = "organization_id = ? AND audience = 'store' AND read_at IS NULL"
-    if (input.storeId !== undefined) {
-      where += ' AND store_id = ?'
-      params.push(input.storeId)
-    }
-    const result = await c.env.DB.prepare(`UPDATE alerts SET read_at = ? WHERE ${where}`)
-      .bind(...params)
+    if (input.storeId === undefined) return c.json({ error: 'store_required' }, 400)
+    const assigned = await c.env.DB.prepare(
+      'SELECT 1 FROM store_memberships WHERE organization_id = ? AND store_id = ? AND user_id = ?',
+    )
+      .bind(org, input.storeId, sub)
+      .first()
+    if (assigned === null) return c.json({ error: 'forbidden' }, 403)
+    const nowIso = new Date(c.env.TEST_NOW ?? Date.now()).toISOString()
+    const updated = await c.env.DB.prepare(
+      "UPDATE alerts SET read_at = ? WHERE organization_id = ? AND store_id = ? AND audience = 'store' AND read_at IS NULL",
+    )
+      .bind(nowIso, org, input.storeId)
       .run()
-    return c.json(AlertReadAllResult.parse({ updated: result.meta.changes ?? 0 }))
+    return c.json(AlertReadAllResult.parse({ updated: updated.meta.changes }))
   })
 
   /**
@@ -8988,19 +9832,27 @@ const routes = app
           .bind(now, now, org, row.id)
           .run()
       } else {
-        await c.env.DB.batch([
+        const results = await c.env.DB.batch([
           c.env.DB.prepare(
             "UPDATE web_bookings SET status = 'cancelled', cancelled_at = ?, updated_at = ? " +
               "WHERE organization_id = ? AND id = ? AND status = 'pending'",
           ).bind(now, now, org, row.id),
           c.env.DB.prepare(
             "UPDATE reservations SET status = 'cancelled', cancelled_at = ?, cancel_reason = 'store', " +
-              'updated_at = ?, version = version + 1 WHERE organization_id = ? AND id = ?',
-          ).bind(now, now, org, row.reservationId),
+              'updated_at = ?, version = version + 1 WHERE organization_id = ? AND id = ? ' +
+              "AND status NOT IN ('cancelled','no_show') AND EXISTS (" +
+              'SELECT 1 FROM web_bookings WHERE organization_id = ? AND id = ? ' +
+              "AND status = 'cancelled' AND cancelled_at = ?)",
+          ).bind(now, now, org, row.reservationId, org, row.id, now),
           c.env.DB.prepare(
-            'DELETE FROM reservation_slot_locks WHERE organization_id = ? AND reservation_id = ?',
-          ).bind(org, row.reservationId),
+            'DELETE FROM reservation_slot_locks WHERE organization_id = ? AND reservation_id = ? ' +
+              'AND EXISTS (SELECT 1 FROM web_bookings WHERE organization_id = ? AND id = ? ' +
+              "AND status = 'cancelled' AND cancelled_at = ?)",
+          ).bind(org, row.reservationId, org, row.id, now),
         ])
+        if ((results[0]?.meta.changes ?? 0) === 0) {
+          return c.json({ error: 'invalid_transition' }, 409)
+        }
       }
       const detail = await reservationDetailOf(c.env, org, row.reservationId)
       if (detail === null) return c.json({ error: 'not_found' }, 404)
@@ -9247,6 +10099,7 @@ const routes = app
             noteCustomer: '',
             noteInternal: '',
             actorId: null,
+            actorType: 'customer',
             correlationId,
             receptionSessionId: null,
             idempotency: null,
@@ -9613,6 +10466,7 @@ const routes = app
         })),
         assignments: [{ kind: 'staff', targetId: null }],
         actorId: null,
+        actorType: 'customer',
         correlationId: crypto.randomUUID(),
         // 監査は追記専用。平文のお名前・お電話番号を入れない（`07-nfr.md` §6.6）。
         audit: {
@@ -9711,6 +10565,7 @@ const routes = app
         reason: 'customer',
         now,
         actorId: null,
+        actorType: 'customer',
         correlationId: crypto.randomUUID(),
         audit: { before: { startsAt: row.startsAt, source: 'web' } },
       })
@@ -9744,114 +10599,6 @@ const routes = app
     },
   )
 
-  /* --- 分析（P9） -------------------------------------------------------- */
-
-  /**
-   * タブ 1 枚ぶんの数字（`GET /api/staff/analytics`）。
-   *
-   * **読むのは `analytics_daily` だけ**で、生データ（予約・受付・来店）を 1 行も走査しない
-   * （`03-data-model.md` §11.4 / `07-nfr.md` §4.2）。D1 に投げるのは多くて 3 本である。
-   * 数え方（小標本抑制・営業日数・中央値）は `domain/analytics-report.ts` の純関数に置き、
-   * ここは行を集めて渡すだけにする。
-   */
-  .get(
-    '/api/staff/analytics',
-    requireStorePermission('analytics.read', { storeIdFrom: 'query' }),
-    async (c) => {
-      const { org } = c.get('auth')
-      const query = validQuery(c, AnalyticsQuery, c.req.query())
-
-      const reservationMetric =
-        query.countBy === 'received_date' ? 'reservations_received' : 'reservations'
-      const metrics: Record<AnalyticsMetric, string[]> = {
-        overview: ['closed', reservationMetric],
-        reservation_count: ['closed', reservationMetric],
-        reservation_source: ['closed', reservationMetric],
-        cancellation: ['closed', 'cancellations', 'reservations', 'no_shows'],
-        visit_frequency: ['closed', 'receptions'],
-        staff: ['closed', 'receptions', 'revisits_90d'],
-        purpose: ['closed', reservationMetric],
-        wait_time: ['closed', 'wait_seconds_median', 'receptions'],
-      }
-      const wanted = metrics[query.metric]
-
-      const readRows = async (from: string, to: string) =>
-        (
-          await c.env.DB.prepare(
-            'SELECT date, metric, dimension, dimension_key AS dimensionKey, value ' +
-              'FROM analytics_daily WHERE organization_id = ? AND store_id = ? ' +
-              `AND date >= ? AND date <= ? AND metric IN (${wanted.map(() => '?').join(',')})`,
-          )
-            .bind(org, query.storeId, from, to, ...wanted)
-            .all<DailyRow>()
-        ).results
-
-      const rows = await readRows(query.from, query.to)
-
-      // 「前の月の中央値」はお待ち時間タブだけが要る。他のタブで 1 本余計に投げない。
-      const previousTo = addDays(`${query.from.slice(0, 7)}-01`, -1)
-      const previousMonthRows =
-        query.metric === 'wait_time'
-          ? await readRows(`${previousTo.slice(0, 7)}-01`, previousTo)
-          : []
-
-      // 件数 0 の担当も点として返すので、名簿は分析の側で引く（受付の行だけでは出ない）。
-      const staffList =
-        query.metric === 'staff'
-          ? (
-              await c.env.DB.prepare(
-                'SELECT id, display_name AS name FROM staff WHERE organization_id = ? ' +
-                  "AND store_id = ? AND is_active = '1' ORDER BY sort_order, id",
-              )
-                .bind(org, query.storeId)
-                .all<{ id: string; name: string }>()
-            ).results
-          : []
-
-      // 削除された目的も、期間に予約があれば名前のまま残す（`is_active` で絞らない）。
-      const purposeNames =
-        query.metric === 'purpose'
-          ? new Map(
-              (
-                await c.env.DB.prepare(
-                  'SELECT id, name_internal AS name FROM visit_purposes ' +
-                    'WHERE organization_id = ? AND (store_id = ? OR store_id IS NULL)',
-                )
-                  .bind(org, query.storeId)
-                  .all<{ id: string; name: string }>()
-              ).results.map((row) => [row.id, row.name] as const),
-            )
-          : new Map<string, string>()
-
-      return c.json(
-        AnalyticsReport.parse(
-          buildReport({
-            query,
-            rows,
-            previousMonthRows,
-            staffList,
-            purposeNames,
-            now: query.now === undefined ? new Date() : new Date(query.now),
-            targets: ANALYTICS_TARGETS,
-          }),
-        ),
-      )
-    },
-  )
-
-  /**
-   * 目安の 3 つ（`GET /api/staff/analytics/targets`）。**全店共通の固定値**なので
-   * D1 を 1 回も読まない。画面から変える操作は作らない（設定の置き場も持たない）。
-   */
-  .get(
-    '/api/staff/analytics/targets',
-    requireStorePermission('analytics.read', { storeIdFrom: 'query' }),
-    (c) => {
-      validQuery(c, StoreIdQuery, c.req.query())
-      return c.json(AnalyticsTargets.parse(ANALYTICS_TARGETS))
-    },
-  )
-
   /**
    * 確認待ちのまま**受信日**の 24:00 JST を越えた Web 予約を自動で取り消す保守。
    * 共有鍵で守られていて、テナントのトークンでは越えられない。
@@ -9869,623 +10616,100 @@ const routes = app
       return c.json(WebPublicationApplyResult.parse(result))
     },
   )
-
-  /**
-   * 日次集計（P9）。当日分と前日分を数え直し、25 か月より古い行を消す。
-   * 共有鍵で守られていて、テナントのトークンでは越えられない。
-   * `now` を受け取れるようにしてあるのは、日境界をテストから注入するためである。
-   */
+  .get(
+    '/api/staff/analytics',
+    zValidator('query', AnalyticsQuery),
+    requireStorePermission('analytics.read', { storeIdFrom: 'query' }),
+    async (c) => {
+      const input = c.req.valid('query')
+      // P9 の読出し境界: reservations / events などの生表をここで参照しない。
+      const period = analyticsPreviousMonthRange(input.from)
+      const overviewPeriod = analyticsOverviewWeekRange(input.from, input.to)
+      const metrics = JSON.stringify(analyticsStoredMetrics(input.metric, input.countBy))
+      const statement =
+        'SELECT date, metric, dimension, dimension_key AS dimensionKey, dimension_label AS dimensionLabel, value FROM analytics_daily ' +
+        'WHERE organization_id = ?1 AND store_id = ?2 AND date >= ?3 AND date <= ?4 ' +
+        'AND metric IN (SELECT value FROM json_each(?5))'
+      const [rows, comparisonRows, overviewRows] = await Promise.all([
+        c.env.DB.prepare(statement)
+          .bind(c.get('auth').org, input.storeId, input.from, input.to, metrics)
+          .all<{
+            date: string
+            metric: string
+            dimension: string
+            dimensionKey: string
+            dimensionLabel: string
+            value: number
+          }>(),
+        input.metric === 'wait_time'
+          ? c.env.DB.prepare(statement)
+              .bind(
+                c.get('auth').org,
+                input.storeId,
+                period.from,
+                period.to,
+                JSON.stringify(['wait_seconds_histogram']),
+              )
+              .all<{
+                date: string
+                metric: string
+                dimension: string
+                dimensionKey: string
+                dimensionLabel: string
+                value: number
+              }>()
+          : Promise.resolve({ results: [] }),
+        input.metric === 'overview'
+          ? c.env.DB.prepare(statement)
+              .bind(
+                c.get('auth').org,
+                input.storeId,
+                overviewPeriod.from,
+                overviewPeriod.to,
+                JSON.stringify(['reservations']),
+              )
+              .all<{
+                date: string
+                metric: string
+                dimension: string
+                dimensionKey: string
+                dimensionLabel: string
+                value: number
+              }>()
+          : Promise.resolve({ results: [] }),
+      ])
+      return c.json(
+        AnalyticsReport.parse(
+          buildAnalyticsReport({
+            ...input,
+            rows: rows.results,
+            comparisonRows: comparisonRows.results,
+            overviewRows: overviewRows.results,
+          }),
+        ),
+      )
+    },
+  )
+  .get(
+    '/api/staff/analytics/targets',
+    zValidator('query', StoreIdQuery),
+    requireStorePermission('analytics.read', { storeIdFrom: 'query' }),
+    (c) =>
+      c.json(
+        AnalyticsTargets.parse({
+          waitMinutes: 8,
+          cancellationRatePercent: 10,
+          revisitWindowDays: 90,
+        }),
+      ),
+  )
   .post(
     '/api/internal/maintenance/analytics/rollup',
     zValidator('json', AnalyticsRollupRequest),
     async (c) => {
       const input = c.req.valid('json')
-      const result = await rollupAnalytics(c.env, {
-        now: input.now === undefined ? new Date() : new Date(input.now),
-        days: input.days,
-        ahead: input.ahead,
-        limit: input.limit,
-      })
+      const result = await rollupAnalytics(c.env, { ...input, now: new Date() })
       return c.json(AnalyticsRollupResult.parse(result))
-    },
-  )
-
-  /* --- P10 端末の使い分けと監査 ------------------------------------------ */
-
-  /**
-   * 置き場所の一覧（LOGIN-SHARED）。**誰でも読める** — レジ横の iPad は個人ログインの
-   * 前にこの一覧を出すので、ここに権限の壁を置くと最初の 1 画面が出ない。
-   * `hasPin` と `isOnline` は列に持たず、毎回計算して返す。
-   */
-  .get('/api/staff/terminals', async (c) => {
-    const db = drizzle(c.env.DB)
-    const { org } = c.get('auth')
-    const query = validQuery(c, TerminalListQuery, c.req.query())
-    // 他社の店舗 id を指されたとき、**その店舗が在ることを 404 で漏らさない**（一律 403）。
-    if (!(await findStore(db, org, query.storeId))) return c.json({ error: 'forbidden' }, 403)
-    const now = new Date()
-    // 名乗って叩いた端末だけ「いま生きています」を残してから読む（自分は online で返る）。
-    await touchNamedTerminal(c, org, now)
-    const rows = await db
-      .select()
-      .from(terminals)
-      .where(and(eq(terminals.organizationId, org), eq(terminals.storeId, query.storeId)))
-      .orderBy(asc(terminals.createdAt))
-    const items = rows
-      .filter((row) => query.includeInactive || isOn(row.isActive))
-      .filter((row) => query.kind === undefined || row.kind === query.kind)
-      .map((row) => toTerminal(row, now))
-    return c.json({ items: Terminal.array().parse(items) })
-  })
-
-  /**
-   * 端末の登録。`pin` はここでだけ受け取り、ハッシュにしてから保存する。
-   * **応答にも監査にも載せない。**
-   */
-  .post(
-    '/api/staff/terminals',
-    requireStorePermission('terminal.manage', { storeIdFrom: 'query' }),
-    requirePersonalMode(ELEVATE_SUBJECT.settings),
-    zValidator('json', TerminalInput),
-    async (c) => {
-      const db = drizzle(c.env.DB)
-      const { org } = c.get('auth')
-      const storeId = String(c.req.query('storeId'))
-      if (!(await findStore(db, org, storeId))) return c.json({ error: 'not_found' }, 404)
-      const input = c.req.valid('json')
-      if (input.pin !== undefined && isWeakPin(input.pin)) {
-        return c.json({ error: 'weak_pin' }, 400)
-      }
-      const now = new Date()
-      const nowIso = now.toISOString()
-      const id = crypto.randomUUID()
-      const row = {
-        id,
-        organizationId: org,
-        storeId,
-        name: input.name,
-        kind: input.kind,
-        placeNote: input.placeNote,
-        deviceLabel: input.deviceLabel,
-        pinHash:
-          input.pin === undefined ? null : await pinHashOf(input.pin, org, id, c.env.AUTH_PEPPER),
-        autoLockSeconds: input.autoLockSeconds,
-        lastSeenAt: null,
-        isActive: flag(input.isActive),
-        version: FIRST_VERSION,
-        createdAt: nowIso,
-      }
-      await db.insert(terminals).values(row)
-      await auditInsert(c.env.DB, {
-        organizationId: org,
-        storeId,
-        actor: await actorOf(c, org, null, now),
-        action: 'terminal.created',
-        targetType: 'terminals',
-        targetId: id,
-        after: { name: input.name, kind: input.kind, autoLockSeconds: input.autoLockSeconds },
-        correlationId: crypto.randomUUID(),
-        occurredAt: nowIso,
-      }).run()
-      return c.json(Terminal.parse(toTerminal(row, now)), 201)
-    },
-  )
-
-  /**
-   * 端末の更新。**版が合わなければ 409** で、行も監査も 1 つも動かさない。
-   * D1 のバッチは 0 行しか当たらない `UPDATE` でも中断しないので、監査の追記にも
-   * 本処理と同じ版の条件（`WHERE EXISTS`）を当てる。
-   */
-  .patch(
-    '/api/staff/terminals/:terminalId',
-    requireStorePermission('terminal.manage'),
-    requirePersonalMode(ELEVATE_SUBJECT.settings),
-    zValidator('json', TerminalPatch),
-    async (c) => {
-      const db = drizzle(c.env.DB)
-      const { org } = c.get('auth')
-      const terminalId = c.req.param('terminalId')
-      const rows = await db
-        .select()
-        .from(terminals)
-        .where(and(eq(terminals.organizationId, org), eq(terminals.id, terminalId)))
-      const current = rows[0]
-      if (current === undefined) return c.json({ error: 'not_found' }, 404)
-      // 権限は**その端末が置かれた店舗**で見直す（`:storeId` がパスに無いため）。
-      const { sub } = c.get('auth')
-      if (!(await grantedOnStore(db, org, sub, current.storeId, 'terminal.manage'))) {
-        return c.json({ error: 'forbidden' }, 403)
-      }
-      const patch = c.req.valid('json')
-      if (patch.pin !== undefined && isWeakPin(patch.pin)) {
-        return c.json({ error: 'weak_pin' }, 400)
-      }
-      const now = new Date()
-      const next = {
-        name: patch.name ?? current.name,
-        kind: patch.kind ?? (current.kind as 'shared' | 'personal'),
-        placeNote: patch.placeNote ?? current.placeNote ?? '',
-        deviceLabel: patch.deviceLabel ?? current.deviceLabel ?? '',
-        autoLockSeconds: patch.autoLockSeconds ?? current.autoLockSeconds,
-        isActive: patch.isActive ?? isOn(current.isActive),
-      }
-      const changed = changedFields(
-        {
-          name: current.name,
-          kind: current.kind,
-          placeNote: current.placeNote ?? '',
-          deviceLabel: current.deviceLabel ?? '',
-          autoLockSeconds: current.autoLockSeconds,
-          isActive: isOn(current.isActive),
-        },
-        next,
-      )
-      const guard = {
-        clause:
-          'EXISTS (SELECT 1 FROM terminals WHERE organization_id = ? AND id = ? AND version = ?)',
-        params: [org, terminalId, patch.version],
-      }
-      const pinHash =
-        patch.pin === undefined
-          ? current.pinHash
-          : await pinHashOf(patch.pin, org, terminalId, c.env.AUTH_PEPPER)
-      const [, applied] = await c.env.DB.batch([
-        auditInsert(c.env.DB, {
-          organizationId: org,
-          storeId: current.storeId,
-          actor: await actorOf(c, org, terminalId, now),
-          action: 'terminal.updated',
-          targetType: 'terminals',
-          targetId: terminalId,
-          before: changed.before,
-          after: changed.after,
-          correlationId: crypto.randomUUID(),
-          occurredAt: now.toISOString(),
-          guard,
-        }),
-        // **必ず最後。**この 1 文の `meta.changes` だけが 409 かどうかを知っている。
-        c.env.DB.prepare(
-          'UPDATE terminals SET name = ?, kind = ?, place_note = ?, device_label = ?, ' +
-            'auto_lock_seconds = ?, is_active = ?, pin_hash = ?, version = version + 1 ' +
-            'WHERE organization_id = ? AND id = ? AND version = ?',
-        ).bind(
-          next.name,
-          next.kind,
-          next.placeNote,
-          next.deviceLabel,
-          next.autoLockSeconds,
-          flag(next.isActive),
-          pinHash,
-          org,
-          terminalId,
-          patch.version,
-        ),
-      ])
-      if ((applied?.meta.changes ?? 0) === 0) {
-        return c.json({ error: 'version_conflict', current: current.version }, 409)
-      }
-      return c.json(
-        Terminal.parse(
-          toTerminal(
-            {
-              ...current,
-              ...next,
-              isActive: flag(next.isActive),
-              pinHash,
-              version: current.version + 1,
-            },
-            now,
-          ),
-        ),
-      )
-    },
-  )
-
-  /**
-   * 業務の開始（LOGIN-SHARED / LOGIN-STAFF）。**JWT だけで通る** — 共有端末は
-   * 個人ログイン無しで日常業務を回すのが目的である。置き場所を別の端末に
-   * 引き継ぐときは、前の業務に `revoked_at` を書いて**行は残す**。
-   */
-  .post(
-    '/api/staff/terminals/:terminalId/sessions',
-    zValidator('json', TerminalSessionStart),
-    async (c) => {
-      const db = drizzle(c.env.DB)
-      const { org } = c.get('auth')
-      const terminalId = c.req.param('terminalId')
-      const rows = await db
-        .select()
-        .from(terminals)
-        .where(and(eq(terminals.organizationId, org), eq(terminals.id, terminalId)))
-      const terminal = rows[0]
-      if (terminal === undefined) return c.json({ error: 'not_found' }, 404)
-      const input = c.req.valid('json')
-      const staffId = input.mode === 'personal' ? input.staffId : null
-      const now = new Date()
-      const record = await readPinFailure(
-        c.env.SHORT_LIVED,
-        pinFailureKey(org, terminalId, staffId),
-      )
-      if (
-        isPinLocked(
-          record?.lockedAt === undefined || record.lockedAt === null
-            ? null
-            : new Date(record.lockedAt),
-          now,
-        )
-      ) {
-        return c.json({ error: 'pin_locked', retryAfterSeconds: 30, remainingAttempts: 0 }, 429)
-      }
-      let storedHash: string | null = terminal.pinHash
-      if (staffId !== null) {
-        const staffRow = await db
-          .select({ pinHash: staff.pinHash })
-          .from(staff)
-          .where(
-            and(
-              eq(staff.organizationId, org),
-              eq(staff.storeId, terminal.storeId),
-              eq(staff.id, staffId),
-            ),
-          )
-        // 自分の組織・自分の店舗に居ないスタッフは「無い」— 暗証番号を照合する前に 404。
-        if (staffRow[0] === undefined) return c.json({ error: 'not_found' }, 404)
-        storedHash = staffRow[0].pinHash
-      }
-      const subjectId = staffId ?? terminalId
-      if (!(await pinMatches(input.pin, org, subjectId, c.env.AUTH_PEPPER, storedHash))) {
-        return rejectPin(c, {
-          org,
-          storeId: terminal.storeId,
-          terminalId,
-          staffId,
-          now,
-          record,
-        })
-      }
-      await c.env.SHORT_LIVED.delete(pinFailureKey(org, terminalId, staffId))
-      const nowIso = now.toISOString()
-      const session = {
-        id: crypto.randomUUID(),
-        terminalId,
-        staffId,
-        mode: input.mode,
-        startedAt: nowIso,
-        expiresAt: expiresAtFrom(now, terminal.autoLockSeconds),
-      }
-      const correlationId = crypto.randomUUID()
-      const previous = await liveSessionsOf(c.env.DB, org, terminalId, now)
-      const actor = { type: 'terminal' as const, id: terminalId, terminalId }
-      await c.env.DB.batch([
-        c.env.DB.prepare(
-          'UPDATE terminal_sessions SET revoked_at = ? WHERE organization_id = ? AND terminal_id = ? AND revoked_at IS NULL',
-        ).bind(nowIso, org, terminalId),
-        ...previous.map((row) =>
-          auditInsert(c.env.DB, {
-            organizationId: org,
-            storeId: terminal.storeId,
-            actor,
-            action: 'terminal.session.ended',
-            targetType: 'terminals',
-            targetId: row.id,
-            after: { reason: 'taken_over' },
-            correlationId,
-            occurredAt: nowIso,
-          }),
-        ),
-        c.env.DB.prepare(
-          'INSERT INTO terminal_sessions (id, organization_id, store_id, terminal_id, staff_id, mode, started_at, expires_at, revoked_at, created_at) ' +
-            'VALUES (?,?,?,?,?,?,?,?,NULL,?)',
-        ).bind(
-          session.id,
-          org,
-          terminal.storeId,
-          terminalId,
-          staffId,
-          input.mode,
-          nowIso,
-          session.expiresAt,
-          nowIso,
-        ),
-        auditInsert(c.env.DB, {
-          organizationId: org,
-          storeId: terminal.storeId,
-          actor: staffId === null ? actor : { type: 'staff' as const, id: staffId, terminalId },
-          action: 'terminal.session.started',
-          targetType: 'terminals',
-          targetId: session.id,
-          after: { mode: input.mode, staffId },
-          correlationId,
-          occurredAt: nowIso,
-        }),
-        c.env.DB.prepare(
-          'UPDATE terminals SET last_seen_at = ? WHERE organization_id = ? AND id = ?',
-        ).bind(nowIso, org, terminalId),
-      ])
-      return c.json(TerminalSession.parse(toSession(session)), 201)
-    },
-  )
-
-  /** 業務の終了。行は消さず `revoked_at` を書く（いつ誰から誰へ移ったかを残す）。 */
-  .delete('/api/staff/terminals/:terminalId/sessions/:sessionId', async (c) => {
-    const { org } = c.get('auth')
-    const terminalId = c.req.param('terminalId')
-    const sessionId = c.req.param('sessionId')
-    const row = await c.env.DB.prepare(
-      `${SESSION_COLUMNS}WHERE organization_id = ? AND terminal_id = ? AND id = ? AND revoked_at IS NULL`,
-    )
-      .bind(org, terminalId, sessionId)
-      .first<SessionRow>()
-    if (row === null) return c.json({ error: 'not_found' }, 404)
-    const now = new Date()
-    const nowIso = now.toISOString()
-    await c.env.DB.batch([
-      c.env.DB.prepare(
-        'UPDATE terminal_sessions SET revoked_at = ? WHERE organization_id = ? AND id = ? AND revoked_at IS NULL',
-      ).bind(nowIso, org, sessionId),
-      auditInsert(c.env.DB, {
-        organizationId: org,
-        storeId: row.storeId,
-        actor: resolveActor(row),
-        action: 'terminal.session.ended',
-        targetType: 'terminals',
-        targetId: sessionId,
-        after: { reason: 'ended' },
-        correlationId: crypto.randomUUID(),
-        occurredAt: nowIso,
-      }),
-      c.env.DB.prepare(
-        'UPDATE terminals SET last_seen_at = ? WHERE organization_id = ? AND id = ?',
-      ).bind(nowIso, org, terminalId),
-    ])
-    return c.body(null, 204)
-  })
-
-  /**
-   * 個人モードへの昇格（MODE-PERSONAL / EX-PERMISSION）。共有の業務を閉じてから
-   * 本人の業務を開く。**用件は 4 語の許可リスト**で、知らない用件は契約が落とす。
-   */
-  .post('/api/staff/terminals/:terminalId/elevate', zValidator('json', ReauthInput), async (c) => {
-    const db = drizzle(c.env.DB)
-    const { org } = c.get('auth')
-    const terminalId = c.req.param('terminalId')
-    const rows = await db
-      .select()
-      .from(terminals)
-      .where(and(eq(terminals.organizationId, org), eq(terminals.id, terminalId)))
-    const terminal = rows[0]
-    if (terminal === undefined) return c.json({ error: 'not_found' }, 404)
-    const now = new Date()
-    const live = await liveSessionsOf(c.env.DB, org, terminalId, now)
-    // 業務が 1 本も開いていない端末は「まだ誰も使っていない」— 昇格の前に開始が要る。
-    if (live.length === 0) return c.json({ error: 'not_found' }, 404)
-    const input = c.req.valid('json')
-    const record = await readPinFailure(
-      c.env.SHORT_LIVED,
-      pinFailureKey(org, terminalId, input.staffId),
-    )
-    if (isPinLocked(record?.lockedAt == null ? null : new Date(record.lockedAt), now)) {
-      return c.json({ error: 'pin_locked', retryAfterSeconds: 30, remainingAttempts: 0 }, 429)
-    }
-    const staffRows = await db
-      .select({ pinHash: staff.pinHash })
-      .from(staff)
-      .where(
-        and(
-          eq(staff.organizationId, org),
-          eq(staff.storeId, terminal.storeId),
-          eq(staff.id, input.staffId),
-        ),
-      )
-    if (
-      !(await pinMatches(
-        input.pin,
-        org,
-        input.staffId,
-        c.env.AUTH_PEPPER,
-        staffRows[0]?.pinHash ?? null,
-      ))
-    ) {
-      return rejectPin(c, {
-        org,
-        storeId: terminal.storeId,
-        terminalId,
-        staffId: input.staffId,
-        now,
-        record,
-      })
-    }
-    await c.env.SHORT_LIVED.delete(pinFailureKey(org, terminalId, input.staffId))
-    const nowIso = now.toISOString()
-    const session = {
-      id: crypto.randomUUID(),
-      terminalId,
-      staffId: input.staffId,
-      mode: 'personal' as const,
-      startedAt: nowIso,
-      expiresAt: expiresAtFrom(now, terminal.autoLockSeconds),
-    }
-    const correlationId = crypto.randomUUID()
-    await c.env.DB.batch([
-      c.env.DB.prepare(
-        'UPDATE terminal_sessions SET revoked_at = ? WHERE organization_id = ? AND terminal_id = ? AND revoked_at IS NULL',
-      ).bind(nowIso, org, terminalId),
-      c.env.DB.prepare(
-        'INSERT INTO terminal_sessions (id, organization_id, store_id, terminal_id, staff_id, mode, started_at, expires_at, revoked_at, created_at) ' +
-          'VALUES (?,?,?,?,?,?,?,?,NULL,?)',
-      ).bind(
-        session.id,
-        org,
-        terminal.storeId,
-        terminalId,
-        input.staffId,
-        'personal',
-        nowIso,
-        session.expiresAt,
-        nowIso,
-      ),
-      auditInsert(c.env.DB, {
-        organizationId: org,
-        storeId: terminal.storeId,
-        actor: { type: 'staff', id: input.staffId, terminalId },
-        action: 'terminal.mode.elevated',
-        targetType: 'terminals',
-        targetId: terminalId,
-        // 設定の変更のための昇格だけは、あとから理由で引けるように別の語で残す。
-        after: { reason: input.reason === 'settings' ? 'settings_approval' : input.reason },
-        correlationId,
-        occurredAt: nowIso,
-      }),
-      c.env.DB.prepare(
-        'UPDATE terminals SET last_seen_at = ? WHERE organization_id = ? AND id = ?',
-      ).bind(nowIso, org, terminalId),
-    ])
-    return c.json(TerminalSession.parse(toSession(session)), 201)
-  })
-
-  /**
-   * 本人の暗証番号の設定。**平文も保存形式も応答に載せない。**
-   * 監査に残すのは「持っているかどうか」だけである（`07-nfr.md` §7.1）。
-   */
-  .put(
-    '/api/staff/stores/:storeId/staff/:staffId/pin',
-    requireStorePermission('settings.manage'),
-    requirePersonalMode(ELEVATE_SUBJECT.settings),
-    zValidator('json', StaffPinInput),
-    async (c) => {
-      const db = drizzle(c.env.DB)
-      const { org } = c.get('auth')
-      const storeId = c.req.param('storeId')
-      const staffId = c.req.param('staffId')
-      const input = c.req.valid('json')
-      if (isWeakPin(input.pin)) return c.json({ error: 'weak_pin' }, 400)
-      const rows = await db
-        .select({ id: staff.id, pinHash: staff.pinHash })
-        .from(staff)
-        .where(
-          and(eq(staff.organizationId, org), eq(staff.storeId, storeId), eq(staff.id, staffId)),
-        )
-      const current = rows[0]
-      if (current === undefined) return c.json({ error: 'not_found' }, 404)
-      const now = new Date()
-      const nowIso = now.toISOString()
-      await c.env.DB.batch([
-        c.env.DB.prepare(
-          'UPDATE staff SET pin_hash = ?, pin_updated_at = ?, updated_at = ? WHERE organization_id = ? AND store_id = ? AND id = ?',
-        ).bind(
-          await pinHashOf(input.pin, org, staffId, c.env.AUTH_PEPPER),
-          nowIso,
-          nowIso,
-          org,
-          storeId,
-          staffId,
-        ),
-        auditInsert(c.env.DB, {
-          organizationId: org,
-          storeId,
-          actor: await actorOf(c, org, null, now),
-          action: 'settings.changed',
-          targetType: 'staff',
-          targetId: staffId,
-          before: { hasPin: current.pinHash !== null },
-          after: { hasPin: true },
-          correlationId: crypto.randomUUID(),
-          occurredAt: nowIso,
-        }),
-      ])
-      return c.json(PinSetResult.parse({ staffId, updatedAt: nowIso }))
-    },
-  )
-
-  /**
-   * 監査の読み返し（AUDIT-VIEW）。**閲覧そのものは監査に残さない。**
-   * `OFFSET` を使わず `(occurred_at, rowid)` の複合カーソルで続きをたどる。
-   */
-  .get(
-    '/api/staff/audit',
-    requireStorePermission('audit.read', { storeIdFrom: 'query' }),
-    async (c) => {
-      const { org } = c.get('auth')
-      const query = validQuery(c, AuditSearchQuery, c.req.query())
-      const where: string[] = ['organization_id = ?']
-      const params: unknown[] = [org]
-      if (query.storeId !== undefined) {
-        where.push('store_id = ?')
-        params.push(query.storeId)
-      }
-      if (query.actorId !== undefined) {
-        where.push('actor_id = ?')
-        params.push(query.actorId)
-      }
-      if (query.action !== undefined) {
-        where.push('action = ?')
-        params.push(query.action)
-      }
-      if (query.from !== undefined) {
-        where.push('occurred_at >= ?')
-        params.push(toInstant(query.from, 0))
-      }
-      if (query.to !== undefined) {
-        where.push('occurred_at < ?')
-        params.push(toInstant(query.to, MINUTES_PER_DAY))
-      }
-      const clause = where.join(' AND ')
-      const total = await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM audit_events WHERE ${clause}`)
-        .bind(...params)
-        .first<{ n: number }>()
-      const cursor = query.cursor === undefined ? null : decodeAuditCursor(query.cursor)
-      const pageWhere =
-        cursor === null
-          ? clause
-          : `${clause} AND (occurred_at < ? OR (occurred_at = ? AND rowid < ?))`
-      const pageParams =
-        cursor === null ? params : [...params, cursor.occurredAt, cursor.occurredAt, cursor.rowid]
-      const { results } = await c.env.DB.prepare(
-        'SELECT rowid AS rowid, id, occurred_at AS occurredAt, actor_type AS actorType, ' +
-          'actor_id AS actorId, terminal_id AS terminalId, action, target_type AS targetType, ' +
-          'target_id AS targetId, correlation_id AS correlationId, before_json AS beforeJson, ' +
-          `after_json AS afterJson FROM audit_events WHERE ${pageWhere} ` +
-          'ORDER BY occurred_at DESC, rowid DESC LIMIT ?',
-      )
-        .bind(...pageParams, query.limit + 1)
-        .all<{
-          rowid: number
-          id: string
-          occurredAt: string
-          actorType: string
-          actorId: string | null
-          terminalId: string | null
-          action: string
-          targetType: string
-          targetId: string
-          correlationId: string | null
-          beforeJson: string | null
-          afterJson: string | null
-        }>()
-      const page = results.slice(0, query.limit)
-      const last = page.at(-1)
-      return c.json(
-        AuditEventList.parse({
-          items: page.map((row) => ({
-            id: row.id,
-            occurredAt: row.occurredAt,
-            actorType: row.actorType,
-            actorId: row.actorId,
-            terminalId: row.terminalId,
-            action: row.action,
-            targetType: row.targetType,
-            targetId: row.targetId,
-            correlationId: row.correlationId,
-            beforeJson: row.beforeJson === null ? null : JSON.parse(row.beforeJson),
-            afterJson: row.afterJson === null ? null : JSON.parse(row.afterJson),
-          })),
-          nextCursor:
-            results.length > query.limit && last !== undefined
-              ? encodeAuditCursor({ occurredAt: last.occurredAt, rowid: last.rowid })
-              : null,
-          total: total?.n ?? 0,
-        }),
-      )
     },
   )
 
@@ -10496,23 +10720,186 @@ export type AppType = typeof routes
  * 日次の保守（`wrangler.jsonc` の `triggers.crons`）。**アカウント全体の Cron 枠 5 本の
  * うち 1 本目**をこのサービスが使う（`04-api.md` §3.2）。
  *
- * **1 つが失敗しても後続を止めない。**録音の掃除と日次集計を try/catch で 1 本ずつ
- * 包む（1 本目が投げたせいで翌朝の朝礼の数字が出ない、という壊れ方を作らない）。
- * **Cron は増やさない** — アカウント全体の枠は 5 本なので、この 1 本に足していく。
+ * **1 つが失敗しても後続を止めない。**いまは録音の掃除 1 本だが、P8 以降がこの中へ
+ * 処理を足していくので、try/catch で包む形を最初から作っておく（1 本目が投げたせいで
+ * 勤務の窓送りが止まる、という壊れ方を作らない）。
  */
-async function scheduled(_controller: ScheduledController, env: Bindings): Promise<void> {
-  const now = new Date()
+type ScheduledMaintenanceTasks = {
+  applyWebPublications: (now: Date) => Promise<unknown>
+  readRollupCursor: () => Promise<string | undefined>
+  rollupAnalytics: (input: {
+    from: string
+    to: string
+    limit: number
+    storeCursor?: string
+    now: Date
+    completedThrough?: string
+  }) => Promise<{ nextStoreCursor: string | null; failedStores: string[]; dropped: number }>
+  writeRollupCursor: (cursor: string | null) => Promise<unknown>
+  purgeRecordings: (now: Date) => Promise<unknown>
+  purgeAuditAndSessions?: (now: Date) => Promise<unknown>
+  expandShiftWindow?: (now: Date) => Promise<unknown>
+}
+
+/**
+ * 勤務の曜日テンプレートを、窓の先端の 1 日ぶんだけ日付の行へ展開する。
+ *
+ * `staff_weekly_shifts` が正本で、`staff_shifts` はその展開結果である
+ * （`004-store-settings/spec.md`「62 日先までを展開した結果で、**保存時と日次 Cron の
+ * 両方で展開する**」）。保存時しか展開していなかったので、設定を触らないまま
+ * 62 日が過ぎると勤務の行が尽き、台帳に担当者の行が出ず空き枠も出せなくなっていた
+ * （実装不足の洗い出し settings-07）。
+ *
+ * **その日にすでに行があれば触らない。**日付ごとの手直し（臨時の早上がりなど）を
+ * Cron が毎晩塗り潰すと、直した本人の知らないうちに元へ戻る。
+ * 1 回で足すのは先端の 1 日だけでよい —— 毎晩動くので窓は 1 日ずつ前へ出る。
+ */
+export async function expandShiftWindow(
+  db: D1Database,
+  now: Date,
+): Promise<{ inserted: number; date: string }> {
+  const date = addJstDays(toJstDateString(now), SHIFT_WINDOW_DAYS - 1)
+  const weekday = new Date(`${date}T00:00:00.000Z`).getUTCDay()
+  const template = await db
+    .prepare(
+      'SELECT w.organization_id AS org, w.store_id AS storeId, w.staff_id AS staffId, ' +
+        'w.starts_at AS startsAt, w.ends_at AS endsAt, w.break_start AS breakStart, w.break_end AS breakEnd ' +
+        "FROM staff_weekly_shifts w WHERE w.weekday = ? AND w.is_off = '0' " +
+        'AND w.starts_at IS NOT NULL AND w.ends_at IS NOT NULL AND w.effective_from <= ? ' +
+        'AND NOT EXISTS (SELECT 1 FROM staff_shifts s WHERE s.organization_id = w.organization_id ' +
+        'AND s.staff_id = w.staff_id AND s.date = ?)',
+    )
+    .bind(weekday, date, date)
+    .all<{
+      org: string
+      storeId: string
+      staffId: string
+      startsAt: string
+      endsAt: string
+      breakStart: string | null
+      breakEnd: string | null
+    }>()
+
+  const nowIso = now.toISOString()
+  const insert =
+    'INSERT INTO staff_shifts (id, organization_id, store_id, staff_id, date, starts_at, ends_at, kind, created_at) VALUES (?,?,?,?,?,?,?,?,?)'
+  const writes: Statement[] = []
+  for (const row of template.results) {
+    writes.push(
+      db
+        .prepare(insert)
+        .bind(
+          crypto.randomUUID(),
+          row.org,
+          row.storeId,
+          row.staffId,
+          date,
+          row.startsAt,
+          row.endsAt,
+          'work',
+          nowIso,
+        ),
+    )
+    if (row.breakStart !== null && row.breakEnd !== null) {
+      writes.push(
+        db
+          .prepare(insert)
+          .bind(
+            crypto.randomUUID(),
+            row.org,
+            row.storeId,
+            row.staffId,
+            date,
+            row.breakStart,
+            row.breakEnd,
+            'break',
+            nowIso,
+          ),
+      )
+    }
+  }
+  if (writes.length > 0) await db.batch(writes)
+  return { inserted: writes.length, date }
+}
+
+export async function purgeAuditAndSessions(db: D1Database, now: Date): Promise<void> {
+  const auditBefore = new Date(now.getTime() - 400 * 24 * 60 * 60 * 1000).toISOString()
+  const sessionsBefore = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString()
+  await db.batch([
+    db.prepare('DELETE FROM audit_events WHERE occurred_at < ?').bind(auditBefore),
+    db.prepare('DELETE FROM terminal_sessions WHERE expires_at < ?').bind(sessionsBefore),
+  ])
+}
+
+export async function runScheduledMaintenance(
+  now: Date,
+  tasks: ScheduledMaintenanceTasks,
+): Promise<void> {
   try {
-    await purgeRecordings(env, { now, limit: 100 })
+    await tasks.applyWebPublications(now)
+  } catch (err) {
+    console.error('scheduled web publications apply failed', err)
+  }
+  try {
+    const today = toJstDateString(now)
+    // 各店舗のclosed最終確定日の翌日から、最大31日ずつ追いつく。遅延が残るページは
+    // 同じcursorを保持し、追いついた店舗だけ通常の昨日〜7日先へ戻る。
+    const from = addJstDays(today, -1)
+    const to = addJstDays(today, 7)
+    const completedThrough = addJstDays(today, -1)
+    const storeCursor = await tasks.readRollupCursor()
+    const result = await tasks.rollupAnalytics({
+      from,
+      to,
+      limit: 3,
+      storeCursor,
+      now,
+      completedThrough,
+    })
+    if (result.failedStores.length > 0 || result.dropped > 0)
+      console.error('scheduled analytics rollup completed with anomalies', {
+        failedStores: result.failedStores,
+        dropped: result.dropped,
+      })
+    await tasks.writeRollupCursor(result.nextStoreCursor)
+  } catch (err) {
+    console.error('scheduled analytics rollup failed', err)
+  }
+  try {
+    await tasks.purgeRecordings(now)
   } catch (err) {
     console.error('scheduled recordings purge failed', err)
   }
   try {
-    // 当日分と前日分を数え直し（前日は終業後の記録が遅れて入るため）、先 7 日も書く。
-    await rollupAnalytics(env, { now, days: 2, ahead: 7, limit: 100 })
+    await tasks.purgeAuditAndSessions?.(now)
   } catch (err) {
-    console.error('scheduled analytics rollup failed', err)
+    console.error('scheduled audit and terminal session purge failed', err)
   }
+  try {
+    await tasks.expandShiftWindow?.(now)
+  } catch (err) {
+    console.error('scheduled staff shift expansion failed', err)
+  }
+}
+
+async function scheduled(controller: ScheduledController, env: Bindings): Promise<void> {
+  // Cloudflare が配った scheduledTime を唯一の時計にする（JST 00:00 の境界を再取得しない）。
+  const now = new Date(controller.scheduledTime)
+  await runScheduledMaintenance(now, {
+    applyWebPublications: (clock) => applyWebPublications(env, { now: clock, limit: 100 }),
+    readRollupCursor: async () =>
+      (await env.SHORT_LIVED.get('analytics:rollup:store-cursor')) ?? undefined,
+    rollupAnalytics: (input) => rollupAnalytics(env, input),
+    writeRollupCursor: (cursor) =>
+      cursor === null
+        ? env.SHORT_LIVED.delete('analytics:rollup:store-cursor')
+        : env.SHORT_LIVED.put('analytics:rollup:store-cursor', cursor, {
+            expirationTtl: 172_800,
+          }),
+    purgeRecordings: (clock) => purgeRecordings(env, { now: clock, limit: 100 }),
+    purgeAuditAndSessions: (clock) => purgeAuditAndSessions(env.DB, clock),
+    expandShiftWindow: (clock) => expandShiftWindow(env.DB, clock),
+  })
 }
 
 export default { fetch: app.fetch, scheduled }

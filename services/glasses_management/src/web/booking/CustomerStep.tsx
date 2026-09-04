@@ -13,12 +13,12 @@ import { Keypad } from './Keypad'
 import type { StepGuard } from './steps'
 
 /*
- * 工程 4 お客様（承認済みモック docs/frontend/mockups/eyex/images/BOOK-04-CUSTOMER.png と
+ * 工程 4 お客様（承認済みモック docs/frontend/mockups/eye/images/BOOK-04-CUSTOMER.png と
  * BOOK-04c-KEYPAD.png）。
  *
  * この面の仕事は「受話器を持ったまま片手で番号を打ち切り、伺えないときはお名前だけで進む」こと。
  *
- * 実測値（screens/BOOK-04-CUSTOMER.html / BOOK-04c-KEYPAD.html と assets/eyex.css）:
+ * 実測値（screens/BOOK-04-CUSTOMER.html / BOOK-04c-KEYPAD.html と assets/eye.css）:
  *   本文 1fr ／ 右の柱 372px（`w-93`）、本文の余白 36px 44px・柱 36px 28px。
  *   番号の欄は 幅 420px・最小高 96px・34px のモノスペース・字間 .04em。
  *   テンキーを開くと 幅 520px・最小高 104px になり、右の柱が「番号を打つ」に替わる。
@@ -34,11 +34,13 @@ import type { StepGuard } from './steps'
  * 「番号を入れ直す」は打った桁を捨ててテンキーを開き直す。
  *
  * 伺ったお名前・ふりがな・お電話番号は `reception_sessions.draft_json` の
- * 打ちかけの文字（`nameTyped` / `kanaTyped` / `phoneTyped`）に置く。候補を選んだときだけ
- * それらを埋めるが、**この工程自身は顧客 id を持たない** —— 選んだ 1 名を予約へ結び付ける
- * 経路（`POST /api/staff/reservations` の `customerId`）はまだ書き込まれないので
- * （worker 側の既知の欠落。`e2e/customers.spec.ts` の頭のコメントを参照）、ここでは
- * お名前・ふりがなを引き継ぐところまでを持つ。
+ * 打ちかけの文字（`nameTyped` / `kanaTyped` / `phoneTyped`）に置く。
+ * **候補を選んだら、その方の id も持つ**（`customerId`）。器がそれを
+ * `POST /api/staff/reservations` の `customerId` へ載せて、選んだ 1 名と
+ * ご予約を結び付ける。持たなかったころ、候補から選んでも予約行の `customer_id` は
+ * NULL のままで、台帳の帯にお名前も来店回数も出ず、来店回数も一生増えなかった
+ * （実装不足の洗い出し customers-01。AC-CUST-24 / 25、AC-CUST-10 / 11）。
+ * 番号を打ち直したら id も捨てる —— 違う番号の答えを引きずらない。
  */
 
 /** 工程 4 が持つ下書き。`ReceptionSessionDraft` の打ちかけの欄と同じ名前にする。 */
@@ -47,6 +49,11 @@ export type CustomerDraft = {
   nameTyped: string
   kanaTyped: string
   noteTyped: string
+  /**
+   * 候補から選んだお客様。選んでいなければ null。
+   * 器がこれを予約の `customerId` に載せる（打ちかけの文字と違い、これは id である）。
+   */
+  customerId: string | null
   /** 手書きで残したご要望。R2 へ上げて `handwritingKeys` にするのは器の仕事。 */
   notes: readonly HandwrittenNote[]
 }
@@ -198,7 +205,9 @@ export function CustomerStep({
 
   function typeDigit(digit: string) {
     if (digits.length >= target) return
-    patch({ phoneTyped: `${digits}${digit}` })
+    // 番号を打ち直したら、選んだ方の id も捨てる。残すと、別の番号を打って
+    // 名前だけ書き換えたご予約が、前に選んだ方へぶら下がる。
+    patch({ phoneTyped: `${digits}${digit}`, customerId: null })
   }
 
   async function lookup(typed: string) {
@@ -352,7 +361,10 @@ export function CustomerStep({
                 onClick={() => setPadOpen(true)}
                 onChange={(event) => {
                   // 物理キーボードがつないである端末のための道。無くても完結する。
-                  patch({ phoneTyped: event.target.value.replace(/\D/g, '').slice(0, target) })
+                  patch({
+                    phoneTyped: event.target.value.replace(/\D/g, '').slice(0, target),
+                    customerId: null,
+                  })
                 }}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' && missing === 0) finishPhone()
@@ -382,12 +394,13 @@ export function CustomerStep({
                   patch({
                     nameTyped: candidate.customer.name,
                     kanaTyped: candidate.customer.kana,
+                    customerId: candidate.customer.id,
                   })
                 }}
                 onDismiss={() => setMatch({ kind: 'closed' })}
                 onReenter={() => {
                   setMatch({ kind: 'closed' })
-                  patch({ phoneTyped: '' })
+                  patch({ phoneTyped: '', customerId: null })
                   setPadOpen(true)
                 }}
               />
