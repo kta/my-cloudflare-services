@@ -73,7 +73,7 @@ export async function syncMembership(ctx, port = 4300) {
   return res.status()
 }
 
-/** お店のコード → 端末モード → 置き場所 → 共有PIN 2580 を通して業務画面へ入る */
+/** お店のコード → 端末モード → 置き場所 → 共有PIN 000000 を通して業務画面へ入る */
 export async function start(page, mode = 'shared') {
   await page.clock.install({ time: NOW })
   await page.goto('/')
@@ -98,7 +98,7 @@ export async function start(page, mode = 'shared') {
   } else {
     await page.getByRole('button', { name: /佐藤 美咲/ }).click()
   }
-  for (const d of ['2', '5', '8', '0'])
+  for (const d of ['0', '0', '0', '0', '0', '0'])
     await page.getByRole('button', { name: d, exact: true }).click()
   await page.getByRole('button', { name: /^確定/ }).click()
   await nav.waitFor({ timeout: 20000 })
