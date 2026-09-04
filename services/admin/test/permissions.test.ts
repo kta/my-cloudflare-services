@@ -311,3 +311,18 @@ describe('dev トークングラントの fail close', () => {
     expect(res.status).toBe(404)
   })
 })
+
+/**
+ * staging ゲート(`app.use('*', stagingGate())`)は STAGING_ACCESS_TOKEN が
+ * 設定された環境でだけ働く。この環境には設定が無いので、全リクエストが素通り
+ * しなければならない — 誤って有効化されると本番まで 401 で塞がる。
+ */
+describe('staging ゲート', () => {
+  it('STAGING_ACCESS_TOKEN 未設定のこの環境では素通りする', async () => {
+    const token = await devToken('admin', 'operator-org')
+    const res = await SELF.fetch(`${BASE}/api/organizations`, {
+      headers: { authorization: `Bearer ${token}` },
+    })
+    expect(res.status).toBe(200)
+  })
+})

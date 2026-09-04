@@ -1,98 +1,118 @@
-# develop → staging 自動デプロイ設計（Terraform × Wrangler × GitHub Actions）
+# develop → staging / main → production 自動デプロイ設計
 
 - 日付: 2026-09-04
-- 状態: 承認待ち（設計）
-- 対象: `infra/terraform/cloudflare/`, `.github/workflows/ci.yml`, 各 `services/*/wrangler.jsonc`, `Makefile`, `scripts/`
+- 状態: 承認済み（実装待ち）
+- 対象: `infra/terraform/cloudflare/`, `.github/workflows/ci.yml`, 各 `services/*/wrangler.jsonc`,
+  `services/*/package.json`, `services/admin/seed.mjs`, `packages/shared/`, `Makefile`, `scripts/`,
+  `docs/howto/deploy.md`, `docs/architecture/infra.md`, `AGENTS.md`
 
 ## 1. 目的
 
-`develop` へ merge したら **staging 環境**へ自動デプロイし、`main` へ merge したら **production**
-へ自動デプロイする。基盤リソース（D1 / KV / R2）は Terraform が両環境ぶん所有し、CI が
-apply する。人間の手作業を最小にする。
+`develop` へ merge したら **staging**、`main` へ merge したら **production** へ自動でデプロイする。
+どちらも承認ゲートを置かず、verify が緑なら即座に出す。デプロイに要る値は **GitHub Environment
+secrets を唯一の源泉**とし、それを経由しない限りデプロイが成立しないようにする。
 
-現状は次のとおりで、いずれも自動化されていない。
+## 2. 現状（実物を読んで確認した事実）
 
-- `ci.yml` は `pull_request` と `push: main` で `verify` を回すだけ。デプロイは
-  `workflow_dispatch` の `deploy-eye-stack` のみ（人間がボタンを押す）。
+- `ci.yml` は `pull_request` と `push: [main]` で `verify` を回すだけ。デプロイは
+  `workflow_dispatch` + `deploy_eye_stack == true` の `deploy-eye-stack` job のみ。
+  **merge では発火しない**。`develop` は `push.branches` に入っていない。
 - `infra/terraform/cloudflare/` は単一ルート・**ローカル state**（`terraform.tfstate` は存在しない）。
-  backend の `s3` ブロックは README にコメントアウトのまま。
-- 本番リソースの一部は Terraform 管理外。`services/admin/wrangler.jsonc` の D1 ID は実 UUID だが、
-  `services/glasses_management/wrangler.jsonc` は placeholder（`00000000-...`）のまま。
-- `wrangler.jsonc` に環境の区分（`env.*`）が無い。
+  backend の `s3` ブロックは `versions.tf` にコメントアウトのまま。
+- **本番リソースの一部が Terraform 管理外**。`services/admin/wrangler.jsonc` の D1
+  (`0388dd19-68f7-4d34-a5bb-818b84205548`) と KV (`ec31896881954c4aa932a4a72b1a08be`) は実 ID だが
+  state に無い。`services/glasses_management/wrangler.jsonc` と `services/notifier/wrangler.jsonc`
+  は placeholder（`00000000-…`）のまま。
+- `wrangler.jsonc` に環境の区分（`env.*`）が無い。`routes` / `custom_domain` / `workers_dev` の
+  指定も無く、**全 Worker が `*.workers.dev` で公開**される。
+- **D1 の名前が 3 箇所にハードコード**されている（§6）。
+- **`services/ops` が存在しない**。`AGENTS.md` と `docs/howto/deploy.md` は実在しない Worker を
+  前提に書かれている（§12）。
 
-## 2. 環境モデル
+## 3. 決定事項
+
+| 論点 | 決定 |
+|---|---|
+| スコープ | staging と production を**一度に**有効化する |
+| Terraform の実行者 | **CI が apply**（R2 state backend + 既存リソースの import） |
+| 本番の承認ゲート | **置かない**（merge → verify 緑 → 即デプロイ） |
+| staging のアクセス制御 | **Worker 内のゲートトークン必須**（Cloudflare Access は使えない — §7） |
+| secrets の源泉 | **GitHub Environment secrets のみ**。手動 `wrangler secret put` は廃止 |
+
+## 4. 環境モデル
 
 | | production | staging |
 |---|---|---|
 | ブランチ | `main` | `develop` |
 | Worker 名 | `admin` / `glasses-management` / `notifier` | `admin-staging` / `glasses-management-staging` / `notifier-staging` |
-| wrangler 設定 | 上位（トップレベル） | `env.staging` |
-| 公開 | 現状のまま | `*.workers.dev` |
-| Cron | `glasses-management` の日次 1 本 | **0 本** |
+| wrangler 設定 | 上位（トップレベル）＝据え置き | `env.staging` を新設 |
+| `CLOUDFLARE_ENV` | 空 | `staging` |
 | GitHub Environment | `production` | `staging` |
+| 承認ゲート | なし | なし |
+| Cron | `glasses-management` の日次 1 本 | **0 本** |
+| アクセス | `*.workers.dev` 素通り | `*.workers.dev` + **ゲートトークン必須** |
+| seed | 初回のみ人間が実行 | **毎デプロイ**（冪等） |
 
-### 2.1 なぜ上位を production のままにするか
+### 4.1 なぜ上位を production のままにするか
 
 Wrangler の名前付き環境は Worker 名に `-<env>` を自動で付ける。`env.production` を新設すると
 本番 Worker が `admin-production` に**改名**され、既存のデプロイ・secrets・observability の
 連続性が切れる。したがって **上位＝production のまま据え置き、`env.staging` だけを足す**。
-`main` のデプロイは今までどおり `wrangler deploy`（環境指定なし）で走る。
 
-### 2.2 staging の Cron を 0 本にする理由
+### 4.2 staging の Cron を 0 本にする理由
 
 Cron は Workers Free で**アカウント全体 5 トリガー**の共有枠（`docs/howto/free-tier-limits.md`）。
 staging に日次 Cron を持たせると枠を 1 本食い、かつ staging の録音掃除ジョブが誰も見ていない
 時間に動く。`env.staging` では `"triggers": { "crons": [] }` として明示的に切る。
 
-### 2.3 バインディングは非継承
+### 4.3 バインディングは非継承
 
-`vars` / `kv_namespaces` / `d1_databases` / `r2_buckets` / `services` は Wrangler の
+`vars` / `kv_namespaces` / `d1_databases` / `r2_buckets` / `services` / `triggers` は Wrangler の
 **非継承キー**で、環境ごとに全部書き下ろす必要がある。service binding の `service` は自動で
 サフィックスが付かないため、`env.staging` では明示的に `glasses-management-staging` /
 `notifier-staging` / `admin-staging` を指す。
 
-### 2.4 Vite プラグイン利用時の環境選択
+### 4.4 Vite プラグイン利用時の環境選択
 
 `admin` / `glasses_management` は `@cloudflare/vite-plugin` を使うため、環境は `--env` ではなく
-**`CLOUDFLARE_ENV` 環境変数**で決まる（ビルド時に「flattened deploy config」が生成され、
+**`CLOUDFLARE_ENV` 環境変数**で決まる（ビルド時に flattened deploy config が生成され、
 `wrangler deploy` はそれを検証する）。CI ではビルドとデプロイの両方に同じ値を渡す。
+`notifier` は Vite を通さないが、**表記を `CLOUDFLARE_ENV` に統一**する。
 
 ```sh
 CLOUDFLARE_ENV=staging pnpm --filter @app/admin run deploy
 ```
 
-`notifier` は Vite を通さないので `--env staging` でも `CLOUDFLARE_ENV` でも良いが、
-**表記を `CLOUDFLARE_ENV` に統一**する。
+## 5. Terraform 構成
 
-## 3. Terraform 構成
-
-### 3.1 ディレクトリ
+### 5.1 ディレクトリ
 
 ```
 infra/terraform/cloudflare/
-  modules/substrate/     # 現 main.tf を var.name_suffix 付きで一般化
+  modules/substrate/     # 現 main.tf を suffix 付きで一般化
     main.tf variables.tf outputs.tf
-  envs/production/       # name_suffix = ""      → admin, glasses_management, ...
+  envs/production/       # d1_suffix = ""        kv_r2_suffix = ""
     main.tf backend.tf variables.tf outputs.tf
-  envs/staging/          # name_suffix = "_staging" / "-staging"
+  envs/staging/          # d1_suffix = "_staging" kv_r2_suffix = "-staging"
     main.tf backend.tf variables.tf outputs.tf
 ```
 
-workspace ではなく**ルートディレクトリ分割**を採る。CI の staging job は
-`envs/staging` に `cd` するので、**構造上 production の state に触れられない**。
-workspace は選択ミスが本番を壊す経路になる。
+workspace ではなく**ルートディレクトリ分割**を採る。CI の staging job は `envs/staging` に
+`cd` するので、**構造上 production の state に触れられない**。workspace は選択ミスが本番を
+壊す経路になる。
 
-### 3.2 命名
+### 5.2 命名
 
-module 側は D1 / KV / R2 で許される文字が違うため、サフィックスを 2 つ受け取る。
+D1 はアンダースコア命名、KV / R2 はハイフン命名で許容文字が違うため、module はサフィックスを
+2 つ受け取る。
 
 | リソース | production | staging |
 |---|---|---|
 | D1 | `admin` / `glasses_management` | `admin_staging` / `glasses_management_staging` |
 | KV | `admin-auth-rl` / `notifier-dedupe` / `glasses-management-short-lived` | 各々に `-staging` |
-| R2 | `glasses-management-recordings` | `glasses-management-recordings-staging` |
+| R2 | `glasses-management-recordings`（`location = "apac"`） | 同 `-staging` |
 
-### 3.3 State backend（R2）
+### 5.3 State backend（R2）
 
 ```hcl
 backend "s3" {
@@ -109,19 +129,16 @@ backend "s3" {
 }
 ```
 
-R2 には**ネイティブなロック機構が無い**ので、CI の `concurrency: deploy-<env>`
-（`cancel-in-progress: false`）で apply を直列化する。`endpoints` にアカウント ID が入るため、
-backend 設定は `-backend-config` で CI から注入する（ファイルにアカウント ID を書かない）。
+`endpoints` にアカウント ID が入るため、backend 設定は `-backend-config` で CI から注入する
+（ファイルにアカウント ID を書かない）。R2 には**ネイティブなロック機構が無い**ので、CI の
+`concurrency: deploy-<branch>`（`cancel-in-progress: false`）で apply を直列化する。
+state バケットは CI が `wrangler r2 bucket create tfstate` を冪等に呼んで用意する。
 
-state バケットは CI が `wrangler r2 bucket create tfstate` を冪等に呼んで用意する
-（既存なら失敗を無視）。
+### 5.4 既存リソースの取り込み（import）
 
-### 3.4 本番リソースの取り込み（import）
-
-production の D1 / KV / R2 の一部は Cloudflare 上に実在するが Terraform state に無い。
-そのまま `apply` すると同名リソースを作りに行って壊れる。
-
-`scripts/tf-import-existing.sh` を用意し、**apply の前に CI が実行**する。各リソースについて:
+production の D1 / KV は Cloudflare 上に実在するが state に無い。そのまま `apply` すると
+同名リソースを作りに行って壊れる。`scripts/tf-import-existing.sh <env>` を **apply の前に CI が
+実行**する。各リソースについて:
 
 1. `terraform state show <addr>` が成功したら何もしない（冪等）。
 2. 失敗したら Cloudflare API を名前で引いて ID を取得する。
@@ -131,45 +148,99 @@ production の D1 / KV / R2 の一部は Cloudflare 上に実在するが Terraf
 3. 見つかったら `terraform import <addr> <import_id>` を実行する。
 4. 見つからなければ何もしない（続く `apply` が新規作成する）。
 
-import ID の形式は `<account_id>/<resource_id>`（R2 は `<account_id>/<bucket_name>`）を前提とするが、
-**実装時に provider v5 のドキュメントで各リソースの `import` セクションを確認して確定させる**。
-このスクリプトは staging でも同じロジックで動く（初回は何も見つからず apply が作る）。
+staging でも同じロジックがそのまま動く（初回は何も見つからず apply が作る）。
+**import ID の形式は実装時に provider v5 のドキュメントで確認して確定させる**（§15-1）。
 
-## 4. wrangler.jsonc の変更
+### 5.5 ID の突合
 
-各サービスに `env.staging` を追加する。ID は Terraform 出力の実値をコミットして固定する。
-
-例（`services/notifier/wrangler.jsonc`）:
-
-```jsonc
-{
-  "name": "notifier",
-  // ... 上位 = production（現状のまま）
-  "env": {
-    "staging": {
-      "kv_namespaces": [{ "binding": "DEDUPE", "id": "<notifier_dedupe_kv_namespace_id (staging)>" }],
-      "vars": { "MAIL_FROM": "" }
-    }
-  }
-}
-```
-
-`glasses_management` の `env.staging` は D1 / KV / R2 / service bindings に加えて
-`"triggers": { "crons": [] }` を持つ。`admin` の `env.staging` は
-`"services": [{ "binding": "GLASSES_MANAGEMENT", "service": "glasses-management-staging" }]`。
-
-### 4.1 ID のずれを検知する
-
-CI は `terraform apply` の後に `terraform output -json` と `wrangler.jsonc` の値を突き合わせ、
+`terraform apply` の後、`terraform output -json` と `wrangler.jsonc` の値を突き合わせ、
 **一致しなければ job を落とす**。突合先は環境で変わる — staging は `env.staging`、production は
-上位（トップレベル）のバインディング。黙って別リソースへデプロイする事故を防ぐ。
-初回はリソースが新規作成されて突合が落ちるので、出力された ID をコミットする（一度きり）。
-`services/glasses_management/wrangler.jsonc` の production 側 D1 ID が placeholder のままなので、
-production 初回はここでも落ちる。実値を入れて解消する。
+上位（トップレベル）のバインディング。黙って別リソースへデプロイする事故を防ぐ唯一の関所である。
 
-## 5. CI ワークフロー
+この突合は D1 / KV / R2 の全バインディングを対象とする一般の関所で、CI の 1 ステップとして
+`terraform apply` の直後に走る。D1 についてはこれに加えて、`scripts/d1-migrate.mjs` が
+マイグレーション適用の直前にもう一度同じ検証を行う（§6.1）。二重にするのは、マイグレーションだけが
+取り返しのつかない操作だからである。
 
-`.github/workflows/ci.yml` を次のように変える。
+**初回の鶏と卵**: リソースが新規作成された初回は突合が落ちる。出力された ID をコミットして
+解消する（一度きり）。`glasses_management` と `notifier` の production 側も placeholder のままなので、
+**production の初回もここで落ちる**。実値を入れて解消する。
+
+## 6. D1 マイグレーションと seed の安全化（最大の事故ポイント）
+
+現状、D1 の名前が 3 箇所にハードコードされている。
+
+| 箇所 | 現在の値 |
+|---|---|
+| `services/admin/package.json` の `db:migrate:remote` | `wrangler d1 migrations apply admin --remote` |
+| `services/glasses_management/package.json` の同 | `wrangler d1 migrations apply glasses_management --remote` |
+| `services/admin/seed.mjs` | `wrangler d1 execute admin --remote` |
+
+このまま `develop` の CI を有効にすると、**staging のデプロイが production の D1 に
+マイグレーションと seed を当てる**。seed は `INSERT OR IGNORE` で冪等なため静かに成功し、
+気づけない。ここを塞がずに自動化してはならない。
+
+### 6.1 採用案 — ラッパースクリプト
+
+`scripts/d1-migrate.mjs <service> <env>` を追加する。このスクリプトが:
+
+1. `services/<service>/wrangler.jsonc` から、指定環境の `database_name` と `database_id` を読む
+   （`env` 未指定なら上位、`staging` なら `env.staging`）。
+2. `terraform output -json` の対応する値と**一致することを確かめる**（§5.5 の突合をここに統合）。
+3. 一致したときだけ `wrangler d1 migrations apply <database_name> --remote` を実行する。
+
+不採用にした案:
+
+- **環境変数で名前を渡す** — 単純だが、既定値を置くと事故が復活し、渡し忘れが静かに本番へ当たる。
+- **wrangler の `--env` に任せる** — 引数の DB 名は結局書く必要があり、二重管理が残る。
+
+採用理由は 3 つ。人が DB 名を二重管理しない。ID 突合を適用の直前に置けるので取り違えが構造的に
+起きない。seed も同じ経路に乗せられる。
+
+jsonc（コメント付き JSON）のパースは依存を増やさず**テスト可能な純関数**として書く。文字列
+リテラル内の `//` や `/*` を誤除去しないことを境界値テストで担保する。`@cloudflare/vite-plugin`
+がビルド時に出す flattened config を使う手もあるので、実装時にどちらが確実か実機で確かめる（§15-2）。
+
+### 6.2 seed
+
+`services/admin/seed.mjs` の `wrangler d1 execute admin` を、§6.1 が解決した名前に置き換える。
+
+staging は dev グラント無しの fail close なので、**admin ユーザーがいないとログインできない**。
+seed は冪等なので staging では毎デプロイ実行してよい。`AUTH_PEPPER` は GitHub secret
+`WORKER_AUTH_PEPPER` から、`ADMIN_PASSWORD` は `WORKER_STAGING_ADMIN_PASSWORD` から渡す。
+production では**回さない**（初回だけ人間が実行する現行方針を維持する）。
+
+### 6.3 デプロイ順と失敗時
+
+`notifier` → `glasses_management` → `admin` の直列。service binding は参照先の Worker が先に
+存在している必要があるため、この順序は動かせない。各サービスは **deploy → secrets 同期**の順
+（未作成の Worker には `secret bulk` を打てない）。
+
+**ロールバックはしない。** D1 マイグレーションは戻せず、Worker だけ戻すと整合しない。前方修正が
+方針である。ただしこの順序を守る限り、途中で失敗しても「新しい Worker がまだ出ていない」だけで、
+既存の本番は動き続ける。
+
+## 7. staging ゲート
+
+`*.workers.dev` は URL を知っていれば誰でも叩ける。**Cloudflare Access は使えない** — 本番も
+staging も独自ドメインを持たず（`routes` / `custom_domain` の指定が無い）、Access は自分の zone の
+ホスト名にしか適用できないためである。ドメインの持ち込みは別の承認事項とする。
+
+代わりに `packages/shared/src/staging-gate.ts` に Hono ミドルウェアを 1 本置く。
+
+- `env.STAGING_ACCESS_TOKEN` が未設定なら**即座に `next()`**。production ではこの分岐が死ぬ。
+- `/api/internal/*` は対象外（service binding は `x-internal-key` が守る）。
+- Cookie `staging_gate` の値が一致 → 通す。
+- `?gate=<token>` が一致 → `HttpOnly; Secure; SameSite=Lax; Max-Age=30d` の Cookie を発行し、
+  クエリを除いた同 URL へ 302。
+- どちらも無ければ `401`。本文は最小限にし、トークンの存在をヒントにしない。
+- 比較は**定数時間**で行う（長さの差でも早期 return しない）。
+
+`admin` と `glasses_management` の Worker エントリで、他のどのミドルウェアより先に置く。
+
+## 8. CI ワークフロー
+
+`.github/workflows/ci.yml` の変更は 3 点。
 
 ```yaml
 on:
@@ -179,7 +250,7 @@ on:
   workflow_dispatch: { ... 既存のまま ... }
 ```
 
-`verify` job は変更しない（`pull_request` と両ブランチの push で走る）。
+`verify` job は §11 のゲートを足す以外は変えない。
 
 新しい `deploy` job:
 
@@ -192,78 +263,95 @@ on:
 手順:
 
 1. checkout / pnpm / node / `pnpm install --frozen-lockfile`
-2. `pnpm -r --if-present cf-typegen`
-3. `hashicorp/setup-terraform`（バージョンはピン留め、SHA 指定）
-4. state バケットの用意（`wrangler r2 bucket create tfstate` を冪等に）
-5. `terraform init -backend-config=...`（`envs/<env>`）
-6. `bash scripts/tf-import-existing.sh <env>`
-7. `terraform apply -auto-approve`
-8. Terraform 出力と `wrangler.jsonc` の ID を突合（不一致なら fail）
-9. デプロイを依存順に。**各 Worker はデプロイしてから secrets を同期する**
-   （未作成の Worker に `secret bulk` は打てないため。§11.3）:
+2. **preflight**（`scripts/deploy-preflight.sh`）— ブランチ / `CLOUDFLARE_ENV` / Environment 名の
+   3 つが整合しているか検証し、ずれていたら即 fail（`develop` なのに `CLOUDFLARE_ENV` が空、
+   のような取り違えを構造的に殺す）。続けて必須 secrets の非空を検証し、1 つでも欠けたら
+   `terraform` にも `wrangler` にも進まない。スクリプトはリポジトリ内にあるので checkout の後に置く。
+3. `pnpm -r --if-present cf-typegen`
+4. `hashicorp/setup-terraform`（SHA でピン留め）
+5. state バケットの用意（`wrangler r2 bucket create tfstate` を冪等に）
+6. `terraform init -backend-config=...`（`envs/<env>`）
+7. `bash scripts/tf-import-existing.sh <env>`
+8. `terraform apply -auto-approve`
+9. Terraform 出力と `wrangler.jsonc` の ID を突合（不一致なら fail）
+10. デプロイを依存順に。各 Worker は **deploy → `wrangler secret bulk`** の順:
     - `notifier` deploy → secrets 同期
-    - `glasses_management`: `db:migrate:remote` → deploy → secrets 同期
-    - `admin`: `db:migrate:remote` → deploy → secrets 同期
-      （`glasses-management` への service binding があるため最後）
-10. secrets 同期後、反映のために各 Worker を**もう一度 deploy はしない**
-    — `wrangler secret` は Worker の新しいバージョンを作るので再デプロイは不要。
+    - `glasses_management`: `scripts/d1-migrate.mjs` → deploy → secrets 同期
+    - `admin`: `scripts/d1-migrate.mjs` → deploy → secrets 同期 → （staging のみ）seed
+11. secrets 同期後に再デプロイはしない（`wrangler secret` は Worker の新しいバージョンを作る）。
     ただし初回デプロイ直後の数十秒は secrets 未設定で fail-closed になる。
 
-`db:migrate:remote` は環境ごとに DB 名が違うので、`--env` を効かせるか DB 名を引数化する。
-package.json の script を `wrangler d1 migrations apply $D1_NAME --remote` の形にして、
-環境変数で切り替える（実装時に wrangler の `--env` と `d1 migrations apply` の
-組み合わせを実機で確認する）。
-
-既存の `workflow_dispatch` 版 `deploy-eye-stack` は**残す**。初回投入・緊急時の手動経路として要る。
-
+既存の `workflow_dispatch` 版 `deploy-eye-stack` は**残す**。緊急時の手動経路として要る。
 `e2e` job は現状どおり `workflow_dispatch` のみ（変更なし）。
 
-## 6. Secrets
+## 9. Secrets — 源泉と強制
 
-### 6.1 GitHub Environment secrets
+**GitHub Environment secrets が唯一の源泉**とし、値がリポジトリにも開発者の手元にも存在しない
+状態を作る。
 
 | 名前 | production | staging | 用途 |
 |---|---|---|---|
-| `CLOUDFLARE_API_TOKEN` | ✓ | ✓ | wrangler / Terraform provider |
+| `CLOUDFLARE_API_TOKEN` | ✓ | ✓ | Terraform provider + wrangler |
 | `CLOUDFLARE_ACCOUNT_ID` | ✓ | ✓ | 同上 + backend endpoint |
 | `R2_STATE_ACCESS_KEY_ID` | ✓ | ✓ | TF state backend（`AWS_ACCESS_KEY_ID` に写す） |
 | `R2_STATE_SECRET_ACCESS_KEY` | ✓ | ✓ | 同上 |
-| `WORKER_INTERNAL_KEY` | ✓ | ✓ | Worker secret `INTERNAL_KEY` |
-| `WORKER_JWT_SECRET` | ✓ | ✓ | Worker secret `JWT_SECRET` |
-| `WORKER_AUTH_PEPPER` | ✓ | ✓ | Worker secret `AUTH_PEPPER` |
-| `WORKER_RESEND_API_KEY` | ✓ | （未設定） | notifier の送信手段 |
+| `WORKER_INTERNAL_KEY` | ✓ | ✓ | Worker secret `INTERNAL_KEY`（全サービス同一値） |
+| `WORKER_JWT_SECRET` | ✓ | ✓ | Worker secret `JWT_SECRET`（発行側と検証側で同一値） |
+| `WORKER_AUTH_PEPPER` | ✓ | ✓ | Worker secret `AUTH_PEPPER`（admin のみ） |
+| `WORKER_DOMAIN_AUTH_KEY` | ✓ | ✓ | admin の `DOMAIN_AUTH_KEY` / glasses_management の `ADMIN_DOMAIN_AUTH_KEY` |
+| `WORKER_STAGING_ACCESS_TOKEN` | **入れない** | ✓ | §7 のゲート |
+| `WORKER_STAGING_ADMIN_PASSWORD` | **入れない** | ✓ | §6.2 の seed |
+| `WORKER_RESEND_API_KEY` | ✓ | **入れない** | notifier の送信手段 |
 
-### 6.2 CI が Worker へ同期する
+強制は 3 段で効かせる。
 
-各 Worker のデプロイ直後に `wrangler secret bulk` で投入する。Worker secrets は Worker ごとに
-独立なので、`admin-staging` は `admin` とは別の保管庫になる。これで staging はいつでも
-作り直せる。値はワークフローのログに出さない（`secret bulk` は stdin から JSON を読む）。
+1. **preflight** — 必須 secrets が空なら job を落とす（§8-1）。
+2. **同期** — deploy 直後に `wrangler secret bulk` へ stdin で流し込む。値はログに出さない。
+3. **アプリ側の fail close** — 既存設計のまま。`INTERNAL_KEY` 無しで internal API 401、
+   `JWT_SECRET` 無しで認証不可、`MAIL_FROM` / `RESEND_API_KEY` 無しで送信 502。
+   secrets を経ずに出た Worker は動かない。
 
-Terraform には secrets を置かない（`secret_text` は state に載る）。ルール 11 に従う。
+**保証できないこと（正直に）**: Cloudflare API トークンを手元に持つ人が `wrangler deploy` を
+打つことは Cloudflare 側の仕組みでは止められない。実効的な強制は「**デプロイ用トークンを
+ローカルに置かない**」運用に倒すことである。`docs/howto/deploy.md` から手動デプロイ手順と
+`wrangler secret put` 手順を削り、ローカルで基盤 Terraform を触るときだけその場限りで
+トークンを渡す形にする。
 
-`AUTH_PEPPER` は**変えるとパスワードハッシュが全部無効になる**ので、一度決めたら固定する。
-GitHub secret を後から書き換えないよう README に明記する。
+### 9.1 変えてはいけない値
 
-### 6.3 staging では RESEND_API_KEY を設定しない
+`AUTH_PEPPER` は**変えると既存パスワードハッシュが全部無効**になる。一度決めたら固定し、
+GitHub secret を後から書き換えない。`INTERNAL_KEY` は全サービス同一値なので、
+ローテーションするときは全サービス同時に行う。
 
-notifier は送信手段が未設定なら **fail close（502）** する設計（`docs/howto/notifications.md`）。
+### 9.2 staging では RESEND_API_KEY を設定しない
+
+notifier は送信手段が未設定なら **fail close（502）** する（`docs/howto/notifications.md`）。
 staging から本物のメールが飛ぶ事故を防ぐため、これを積極的に利用して未設定のままにする。
-staging で通知経路を試したくなったら、Resend のテスト用キーを GitHub secret に足す。
 
-### 6.4 ブートストラップ（人間の手作業）
+### 9.3 Terraform に secrets を置かない
+
+`secret_text` は state に載る。ルール 11 に従い、Terraform は基盤リソースだけを持つ。
+
+## 10. ブートストラップ（人間の手作業）
 
 `make bootstrap/ci` を追加する。`gh` CLI で:
 
 1. GitHub Environment `staging` / `production` を作成（`gh api`）。
-2. `WORKER_INTERNAL_KEY` / `WORKER_JWT_SECRET` / `WORKER_AUTH_PEPPER` を `openssl rand -hex 32`
-   で生成し、`gh secret set --env <env>` で登録する。**値は人間が知る必要がない。**
-3. `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` / R2 アクセスキー 2 値は対話で受け取って登録。
+2. `WORKER_INTERNAL_KEY` / `WORKER_JWT_SECRET` / `WORKER_AUTH_PEPPER` /
+   `WORKER_DOMAIN_AUTH_KEY` / `WORKER_STAGING_ACCESS_TOKEN` /
+   `WORKER_STAGING_ADMIN_PASSWORD` を `openssl rand -hex 32` で生成し、
+   `gh secret set --env <env>` で登録する。**値は人間が知る必要がない。**
+3. `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` / R2 アクセスキー 2 値 /
+   `WORKER_RESEND_API_KEY` は対話で受け取って登録する。
 
-**自動化できない唯一の作業**は、Cloudflare ダッシュボードで **R2 API トークンを 1 回発行**すること。
-S3 互換 backend は Cloudflare API トークンでは認証できず、R2 のアクセスキー ID / シークレットが要る。
-発行した 2 値を `make bootstrap/ci` に貼れば、以降は全部スクリプトが処理する。
+**自動化できない唯一の作業**は、Cloudflare ダッシュボードで **R2 API トークンを 1 回発行**する
+こと。S3 互換 backend は Cloudflare API トークンでは認証できず、R2 のアクセスキー ID /
+シークレットが要る。発行した 2 値を `make bootstrap/ci` に渡せば、以降はスクリプトが処理する。
 
-## 7. 検証
+Cloudflare API トークンの権限は `docs/howto/deploy.md` のとおり **Workers Scripts / D1 /
+Workers KV Storage / Workers R2 Storage の Edit + Account Settings Read**（Queues は不要）。
+
+## 11. 検証・テスト
 
 Terraform と CI はユニットテストの対象外なので、`verify` job にゲートを足す。
 
@@ -271,10 +359,29 @@ Terraform と CI はユニットテストの対象外なので、`verify` job �
 - `terraform validate`（`envs/production` と `envs/staging` の両方）
 - `CLOUDFLARE_ENV=staging wrangler deploy --dry-run`（各サービス。staging 構成の妥当性）
 
-`pnpm check`（lint / knip / typecheck / combined test）は変更しない。
-Knip の設定に新しいスクリプトが引っかからないか確認する。
+TDD の対象になるコードは 2 つ。
 
-## 8. 無料枠への影響（正直な代償）
+1. **`scripts/d1-migrate.mjs`** — jsonc パーサ（文字列リテラル内の `//` `/*` を誤除去しない）と
+   環境解決（`env` 未指定 → 上位 / `staging` → `env.staging`）、突合の不一致で必ず落ちること。
+2. **`packages/shared/src/staging-gate.ts`** — `permissions.test.ts` の表駆動に 1 ブロック追加する。
+   未設定時に素通りすること、Cookie 一致で通ること、`?gate=` からの Cookie 発行、
+   不一致・欠落で 401、`/api/internal/*` が対象外、**未知パスも 401**（default-deny の証明）。
+
+`pnpm check`（lint / knip / typecheck / combined test）の内容は変えない。Knip の設定に新しい
+スクリプトが引っかからないか確認する。
+
+## 12. 付随して直すもの
+
+- **`services/ops` が存在しない**。`AGENTS.md` のサービス境界表、`docs/howto/deploy.md` の
+  デプロイ順・secrets 手順、`docs/howto/restore.md` が実在しない Worker を前提に書かれている。
+  今回は**ドキュメント側を実態に合わせる**。ops の新規実装は別件（ルール 10 の承認事項）。
+- `docs/howto/deploy.md` を「GitHub secrets が源泉、手動 `wrangler secret put` は廃止、
+  デプロイは merge で自動」に全面改稿する。
+- `docs/architecture/infra.md` に 2 環境モデル・TF ディレクトリ構成・state backend を反映する。
+- `infra/terraform/cloudflare/README.md` を module + envs 構成と import スクリプトに合わせる。
+- `AGENTS.md` のサービス境界表に staging Worker 名を追記する。
+
+## 13. 無料枠への影響（正直な代償）
 
 staging は同じ Cloudflare アカウントに同居するので、**アカウント共有の枠を食う**。
 
@@ -289,26 +396,20 @@ staging は同じ Cloudflare アカウントに同居するので、**アカウ�
 staging を本番相当の負荷で回すと本番が止まりうる。**staging は手動確認とスモークに限る**。
 負荷試験を回すなら Paid への移行判断が要る（ルール 10 の人間承認事項）。
 
-## 9. ドキュメントの更新
+## 14. 実装しないと決めたもの（YAGNI）
 
-- `docs/architecture/infra.md` — 2 環境モデル、TF ディレクトリ構成、state backend を反映
-- `docs/howto/deploy.md` — develop/main のデプロイ経路、ブートストラップ手順、本番前チェックリスト
-- `infra/terraform/cloudflare/README.md` — module + envs 構成、import スクリプト
-- `AGENTS.md` — 「サービス境界」表に staging Worker 名を追記するかは実装時に判断
-
-## 10. 実装しないと決めたもの（YAGNI）
-
-- **staging への独自ドメイン / Cloudflare Access**: `*.workers.dev` で足りる。認証は各サービスが持つ。
-- **PR ごとのプレビュー環境**: Worker とリソースが PR 数だけ増え、無料枠を食う。develop の 1 本で足りる。
-- **Terraform による Worker / バインディング管理**: 1 リソース 1 オーナーの原則（`docs/architecture/infra.md`）を崩さない。
+- **staging への独自ドメイン / Cloudflare Access**: §7 のゲートで足りる。
+- **PR ごとのプレビュー環境**: Worker とリソースが PR 数だけ増え、無料枠を食う。
+- **Terraform による Worker / バインディング管理**: 1 リソース 1 オーナーの原則を崩さない。
 - **CI での e2e 実行**: 現行方針（`workflow_dispatch` のみ）を変えない。
-- **staging の Cron**: §2.2 のとおり切る。
+- **staging の Cron**: §4.2 のとおり切る。
+- **デプロイのロールバック**: §6.3 のとおり前方修正で対応する。
 
-## 11. 未確定（実装時に実機／公式ドキュメントで確認する）
+## 15. 未確定（実装時に実機／公式ドキュメントで確認する）
 
 1. `terraform import` の ID 形式（cloudflare provider v5 の D1 / KV / R2 各リソース）。
-2. `wrangler d1 migrations apply` と `--env` / `CLOUDFLARE_ENV` の組み合わせで、環境の
-   `d1_databases` から DB 名が解決されるか。解決されないなら DB 名を引数で渡す。
-3. `wrangler secret bulk` の `--env` 対応と、対象 Worker が未作成のときの挙動
-   （初回は secrets 同期をデプロイ後に回す必要があるかもしれない）。
+2. `wrangler.jsonc` から環境ごとの `database_name` / `database_id` を得る方法として、
+   自前の jsonc パーサと `@cloudflare/vite-plugin` の flattened config のどちらが確実か。
+3. `wrangler secret bulk` の `--env` 対応と、stdin から JSON を渡す正確な形式。
 4. `wrangler r2 bucket create` が既存バケットに対して返す終了コード（冪等化の書き方）。
+5. `wrangler d1 migrations apply` に `--env` を付けたときの DB 名解決の挙動（§6.1 の前提確認）。

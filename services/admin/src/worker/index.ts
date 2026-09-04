@@ -22,6 +22,7 @@ import {
   REFRESH_TTL_SECONDS,
   requireRole,
   signAccessToken,
+  stagingGate,
   tenantAuth,
 } from '@app/shared'
 import type { D1Database, Fetcher, KVNamespace } from '@cloudflare/workers-types'
@@ -67,12 +68,18 @@ export type Bindings = {
   // fail-closed configuration error (see internalAuth()).
   INTERNAL_KEY: string
   DOMAIN_AUTH_KEY: string
+  // staging だけに設定される。未設定なら stagingGate は何もしない(production)。
+  STAGING_ACCESS_TOKEN?: string
 }
 
 const REFRESH_COOKIE = 'rt'
 const INVITE_TTL_SECONDS = 72 * 60 * 60
 
 const app = new Hono<{ Bindings: Bindings; Variables: AuthVariables }>()
+
+// staging(workers.dev 公開)を守る。production は secret 未設定なので素通りする。
+// 他のどのミドルウェアより先に置く。
+app.use('*', stagingGate())
 
 app.onError((err, c) => {
   if (err instanceof HTTPException) return err.getResponse()

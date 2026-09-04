@@ -16,6 +16,16 @@
   // fail-closed until a verified sender is configured per environment.
   "vars": {
     "MAIL_FROM": ""
+  },
+  // staging(develop からの自動デプロイ先)。Worker 名は notifier-staging になる。
+  // kv_namespaces は wrangler の非継承キーなので環境ごとに書き下ろす。
+  // id は Terraform(envs/staging) の notifier_dedupe_kv_namespace_id の実値に差し替える。
+  "env": {
+    "staging": {
+      "kv_namespaces": [{ "binding": "DEDUPE", "id": "00000000000000000000000000000000" }],
+      // staging では RESEND_API_KEY を設定しないので、この空値のまま fail close する。
+      "vars": { "MAIL_FROM": "" }
+    }
   }
   // No secrets are stored in vars. INTERNAL_KEY and RESEND_API_KEY are set
   // with `wrangler secret put`; MAIL_FROM is an ordinary deployment variable.

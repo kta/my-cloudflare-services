@@ -1,0 +1,4 @@
+# Copy to terraform.tfvars and fill in. Never commit real values.
+# CI は TF_VAR_cloudflare_account_id を GitHub secret から渡すので、このファイルは
+# ローカルで触るときだけ要る。
+cloudflare_account_id = "your-cloudflare-account-id"

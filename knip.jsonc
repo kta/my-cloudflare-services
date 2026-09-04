@@ -2,6 +2,9 @@
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "treatConfigHintsAsErrors": true,
   "ignoreDependencies": ["^cloudflare(:.*)?$"],
+  // scripts/d1-migrate.mjs は `pnpm exec wrangler` を services/<name> を cwd にして
+  // 呼ぶ。wrangler は各サービスの devDependency であり、root には要らない。
+  "ignoreBinaries": ["wrangler"],
   "ignoreFiles": [
     ".agents/skills/design-select/scripts/**",
     // モックは製品のコードではなく、発注元へ見せる静止画とその撮影道具である。

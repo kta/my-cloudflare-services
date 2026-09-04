@@ -14,8 +14,21 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { readWranglerConfig, resolveEnv } from '../../scripts/lib/wrangler-config.mjs'
 
 const REMOTE = process.argv.includes('--remote')
+// 宛先の D1 は wrangler.jsonc から解決する。DB 名を直書きすると staging の seed が
+// 本番へ当たり、INSERT OR IGNORE は静かに成功するので気づけない。
+const ENV_NAME = process.env.CLOUDFLARE_ENV ?? ''
+const RESOLVED = resolveEnv(
+  readWranglerConfig(new URL('./wrangler.jsonc', import.meta.url)),
+  ENV_NAME,
+)
+const DB_NAME = RESOLVED.d1.find((d) => d.binding === 'DB')?.database_name
+if (!DB_NAME) {
+  console.error('❌ wrangler.jsonc から DB バインディングを解決できませんでした。')
+  process.exit(1)
+}
 // pepper は local は dev 値、remote は環境変数(本番 secret と一致)を要求する。
 const DEV_PEPPER = 'dev-auth-pepper-change-me' // == .dev.vars(.example) AUTH_PEPPER (local)
 const PEPPER = REMOTE ? (process.env.AUTH_PEPPER ?? '') : DEV_PEPPER
@@ -105,8 +118,9 @@ execFileSync(
     'wrangler',
     'd1',
     'execute',
-    'admin',
+    DB_NAME,
     REMOTE ? '--remote' : '--local',
+    ...(ENV_NAME ? ['--env', ENV_NAME] : []),
     '--file',
     sqlPath,
     '--yes',
@@ -114,7 +128,7 @@ execFileSync(
   { cwd: import.meta.dirname, stdio: 'inherit' },
 )
 
-const where = REMOTE ? 'REMOTE(本番)' : 'local'
+const where = REMOTE ? `REMOTE(${DB_NAME})` : `local(${DB_NAME})`
 console.log(`\n✅ seeded admin D1 [${where}]`)
 console.log(`   管理者ログイン: ${ADMIN_EMAIL}${REMOTE ? '' : ` / ${ADMIN_PASSWORD}`}`)
 if (REMOTE) {
