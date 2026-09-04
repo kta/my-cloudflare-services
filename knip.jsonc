@@ -16,6 +16,11 @@
       "project": ["src/**/*.ts", "test/**/*.ts"],
       "vitest": false
     },
+    "packages/patent-corpus": {
+      "entry": ["test/**/*.test.ts"],
+      "project": ["src/**/*.ts", "test/**/*.ts"],
+      "vitest": false
+    },
     "packages/shared": {
       "entry": ["test/**/*.test.ts"],
       "project": ["src/**/*.ts", "test/**/*.ts"],
@@ -31,6 +36,11 @@
       "vitest": false
     },
     "services/glasses_management": {
+      "entry": ["test/**/*.test.ts", "vitest.config.ts", "src/web/**/*.test.{ts,tsx}"],
+      "project": ["src/**/*.{ts,tsx,css}", "test/**/*.ts", "e2e/**/*.ts", "*.ts"],
+      "vitest": false
+    },
+    "services/patent_research": {
       "entry": ["test/**/*.test.ts", "vitest.config.ts", "src/web/**/*.test.{ts,tsx}"],
       "project": ["src/**/*.{ts,tsx,css}", "test/**/*.ts", "e2e/**/*.ts", "*.ts"],
       "vitest": false

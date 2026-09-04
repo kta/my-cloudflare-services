@@ -62,5 +62,12 @@ catalog:
   '@types/react': ^19.2.18
   '@types/react-dom': ^19.2.4
 
+  # Node（patent-corpus は node:sqlite / node:crypto を使うため型が要る）
+  '@types/node': ^26.4.1
+
+  # Fonts（typography は自己ホスト。外部 CDN へ取りに行かない）
+  '@fontsource/biz-udpgothic': ^5.3.0
+  '@fontsource/jetbrains-mono': ^5.3.0
+
   # Tooling
   '@biomejs/biome': ^2.5.10
