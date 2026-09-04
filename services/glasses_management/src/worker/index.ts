@@ -161,6 +161,7 @@ import {
   type OrgResolver,
   requireActiveOrg,
   signAccessToken,
+  stagingGate,
   stretchPin,
   tenantAuth,
   toJstDateString,
@@ -356,6 +357,8 @@ export type Bindings = {
   AUTH_DEV_GRANT?: string
   /** integration test の基準時刻。本番では設定せず、実時刻を使う。 */
   TEST_NOW?: string
+  /** staging だけに設定される。未設定なら stagingGate は何もしない(production)。 */
+  STAGING_ACCESS_TOKEN?: string
 }
 
 type Env = { Bindings: Bindings; Variables: AuthVariables }
@@ -370,6 +373,10 @@ type Db = DrizzleD1Database
 type Statement = D1PreparedStatement
 
 const app = new Hono<Env>()
+
+// staging(workers.dev 公開)を守る。production は secret 未設定なので素通りする。
+// 他のどのミドルウェアより先に置く。
+app.use('*', stagingGate())
 
 // 予期しない throw だけを 500 に畳む。投げられた HTTPException は自分の応答を保つ。
 app.onError((err, c) => {
