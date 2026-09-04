@@ -16,7 +16,7 @@
     "deploy:preflight": "node scripts/deploy-preflight.mjs",
     "check:bindings": "node scripts/check-binding-ids.mjs",
     "db:migrate:env": "node scripts/d1-migrate.mjs",
-    "test:scripts": "node --test scripts/lib/",
+    "test:scripts": "node --test scripts/lib/*.test.mjs",
     "test:traceability": "node --test scripts/check-e2e-traceability.test.mjs && node scripts/check-e2e-traceability.mjs",
     "lint": "biome check .",
     "deps:check": "knip",
