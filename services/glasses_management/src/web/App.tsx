@@ -1,5 +1,6 @@
 import type {
   BusinessHoursRow,
+  LocalDate,
   StaffMember,
   StaffShift,
   Store,
@@ -22,6 +23,7 @@ import {
 } from './client'
 import { CustomerScreen } from './customers/CustomerScreen'
 import { MyReservations } from './home/MyReservations'
+import { WeekStrip } from './home/WeekStrip'
 import { LedgerScreen } from './ledger/LedgerScreen'
 import { PinEntry } from './login/PinEntry'
 import { PlacePick } from './login/PlacePick'
@@ -72,14 +74,22 @@ function StartWork({ onStarted }: { onStarted: (org: string) => void }) {
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
-    if (!orgId.trim()) {
+    /*
+     * **入口でコードを畳んでから送る。**
+     * dev グラントは知らない組織にもトークンを出したうえで `organizations` に行を作るので、
+     * `EYEX` のまま送ると「EYEX」という空の組織が生まれ、店舗 0 件で
+     * 「このコードのお店が見つかりませんでした。」が出る —— seed 済みの `eyex` は無事なのに。
+     * 打ち間違いが組織として永続化するのも同じ経路なので、送る前にここで揃える。
+     */
+    const code = orgId.trim().toLowerCase()
+    if (!code) {
       setError('お店のコードを入れてください。')
       return
     }
     setBusy(true)
     setError(null)
     try {
-      await auth.login(orgId.trim())
+      await auth.login(code)
       /*
        * **入るまえに、そのコードのお店が本当にあるかを確かめる。**
        * dev グラントは知らない組織にもトークンを出すので、ここを見ないと
@@ -98,7 +108,7 @@ function StartWork({ onStarted }: { onStarted: (org: string) => void }) {
           return
         }
       }
-      onStarted(orgId.trim())
+      onStarted(code)
     } catch {
       setError('業務を始められませんでした。コードを確かめて、もう一度お試しください。')
     } finally {
@@ -141,6 +151,8 @@ function Workspace({
 }) {
   const [current, setCurrent] = useState('home')
   const [rail, setRail] = useState(false)
+  /** トップの 1 週間の帯から入ったときに台帳が開く日。左ナビから入ったときは本日。 */
+  const [ledgerDate, setLedgerDate] = useState<LocalDate | null>(null)
   // 個人トップの 1 行から来たとき、台帳のその帯の詳細を開いた状態で出す。
   const [openReservation, setOpenReservation] = useState<string | null>(null)
   const [stores, setStores] = useState<Store[] | null>(null)
@@ -754,7 +766,15 @@ function Workspace({
               sharedTerminal={terminalSession?.mode === 'shared'}
               onSharedSnapshot={setLockSnapshot}
               onOpenReservation={(id) => navigate('ledger', id)}
-              onOpenLedger={() => navigate('ledger')}
+              onOpenLedger={() => {
+                setLedgerDate(null)
+                navigate('ledger')
+              }}
+              today={toJstDateString(new Date())}
+              onPickDate={(date) => {
+                setLedgerDate(date)
+                navigate('ledger')
+              }}
               onStartBooking={() => startBooking()}
               onOpenSearch={() => navigate('search')}
             />
@@ -762,6 +782,7 @@ function Workspace({
             store ? (
               <LedgerScreen
                 storeId={store.id}
+                initialDate={ledgerDate ?? undefined}
                 initialReservationId={openReservation ?? undefined}
                 initialWalkinOpen={walkinPanel}
                 onBarCenter={setBarCenter}
@@ -894,6 +915,8 @@ function Home({
   onSharedSnapshot,
   onOpenReservation,
   onOpenLedger,
+  today,
+  onPickDate,
   onStartBooking,
   onOpenSearch,
 }: {
@@ -911,6 +934,10 @@ function Home({
   }) => void
   onOpenReservation: (reservationId: string) => void
   onOpenLedger: () => void
+  /** サーバの今日（JST の暦日）。1 週間の帯が読む。端末の時計は読まない。 */
+  today: LocalDate
+  /** 帯の日を押した。その日の台帳を開く。 */
+  onPickDate: (date: LocalDate) => void
   /** 受付の 5 工程へ入る。マイクの許可はこの指の操作の中で求める（Safari の制約）。 */
   onStartBooking: () => void
   /** 予約を探す・直す面（CHANGE-SEARCH）へ移る。 */
@@ -918,54 +945,64 @@ function Home({
 }) {
   const others = stores?.filter((s) => s.id !== currentStoreId) ?? []
   return (
-    <div className="grid h-full grid-flow-col content-center justify-start gap-12 pb-31 pl-11">
-      <div className="grid content-center gap-6">
-        <PrimaryAction
-          title="新しい予約を取る"
-          note="お電話・ご来店のお客様"
-          tone="pine"
-          glyph="☎"
-          onPress={onStartBooking}
-        />
-        <PrimaryAction
-          title="予約を変更する"
-          note="日時・内容の変更、取り消し"
-          tone="walkin"
-          glyph="✎"
-          onPress={onOpenSearch}
-        />
-        <section aria-label="ほかのお店" className="mt-2">
-          {stores === null ? (
-            <p className="text-grid text-ink-muted">読み込んでいます…</p>
-          ) : stores.length === 0 ? (
-            <p className="text-grid text-ink-muted">お店がまだ登録されていません。</p>
-          ) : others.length > 0 ? (
-            <ul className="flex flex-wrap gap-2">
-              {others.map((s) => (
-                <li key={s.id}>
-                  <button
-                    type="button"
-                    onClick={() => onSwitchStore(s.id)}
-                    className={`min-h-11 rounded-full border border-line-strong bg-surface px-4 text-note font-semibold text-ink-muted ${focusRing}`}
-                  >
-                    {s.name}へ切り替える
-                  </button>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </section>
+    <div className="relative h-full">
+      <div className="grid h-full grid-flow-col content-center justify-start gap-12 pb-31 pl-11">
+        <div className="grid content-center gap-6">
+          <PrimaryAction
+            title="新しい予約を取る"
+            note="お電話・ご来店のお客様"
+            tone="pine"
+            glyph="☎"
+            onPress={onStartBooking}
+          />
+          <PrimaryAction
+            title="予約を変更する"
+            note="日時・内容の変更、取り消し"
+            tone="walkin"
+            glyph="✎"
+            onPress={onOpenSearch}
+          />
+          <section aria-label="ほかのお店" className="mt-2">
+            {stores === null ? (
+              <p className="text-grid text-ink-muted">読み込んでいます…</p>
+            ) : stores.length === 0 ? (
+              <p className="text-grid text-ink-muted">お店がまだ登録されていません。</p>
+            ) : others.length > 0 ? (
+              <ul className="flex flex-wrap gap-2">
+                {others.map((s) => (
+                  <li key={s.id}>
+                    <button
+                      type="button"
+                      onClick={() => onSwitchStore(s.id)}
+                      className={`min-h-11 rounded-full border border-line-strong bg-surface px-4 text-note font-semibold text-ink-muted ${focusRing}`}
+                    >
+                      {s.name}へ切り替える
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </section>
+        </div>
+        {currentStoreId !== undefined && (
+          <MyReservations
+            storeId={currentStoreId}
+            showShared={showSharedReservations}
+            sharedTerminal={sharedTerminal}
+            onSharedSnapshot={onSharedSnapshot}
+            onOpen={onOpenReservation}
+            onOpenLedger={onOpenLedger}
+          />
+        )}
       </div>
-      {currentStoreId !== undefined && (
-        <MyReservations
-          storeId={currentStoreId}
-          showShared={showSharedReservations}
-          sharedTerminal={sharedTerminal}
-          onSharedSnapshot={onSharedSnapshot}
-          onOpen={onOpenReservation}
-          onOpenLedger={onOpenLedger}
-        />
-      )}
+      {/*
+        1 週間の帯は本文の下辺に置く（承認済みモック HOME.png の `.days`。
+        左右 44px・下 44px）。ここが空いていたあいだ、トップは今日について
+        何も言っていなかった（UX 監査 J-01）。
+      */}
+      <div className="absolute right-11 bottom-11 left-11">
+        <WeekStrip today={today} onPickDate={onPickDate} onOpenCalendar={onOpenLedger} />
+      </div>
     </div>
   )
 }

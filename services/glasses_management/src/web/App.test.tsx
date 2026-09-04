@@ -323,6 +323,80 @@ describe('知らないお店のコード', () => {
   })
 })
 
+/*
+ * お店のコードは大文字で入れても同じ店に入れる。
+ * dev グラントは知らない組織にもトークンを出したうえで `organizations` に行を作るので、
+ * `EYEX` のまま送ると「EYEX」という空の組織が生まれ、店舗 0 件で
+ * 「このコードのお店が見つかりませんでした。」が出る（seed 済みの `eyex` は無事なのに）。
+ * **入口で畳んでから送る。**
+ */
+describe('お店のコードの正規化', () => {
+  function captureFetch() {
+    const calls: { url: string; body: string }[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        calls.push({ url, body: String(init?.body ?? '') })
+        if (url.includes('/api/auth/token')) {
+          return new Response(JSON.stringify({ token: 'test-token' }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        if (url.includes('/business-hours')) {
+          return new Response(JSON.stringify({ rows: businessHours }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        if (url.includes('/api/staff/alerts')) {
+          return new Response(
+            JSON.stringify({ items: [], counts: { all: 0, alert: 0, info: 0, done: 0 } }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          )
+        }
+        if (url.includes('/api/staff/stores')) {
+          return new Response(JSON.stringify(stores), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        return new Response('not found', { status: 404 })
+      }),
+    )
+    return calls
+  }
+
+  it('大文字で入れても小文字にして送る', async () => {
+    const calls = captureFetch()
+    render(<App />)
+    await userEvent.type(screen.getByLabelText('お店のコード'), 'EYEX')
+    await userEvent.click(screen.getByRole('button', { name: '業務を始める' }))
+    await waitFor(() => expect(calls.some((c) => c.url.includes('/api/auth/token'))).toBe(true))
+    const token = calls.find((c) => c.url.includes('/api/auth/token'))
+    expect(JSON.parse(token?.body ?? '{}')).toEqual({ organizationId: 'eyex' })
+  })
+
+  it('前後に空白があっても大文字でも、そのまま業務に入れる', async () => {
+    captureFetch()
+    render(<App />)
+    await userEvent.type(screen.getByLabelText('お店のコード'), '  EyeX  ')
+    await userEvent.click(screen.getByRole('button', { name: '業務を始める' }))
+    await waitFor(() => expect(screen.queryByLabelText('お店のコード')).toBeNull())
+    // 入口を抜けた先で、そのコードの店舗名が読める。
+    await waitFor(() => expect(screen.getByText('EYEX 銀座店')).toBeInTheDocument())
+  })
+
+  it('畳んだコードを覚えるので、再読み込みしても同じ店に戻る', async () => {
+    captureFetch()
+    render(<App />)
+    await userEvent.type(screen.getByLabelText('お店のコード'), 'EYEX')
+    await userEvent.click(screen.getByRole('button', { name: '業務を始める' }))
+    await waitFor(() => expect(sessionStorage.getItem('app.auth.org')).toBe('eyex'))
+  })
+})
+
 describe('業務を終える', () => {
   it('終えると業務開始の画面へ戻る', async () => {
     await startWork()

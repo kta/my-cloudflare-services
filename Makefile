@@ -58,6 +58,15 @@ db/migrate/local:
 db/migrate/remote:
 	pnpm -r --if-present db:migrate:remote
 
+## db/reset/local: throw away local D1 state, then migrate + seed from scratch
+##   マイグレーションがリネーム・再生成されると、d1_migrations に残った古い名前のせいで
+##   db/migrate/local が `table ... already exists` で落ち、その先の seed（旧組織 ID の
+##   移行を含む）が一度も走らなくなる。ローカルの開発データだけを捨てて作り直す。
+db/reset/local:
+	rm -rf services/*/.wrangler/state/v3/d1
+	$(MAKE) db/migrate/local
+	$(MAKE) db/seed/local
+
 ## build: build all packages
 build:
 	pnpm -r --if-present build
@@ -96,6 +105,6 @@ worktree/rm:
 help:
 	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/## //' | awk -F': ' '{printf "  \033[36m%-26s\033[0m %s\n", $$1, $$2}'
 
-.PHONY: init dev/example_service dev/admin dev/glasses_management dev/notifier dev/all db/generate db/migrate/local db/migrate/remote db/seed/local \
+.PHONY: init dev/example_service dev/admin dev/glasses_management dev/notifier dev/all db/generate db/migrate/local db/migrate/remote db/seed/local db/reset/local \
 	build test typecheck lint check dev-vars deploy/admin \
 	worktree/new worktree/rm help
