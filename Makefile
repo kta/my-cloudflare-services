@@ -105,10 +105,13 @@ lint:
 check:
 	pnpm run check
 
-# NOTE: example_service は雛形なので本番 deploy ターゲットを持たない(CI matrix からも除外)。
-## deploy/admin: build + deploy the admin Worker (SPA + API)
-deploy/admin:
-	pnpm --filter @app/admin run deploy
+# NOTE: 手元からの deploy ターゲットは置かない。デプロイは GitHub Actions が
+# Environment secrets を使って行う唯一の経路であり、緊急時は workflow_dispatch を使う
+# (docs/howto/deploy.md)。手元に本番トークンを常設させないための意図的な欠落である。
+
+## bootstrap/ci: GitHub Environment と secrets を用意する(人の手は R2 トークン発行のみ)
+bootstrap/ci:
+	bash scripts/bootstrap-ci.sh
 
 ## worktree/new: isolated worktree for a parallel agent (name=<branch>)
 worktree/new:
@@ -124,5 +127,5 @@ help:
 	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/## //' | awk -F': ' '{printf "  \033[36m%-26s\033[0m %s\n", $$1, $$2}'
 
 .PHONY: init dev/example_service dev/admin dev/glasses_management dev/patent_research dev/notifier dev/all corpus/serve corpus/synth corpus/probe db/generate db/migrate/local db/migrate/remote db/seed/local db/reset/local \
-	build test typecheck lint check dev-vars deploy/admin \
+	build test typecheck lint check dev-vars bootstrap/ci \
 	worktree/new worktree/rm help
