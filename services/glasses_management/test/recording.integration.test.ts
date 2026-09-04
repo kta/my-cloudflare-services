@@ -819,6 +819,51 @@ describe('保存の失敗', () => {
     expect(listed.body.items).toHaveLength(1)
   })
 
+  it('ご予約 id で絞ると、その 1 件にぶら下がる録音だけが返る', async () => {
+    /*
+     * 絞り込みが無かったころ、画面はご予約 1 件の録音を特定できず、台帳の詳細・
+     * 予約を探す・受付履歴のどこにも「● 録音を聞く」が出せなかった
+     * （実装不足の洗い出し recording-03 / recording-02）。
+     */
+    const tenant = await recordingTenant()
+    const mine = await startSession(tenant.org, tenant.storeId)
+    const other = await startSession(tenant.org, tenant.storeId)
+    const wanted = await startRecording(tenant, mine)
+    const unrelated = await startRecording(tenant, other)
+    const reservationId = crypto.randomUUID()
+    await env.DB.prepare('UPDATE recordings SET reservation_id = ? WHERE id = ?')
+      .bind(reservationId, wanted.id)
+      .run()
+
+    const call = callAs(tenant.token)
+    const listed = await call(
+      'GET',
+      `/api/staff/recordings?storeId=${tenant.storeId}&reservationId=${reservationId}`,
+    )
+    expect(listed.status).toBe(200)
+    expect(listed.body.items).toHaveLength(1)
+    expect(listed.body.items[0]).toMatchObject({ id: wanted.id })
+    expect(listed.body.total).toBe(1)
+    // ほかのご予約の録音は混ざらない。
+    expect(listed.body.items.map((row: { id: string }) => row.id)).not.toContain(unrelated.id)
+  })
+
+  it('受付 id でも絞れる', async () => {
+    const tenant = await recordingTenant()
+    const mine = await startSession(tenant.org, tenant.storeId)
+    const other = await startSession(tenant.org, tenant.storeId)
+    const wanted = await startRecording(tenant, mine)
+    await startRecording(tenant, other)
+
+    const listed = await callAs(tenant.token)(
+      'GET',
+      `/api/staff/recordings?storeId=${tenant.storeId}&receptionSessionId=${mine}`,
+    )
+    expect(listed.status).toBe(200)
+    expect(listed.body.items).toHaveLength(1)
+    expect(listed.body.items[0]).toMatchObject({ id: wanted.id })
+  })
+
   it('送り直しても最低保持期限は伸びない（消せない録音を作らない）', async () => {
     // 一度決まった期限を送り直しのたびに引き直すと、5 分ごとの再送を続けるだけで
     // 期限が前へ逃げ続け、削除が永久に 409 `recording_retained` で拒まれる。

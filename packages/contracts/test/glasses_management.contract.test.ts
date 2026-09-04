@@ -3295,6 +3295,14 @@ describe('RecordingListQuery', () => {
     expect(() => RecordingListQuery.parse({ limit: 201 })).toThrow()
     expect(() => RecordingListQuery.parse({ state: 'purged' })).toThrow()
   })
+
+  it('ご予約・受付で絞れる（画面が「録音を聞く」の 1 本を特定する手段）', () => {
+    const id = '11111111-1111-4111-8111-111111111111'
+    expect(RecordingListQuery.parse({ reservationId: id }).reservationId).toBe(id)
+    expect(RecordingListQuery.parse({ receptionSessionId: id }).receptionSessionId).toBe(id)
+    expect(RecordingListQuery.parse({}).reservationId).toBeUndefined()
+    expect(() => RecordingListQuery.parse({ reservationId: 'いろは' })).toThrow()
+  })
 })
 
 describe('RecordingList', () => {

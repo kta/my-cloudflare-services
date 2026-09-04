@@ -14,6 +14,7 @@ import { cn, focusRing, focusRingOnPine } from '@app/ui'
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { client } from '../client'
 import { WalkinPanel } from '../reception/WalkinPanel'
+import { useReservationRecording } from '../recording/useReservationRecording'
 import { dateLabel, nowChipLabel, shiftDate } from './metrics'
 import { OfflineBanner } from './OfflineBanner'
 import { ReservationDetail, type ReservationDetailPhase } from './ReservationDetail'
@@ -129,6 +130,7 @@ export function LedgerScreen({
   const [autoRound, setAutoRound] = useState(0)
   // 開いているご予約。台帳の帯を押すと入り、閉じる 3 つの道のどれでも null に戻る。
   const [openId, setOpenId] = useState<string | null>(initialReservationId ?? null)
+  const recording = useReservationRecording(openId)
   const [detail, setDetail] = useState<ReservationDetailShape | null>(null)
   const [detailPhase, setDetailPhase] = useState<ReservationDetailPhase>('loading')
   const [anchor, setAnchor] = useState({ left: ARROW_LEFT_PX, top: 0, bandTop: 0 })
@@ -465,6 +467,8 @@ export function LedgerScreen({
             <ReservationDetail
               detail={detail}
               phase={detailPhase}
+              /* 保存済みの録音があれば「● 録音を聞く」を出す（UX 監査 recording-02）。 */
+              recording={recording}
               staffName={staffName}
               equipmentNames={equipmentNames}
               anchor={anchor}

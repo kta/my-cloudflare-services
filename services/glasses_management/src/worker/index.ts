@@ -9082,6 +9082,15 @@ const routes = app
         clauses.push('created_at < ?')
         params.push(toInstant(query.to, MINUTES_PER_DAY))
       }
+      // ご予約 1 件・受付 1 件にぶら下がる録音を引く（画面の「録音を聞く」がこれを使う）。
+      if (query.reservationId !== undefined) {
+        clauses.push('reservation_id = ?')
+        params.push(query.reservationId)
+      }
+      if (query.receptionSessionId !== undefined) {
+        clauses.push('reception_session_id = ?')
+        params.push(query.receptionSessionId)
+      }
       const where = `organization_id = ? AND ${clauses.join(' AND ')}`
 
       const cursor = decodePageCursor(query.cursor)

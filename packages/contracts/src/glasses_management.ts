@@ -2460,6 +2460,14 @@ export const RecordingListQuery = z.strictObject({
   state: QueryWordList(RecordingState, 5),
   from: LocalDate.optional(),
   to: LocalDate.optional(),
+  /*
+   * ご予約 1 件・受付 1 件にぶら下がる録音を引く。
+   * この 2 つが無かったころ、台帳の詳細・予約検索・受付履歴のどこからも
+   * 「録音を聞く」に辿り着けなかった —— API は動いているのに、画面が
+   * その 1 本を特定する手段を持っていなかった（実装不足の洗い出し recording-03 / 02）。
+   */
+  reservationId: Uuid.optional(),
+  receptionSessionId: Uuid.optional(),
   limit: Limit,
   cursor: Cursor.optional(),
 })

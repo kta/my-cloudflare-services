@@ -15,6 +15,7 @@ import { client } from '../client'
 import { dateLabel, jstClock, shiftDate } from '../ledger/metrics'
 import { VisitBadge } from '../ledger/Timetable'
 import { hasPlayableRecording, RecordingPlayer } from '../recording/RecordingPlayer'
+import { useReservationRecording } from '../recording/useReservationRecording'
 import { EmptyState, LoadingState } from '../shell/EmptyState'
 import { LoadFailed } from '../shell/LoadFailed'
 
@@ -296,6 +297,14 @@ export function ReceptionHistory({
   const [reloadCount, setReloadCount] = useState(0)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [detail, setDetail] = useState<ReceptionHistoryDetail | null>(null)
+  /*
+   * 選んだ受付のご予約にぶら下がる録音。器から渡ってくることもあるので、
+   * そちらが先（テストと差し替えのため）。渡らなければ自分で引く。
+   * 引く手段が無かったころ、この面に「受付のときの録音」が一度も出なかった
+   * （実装不足の洗い出し recording-02）。
+   */
+  const foundRecording = useReservationRecording(detail?.reservation?.id ?? null)
+  const shownRecording = recording ?? foundRecording
   const [detailFailed, setDetailFailed] = useState(false)
 
   const staffName = useCallback(
@@ -589,7 +598,7 @@ export function ReceptionHistory({
             failed={detailFailed}
             selected={selectedId !== null}
             staffName={staffName}
-            recording={recording}
+            recording={shownRecording}
             onOpenReservation={onOpenReservation}
           />
         </div>

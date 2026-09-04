@@ -14,6 +14,7 @@ import type { ReservationSnapshot } from '../../worker/domain/reservation-change
 import type { SlotChoice } from '../booking/SlotStep'
 import { client } from '../client'
 import { dateLabel, jstClock } from '../ledger/metrics'
+import { useReservationRecording } from '../recording/useReservationRecording'
 import { type CancelReason, ChangeCancel } from './ChangeCancel'
 import { ChangeDateTime } from './ChangeDateTime'
 import { ChangeDiff, type SlotTaken } from './ChangeDiff'
@@ -540,6 +541,9 @@ export function ChangeScreen({
     setStep('search')
   }
 
+  // 選んだご予約にぶら下がる録音。引く手段が無かったころ、この面に一度も出なかった。
+  const searchRecording = useReservationRecording(selectedId)
+
   const before = detail === null ? null : snapshotOf(detail, staffNames, placeNames)
   /*
    * 差分の右側。日時の道と担当・場所の道は同じ 1 枚の差分表に流れ込む
@@ -896,6 +900,8 @@ export function ChangeScreen({
           />
         ) : step === 'search' ? (
           <ReservationSearch
+            /* 保存済みの録音があれば「● 録音を聞く」を出す（UX 監査 recording-02）。 */
+            recording={searchRecording}
             conditions={conditions}
             onConditions={(next) => {
               setNotice(null)
