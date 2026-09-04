@@ -1,0 +1,20 @@
+@import "tailwindcss";
+@import "@app/ui/theme.css";
+
+/* 書体は自己ホストする（外部 CDN へ取りに行かない）。
+ * BIZ UDPGothic は公文書向けの UD 書体で、この製品の題材（出願台帳）に合う。
+ * 等幅は公報番号・段落番号・日付・件数・検索式にだけ使い、和文には使わない。 */
+@import "@fontsource/biz-udpgothic/400.css";
+@import "@fontsource/biz-udpgothic/700.css";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
+
+/* Tailwind v4 は pnpm の symlink を辿らないので、共有 UI の class 名を明示的に走査させる。 */
+@source "../../../../packages/ui/src";
+
+/* 台帳の地。body に明示的に置く（親の地を借りない）。 */
+body {
+  background-color: var(--color-tk-board);
+  color: var(--color-tk-ink);
+  font-family: var(--font-tk-sans);
+}

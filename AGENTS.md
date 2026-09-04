@@ -64,12 +64,14 @@ Lefthook は開発中の早期フィードバック、CI `verify` は迂回で�
 | パッケージ | 種別 | dev port | 役割 |
 |---|---|---|---|
 | `services/example_service` (`@app/example_service`) | SPA+API Worker + D1 | 5173 | item ドメイン。**コピー元の雛形**（本番デプロイ対象外） |
+| `services/patent_research` (`@app/patent_research`) | SPA+API Worker + D1 | 5177 | **典拠（Tenkyo）**: 特許の先行技術調査と明細書ドラフト。公報コーパスは `packages/patent-corpus` の別プロセス（:8899）に持たせ、`x-internal-key` の HTTP で問い合わせる。**ローカル完結・本番デプロイ対象外** |
 | `services/admin` (`@app/admin`) | SPA+API Worker + D1 + KV | 5174 | organizations 源泉 + **認証源泉**（login/refresh/招待）。service binding で各ドメインへ org 同期 + 日次照合 Cron |
 | `services/notifier` (`@app/notifier`) | 同期送信 API Worker + KV | — | 通知（`POST /api/internal/send`・KV 冪等・Resend）。送信手段未設定は **fail close(502)** |
 | `services/ops` (`@app/ops`) | Cron + Workflows Worker + R2 | — | D1 バックアップ（R2 に世代保存）+ 鮮度/容量/死活監視。Workflows は無料枠内 |
 | `packages/contracts` (`@app/contracts`) | TS | — | **Zod 単一ソース** |
 | `packages/ui` (`@app/ui`) | TS/TSX + theme.css | — | **デザイントークン単一ソース** + 共有プリミティブ |
 | `packages/shared` (`@app/shared`) | TS | — | 認証(JWT/password/hono ミドルウェア) / internal 呼び出し / JST 日付 / 解析(GA4) |
+| `packages/patent-corpus` (`@app/patent-corpus`) | TS (Node CLI + サイドカー) | 8899 | 日本語特許コーパス。バルクデータの取り込み・bigram 全文検索・**典拠の照合**・ベクトル。`node:sqlite` のみで外部依存ほぼゼロ。**派生物であり作り直せる** |
 
 各サービスの中身: `src/worker/`（Hono + Drizzle schema）/ `src/web/`（React SPA）/ `migrations/` / `test/`（vitest-pool-workers）/ `e2e/`（Playwright）。ops・notifier は SPA/D1 を持たない（`src/` 直下に Worker のみ）。
 
@@ -84,7 +86,7 @@ Lefthook は開発中の早期フィードバック、CI `verify` は迂回で�
 
 ## エージェント固有メモ
 - **Claude Code**: 次の場合は **plan mode** で計画してから着手 — ①新サービス追加 ②DB スキーマ変更 ③ライブラリ追加・置換 ④仕様外/横断的なリファクタ ⑤認証・通知・service binding に触れる変更。
-- **リポジトリ内スキル**（`.agents/skills/`）: `check`（`pnpm check` を緑まで）/ `new-service <name>`（サービス雛形）/ `design-select`（デザイン候補を HTML でブラウザ提示→クリックで選択）。Claude Code は `.claude/skills` の symlink から同じスキルを利用する。
+- **リポジトリ内スキル**（`.agents/skills/`）: `check`（`pnpm check` を緑まで）/ `new-service <name>`（サービス雛形）/ `design-select`（デザイン候補を HTML でブラウザ提示→クリックで選択）/ `patent-search`・`patent-assess`・`patent-draft`（典拠の分析。積まれたジョブを拾う）。Claude Code は `.claude/skills` の symlink から同じスキルを利用する。
 - **新規画面・見た目の大幅変更**では、コードの前に `docs/frontend/DESIGN_RULE.md` のパス 1（トークン計画）をテキストで出し、`design-select` スキルで候補 2〜3 案を見せてから実装する。
 - **新 API は当て推量しない**: Cloudflare は Claude Code の `.mcp.json` または Codex の `.codex/config.toml` にある `cloudflare-docs` MCP、ライブラリ全般は `context7` MCP（**導入している場合**。未導入ならインストール済みパッケージの型定義・公式 docs で確認）。
 - 並行作業は `make worktree/new name=<branch>` / `make worktree/rm name=<branch>`（`.wrangler/state` が worktree ごとに隔離される）。
@@ -103,6 +105,7 @@ Lefthook は開発中の早期フィードバック、CI `verify` は迂回で�
 | 無料枠の上限・設計対処 | `docs/howto/free-tier-limits.md` |
 | バックアップ / リストア | `docs/howto/restore.md` |
 | 通知（Queue なし設計） | `docs/howto/notifications.md` |
+| 特許調査・出願支援（典拠） | `docs/howto/patent-research.md` / `docs/patent/BUDGET.md` / `docs/superpowers/specs/2026-09-04-patent-research-system-design.md` |
 | 開発体制・ワークフロー全体 | `docs/howto/agent-development.md` |
 | 依存の追加・削除・更新 | `docs/howto/dependency-management.md` |
 | LLM を組み込む機能**のみ** | `docs/security/AI_GUARDRAILS_RULE.md`（LLM を扱わないタスクでは読まない） |
