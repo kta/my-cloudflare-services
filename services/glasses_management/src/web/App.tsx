@@ -168,6 +168,8 @@ function Workspace({
   // 顧客台帳の「この方のご予約を取る」（AC-CUST-26）から来たときの、その方。
   // 工程 4 のお名前・ふりがな・お電話番号をこれで埋める。
   const [bookingCustomer, setBookingCustomer] = useState<{
+    /** その方の id。予約に結び付けるので、名前と一緒に必ず運ぶ。 */
+    id?: string
     name: string
     kana: string
     phone: string | null
@@ -399,7 +401,12 @@ function Workspace({
   }
 
   /** 顧客台帳から「ご予約を取る」（AC-CUST-26）。渡さなければ、いつもの白紙の受付になる。 */
-  function startBooking(customer?: { name: string; kana: string; phone: string | null }) {
+  function startBooking(customer?: {
+    id?: string
+    name: string
+    kana: string
+    phone: string | null
+  }) {
     setBookingCustomer(customer ?? null)
     navigate('book')
   }

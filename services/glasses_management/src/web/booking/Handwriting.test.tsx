@@ -37,6 +37,7 @@ const EMPTY: CustomerDraft = {
   nameTyped: '',
   kanaTyped: '',
   noteTyped: '',
+  customerId: null,
   notes: [],
 }
 

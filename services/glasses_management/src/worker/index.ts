@@ -1246,8 +1246,16 @@ function toReport(input: {
 const handwritingKey = (org: string, customerId: string, noteId: string): string =>
   `notes/${org}/${customerId}/${noteId}.svg`
 
-/** 接客を終えた 1 語。来店3列はすべて `done` の予約だけから書き戻す。 */
-const VISITED_STATUSES = "('done')"
+/*
+ * 「ご来店になった」と数える状態。
+ *
+ * **`done` だけでは足りない。**`AC-CUST-11` は「最後のご来店」を
+ * **来店済み（`arrived` / `serving` / `done`）の予約の最終 `starts_at`」と定めている。
+ * `done` だけで数えていたころ、いまお店にいらしている方（`arrived` / `serving`）の
+ * 「最後のご来店」が前回のまま止まり、一覧・要約・重複の警告に古い日付が出続けた
+ * （実装不足の洗い出し customers-05）。来店回数（`visit_count`）も同じ数え方をする。
+ */
+const VISITED_STATUSES = "('arrived', 'serving', 'done')"
 
 /** 一覧・詳細・候補が同じ形で読む列。別名は契約の欄名に揃える。 */
 const CUSTOMER_COLUMNS =

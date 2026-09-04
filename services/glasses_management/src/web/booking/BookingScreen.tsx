@@ -71,7 +71,7 @@ export type BookingScreenProps = {
    * 工程 4 のお名前・ふりがな・お電話番号をこれで埋め、打ち直させない。
    * 新しい受付（再開ではない）のときだけ効く。
    */
-  initialCustomer?: { name: string; kana: string; phone: string | null }
+  initialCustomer?: { id?: string; name: string; kana: string; phone: string | null }
   /** 受付を閉じた／あとで続けるでトップへ戻る。 */
   onExit: () => void
   /** 完了の面の「台帳で見る」。省くとトップへ戻る。 */
@@ -145,6 +145,8 @@ export function BookingScreen({
           nameTyped: initialCustomer.name,
           kanaTyped: initialCustomer.kana,
           phoneTyped: initialCustomer.phone ?? '',
+          // 顧客台帳の「ご予約を取る」から来たときは、その 1 名で決まっている。
+          customerId: initialCustomer.id ?? null,
         },
   )
   const [confirming, setConfirming] = useState(false)
@@ -418,6 +420,7 @@ export function BookingScreen({
     nameTyped: draft.nameTyped,
     kanaTyped: draft.kanaTyped,
     noteTyped: draft.noteTyped,
+    customerId: draft.customerId,
     notes,
   }
 
@@ -532,6 +535,10 @@ export function BookingScreen({
             durationMinutes,
             staffId: chosenStaffId,
             equipmentIds: chosenEquipmentIds,
+            // 候補から選んだ 1 名をご予約に結び付ける。載せていなかったころ、
+            // 予約行の `customer_id` は NULL のままで、台帳の帯にお名前も来店回数も
+            // 出ず、来店回数も一生増えなかった（AC-CUST-24 / 25、AC-CUST-10 / 11）。
+            ...(draft.customerId === null ? {} : { customerId: draft.customerId }),
             noteCustomer: draft.noteTyped,
             source: 'phone',
             ...(hold === null ? {} : { holdId: hold.id }),
@@ -980,6 +987,9 @@ export function BookingScreen({
                 nameTyped: next.nameTyped,
                 kanaTyped: next.kanaTyped,
                 noteTyped: next.noteTyped,
+                // 選んだ 1 名は下書きに置く。サーバに残るので、タブを捨てて戻っても
+                // 結び付けが消えない（実装不足の洗い出し customers-01）。
+                customerId: next.customerId,
               }))
             }}
             soFar={{

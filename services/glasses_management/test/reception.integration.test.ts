@@ -847,7 +847,7 @@ describe('あとから結びつける', () => {
     expect(row?.visitCount).toBe(1)
   })
 
-  it('接客中の来店を紐づけても退店までは初回・最終来店に数えない', async () => {
+  it('接客中の来店を紐づけると来店の日付は動くが、来店回数は退店まで増えない', async () => {
     const t = await receptionTenant()
     const customerId = await seedCustomer(t.org, {
       name: '田中 花子',
@@ -874,7 +874,17 @@ describe('あとから結びつける', () => {
     )
       .bind(t.org, customerId)
       .first<{ visitCount: number; firstVisitAt: string | null; lastVisitAt: string | null }>()
-    expect(row).toEqual({ visitCount: 0, firstVisitAt: null, lastVisitAt: null })
+    /*
+     * 数え方が 2 通りあることをここで固定する。
+     *   来店回数（`visit_count`）: 退店（`done`）だけ（AC-RECEP-23）。
+     *   初回・最後のご来店: 来店済み（`arrived` / `serving` / `done`）（AC-CUST-11）。
+     * 接客中の日付まで止めていたころ、いまお店にいらしている方の「最後のご来店」に
+     * 前回の日付が出続けた（実装不足の洗い出し customers-05）。
+     */
+    expect(row?.visitCount).toBe(0)
+    // ウォークインの枠は刻みへ丸められるので 11:00 から始まる。
+    expect(row?.firstVisitAt).toBe(jstAt(LEDGER_DATE, '11:00'))
+    expect(row?.lastVisitAt).toBe(jstAt(LEDGER_DATE, '11:00'))
   })
 
   it('別テナントの担当者をウォークインへ割り当てられない', async () => {
