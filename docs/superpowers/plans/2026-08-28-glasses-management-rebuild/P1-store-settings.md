@@ -437,8 +437,8 @@
   - トークン計画: 緑は左の柱 1 本だけに保つ（第2サイドバーは `--color-surface-2` の薄い面）。
     白い箱は 3 枚まで、説明文は 2 つまで。角は 8/12/16px の 3 段。値は右寄せ。
   - シグネチャ: **上の 56px のバーに「変更を捨てる／面の名前／未保存の札＋保存」を固定し、6 面すべてで同じ位置に置く。**
-- **見るモック**: `docs/frontend/mockups/eyex/images/SETTINGS-STORE.png`（1194×834。撮影は上の 24px を外した 1194×810）
-- **実測値**（`screens/SETTINGS-*.html` の `<style>` と `assets/eyex.css`。6 面すべて同じ）
+- **見るモック**: `docs/frontend/mockups/eye/images/SETTINGS-STORE.png`（1194×834。撮影は上の 24px を外した 1194×810）
+- **実測値**（`screens/SETTINGS-*.html` の `<style>` と `assets/eye.css`。6 面すべて同じ）
   - `.set`: `grid-template-columns: 236px 1fr`、高さ 100%
   - 第2サイドバー: 地 `--color-surface-2`、右に 1px `--color-line`、`padding: 4px 10px 0`
   - 群の見出し: 11px / 行高 13px / `--color-ink-muted` / `padding: 3px 12px 0`
@@ -730,13 +730,13 @@
 - **やること**
   - `SETTINGS-STORE` / `SETTINGS-CALENDAR` / `SETTINGS-HOURS` / `SETTINGS-PURPOSE` / `SETTINGS-STAFF` /
     `SETTINGS-EQUIPMENT` の 6 枚を `toHaveScreenshot('<画面ID>.png', { scale: 'device' })` で撮る。
-    基準画像は `docs/frontend/mockups/eyex/reference/`（ステータスバー 24px を外した派生物）。
-    `node docs/frontend/mockups/eyex/reference.mjs` で作り直せる。
+    基準画像は `docs/frontend/mockups/eye/reference/`（ステータスバー 24px を外した派生物）。
+    `node docs/frontend/mockups/eye/reference.mjs` で作り直せる。
   - `maxDiffPixelRatio` は「いま許している差」。**残っている差が何かをコメントに書く。下げるだけで、上げてはいけない。**
     既知の差として先に書いておくもの: ①「キャンセル」→「変更を捨てる」の文字（この TODO の決め #2）
     ②お昼の帯 13:00–14:00 → 12:00–13:00（決め #6）③第2サイドバーの 8 項目を出さないこと（決め #1）
     ④上のバーの「お知らせ 3」（P10）。
-  - **HOME の `maxDiffPixelRatio` を下げる。**T-012 で銀座店が入るので、店名が `EYEX` から `EYEX 銀座店` になる。
+  - **HOME の `maxDiffPixelRatio` を下げる。**T-012 で銀座店が入るので、店名が `EYE` から `EYE 銀座店` になる。
 - **先に書くテスト**: なし（`toHaveScreenshot` そのものが検証）。
 - **実装**: 6 面の `toHaveScreenshot` と、許している差のコメント。
 - **完了条件**: `pnpm --filter @app/glasses_management exec playwright test --project=mock` が緑。

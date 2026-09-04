@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { mondayOf, monthLabel, WeekStrip, weekOf } from './WeekStrip'
 
 /*
- * トップの下辺の 1 週間の帯（承認済みモック docs/frontend/mockups/eyex/images/HOME.png）。
+ * トップの下辺の 1 週間の帯（承認済みモック docs/frontend/mockups/eye/images/HOME.png）。
  *
  * この帯が無いあいだ、共有端末のトップは主操作 2 枚だけで、今日について何も言って
  * いなかった（UX 監査 J-01）。台帳へ入るには左の柱から「予約台帳」を押し、

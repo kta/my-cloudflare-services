@@ -8,12 +8,12 @@ import { VisitBadge } from '../ledger/Timetable'
 import { EmptyState } from '../shell/EmptyState'
 
 /*
- * 来店受付ボード（承認済みモック docs/frontend/mockups/eyex/images/RECEPTION-JOURNEY.png）。
+ * 来店受付ボード（承認済みモック docs/frontend/mockups/eye/images/RECEPTION-JOURNEY.png）。
  *
  * 題材: フロアのスタッフが顔を上げて 3 秒で「誰をお待たせしているか」を掴む面。主役は盤面 1 枚。
  * シグネチャ: **待たせている行が赤地と文字の両方で真っ先に目に入り、空の欄は空のまま置くこと。**
  *
- * 実測（screens/RECEPTION-JOURNEY.html の <style> と assets/eyex.css）:
+ * 実測（screens/RECEPTION-JOURNEY.html の <style> と assets/eye.css）:
  *   .board  = padding 28px 36px
  *   .jgrid  = 220px + 6 列 1fr / 行 40px + 4 × 1fr / 枠 1px --line / 角 16px / overflow hidden
  *   .jhead  = padding 0 14px・13px/600・--ink-2・下罫 1px --line-strong

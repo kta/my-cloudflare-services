@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EYE予約 — 店頭のお客様を受け付ける</title>
+<link rel="stylesheet" href="../assets/eye.css">
+<style>
+  /* 10:00 から 30分刻みで 14 枠（10:00–17:00）。左の名前列は 150px 固定。 */
+  .tt-grid { grid-template-columns: 150px repeat(14, 1fr); }
+  /* 行は画面の高さいっぱいに広げる。最終行（お待ち）だけは帯なので低くする。 */
+  .tt-grid.fill { height: 100%; grid-template-rows: 34px repeat(4, 1fr) 92px; }
+  .tt-cell { overflow: hidden; }
+  .appt.narrow { word-break: keep-all; }
+  .appt.narrow b { font-size: 13px; }
+  .appt .src { display: block; font-weight: 400; color: var(--ink-2); }
+  /* 空き枠の案内は 2枠ぶんの幅に 1行で収める。 */
+  .appt.free { padding: 6px 5px; }
+  .tt-head.time { justify-content: flex-start; }
+  /* 現在 11:08 = 開始から68分 / 全420分 */
+  .nowline { left: calc(150px + (100% - 150px) * 0.1619); }
+
+  /* 右から出る受付パネル。台帳を見ながら埋められるよう、台帳の上に重ねる。
+     午後の枠はパネルの下に続いている。 */
+  .panel { position: absolute; top: 0; right: 0; bottom: 0; width: 400px; z-index: 5;
+           background: var(--surface); border-left: 1px solid var(--line-strong);
+           display: flex; flex-direction: column; }
+  .panel .wh { flex: none; display: flex; align-items: center; gap: 10px;
+               padding: 12px 22px; border-bottom: 1px solid var(--line); }
+  .panel .wh h2 { margin: 0; font-size: 18px; }
+  .panel .wb { flex: 1; min-height: 0; overflow: hidden; padding: 22px 22px 0; }
+  .panel .wf { flex: none; padding: 20px 22px; }
+  .sec { margin-top: 24px; }
+  .waitline { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 12px;
+              border-radius: var(--r-m); background: var(--walkin-tint); border: 1px solid var(--walkin); }
+  .waitline b { font-size: 15px; color: var(--walkin); white-space: nowrap; }
+  .picks { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .pick { min-height: 60px; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: var(--r-s);
+          background: var(--surface); color: var(--ink); font: 600 15px var(--sans); text-align: left; }
+  .pick small { display: block; font: 400 12px var(--sans); color: var(--ink-2); margin-top: 2px; }
+  .pick.on { border: 3px solid var(--brand); background: var(--brand-tint); color: var(--brand-dark); padding: 6px 8px; }
+  .pick.on small { color: var(--brand-dark); }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+  .wchip { min-height: 44px; padding: 0 14px; border: 1px solid var(--line-strong); border-radius: var(--r-pill);
+           background: var(--surface); color: var(--ink); font: 600 15px var(--sans); }
+  .wchip.on { border: 2px solid var(--brand); background: var(--brand-tint); color: var(--brand-dark); }
+  .wchip small { font-weight: 400; color: var(--ink-2); }
+  .wchip.on small { color: var(--brand-dark); }
+  .panel .field { min-height: 52px; font-size: 16px; }
+  .panel .label { margin-bottom: 10px; font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="caption">
+  <h1>店頭のお客様を受け付ける（ウォークイン）</h1>
+  <p>台帳を見たまま、ご用件を伺う。30分ごとの薄い線が入ったので、空いている枠が置き場所として読める。</p>
+</div>
+
+<main class="device" id="screen">
+  <div class="statusbar"><span>11:08</span><span>EYE 銀座店</span><span>Wi‑Fi　100%</span></div>
+
+  <header class="appbar">
+    <button class="homebtn" aria-label="トップへ">⌂</button>
+    <div class="storename">EYE 銀座店<small>予約台帳</small></div>
+    <div class="datepill">
+      <button aria-label="前の日">‹</button>
+      <span>2026年8月27日（木）</span>
+      <span class="today">本日</span>
+      <button aria-label="次の日">›</button>
+    </div>
+    <div class="barbtns"><button class="barbtn"><b>お知らせ</b><span class="badge">3</span></button></div>
+  </header>
+
+  <div class="body">
+    <div class="shell">
+      <nav class="sidenav" aria-label="画面の切り替え">
+        <button class="navtoggle" aria-label="サイドバーをたたむ">たたむ</button>
+        <button class="new">＋ 予約を取る</button>
+        <button class="nav-item on" data-icon="ledger">予約台帳</button>
+        <button class="nav-item" data-icon="reception">来店受付</button>
+        <button class="nav-item" data-icon="search">予約を検索</button>
+        <button class="nav-item" data-icon="history">受付履歴</button>
+        <button class="nav-item" data-icon="customer">顧客台帳</button>
+        <div class="group">お店の運用</div>
+        <button class="nav-item" data-icon="analytics">分析</button>
+        <button class="nav-item" data-icon="settings">設定</button>
+        <div class="foot">銀座店 レジ横iPad<br>共有で使っています</div>
+      </nav>
+
+      <div class="content">
+        <div class="toolbar">
+          <div class="segmented" role="group" aria-label="台帳の並べ方">
+            <button class="on">担当者</button>
+            <button>設備・場所</button>
+          </div>
+          <div class="segmented" role="group" aria-label="表示のかたち">
+            <button class="on">タイムテーブル</button>
+            <button>予約リスト</button>
+          </div>
+          <button class="btn" style="min-height:40px;padding:0 14px">絞り込み</button>
+          <span class="nowchip right"><i aria-hidden="true"></i>現在 11:08</span>
+        </div>
+
+        <div class="inner">
+          <div class="tt">
+            <div class="tt-bg" style="--label:150px;--slots:14;--hours:7;--headh:34px"></div>
+            <div class="nowline"></div>
+            <div class="tt-grid fill">
+        <div class="tt-head">担当者</div>
+        <div class="tt-head time">10:00</div><div class="tt-head time">10:30</div>
+        <div class="tt-head time">11:00</div><div class="tt-head time">11:30</div>
+        <div class="tt-head time">12:00</div><div class="tt-head time">12:30</div>
+        <div class="tt-head time">13:00</div><div class="tt-head time">13:30</div>
+        <div class="tt-head time">14:00</div><div class="tt-head time">14:30</div>
+        <div class="tt-head time">15:00</div><div class="tt-head time">15:30</div>
+        <div class="tt-head time">16:00</div><div class="tt-head time">16:30</div>
+
+        <div class="tt-name">佐藤 美咲<small>視力測定・加工</small></div>
+        <div class="tt-cell" style="grid-column:span 2"></div>
+        <div class="tt-cell" style="grid-column:span 2"><div class="appt"><b>田中 花子 様</b>新調相談・視力測定</div></div>
+        <div class="tt-cell" style="grid-column:span 2"></div>
+        <div class="tt-cell" style="grid-column:span 2"><div class="appt busy">休憩</div></div>
+        <div class="tt-cell" style="grid-column:span 6"></div>
+
+        <div class="tt-name">高橋 健<small>フィッティング</small></div>
+        <div class="tt-cell"><div class="appt narrow"><b>伊藤 様</b></div></div>
+        <div class="tt-cell" style="grid-column:span 5"></div>
+        <div class="tt-cell" style="grid-column:span 2"><div class="appt"><b>佐々木 亮 様</b>フィッティング</div></div>
+        <div class="tt-cell" style="grid-column:span 6"></div>
+
+        <div class="tt-name">中村 彩<small>販売・受付</small></div>
+        <div class="tt-cell"></div>
+        <div class="tt-cell" style="grid-column:span 2"><div class="appt web"><b>山口 真央 様</b>視力測定<span class="src">Web予約</span></div></div>
+        <div class="tt-cell" style="grid-column:span 11"></div>
+
+        <div class="tt-name">渡辺 由紀<small>販売</small></div>
+        <div class="tt-cell" style="grid-column:span 3"></div>
+        <div class="tt-cell" style="grid-column:span 2"><div class="appt free">ここに入ります<br><span style="font-weight:400">11:30–12:30</span></div></div>
+        <div class="tt-cell" style="grid-column:span 9"></div>
+
+        <div class="tt-name" style="background:var(--walkin-tint)">ご来店お待ち<small>2名</small></div>
+        <div class="tt-cell" style="grid-column:span 14">
+          <div class="appt walkin"><b>ウォークイン 004　受付 11:02　お待ち 6分</b>フレームの相談</div>
+        </div>
+            </div>
+
+            <aside class="panel" aria-label="店頭のお客様の受け付け">
+              <div class="wh">
+                <h2>店頭のお客様を受け付けます</h2>
+                <button class="btn quiet right" style="min-height:44px;padding:0 10px">やめる</button>
+              </div>
+
+              <div class="wb">
+                <div class="waitline">
+                  <b>いまお待ち 2名</b>
+                  <span class="small">目安 15分</span>
+                  <span class="tag walkin right">ウォークイン 005</span>
+                </div>
+
+                <div class="sec">
+                  <span class="label">ご用件</span>
+                  <div class="picks" role="group" aria-label="ご用件">
+                    <button class="pick on">メガネを新しく作る<small>約60分</small></button>
+                    <button class="pick">メガネを調整したい<small>約20分</small></button>
+                    <button class="pick">できあがりを受け取る<small>約20分</small></button>
+                    <button class="pick">視力測定だけ<small>約30分</small></button>
+                  </div>
+                </div>
+
+                <div class="sec">
+                  <span class="label">お客様</span>
+                  <div class="field empty">電話番号で探す（下4桁でも探せます）</div>
+                  <div class="chips" style="margin-top:10px">
+                    <button class="wchip on">あとで登録する</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="wf">
+                <button class="btn primary big" style="width:100%;min-height:56px">受付して台帳に載せる</button>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+</body>
+</html>

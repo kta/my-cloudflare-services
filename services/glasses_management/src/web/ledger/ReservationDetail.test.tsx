@@ -6,12 +6,12 @@ import { describe, expect, it, vi } from 'vitest'
 import { ReservationDetail } from './ReservationDetail'
 
 /*
- * 予約の詳細（承認済みモック docs/frontend/mockups/eyex/images/LEDGER-DETAIL.png）。
+ * 予約の詳細（承認済みモック docs/frontend/mockups/eye/images/LEDGER-DETAIL.png）。
  *
  * この面の仕事は「台帳の位置を見失わないまま、1 件の中身と次の操作だけを見る」こと。
  * モーダルにしない — 後ろの台帳は見えたままで、押した帯へ矢印が刺さる。
  *
- * 実測値（screens/LEDGER-DETAIL.html と assets/eyex.css の `.popover`）:
+ * 実測値（screens/LEDGER-DETAIL.html と assets/eye.css の `.popover`）:
  *   幅 440px・角 16px・縁 1px --line-strong・影 0 12px 32px、矢印 16px を左 40px。
  *   頭 padding 14px 16px / 胴 12px 16px / 足 12px 16px（足の地は --surface-2）。
  *   主操作は幅いっぱい・min-height 52px・17px、その下に副操作 2 つを 10px 空けて置く。

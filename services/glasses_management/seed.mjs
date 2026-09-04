@@ -5,13 +5,13 @@
  *   local : pnpm --filter @app/glasses_management db:seed:local   （make init から呼ばれる）
  *   本番   : node services/glasses_management/seed.mjs --remote
  *
- * 入れるもの: EYEX（組織）と 3 店舗（銀座・丸の内・新宿）、および銀座店の受付条件 6 面
+ * 入れるもの: EYE（組織）と 3 店舗（銀座・丸の内・新宿）、および銀座店の受付条件 6 面
  * （営業時間 / 止める帯 / 予約の間隔 / スタッフと技能と勤務 / 設備と点検 / ご来店の目的）。
- * 組織 id は admin 側の seed（`org-admin-seed` など）とは別に、EYEX 用の 1 件を置く。
+ * 組織 id は admin 側の seed（`org-admin-seed` など）とは別に、EYE 用の 1 件を置く。
  * 実運用では組織は admin から service binding で届くので、これは開発の足場である。
  *
  * 値の正本: specs/glasses_management/design/03-data-model.md §4〜§6 と、
- * docs/frontend/mockups/eyex/screens/SETTINGS-*.html。
+ * docs/frontend/mockups/eye/screens/SETTINGS-*.html。
  * マスタープラン §5 と食い違う 2 件（店長は 山田 大輔／目的にフィッティングは無い）は §5 が誤り。
  *
  * id は毎回同じ固定値にする。`INSERT OR IGNORE` が「2 回走らせても行が増えない」のは
@@ -40,7 +40,7 @@ if (REMOTE && !PEPPER) {
 // そちらへ入れる。開発者の .wrangler/state は E2E_STATE_PATH が無いときだけ使う。
 const PERSIST_TO = process.env.E2E_STATE_PATH
 const NOW = '2026-08-01T00:00:00.000Z'
-const ORG = 'eyex'
+const ORG = 'eye'
 
 const q = (s) => `'${String(s).replace(/'/g, "''")}'`
 
@@ -77,15 +77,15 @@ const hashStretched = async (stretched, pepper) => {
 const stores = [
   {
     id: '11111111-1111-4111-8111-111111111111',
-    name: 'EYEX 銀座店',
+    name: 'EYE 銀座店',
     slug: 'ginza',
     phone: '03-3571-0001',
-    address: '東京都中央区銀座4-5-6 EYEXビル 2階',
+    address: '東京都中央区銀座4-5-6 EYEビル 2階',
     accessNote: 'A1出口から徒歩3分',
   },
   {
     id: '22222222-2222-4222-8222-222222222222',
-    name: 'EYEX 丸の内店',
+    name: 'EYE 丸の内店',
     slug: 'marunouchi',
     phone: '03-2345-6789',
     address: '東京都千代田区丸の内1-1-1',
@@ -93,7 +93,7 @@ const stores = [
   },
   {
     id: '33333333-3333-4333-8333-333333333333',
-    name: 'EYEX 新宿店',
+    name: 'EYE 新宿店',
     slug: 'shinjuku',
     phone: '03-3456-7890',
     address: '東京都新宿区新宿3-1-1',
@@ -124,21 +124,21 @@ const terminals = [
     name: '銀座店 レジ横iPad',
     kind: 'shared',
     placeNote: 'レジの右側　固定スタンド',
-    deviceLabel: 'EYEX-iPad-07',
+    deviceLabel: 'EYE-iPad-07',
   },
   {
     id: uid('c0100000', 1),
     name: '銀座店 受付iPad',
     kind: 'shared',
     placeNote: '入口の受付台',
-    deviceLabel: 'EYEX-iPad-07',
+    deviceLabel: 'EYE-iPad-07',
   },
   {
     id: uid('c0100000', 2),
     name: '銀座店 検査室iPad',
     kind: 'shared',
     placeNote: '検査室 1　測定機の脇',
-    deviceLabel: 'EYEX-iPad-07',
+    deviceLabel: 'EYE-iPad-07',
   },
 ]
 const terminalSeedRows = await Promise.all(
@@ -163,7 +163,7 @@ const storeInfo = [
   {
     id: GINZA,
     sort_order: 0,
-    name_public: 'EYEX 銀座店（銀座4丁目）',
+    name_public: 'EYE 銀座店（銀座4丁目）',
     nearest_station: '東京メトロ 銀座駅',
     parking_note: '提携駐車場はありません',
     intro_text:
@@ -234,7 +234,7 @@ const staffMembers = [
     kana: 'なかむら あや',
     job: null,
     role: 'staff',
-    adminUserId: 'user-eyex-nakamura',
+    adminUserId: 'user-eye-nakamura',
     skills: ['sales_reception'],
     week: ['10:00-18:00', null, null, '10:00-19:00', '10:00-19:00', '11:00-20:00', '10:00-19:00'],
     rest: null,
@@ -264,7 +264,7 @@ const staffMembers = [
     kana: 'やまだ だいすけ',
     job: '店長',
     role: 'manager',
-    adminUserId: 'user-eyex-yamada',
+    adminUserId: 'user-eye-yamada',
     skills: ['sales_reception'],
     week: [null, '10:00-19:00', null, '10:00-19:00', null, null, '10:00-19:00'],
     rest: null,
@@ -939,12 +939,12 @@ const qBody = (text) => text.split('\n').map(q).join(' || char(10) || ')
  * 実運用では admin が service binding で配るが、dev と E2E の足場としてここに置く。 */
 const memberships = [
   {
-    userId: 'user-eyex-yamada',
+    userId: 'user-eye-yamada',
     permissions:
       'store.read store.manage reservation.read reservation.write customer.read customer.write settings.read settings.manage',
   },
   {
-    userId: 'user-eyex-nakamura',
+    userId: 'user-eye-nakamura',
     permissions: 'store.read reservation.read reservation.write customer.read settings.read',
   },
 ]
@@ -1118,10 +1118,10 @@ const fillStore = (id, column, value) =>
   `UPDATE stores SET ${column} = ${typeof value === 'number' ? value : q(value)} WHERE id = ${q(id)} AND ${column} IS NULL;`
 
 const lines = [
-  // `org-eyex-seed` を使っていた既存のローカル D1 を、現在のログイン ID へ収束させる。
+  // `org-eye-seed` を使っていた既存のローカル D1 を、現在のログイン ID へ収束させる。
   ...legacySeedMigrationStatements(REMOTE),
   ...strayOrganizationCleanupStatements(REMOTE),
-  `INSERT OR IGNORE INTO organizations (id, name, plan, is_disabled, created_at, revision) VALUES (${q(ORG)}, 'EYEX', 'contracted', '0', ${q(NOW)}, '1');`,
+  `INSERT OR IGNORE INTO organizations (id, name, plan, is_disabled, created_at, revision) VALUES (${q(ORG)}, 'EYE', 'contracted', '0', ${q(NOW)}, '1');`,
   `INSERT OR IGNORE INTO organizations (id, name, plan, is_disabled, created_at, revision) VALUES (${q(ANALYTICS_OTHER_ORG)}, '別組織', 'contracted', '0', ${q(NOW)}, '1');`,
   `INSERT OR IGNORE INTO stores (id, organization_id, name, slug, phone, address, access_note, is_active, created_at) VALUES (${q(ANALYTICS_OTHER_STORE)}, ${q(ANALYTICS_OTHER_ORG)}, '別組織店', 'analytics-other', '', '', '', '1', ${q(NOW)});`,
   ...stores.map(
@@ -1344,7 +1344,7 @@ execFileSync(
 )
 
 console.log(`\n✅ seeded glasses_management D1 [${REMOTE ? 'REMOTE(本番)' : 'local'}]`)
-console.log(`   組織: ${ORG}（EYEX）／ 店舗: ${stores.map((s) => s.name).join('・')}`)
+console.log(`   組織: ${ORG}（EYE）／ 店舗: ${stores.map((s) => s.name).join('・')}`)
 console.log(
   `   銀座店の受付条件: 営業時間 ${businessHours.length} 行 ／ 止める帯 ${blackoutWindows.length} 行 ／ ` +
     `スタッフ ${staffMembers.length} 名（技能 ${staffMembers.reduce((n, m) => n + m.skills.length, 0)} 行・` +
@@ -1363,7 +1363,7 @@ console.log(
     `田中 花子 様の度数 ${prescriptionSeeds.length} 件・メガネ ${glassesSeeds.length} 本・` +
     `接客のメモ ${noteSeeds.length} 件・過去のご予約 ${pastVisitRows.length} 件`,
 )
-console.log('   業務開始の画面では、お店のコードに eyex を入れる。暗証番号は 000000。')
+console.log('   業務開始の画面では、お店のコードに eye を入れる。暗証番号は 000000。')
 /*
  * 台帳の中身は承認済みモックが描いている瞬間（2026年8月27日）に固定してある。
  * e2e が丸ごとこの日付に依存しているので動かせない。**実時間が進むほど「今日」は

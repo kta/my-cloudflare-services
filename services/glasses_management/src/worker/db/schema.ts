@@ -1180,7 +1180,7 @@ export const analyticsDaily = sqliteTable(
  * Web 予約の公開設定。**1 店舗 1 行**（SETTINGS-WEB の保存先）。
  *
  * **行が無い店舗は「未公開」として読む**（is_published='0' と同じ）。
- * 「ご案内のページ eyex.jp/ginza」はこの表に持たない（stores.slug から組み立てる）。
+ * 「ご案内のページ eye.jp/ginza」はこの表に持たない（stores.slug から組み立てる）。
  *
  * opens_at < closes_at。この帯は store_business_hours の内側でなくてよい
  * （Web だけ受付を狭められる）。'HH:MM' の文字列比較で大小を見るので、

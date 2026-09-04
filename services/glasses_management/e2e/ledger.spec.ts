@@ -5,7 +5,7 @@ import { completeSeededTerminalStart } from './support/terminal'
 /**
  * 空き枠と予約台帳（005-availability-and-ledger）の受け入れ基準を、実ブラウザと
  * 実 Worker で確かめる。`vite preview` が実 workerd を動かし、D1 は `seed.mjs` が入れた
- * EYEX 銀座店（2026年8月27日（木）のご予約 12 件）である。
+ * EYE 銀座店（2026年8月27日（木）のご予約 12 件）である。
  *
  * 1 本の test の直前の行に `// @e2e-covers <ID> ...` を置く。UC は対になる AC の test に
  * 相乗りさせ、33 件（UC-LEDGER-01..11 / AC-LEDGER-01..22）をちょうど 1 回ずつ並べる。
@@ -37,8 +37,8 @@ declare function getComputedStyle(node: unknown): {
   outlineWidth: string
 }
 
-const ORG = 'eyex'
-/** seed.mjs が固定 id で入れる EYEX 銀座店。 */
+const ORG = 'eye'
+/** seed.mjs が固定 id で入れる EYE 銀座店。 */
 const GINZA = '11111111-1111-4111-8111-111111111111'
 /** dev グラントが載せる `sub`。 */
 const VIEWER = `dev:${ORG}`
@@ -142,14 +142,14 @@ async function startWork(
   await page.getByLabel('お店のコード').fill(ORG)
   await page.getByRole('button', { name: '業務を始める' }).click()
   await completeSeededTerminalStart(page, mode)
-  await expect(page.locator('header').first()).toContainText('EYEX 銀座店')
+  await expect(page.locator('header').first()).toContainText('EYE 銀座店')
 }
 
 /** 同じ端末で画面を開き直す。すでに業務を始めているので名乗り直さない。 */
 async function reopen(page: Page, mode: 'shared' | 'personal' = 'shared'): Promise<void> {
   await page.goto('/')
   await completeSeededTerminalStart(page, mode)
-  await expect(page.locator('header').first()).toContainText('EYEX 銀座店')
+  await expect(page.locator('header').first()).toContainText('EYE 銀座店')
 }
 
 async function openLedger(page: Page): Promise<void> {

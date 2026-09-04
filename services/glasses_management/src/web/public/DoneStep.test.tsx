@@ -4,11 +4,11 @@ import { describe, expect, it, vi } from 'vitest'
 import { DoneStep, type PublicBookingReceipt } from './DoneStep'
 
 /*
- * 工程 6 完了（承認済みモック docs/frontend/mockups/eyex/images/WEB-06-DONE.png）。
+ * 工程 6 完了（承認済みモック docs/frontend/mockups/eye/images/WEB-06-DONE.png）。
  *
  * この面の仕事は「番号を主役にし、戻り道を消し、メールが出なかった日でも戻れるようにする」こと。
  *
- * 実測値（screens/WEB-06-DONE.html と assets/eyex.css）:
+ * 実測値（screens/WEB-06-DONE.html と assets/eye.css）:
  *   上のバーは `‹` を持たない。本文の余白 32px 28px 140px。
  *   ✓ の丸 56px（地 `--color-pine`・文字 28px）、見出し 20px、副文 13px `--color-ink-muted`。
  *   番号の箱は上に 28px・内側 16px 12px・中央寄せ・地 `--color-pine-soft`、
@@ -23,7 +23,7 @@ const RECEIPT: PublicBookingReceipt = {
   status: 'confirmed',
   startsAt: '2026-08-29T02:00:00.000Z', // JST 8月29日（土）11:00
   endsAt: '2026-08-29T03:00:00.000Z',
-  storeName: 'EYEX 銀座店',
+  storeName: 'EYE 銀座店',
   purposeName: '新しいメガネを作る',
   contactName: '山口 真央',
   emailed: true,
@@ -69,7 +69,7 @@ describe('完了', () => {
   it('明細 4 行（ご来店・店舗・ご用件・お名前）が予約の内容と一致する', () => {
     open()
     expect(within(line('ご来店')).getByText('2026年8月29日（土）11:00')).toBeVisible()
-    expect(within(line('店舗')).getByText('EYEX 銀座店')).toBeVisible()
+    expect(within(line('店舗')).getByText('EYE 銀座店')).toBeVisible()
     expect(within(line('ご用件')).getByText('新しいメガネを作る（約60分）')).toBeVisible()
     expect(within(line('お名前')).getByText('山口 真央 様')).toBeVisible()
   })

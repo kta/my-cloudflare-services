@@ -4,7 +4,7 @@ import { completeSeededTerminalStart } from './support/terminal'
 
 /**
  * 電話・店頭からの予約受付（006-booking-flow）の受け入れ基準を、実ブラウザと実 Worker で
- * 確かめる。`vite preview` が実 workerd を動かし、D1 は `seed.mjs` が入れた EYEX 銀座店
+ * 確かめる。`vite preview` が実 workerd を動かし、D1 は `seed.mjs` が入れた EYE 銀座店
  * （2026年8月27日（木）のご予約 12 件）である。
  *
  * 1 本の test の直前の行に `// @e2e-covers <ID> ...` を置く。UC は対になる AC の test に
@@ -40,8 +40,8 @@ declare const CompositionEvent: new (
   init?: { bubbles?: boolean; data?: string },
 ) => unknown
 
-const ORG = 'eyex'
-/** seed.mjs が固定 id で入れる EYEX 銀座店。 */
+const ORG = 'eye'
+/** seed.mjs が固定 id で入れる EYE 銀座店。 */
 const GINZA = '11111111-1111-4111-8111-111111111111'
 
 /** seed の id は `${区分}-0000-4000-8000-${連番}`（`seed.mjs` の `uid`）。 */
@@ -88,7 +88,7 @@ async function startWork(page: Page): Promise<void> {
   await page.getByLabel('お店のコード').fill(ORG)
   await page.getByRole('button', { name: '業務を始める' }).click()
   await completeSeededTerminalStart(page)
-  await expect(page.locator('header').first()).toContainText('EYEX 銀座店')
+  await expect(page.locator('header').first()).toContainText('EYE 銀座店')
 }
 
 /** 「新しい予約を取る」を押して工程 1 に着く。 */
@@ -696,7 +696,7 @@ test('復唱の文を読み上げて確定すると、予約番号と控えの�
   await expect(script).toContainText('9月3日')
   // 復唱は声に出す形（「午後2時30分」）で読む。時計の表記は右の要約が持つ。
   await expect(script).toContainText('午後2時30分')
-  await expect(script).toContainText('EYEX 銀座店')
+  await expect(script).toContainText('EYE 銀座店')
   // 目的は工程 2 で押した札と同じ店内の名前（`name_internal`）で読み上げる。
   await expect(script).toContainText('今のメガネを調整したい')
   await expect(script).toContainText('田中 花子')

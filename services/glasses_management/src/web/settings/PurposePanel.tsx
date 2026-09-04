@@ -16,7 +16,7 @@ import type { PanelDraft, SaveOutcome, SettingsPanelProps } from './sections'
 import { toJstDay } from './sections'
 
 /*
- * 設定 — ご来店の目的（承認済みモック docs/frontend/mockups/eyex/images/SETTINGS-PURPOSE.png）。
+ * 設定 — ご来店の目的（承認済みモック docs/frontend/mockups/eye/images/SETTINGS-PURPOSE.png）。
  *
  * この面の仕事は「所要時間を延ばした瞬間に、受けられなくなる Web 枠を数字で見せる」こと。
  * 試算（POST /api/staff/settings/impact）は何も保存しない。所要時間を変えても、

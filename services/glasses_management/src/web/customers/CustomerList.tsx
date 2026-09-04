@@ -18,12 +18,12 @@ import { EmptyState, LoadingState } from '../shell/EmptyState'
 
 /*
  * 顧客台帳の一覧と、選んだ 1 名の要約
- * （承認済みモック docs/frontend/mockups/eyex/images/CUSTOMER-LIST.png）。
+ * （承認済みモック docs/frontend/mockups/eye/images/CUSTOMER-LIST.png）。
  *
  * 題材: お名前があいまいなまま、来店回数と最後のご来店から 1 名に手繰る面。
  * シグネチャ: **選んだ 1 名の要約が、一覧を閉じずに右に出続けること。**
  *
- * 実測（screens/CUSTOMER-LIST.html と assets/eyex.css）:
+ * 実測（screens/CUSTOMER-LIST.html と assets/eye.css）:
  *   本文は 2 ペイン `1fr 360px`（w-90）。ツールバー 56px・padding 0 16px・gap 10px。
  *   segmented のボタン min-height 38px（触れる大きさは 44pt へ上げる）・padding 0 16px・14px 600。
  *   検索欄の帯 padding 16px 20px・下に 1px の罫、欄は min-height 52px・角 12px・17px。
@@ -445,7 +445,7 @@ export function CustomerList({
                       </span>
                       {/* 来店回数は**平文**で出す。色つきの印（`ledger/Timetable.tsx` の
                           `VisitBadge`）はお名前の右に添えるもので、回数の列をすでに持つ
-                          この面には入れない（モックの規準 `docs/frontend/mockups/eyex/README.md`）。
+                          この面には入れない（モックの規準 `docs/frontend/mockups/eye/README.md`）。
                           数字は等幅で桁を揃える。 */}
                       <span className="w-18 font-mono text-body font-semibold text-ink">
                         {visitLabel(row.visitCount, 'list')}

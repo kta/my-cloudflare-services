@@ -6,7 +6,7 @@ import { shortDate } from './SlotStep'
 import type { StepGuard } from './steps'
 
 /*
- * 枠が先に埋まっていた面（承認済みモック docs/frontend/mockups/eyex/images/BOOK-CONFLICT.png）。
+ * 枠が先に埋まっていた面（承認済みモック docs/frontend/mockups/eye/images/BOOK-CONFLICT.png）。
  *
  * 題材: 確定を押した瞬間に枠を取られた人へ、**失われていないもの**を先に言う面。
  * トークン計画: 赤は上の 1 枚だけ。代わりの時刻の札は白のままにして、赤を選択肢へ広げない。

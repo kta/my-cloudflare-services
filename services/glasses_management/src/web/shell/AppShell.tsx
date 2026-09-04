@@ -13,7 +13,7 @@ const ALERT_DESTINATION: Destination = { key: 'alerts', label: 'お知らせ', i
  *
  * ただしその結果、「録音の保存に3回失敗しました（対応が必要）」が 4 画面で
  * 見えなくなる（UX 監査 UI-05）。ここを変えるなら承認済みモックを変えることになるので、
- * 実装だけを先に動かさない。`docs/audit/2026-09-02-eyex-ux/` の宿題として残す。
+ * 実装だけを先に動かさない。`docs/audit/2026-09-02-eye-ux/` の宿題として残す。
  */
 /*
  * 上のバーに「お知らせ」を出す面。
@@ -42,7 +42,7 @@ const HEADER_ALERT_DESTINATIONS = new Set([
 ])
 
 /*
- * 業務画面の骨格。承認済みモック（docs/frontend/mockups/eyex）の実測に合わせる。
+ * 業務画面の骨格。承認済みモック（docs/frontend/mockups/eye）の実測に合わせる。
  *   上のバー 64px（店名・日付・お知らせだけ）
  *   左サイドバー 216px / たたむと 76px（行き先はすべてここ）
  * 触れるものは 44pt 以上（Apple HIG）。色はすべて packages/ui のトークン経由。

@@ -35,7 +35,7 @@ function operatorJson(token: string, body?: unknown): RequestInit {
   }
 }
 
-function organizationInput(name = 'EYEX tenant'): JsonRecord {
+function organizationInput(name = 'EYE tenant'): JsonRecord {
   return { name, plan: 'contracted' }
 }
 
@@ -59,7 +59,7 @@ describe('admin → glasses-management organization synchronization', () => {
     expect(request.headers.get('x-internal-key')).toBe(INTERNAL_KEY)
     expect(request.url).toContain('/api/internal/organizations/sync')
     await expect(request.json()).resolves.toMatchObject({
-      name: 'EYEX tenant',
+      name: 'EYE tenant',
       plan: 'contracted',
       isDisabled: false,
       revision: 1,

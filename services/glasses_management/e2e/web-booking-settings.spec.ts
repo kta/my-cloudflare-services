@@ -15,9 +15,9 @@ import { completeSeededTerminalStart } from './support/terminal'
  * 承認済みモックとの突き合わせ（mock / mock-phone）はこの面より先に済んでいる。
  */
 
-const ORG = 'eyex'
+const ORG = 'eye'
 const SLUG = 'ginza'
-/** seed.mjs が固定 id で入れる EYEX 銀座店。 */
+/** seed.mjs が固定 id で入れる EYE 銀座店。 */
 const GINZA = '11111111-1111-4111-8111-111111111111'
 const VIEWER = `dev:${ORG}`
 const MEMBERSHIP_ID = '0f0f0f0f-0f0f-4f0f-8f0f-0f0f0f0f0f0f'
@@ -212,7 +212,7 @@ async function startWork(page: Page): Promise<void> {
   await page.getByLabel('お店のコード').fill(ORG)
   await page.getByRole('button', { name: '業務を始める' }).click()
   await completeSeededTerminalStart(page)
-  await expect(page.locator('header').first()).toContainText('EYEX 銀座店')
+  await expect(page.locator('header').first()).toContainText('EYE 銀座店')
 }
 
 async function openWebSettings(page: Page): Promise<void> {
@@ -246,7 +246,7 @@ test('店長は Web 予約を公開するかどうかと、お客様へのお知
   const toggle = page.getByRole('switch', { name: 'Web予約を公開する' })
   await expect(toggle).toHaveAttribute('aria-checked', 'true')
   // ご案内のページは `stores.slug` から組み立てる（表に持たない）。
-  await expect(page.getByText(`eyex.jp/${SLUG}`)).toBeVisible()
+  await expect(page.getByText(`eye.jp/${SLUG}`)).toBeVisible()
 
   await page.getByRole('button', { name: '書き直す' }).click()
   const notice = '棚卸しのため、9月30日はお休みをいただきます。'
@@ -271,7 +271,7 @@ test('保存する前に「お客様の画面の見え方」で、社内の言�
   await openWebSettings(page)
 
   const seen = preview(page)
-  await expect(seen).toContainText('EYEX 銀座店（銀座4丁目）　ご予約')
+  await expect(seen).toContainText('EYE 銀座店（銀座4丁目）　ご予約')
   for (const publicName of [
     '新しいメガネを作る',
     'かけ具合の調整',

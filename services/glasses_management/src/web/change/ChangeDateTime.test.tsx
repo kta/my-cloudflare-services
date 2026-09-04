@@ -5,9 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeDateTime, type ChangeTarget } from './ChangeDateTime'
 
 /*
- * 日時を変える（承認済みモック docs/frontend/mockups/eyex/images/CHANGE-DATETIME.png）。
+ * 日時を変える（承認済みモック docs/frontend/mockups/eye/images/CHANGE-DATETIME.png）。
  *
- * 実測（screens/CHANGE-DATETIME.html と assets/eyex.css）:
+ * 実測（screens/CHANGE-DATETIME.html と assets/eye.css）:
  *   2 段組みは 300px 1fr。左ペイン padding 36px 26px・見出し 15px・日時 20px/1.4 の
  *   --brand-dark・項目名 12px（上 24px）・値 17px/600・補足 13px。
  *   日付は 7 列 gap 10px・min-height 76px・21px/600（選択中は 3px の緑罫 + --brand-tint、

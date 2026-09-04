@@ -26,8 +26,8 @@ function confirmedJob(id = `reservation:${crypto.randomUUID()}`) {
     payload: {
       reservationId,
       to: 'customer@example.test',
-      managementCode: 'EYEX-123456',
-      reservationNumber: 'EYEX-20260826-0001',
+      managementCode: 'EYE-123456',
+      reservationNumber: 'EYE-20260826-0001',
       storeName: '銀座店',
       appointmentAt: '2026-09-01T03:00:00.000Z',
     },
@@ -42,8 +42,8 @@ function reissuedJob(id = `management-code:${crypto.randomUUID()}`) {
     payload: {
       reservationId,
       to: 'customer@example.test',
-      managementCode: 'EYEX-654321',
-      reservationNumber: 'EYEX-20260826-0001',
+      managementCode: 'EYE-654321',
+      reservationNumber: 'EYE-20260826-0001',
     },
   }
 }
@@ -60,7 +60,7 @@ function configuredEnv() {
   return {
     ...env,
     INTERNAL_KEY,
-    MAIL_FROM: 'EYEX <no-reply@example.test>',
+    MAIL_FROM: 'EYE <no-reply@example.test>',
     RESEND_API_KEY: 're_test_key',
   }
 }
@@ -103,11 +103,11 @@ describe('notifier internal send API', () => {
   it('accepts the reservation and management-code contracts as strict payloads', () => {
     expect(ReservationConfirmedEmail.parse(confirmedJob().payload)).toMatchObject({
       reservationId,
-      managementCode: 'EYEX-123456',
+      managementCode: 'EYE-123456',
     })
     expect(ManagementCodeReissuedEmail.parse(reissuedJob().payload)).toMatchObject({
       reservationId,
-      managementCode: 'EYEX-654321',
+      managementCode: 'EYE-654321',
     })
     expect(
       ReservationConfirmedEmail.safeParse({ ...confirmedJob().payload, unexpected: true }).success,
@@ -130,10 +130,10 @@ describe('notifier internal send API', () => {
     const init = resend.mock.calls[0]?.[1]
     expect(url).toBe('https://api.resend.com/emails')
     expect(new Headers(init?.headers).get('authorization')).toBe('Bearer re_test_key')
-    expect(new Headers(init?.headers).get('user-agent')).toBe('eyex-notifier/1.0')
-    expect(new Headers(init?.headers).get('idempotency-key')).toMatch(/^eyex:[a-f0-9]{64}$/)
+    expect(new Headers(init?.headers).get('user-agent')).toBe('eye-notifier/1.0')
+    expect(new Headers(init?.headers).get('idempotency-key')).toMatch(/^eye:[a-f0-9]{64}$/)
     await expect(new Response(init?.body).json()).resolves.toMatchObject({
-      from: 'EYEX <no-reply@example.test>',
+      from: 'EYE <no-reply@example.test>',
       to: ['customer@example.test'],
       subject: expect.stringContaining('予約'),
     })
@@ -175,7 +175,7 @@ describe('notifier internal send API', () => {
       payload: {
         reservationId,
         to: 'customer@example.test',
-        managementCode: 'EYEX-000111',
+        managementCode: 'EYE-000111',
       },
     }
 
@@ -184,7 +184,7 @@ describe('notifier internal send API', () => {
     expect(response.status).toBe(200)
     const init = resend.mock.calls[0]?.[1]
     await expect(new Response(init?.body).json()).resolves.toMatchObject({
-      subject: 'EYEX 予約管理コードのお知らせ',
+      subject: 'EYE 予約管理コードのお知らせ',
     })
   })
 
@@ -217,7 +217,7 @@ describe('notifier internal send API', () => {
     const job = confirmedJob(`reservation:${crypto.randomUUID()}`)
     const changedJob = {
       ...job,
-      payload: { ...job.payload, managementCode: 'EYEX-999999' },
+      payload: { ...job.payload, managementCode: 'EYE-999999' },
     }
 
     const first = await app.fetch(request(job), configuredEnv())
@@ -334,9 +334,7 @@ describe('notifier internal send API', () => {
     const idempotencyKeys = resend.mock.calls.map(([, init]) =>
       new Headers(init?.headers).get('idempotency-key'),
     )
-    expect(new Set(idempotencyKeys)).toEqual(
-      new Set([expect.stringMatching(/^eyex:[a-f0-9]{64}$/)]),
-    )
+    expect(new Set(idempotencyKeys)).toEqual(new Set([expect.stringMatching(/^eye:[a-f0-9]{64}$/)]))
   })
 
   it('returns a delivery failure when the Resend request cannot be made', async () => {
@@ -417,7 +415,7 @@ describe('notifier internal send API', () => {
 
     expect(response.status).toBe(502)
     expect(body).not.toContain('secret-upstream-body')
-    expect(body).not.toContain('EYEX-123456')
+    expect(body).not.toContain('EYE-123456')
   })
 })
 

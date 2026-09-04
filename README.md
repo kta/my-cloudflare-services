@@ -21,7 +21,7 @@
 | データの保存 | サービスごとに 1 つの D1（Cloudflare の SQLite） |
 | メール通知 | `notifier` サービス（Resend 経由。二重送信を防ぐ仕組み込み） |
 | 毎日のバックアップと監視 | `ops` サービス（R2 に世代保存＋容量/鮮度/死活の異常をメール通知） |
-| EYEX 眼鏡店の予約管理 | `glasses_management`（予約・来店受付・顧客・録音・Web予約） |
+| EYE 眼鏡店の予約管理 | `glasses_management`（予約・来店受付・顧客・録音・Web予約） |
 | 見た目の一貫性 | デザイントークン単一ソース（`packages/ui`）+ 「AI っぽい見た目」を禁じるルール |
 | 壊れていないかの自動確認 | `pnpm check`（lint + 未使用依存 + 型 + Worker/web coverage + E2E traceability）。CI でも走る |
 
@@ -52,7 +52,7 @@ make dev/admin  # → http://localhost:5174 が管理コンソール
 
 ```sh
 make dev/example_service   # → http://localhost:5173 サンプルの業務画面
-make dev/glasses_management # → http://localhost:5175 EYEX予約管理画面
+make dev/glasses_management # → http://localhost:5175 EYE予約管理画面
 make dev/all               # admin / example_service / glasses_management / notifier を起動
 make check                 # 壊れていないか全部確認する（緑ならOK）
 make help                  # コマンド一覧

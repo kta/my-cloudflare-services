@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test'
 
 /**
  * お客様向け Web 予約（011-web-booking）の受け入れ基準を、実ブラウザと実 Worker で確かめる。
- * `vite preview` が実 workerd を動かし、D1 は `seed.mjs` が入れた EYEX 銀座店である
+ * `vite preview` が実 workerd を動かし、D1 は `seed.mjs` が入れた EYE 銀座店である
  * （`playwright test` を叩くたびに使い捨ての D1 が作り直される）。
  *
  * このファイルは **iphone project（390×844）だけ**が拾う（`playwright.config.ts` の
@@ -34,8 +34,8 @@ declare const CompositionEvent: new (
   init?: { bubbles?: boolean; data?: string },
 ) => unknown
 
-const ORG = 'eyex'
-/** seed.mjs が固定 id で入れる EYEX 銀座店。公開しているのはこの 1 店だけである。 */
+const ORG = 'eye'
+/** seed.mjs が固定 id で入れる EYE 銀座店。公開しているのはこの 1 店だけである。 */
 const SLUG = 'ginza'
 const GINZA = '11111111-1111-4111-8111-111111111111'
 /** seed の id は `${区分}-0000-4000-8000-${連番}`（`seed.mjs` の `uid`）。 */
@@ -601,7 +601,7 @@ test('お名前・ふりがな・お電話番号・メールアドレスを入�
 
   for (const [term, value] of [
     ['ご来店', clock(slot.startsAt)],
-    ['店舗', 'EYEX 銀座店（銀座4丁目）'],
+    ['店舗', 'EYE 銀座店（銀座4丁目）'],
     ['ご用件', 'かけ具合の調整'],
     ['お名前', `${CONTACT.name} 様`],
     ['ご連絡先', CONTACT.phone],
@@ -1035,7 +1035,7 @@ test('完了の番号 2 つで照会すると「ご予約をお調べしまし�
 
   await expect(page.getByRole('heading', { name: 'ご予約をお調べしました' })).toBeVisible()
   await expect(page.getByRole('group', { name: 'ご来店' })).toContainText(clock(slot.startsAt))
-  await expect(page.getByRole('group', { name: '店舗' })).toContainText('EYEX 銀座店（銀座4丁目）')
+  await expect(page.getByRole('group', { name: '店舗' })).toContainText('EYE 銀座店（銀座4丁目）')
   await expect(page.getByRole('group', { name: 'ご用件' })).toContainText('かけ具合の調整')
   await expect(page.getByRole('group', { name: 'お名前' })).toContainText(`${CONTACT.name} 様`)
   await expect(page.getByRole('group', { name: 'ご予約番号' })).toContainText(keys.code)

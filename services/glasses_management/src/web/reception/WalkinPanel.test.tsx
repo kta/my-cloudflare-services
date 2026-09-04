@@ -7,13 +7,13 @@ import { estimateWaitMinutes, WalkinPanel } from './WalkinPanel'
 
 /*
  * 台帳に重なる受付パネル（承認済みモック
- * docs/frontend/mockups/eyex/images/LEDGER-WALKIN.png）。
+ * docs/frontend/mockups/eye/images/LEDGER-WALKIN.png）。
  *
  * この面の仕事は「台帳を見たまま、店頭のお客様のご用件を 3 タップで伺って受け付ける」こと。
  * **お客様を後回しにできる**ことがこの面の芯なので、「あとで登録する」のまま主操作が押せる。
  * 見た目の寸法は e2e の突き合わせで見るので、ここでは「何が読めて、何が押せるか」を見る。
  *
- * 実測（screens/LEDGER-WALKIN.html の <style> と assets/eyex.css）:
+ * 実測（screens/LEDGER-WALKIN.html の <style> と assets/eye.css）:
  *   パネルは `position:absolute` の top/right/bottom 0・幅 400px・左罫 1px --line-strong・地は白。
  *   見出し帯 padding 12px 22px（h2 18px ＋ 右に「やめる」min-height 44px / padding 0 10px）・下罫 1px。
  *   本文 padding 22px 22px 0、節の間 24px。足元 padding 20px 22px。

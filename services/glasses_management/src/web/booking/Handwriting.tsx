@@ -3,11 +3,11 @@ import { type PointerEvent as ReactPointerEvent, useRef, useState } from 'react'
 import { jstClock } from '../ledger/metrics'
 
 /*
- * ご要望を手書きで残す（承認済みモック docs/frontend/mockups/eyex/images/BOOK-04d-HANDWRITE.png）。
+ * ご要望を手書きで残す（承認済みモック docs/frontend/mockups/eye/images/BOOK-04d-HANDWRITE.png）。
  *
  * この面の仕事は「伺ったことばを、文字に直さずかたちのまま残す」こと。
  *
- * 実測値（screens/BOOK-04d-HANDWRITE.html と assets/eyex.css の `.canvas` / `.pen`）:
+ * 実測値（screens/BOOK-04d-HANDWRITE.html と assets/eye.css の `.canvas` / `.pen`）:
  *   本文 1fr ／ 右の柱 320px、本文の余白 32px 40px・柱 32px 26px。
  *   道具（`.pen`）は最小 48×44px・角 8px、仕切りは 1px×32px。
  *   用紙は高さ 420px・上に 20px、罫は 44px ごと。罫の下に

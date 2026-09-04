@@ -5,12 +5,12 @@ import { lastVisitLabel, visitLabel } from '../../worker/domain/customers'
 import { formatPhoneDigits } from '../booking/CustomerStep'
 
 /*
- * 新しいお客様を登録（承認済みモック docs/frontend/mockups/eyex/images/CUSTOMER-NEW.png）。
+ * 新しいお客様を登録（承認済みモック docs/frontend/mockups/eye/images/CUSTOMER-NEW.png）。
  *
  * この面の仕事は「お電話番号を打った瞬間に同じ番号のご登録を突きつけ、二重の登録を止める」こと。
  * 警告は入力欄のすぐ下、同じ視線の上に出し、**進む前に必ず 2 択を通す**。
  *
- * 実測値（screens/CUSTOMER-NEW.html と assets/eyex.css）:
+ * 実測値（screens/CUSTOMER-NEW.html と assets/eye.css）:
  *   本文 1fr ／ 右の柱 356px（w-89）、本文の余白 32px 36px・間 26px、柱 32px 22px。
  *   お電話番号の欄は 幅 320px（max-w-80）・最小高 52px（min-h-13）・21px の等幅。
  *   重複の箱は padding 20px 22px・幅 550px まで、該当行は白地・1px --line-strong・角 8px・
@@ -27,7 +27,7 @@ import { formatPhoneDigits } from '../booking/CustomerStep'
  * 「ハイフン」は桁を変えない —— 区切りは欄が入れる。押して何も起きないキーにしないため、
  * そのことは**キーの読み上げ名**（「ハイフン　区切りは自動で入ります」）で言う。
  * 盤の下に同じことを書いた 1 行は置かない —— この面の説明文が 3 つになり、
- * 「説明文は 2 つまで」（`docs/frontend/mockups/eyex/README.md` の引き算の規準）を超えるため。
+ * 「説明文は 2 つまで」（`docs/frontend/mockups/eye/README.md` の引き算の規準）を超えるため。
  */
 
 /** 揃った番号の桁数。ここに達するたびに重複の照会が走る。 */

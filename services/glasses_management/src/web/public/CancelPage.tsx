@@ -4,11 +4,11 @@ import { type ReactNode, useEffect, useId, useRef, useState } from 'react'
 import { dateLabel, jstClock } from '../ledger/metrics'
 
 /*
- * ご予約の確認・変更・取り消し（承認済みモック docs/frontend/mockups/eyex/images/WEB-CANCEL.png）。
+ * ご予約の確認・変更・取り消し（承認済みモック docs/frontend/mockups/eye/images/WEB-CANCEL.png）。
  *
  * この面の仕事は「番号 2 つだけで自分の予約に戻り、変更と取消の 2 つの出口だけを置く」こと。
  *
- * 実測値（screens/WEB-CANCEL.html と assets/eyex.css）:
+ * 実測値（screens/WEB-CANCEL.html と assets/eye.css）:
  *   進捗は 2 段（本人確認 → 表示。どちらも点灯）。本文の余白 32px 28px 152px。
  *   問いかけは見出し 20px・補足 13px、左の吹き出し 18×15px。
  *   明細は上に 24px、見出し列 **78px**（WEB-06 の 66px より広い）・13px、値 16px 太さ 600。

@@ -41,7 +41,7 @@ export async function syncOrganization(input: {
     headers: INTERNAL_HEADERS,
     body: JSON.stringify({
       id: input.id,
-      name: input.name ?? 'EYEX',
+      name: input.name ?? 'EYE',
       plan: input.plan ?? 'free',
       isDisabled: input.isDisabled ?? false,
       createdAt: input.createdAt ?? '2026-08-27T02:08:00.000Z',
@@ -74,7 +74,7 @@ export function jstAt(date: string, time: string): string {
   return new Date(Date.parse(`${date}T${time}:00.000+09:00`)).toISOString()
 }
 
-export async function insertStore(org: string, name = 'EYEX 銀座店'): Promise<string> {
+export async function insertStore(org: string, name = 'EYE 銀座店'): Promise<string> {
   const id = crypto.randomUUID()
   await env.DB.prepare(
     'INSERT INTO stores (id, organization_id, name, slug, phone, address, access_note, is_active, created_at) VALUES (?,?,?,?,?,?,?,?,?)',

@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from 'react'
 import { client } from '../client'
 
 /*
- * 受付の録音を聞く導線（承認済みモック docs/frontend/mockups/eyex/images/LEDGER-DETAIL.png /
+ * 受付の録音を聞く導線（承認済みモック docs/frontend/mockups/eye/images/LEDGER-DETAIL.png /
  * CHANGE-SEARCH.png / HISTORY-LIST.png）。
  *
  * 題材: 「言った言わない」を確かめるために、1 件の受付だけを聞き直す動作。

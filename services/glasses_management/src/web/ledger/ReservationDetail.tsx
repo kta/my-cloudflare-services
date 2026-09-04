@@ -6,12 +6,12 @@ import { RecordingPlayer } from '../recording/RecordingPlayer'
 import { jstClock } from './metrics'
 
 /*
- * 予約の詳細（承認済みモック docs/frontend/mockups/eyex/images/LEDGER-DETAIL.png）。
+ * 予約の詳細（承認済みモック docs/frontend/mockups/eye/images/LEDGER-DETAIL.png）。
  *
  * 台帳の位置を見失わないまま、1 件の中身と次の操作だけを見る面。**モーダルにしない** —
  * 後ろの台帳は見えたままで、押した帯の左端へ矢印が刺さる。
  *
- * 実測値（screens/LEDGER-DETAIL.html と assets/eyex.css の `.popover`）:
+ * 実測値（screens/LEDGER-DETAIL.html と assets/eye.css の `.popover`）:
  *   幅 440px（w-110）・角 16px（rounded-panel）・縁 1px --line-strong・影 0 12px 32px。
  *   矢印 16px を左 40px。頭 padding 14px 16px / 胴 12px 16px / 足 12px 16px（足の地は --surface-2）。
  *   ご用件などの見出し列は 84px（w-21）。主操作は幅いっぱい・min-height 52px・17px、

@@ -5,11 +5,11 @@ import { dateLabel, jstClock } from '../ledger/metrics'
 import type { PublicContact } from './FormStep'
 
 /*
- * 工程 5 ご確認（承認済みモック docs/frontend/mockups/eyex/images/WEB-05-CONFIRM.png）。
+ * 工程 5 ご確認（承認済みモック docs/frontend/mockups/eye/images/WEB-05-CONFIRM.png）。
  *
  * この面の仕事は「送る前に 5 行で読み返させ、直したい行からその工程へ戻す」こと。
  *
- * 実測値（screens/WEB-05-CONFIRM.html と assets/eyex.css）:
+ * 実測値（screens/WEB-05-CONFIRM.html と assets/eye.css）:
  *   本文の余白 32px 28px 120px。表は上に 28px・角 12px・縁 1px `--color-line`、
  *   行の間に 1px の罫（最後の行は無し）。行は最小高 56px / 内側 12px 16px / 間 12px。
  *   見出し列 66px・13px、値 16px 太さ 600（補足は 13px 標準）、

@@ -3,7 +3,7 @@ import type { ReactNode } from 'react'
 import { useId } from 'react'
 
 /*
- * マイクが使えない面（承認済みモック docs/frontend/mockups/eyex/images/EX-MIC-DENIED.png）。
+ * マイクが使えない面（承認済みモック docs/frontend/mockups/eye/images/EX-MIC-DENIED.png）。
  *
  * 題材: お客様を待たせたまま読む知らせ。読む時間は 3 秒しかない。
  * トークン計画: 赤いカード 1 枚だけを `--color-danger`（左 6px の帯 + 見出し + 地
@@ -12,7 +12,7 @@ import { useId } from 'react'
  * シグネチャ: **失われていないものを先に言う。**できないこと（録音）→ いまも使えること →
  *   次の一手、の順で、右に直し方だけを置く。
  *
- * 実測（screens/EX-MIC-DENIED.html の <style> と assets/eyex.css）:
+ * 実測（screens/EX-MIC-DENIED.html の <style> と assets/eye.css）:
  *   `.wrap` は `1fr 400px`（右 = w-100）。左 padding 40px 44px（px-11 py-10）、
  *   右は左辺 1px 罫 + 地 --surface + padding 40px 32px（px-8 py-10）。段の間は
  *   `.stack.lg` の 28px（gap-7）。
@@ -35,11 +35,11 @@ import { useId } from 'react'
 /**
  * 直し方の 3 手順。**端末の配り方（`design/09-open-questions.md` の Q-05）が変わったら
  * ここだけ差し替える。** いまの前提は「ホーム画面に追加した Web アプリ」で、Safari の
- * タブのまま配るなら iPadOS の「設定」に「EYEX予約」が並ばないので 3 手順ごと書き直しになる。
+ * タブのまま配るなら iPadOS の「設定」に「EYE予約」が並ばないので 3 手順ごと書き直しになる。
  */
 const MIC_FIX_STEPS = [
   'ホーム画面の「設定」を開く',
-  '一覧から「EYEX予約」を選ぶ',
+  '一覧から「EYE予約」を選ぶ',
   '「マイク」をオンにする',
 ] as const
 
@@ -205,7 +205,7 @@ export function MicDeniedPanel({
           ))}
         </ol>
         <p className="mt-7 text-grid text-ink-muted">
-          オンにしたら EYEX予約 に戻り、「もう一度確かめる」を押してください。
+          オンにしたら EYE予約 に戻り、「もう一度確かめる」を押してください。
         </p>
       </aside>
 

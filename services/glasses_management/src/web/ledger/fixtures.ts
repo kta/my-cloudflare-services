@@ -1,7 +1,7 @@
 import type { LedgerEntry, LedgerLane, LedgerView, LocalDate } from '@app/contracts'
 
 /*
- * 台帳の作り置き。承認済みモック docs/frontend/mockups/eyex/images/LEDGER-STAFF.png と
+ * 台帳の作り置き。承認済みモック docs/frontend/mockups/eye/images/LEDGER-STAFF.png と
  * LEDGER-RESOURCE.png の 2026年8月27日（木）銀座店を、P2 が描ける範囲で写したもの。
  *
  * P2 が描けないもの（お客様のお名前・来店回数・お待ちの人数）は null と 0 のままにする。

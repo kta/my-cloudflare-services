@@ -21,7 +21,7 @@ spec が要件の正本であり、このTODOは実装順・テスト・既存�
 | 取消分類 | `analytics_daily` に cancel 分類を保存する。画面の読出しで `reservations` を走査しない |
 | Cron | 既存の `triggers.crons` / `scheduled()` を **JST 00:00（UTC `0 15 * * *`）**へ寄せる。`ScheduledController.scheduledTime` を時計の正本にし、`new Date()` で取り直さない |
 | Cron順序 | Web確認待ち取消 → analytics rollup → recording purge。各jobを独立 try/catch で実行し、前の失敗で後続を止めない |
-| 既存5面の見た目 | `docs/frontend/mockups/eyex` の ANALYTICS-TOP / COUNT / STAFF / WAIT / CANCEL を正本として使い、別案で置き換えない |
+| 既存5面の見た目 | `docs/frontend/mockups/eye` の ANALYTICS-TOP / COUNT / STAFF / WAIT / CANCEL を正本として使い、別案で置き換えない |
 | 3つの追加タブ | mockups README が採用した**案B**の `ANALYTICS-SOURCE` / `ANALYTICS-VISITS` / `ANALYTICS-PURPOSE` を正式な見た目の正本にする。入口・来店回数は縦棒、長い目的名だけ横棒とし、3面ともグラフ1つ＋定義1行＋まとめ3項目 |
 
 ## `analytics_daily` の固定設計
@@ -205,7 +205,7 @@ visit_frequency
 ## T-019 案Bの3タブを実装する（Red → Green）
 
 - **触るファイル**: `src/web/analytics/SimpleTab.tsx`, `SimpleTab.test.tsx`
-- 正式モックは `docs/frontend/mockups/eyex/screens/ANALYTICS-SOURCE.html`, `ANALYTICS-VISITS.html`, `ANALYTICS-PURPOSE.html`。入口・来店回数の短い4分類は縦棒、長い目的名だけ既存担当者型の横棒とし、3面ともグラフ1つ＋定義1行＋まとめ3項目にする。
+- 正式モックは `docs/frontend/mockups/eye/screens/ANALYTICS-SOURCE.html`, `ANALYTICS-VISITS.html`, `ANALYTICS-PURPOSE.html`。入口・来店回数の短い4分類は縦棒、長い目的名だけ既存担当者型の横棒とし、3面ともグラフ1つ＋定義1行＋まとめ3項目にする。
 - 予約入口4系列、来店回数4階級、目的別件数、0件時の一文をRedで固定する。
 
 ## T-020 品質フロアを埋める（Red → Green）

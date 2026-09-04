@@ -1,6 +1,6 @@
 # ジョブズの目線で見直す — 1 巡目（2026-09-04）
 
-実機（`docs/audit/2026-09-02-eyex-ux/harness/serve.sh 4380`）を Playwright で操作し、
+実機（`docs/audit/2026-09-02-eye-ux/harness/serve.sh 4380`）を Playwright で操作し、
 撮った画面を目で見て、座標と色は DOM から実測した。推測で書いたものは 1 つも無い。
 
 サブエージェントで 12 領域を同時に見る手は 3 回試して 3 回とも API の 529 で全滅したので、

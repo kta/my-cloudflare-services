@@ -77,7 +77,7 @@ export type PublishablePurpose = {
 /** 解決した公開設定。お客様の面と SETTINGS-WEB の両方がこの 1 つを読む。 */
 export type Publication = {
   isPublished: boolean
-  /** `eyex.jp/ginza`。表に持たず、公開ドメインと `stores.slug` から組み立てる。 */
+  /** `eye.jp/ginza`。表に持たず、公開ドメインと `stores.slug` から組み立てる。 */
   landingPath: string
   window: WebWindow
   changeDeadlineDays: number
@@ -109,7 +109,7 @@ export function resolvePublication(input: {
   slug: string
   settings: WebBookingSettingsRow | null
   purposes: readonly PublishablePurpose[]
-  /** `wrangler.jsonc` の `vars` にある公開ドメイン（`eyex.jp`）。 */
+  /** `wrangler.jsonc` の `vars` にある公開ドメイン（`eye.jp`）。 */
   publicOrigin: string
   now: Date
 }): Publication {

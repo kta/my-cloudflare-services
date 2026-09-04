@@ -13,7 +13,7 @@ import {
 } from './sections'
 
 /*
- * 営業日（承認済みモック docs/frontend/mockups/eyex/images/SETTINGS-CALENDAR.png）。
+ * 営業日（承認済みモック docs/frontend/mockups/eye/images/SETTINGS-CALENDAR.png）。
  *
  * 実測: .months = 1fr + 1fr / gap 22px / margin-top 16px。月のカードは 1px 罫 +
  * 角 16px + padding 14px 14px 16px、見出し 15px。日の格子は 7 列 / gap 4px、

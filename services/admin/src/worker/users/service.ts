@@ -19,7 +19,7 @@ import type { DrizzleD1Database } from 'drizzle-orm/d1'
 import { pinResetTickets, userAdminAudits, userStoreAssignments, users } from '../db/schema'
 
 /**
- * 利用者・標準ロール・担当店舗の管理(UC-EYEX-149)と個人 PIN(UC-EYEX-151)。
+ * 利用者・標準ロール・担当店舗の管理(UC-EYE-149)と個人 PIN(UC-EYE-151)。
  *
  * すべての読み書きは呼び出し元が JWT から取り出した `organizationId` でスコープ
  * する(リクエスト入力の組織 ID は決して受け取らない)。時刻は `deps.now` として

@@ -1,7 +1,7 @@
 # 07 — 非機能要件と運用（glasses_management）
 
 - サービス: `glasses_management`（`services/glasses_management` / `@app/glasses_management`）
-- 見た目の正本: `docs/frontend/mockups/eyex/`（68画面 + `assets/eyex.css`）
+- 見た目の正本: `docs/frontend/mockups/eye/`（68画面 + `assets/eye.css`）
 - 意味の正本: `packages/ui/src/theme.css`
 - 位置づけ: この文書は「どう作るか」ではなく「どこまで満たすか」を数値で決める。挙動の定義は
   `design/06-use-cases.md`、経路は `design/04-api.md`、列は `design/03-data-model.md` を見る。
@@ -115,13 +115,13 @@ px の直値はグリッドの列幅（台帳の名前列 170px / 150px）だけ
 | 対象 | 実装値 | 出どころ（実測） |
 |---|---|---|
 | すべての操作の下限 | **44pt** | `.navtoggle` 44 / `.datepill` と `.datepill button` 44 / `.pen` 44 / `.wchip` 44（LEDGER-WALKIN） |
-| 一般のボタン（`.btn`）・アプリバーの補助操作（`.barbtn`） | 48pt | `assets/eyex.css` `.btn { min-height: 48px }` / `.barbtn { min-width: 60px; min-height: 48px }` |
+| 一般のボタン（`.btn`）・アプリバーの補助操作（`.barbtn`） | 48pt | `assets/eye.css` `.btn { min-height: 48px }` / `.barbtn { min-width: 60px; min-height: 48px }` |
 | サイドバーの行き先（`.nav-item`） | 46pt（柱のときは 52×52） | `.nav-item { min-height: 46px }` / `.sidenav.rail .nav-item { width: 52px }` |
 | サイドバーの「予約を取る」（`.sidenav .new`。＋ はアイコン） | 52pt | `.sidenav .new { min-height: 52px }` |
 | アプリバーのホームボタン | 48pt | `.homebtn 48×48` |
-| 工程を進める大きな主操作（`.btn.big`） | **56pt** | `assets/eyex.css` `.btn.big { min-height: 56px }` |
+| 工程を進める大きな主操作（`.btn.big`） | **56pt** | `assets/eye.css` `.btn.big { min-height: 56px }` |
 | ポップオーバー・パネルのフッターの主操作 | 52pt | LEDGER-DETAIL `.popover .pf .btn.primary { min-height: 52px }`（同フッターの副操作は 46pt） |
-| テンキーのキー（PIN・電話番号） | **72pt**（幅 96pt） | `assets/eyex.css` `.key { height: 72px }` / `.keypad { grid-template-columns: repeat(3, 96px) }` |
+| テンキーのキー（PIN・電話番号） | **72pt**（幅 96pt） | `assets/eye.css` `.key { height: 72px }` / `.keypad { grid-template-columns: repeat(3, 96px) }` |
 | ウォークインの受付ボタン（FAB） | 64pt | `.fab 64×64` |
 | 隣り合う操作の間隔 | 8pt 以上（例外は下記） | `.chips { gap: 8px }`（EX-EMPTY-SEARCH / LEDGER-WALKIN / CHANGE-SEARCH）／`.picks { gap: 10px }`（WEB-02-PURPOSE / LEDGER-WALKIN） |
 
@@ -139,7 +139,7 @@ px の直値はグリッドの列幅（台帳の名前列 170px / 150px）だけ
 
 pt と px は等倍（1194×834pt = 1194×834 CSS px）で一致するため、実装では px で書いて構わない。
 `.key` / `.keypad` / `.btn` / `.btn.big` / `.nav-item` / `.fab` / `.homebtn` / `.segmented button` / `.step` /
-`.toggle` / `.datepill .today` は `assets/eyex.css` の定義、`.wchip` / `.picks` / `.chips` / `.popover .pf` は
+`.toggle` / `.datepill .today` は `assets/eye.css` の定義、`.wchip` / `.picks` / `.chips` / `.popover .pf` は
 各画面 HTML の `<style>` の定義である。
 
 **「間隔 8pt 以上」の例外**: 分析のタブ（`.tabs { gap: 4px }`、ANALYTICS 5面）だけが 4px である。
@@ -322,7 +322,7 @@ pt と px は等倍（1194×834pt = 1194×834 CSS px）で一致するため、�
 
 ### 2.6 モーション
 
-`assets/eyex.css` と 68 画面の `<style>` は `transition` / `animation` / `@keyframes` を**1つも持たない**（実測 0 件）。
+`assets/eye.css` と 68 画面の `<style>` は `transition` / `animation` / `@keyframes` を**1つも持たない**（実測 0 件）。
 `docs/frontend/DESIGN_RULE.md` の「モーションは1箇所のオーケストレーションだけ」に従い、
 **実装で足してよい動きは次の 2 つだけ**とする。モックにこの 2 つの記述は無く、直接操作の手ざわりのために足す。
 
@@ -346,7 +346,7 @@ AGENTS.md ルール 10 の人間承認事項**である。記録が無いまま�
 | カード上辺／左辺の 3–4px 色ストリップ | `.appt { border-left: 4px solid var(--brand) }`（**すべての予約の帯**）／`.item.unread` の左 4px（§2.4）／`.card.warn.lead` の左 6px（`design/05-screen-flow.md` §6） | 台帳で予約の出どころ（電話・Web・ウォークイン・要対応）を 30分枠の中で読むための機能。塗りだけでは 4 種を見分けられない |
 | 素の system-ui を主書体に／2 役割以上の書体 | `--font-display` は `--font-sans` と同一文字列。決定ブリーフ §12.2 で Web フォントを配らないと確定済みなので、書体は iPadOS の既定（SF / ヒラギノ）だけ | HIG。iPad では自己ホストのフォントより system 書体が先に当たるため、配っても無駄になる |
 
-**決定: 上の 2 件は DESIGN_RULE の NEVER 表からの免除として扱い、`docs/frontend/mockups/eyex/README.md` に
+**決定: 上の 2 件は DESIGN_RULE の NEVER 表からの免除として扱い、`docs/frontend/mockups/eye/README.md` に
 台帳化する**（DESIGN_RULE §6 の「却下されたデザイン方向を台帳化する」に倣う）。台帳化しないと、後続の実装者や
 `/simplify` が「規約違反だから直す」と判断して承認済みの見た目を壊す。免除の範囲は上の表の 2 行に限り、
 新しい色帯・新しい書体をこれを根拠に足さない。
@@ -415,7 +415,7 @@ AGENTS.md ルール 10 の人間承認事項**である。記録が無いまま�
 
 ### 3.2 トークンの一覧（`packages/ui/src/theme.css` の実装値。実測 2026-08-28）
 
-出どころは `docs/frontend/mockups/eyex/assets/eyex.css` の `:root` と決定ブリーフ §10。
+出どころは `docs/frontend/mockups/eye/assets/eye.css` の `:root` と決定ブリーフ §10。
 ただし **3 色は決定ブリーフ §12.1 で実装だけを暗くしてある**（モック画像は直さない）。備考にその旨を書いた。
 
 | トークン | 値 | 役割 |
@@ -458,7 +458,7 @@ AGENTS.md ルール 10 の人間承認事項**である。記録が無いまま�
 文字寸法もトークンで持つ（§1.3 の rem 翻訳はこの表を指す）。**任意値（`text-[15px]`）は書かない。**
 
 なお「モックに無い大きさは足さない」は事実と食い違う。モックが実際に使っている段は **17 段**あり、下の 8 段に
-乗らないものが `assets/eyex.css` 自身にもある（`.card h3 { font-size: 15px }` が 85 か所、
+乗らないものが `assets/eye.css` 自身にもある（`.card h3 { font-size: 15px }` が 85 か所、
 `.navtoggle { font-size: 14px }` が 29 か所。ほかに 18 / 20 / 21 / 24 / 26 / 38px が各 2〜5 か所）。
 逃げ場が無いと実装は「任意値を書く（ルール 5 で禁止）」か「黙って 16px か 13px に寄せる（モックとずれる）」の
 二択になる。現に P0 の `.navtoggle` 相当は `--text-grid`（13px）を当てて 1px 縮んでいる。
@@ -495,8 +495,8 @@ AGENTS.md ルール 10 の人間承認事項**である。記録が無いまま�
 Tailwind の 4px スケールに乗らないものが無くなる。
 ### 3.3 方言トークンの削除（**済み**。ここは現状の記録と残った宿題）
 
-決定ブリーフ §10 が求めた「旧モック `eyex-reservation` 専用の方言（`terminal-*` / `viz-*` / `sp-*` / `compact-*`）の削除」と
-「新 eyex の値への書き直し」は、`packages/ui/src/theme.css` に**すでに適用済み**である（実測 2026-08-28）。
+決定ブリーフ §10 が求めた「旧モック `eye-reservation` 専用の方言（`terminal-*` / `viz-*` / `sp-*` / `compact-*`）の削除」と
+「新 eye の値への書き直し」は、`packages/ui/src/theme.css` に**すでに適用済み**である（実測 2026-08-28）。
 
 | 確認項目 | 実測 |
 |---|---|
@@ -518,7 +518,7 @@ Tailwind の 4px スケールに乗らないものが無くなる。
   （`record` = `--color-danger`、`timer` = `--color-ink-muted`、`glyph` / `figure` / `text-glyph` / `text-figure` は
   それぞれアイコン・図版の前景と文字色）。
 - 新しい色・大きさが要るときは、**`theme.css` にトークンを足してから**使う（§3.1）。
-  モック `assets/eyex.css` にあって `theme.css` に無い値（`--on-brand` の別名など）は、
+  モック `assets/eye.css` にあって `theme.css` に無い値（`--on-brand` の別名など）は、
   すでに `--color-on-pine` / `--color-on-danger` として名前が付いている。生の hex を書き足さない。
 - **書体のフォールバックが決定ブリーフ §12.2 と食い違っている。**§12.2 は「`--font-sans` の予備は
   `Noto Sans JP` と総称 `sans-serif` だけにする」と決め、`@fontsource/*` の依存も `packages/ui/package.json` から
@@ -526,7 +526,7 @@ Tailwind の 4px スケールに乗らないものが無くなる。
   `"IBM Plex Mono"` が残っている。同ファイルのコメント「自前ホストの IBM Plex Sans JP を後ろに残す
   （`packages/ui/src/index.ts` が読む）」も、`index.ts` が「書体は自前で配らない」と明記している以上、嘘である。
   §3.2 の表が正で、**実装は §3.2 の値へ直す**（コメントも一緒に直す）。P0 の残作業として扱う。
-- モック `assets/eyex.css` は `:root` の外で生 hex を 10 個直書きしており、そのうち 2 つは設計文書が名指しで使えと
+- モック `assets/eye.css` は `:root` の外で生 hex を 10 個直書きしており、そのうち 2 つは設計文書が名指しで使えと
   言っている部品の縁である（`.card.warn` の `#d9a9a4` / `.card.note` の `#d9bb92`）。`theme.css` にあるのは塗り
   （`--color-danger-soft` / `--color-walkin-soft`）だけで縁の色が無い。扱いは `design/05-screen-flow.md` §1.1 に書いた。
 
@@ -1234,7 +1234,7 @@ app.use('/api/*', except(['/api/health', '/api/auth/*', '/api/internal/*'],
 | アクセシビリティ | `e2e/accessibility.spec.ts`（新設）。①`button, [role=button], a, input, select, [role=switch], [role=tab]` の `getBoundingClientRect()` を全部取り、**44pt 未満を列挙して 0 件**にする（§2.1(b) の 4 種は当たり判定を広げてあるので通る。例外は作らない） ②`:focus-visible` が全操作に出て、緑の面では `--color-focus-on-pine` が当たる ③200% 拡大で `body` に横スクロールが出ない ④`role="status"` が §2.3 の 7 か所と一致し、`role="alert"` が `Field` の項目エラーだけ ⑤`<header>` / `<nav aria-label="画面の切り替え">` / `<main>` が各画面に 1 つずつある |
 | 狭い画面・低い画面 | `e2e/` の Playwright project を §1.2 の段ごとに持つ（`ipad-mock` 1194×834 = モックとの突き合わせ用／`ipad-safari` 1194×744 = Safari のタブのままの実機相当／`ipad-portrait` 834×1194／`ipad-split` 375×744）。1194×834 の 1 本だけにしない |
 | トークン | `packages/ui/src/theme.css` に方言（`terminal-` / `viz-` / `sp-` / `compact-`）が残っていない（**現状すでに 0 件** — §3.3）。`services/glasses_management/src/web/**` に生 hex と Tailwind 任意値が 0 件 |
-| 見た目の突き合わせ | `e2e/mock-compare.spec.ts` で `docs/frontend/mockups/eyex/images/*.png` と実装画面の差分を記録する |
+| 見た目の突き合わせ | `e2e/mock-compare.spec.ts` で `docs/frontend/mockups/eye/images/*.png` と実装画面の差分を記録する |
 | traceability | `pnpm run test:traceability` |
 | 全体 | `pnpm check` |
 
@@ -1242,7 +1242,7 @@ app.use('/api/*', except(['/api/health', '/api/auth/*', '/api/internal/*'],
 
 ## 13. この文書に残っている `[要確認]`
 
-**残っているのは発注元（EYEX）に聞かないと決められない 5 件だけ**である。ほかはすべてモック・決定ブリーフ・
+**残っているのは発注元（EYE）に聞かないと決められない 5 件だけ**である。ほかはすべてモック・決定ブリーフ・
 設計判断で決着させ、本文に決定として書き込んだ（下の「決着させたもの」）。暫定案は「返事が来るまでこれで作る」
 という意味であり、返事が来たら差し替える。
 
@@ -1252,7 +1252,7 @@ app.use('/api/*', except(['/api/health', '/api/auth/*', '/api/internal/*'],
 
 | # | Q | 節 | 聞くこと | 決まらないと作れないもの | 暫定案（＝いまの前提。このとおりに作る） |
 |---|---|---|---|---|---|
-| 1 | **Q-05** | §1.1 | 業務用の iPad に、この画面をどう入れるか（①ホーム画面に追加して単独のアプリとして使う ②Safari のタブのまま使う ③専用アプリで包む） | 画面の有効高（§1.2 の段）、台帳に入る枠数、EX-MIC-DENIED の直し方 3 手順の文言（②では「設定 › EYEX予約」が存在しない）、マイク許可の寿命、`viewport-fit=cover` と安全領域のトークン | ①（ホーム画面に追加）。`manifest.json` と `apple-mobile-web-app-capable` を足し、モックの 3 手順の文言をそのまま使う |
+| 1 | **Q-05** | §1.1 | 業務用の iPad に、この画面をどう入れるか（①ホーム画面に追加して単独のアプリとして使う ②Safari のタブのまま使う ③専用アプリで包む） | 画面の有効高（§1.2 の段）、台帳に入る枠数、EX-MIC-DENIED の直し方 3 手順の文言（②では「設定 › EYE予約」が存在しない）、マイク許可の寿命、`viewport-fit=cover` と安全領域のトークン | ①（ホーム画面に追加）。`manifest.json` と `apple-mobile-web-app-capable` を足し、モックの 3 手順の文言をそのまま使う |
 | 2 | **Q-06** | §2.8 | 接客の途中で時間切れになってよいものはどれか。とくに、お客様と話している間に枠の仮押さえ（7 分）が切れて、その枠が黙って別の端末へ渡ってよいか。伏せる判定に VoiceOver のフォーカス移動を数えるか | 自動ロック 120 秒・個人モードの寿命 120 秒・仮押さえ 420 秒・短命の確認番号 900 秒・再生チケット 900 秒の 5 つについて「必須として警告なしで切る」か「20 秒以上前に警告して延ばせる」か。延長を認めるなら `PATCH /api/staff/holds/:holdId` が 1 本増える。WCAG 2.2 AA 2.2.1 の答えでもある | 自動ロックと個人モードは「必須（essential）」として免除を主張（伏せるだけで作業は消えない）。仮押さえは残り時間を画面に出し、残り 60 秒で警告して延ばせるようにする |
 | 3 | **Q-10** | §7.2 | お客様の「注意ごと」や設定の下書きを、店長が承認してから表に出す運用があるか。承認できるのは誰か | `customer_notes.status`（`draft` / `published` / `hidden`）の遷移、EX-PERMISSION の「この下書きを店長に依頼する」の行き先、依頼の一覧と承認の画面、依頼をどう知らせるか | 承認は要る（`draft` → 同じ店舗の店長が `published`）。依頼はお知らせに 1 件立て、ALERTS から承認の面へ入る |
 | 4 | **Q-02** | §8 | 受付の録音を、いつまで残し、いつ消すか。個人情報保護法・社内規程・チェーンの内部監査から、別途の保持義務・削除義務（監査ログを含む）が課されるか | `recordings.retain_until` の計算、掃除の Cron、`legal_hold` の運用、R2 の容量見積り、お客様への説明文 | 決定ブリーフ §3.4 のまま（成立した予約は録音完了から 30 日、破棄した受付は録音終了から 24 時間、最低保持の中の削除は拒否）。監査は 400 日 |

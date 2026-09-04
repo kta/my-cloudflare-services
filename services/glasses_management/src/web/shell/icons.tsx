@@ -1,5 +1,5 @@
 /*
- * サイドバーの線画アイコン。承認済みモック（docs/frontend/mockups/eyex）の
+ * サイドバーの線画アイコン。承認済みモック（docs/frontend/mockups/eye）の
  * `data-icon` と 1 対 1 で対応する。外部アセットを持たず、線の色は
  * `currentColor` に従うので、選択中（緑地に白）でもそのまま反転する。
  */

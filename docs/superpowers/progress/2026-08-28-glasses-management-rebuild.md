@@ -1,4 +1,4 @@
-# EYEX予約 再構築 — 進捗台帳
+# EYE予約 再構築 — 進捗台帳
 
 計画: [`../plans/2026-08-28-glasses-management-rebuild.md`](../plans/2026-08-28-glasses-management-rebuild.md)
 
@@ -24,15 +24,15 @@
   （package.json / wrangler.jsonc（D1・KV・R2・NOTIFIER）/ vite / vitest ×2 / drizzle / playwright / tsconfig）
 - `packages/contracts/src/glasses_management.ts` を 0 から書き直した
   （`OrganizationSync` / `StorePermission` / `StoreMembership` / `Store` / `Actor`）
-- `packages/ui/src/theme.css` を承認済みモック `eyex` のトークンへ全面的に書き直した
+- `packages/ui/src/theme.css` を承認済みモック `eye` のトークンへ全面的に書き直した
   （旧モック専用の方言 `terminal-*` / `viz-*` / `sp-*` / `compact-*` は削除）
 - D1: `organizations` / `stores` / `store_memberships`（migration `0000`）
 - Worker: health / dev トークングラント / `POST /api/internal/organizations/sync`（revision で巻き戻さない）/
   `GET /api/internal/organizations` / `POST /api/internal/store-memberships/sync` / `GET /api/staff/stores`
 - web: `AppShell`（上のバー 64px + 左サイドバー 216px、たたむと 76px）と業務開始の画面
 - 旧実装の残骸を削除（`docs/frontend/{diff,overlay,raw,reference,screens,REBUILD.md}`、
-  旧モック `mockups/eyex-reservation/`、旧 spec `features/002-*`、旧 superpowers 文書）
-- 旧 spec が持っていた `UC-EYEX-149` / `UC-EYEX-151` は admin の業務なので
+  旧モック `mockups/eye-reservation/`、旧 spec `features/002-*`、旧 superpowers 文書）
+- 旧 spec が持っていた `UC-EYE-149` / `UC-EYE-151` は admin の業務なので
   `specs/admin/features/003-user-administration/spec.md` へ移し、admin の e2e タグを付け替えた
 
 確かめたこと:

@@ -83,7 +83,7 @@
 | 銀座店 受付iPad | `shared` | 入口の受付台 | 業務中（高橋 健　9:32 から） |
 | 銀座店 検査室iPad | `shared` | 検査室 1　測定機の脇 | つながっていません（最終通信　昨日 18:42） |
 
-`device_label` は START-DEVICE-MODE の脚注に出る `EYEX-iPad-07`。店舗共通 PIN は seed で `2580`
+`device_label` は START-DEVICE-MODE の脚注に出る `EYE-iPad-07`。店舗共通 PIN は seed で `000000`
 （連番でもゾロ目でもない。`weak_pin` に当たらないことを seed のコメントに書く）。
 
 ---
@@ -204,8 +204,8 @@
     `terminal_sessions_org_expires_idx (organization_id, expires_at)` の 2 本。
   - FK を宣言しない。真偽値は `'0'|'1'` の text。日時は ISO8601 の text。DDL の DEFAULT に意味を持たせない。
   - `seed.mjs` に銀座店の 3 端末（上の表）を `INSERT OR IGNORE` で足す。`pin_hash` は
-    `hashStretched(await stretchPin('2580', ORG, terminalId), pepper)` で作り、**ハッシュだけを INSERT する**。
-    pepper は `.dev.vars` の `AUTH_PEPPER` から読む。seed は開発の足場なので `2580` はコードにそのまま書いてよい
+    `hashStretched(await stretchPin('000000', ORG, terminalId), pepper)` で作り、**ハッシュだけを INSERT する**。
+    pepper は `.dev.vars` の `AUTH_PEPPER` から読む。seed は開発の足場なので `000000` はコードにそのまま書いてよい
     （本番の端末 PIN は「設定 › 端末」から作り直す）。
 - **手順**: 編集 → `pnpm --filter @app/glasses_management db:generate` →
   **生成された `000N_*.sql` を目で読む**（`CREATE TABLE` が 2 本、`CREATE INDEX` が 3 本。
@@ -486,9 +486,9 @@
   - `packages/ui/src/keypad.tsx`（新規。`Keypad` / `PinField` / `TryMeter`）
   - `packages/ui/src/index.ts`（re-export）
   - `packages/ui/src/keypad.test.tsx`（新規）
-- **見るべきモック**: `docs/frontend/mockups/eyex/images/LOGIN-STAFF-PIN.png` / `LOGIN-PIN-ERROR.png` /
+- **見るべきモック**: `docs/frontend/mockups/eye/images/LOGIN-STAFF-PIN.png` / `LOGIN-PIN-ERROR.png` /
   `MODE-PERSONAL.png` / `EX-PERMISSION.png` を **Read で実際に見る**。
-- **実測値**（`assets/eyex.css` の `.keypad` / `.key` / `.pins` / `.tries`）
+- **実測値**（`assets/eye.css` の `.keypad` / `.key` / `.pins` / `.tries`）
   | 部品 | 値 |
   |---|---|
   | `Keypad` の枠 | `grid-template-columns: repeat(3, 96px)` / `gap: 12px` |
@@ -575,7 +575,7 @@
   - `services/glasses_management/src/web/login/{StaffPick.tsx,PinEntry.tsx,PlacePick.tsx,StartBar.tsx}`（新規）
   - `services/glasses_management/src/web/App.tsx`（`phase` の状態で 6 面を出し分ける）
   - `services/glasses_management/src/web/terminal/terminalState.ts`（新規。端末セッションの保持と更新）
-- **見るべきモック**（`docs/frontend/mockups/eyex/images/` を **Read で実際に見る**）
+- **見るべきモック**（`docs/frontend/mockups/eye/images/` を **Read で実際に見る**）
   `START-DEVICE-MODE.png` / `LOGIN-STAFF.png` / `LOGIN-STAFF-PIN.png` / `LOGIN-PIN-ERROR.png` /
   `LOGIN-SHARED.png` / `LOGIN-SHARED-PIN.png`
 - **実測値**
@@ -812,8 +812,8 @@
   - `START-DEVICE-MODE` / `LOGIN-STAFF` / `LOGIN-STAFF-PIN` / `LOGIN-PIN-ERROR` / `LOGIN-SHARED` /
     `LOGIN-SHARED-PIN` / `MODE-PERSONAL` / `HOME-SHARED-LOCKED` / `EX-PERMISSION` / `EX-OFFLINE` / `ALERTS`
     の 11 枚を `toHaveScreenshot('<画面ID>.png', { scale: 'device', maxDiffPixelRatio: ... })` で撮る。
-    基準画像は `docs/frontend/mockups/eyex/reference/` にすでに 68 枚ある
-    （作り直すときは `node docs/frontend/mockups/eyex/reference.mjs <画面ID>`）。
+    基準画像は `docs/frontend/mockups/eye/reference/` にすでに 68 枚ある
+    （作り直すときは `node docs/frontend/mockups/eye/reference.mjs <画面ID>`）。
   - `mock` project は viewport **1194×810**・`deviceScaleFactor: 2`。
   - **`maxDiffPixelRatio` は「いま許している差」。下げるだけで、上げてはいけない。**
     残っている差が何かを 1 枚ずつコメントに書く。**いま分かっている差は次の 4 つだけ**なので、

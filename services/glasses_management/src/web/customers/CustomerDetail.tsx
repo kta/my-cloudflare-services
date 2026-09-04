@@ -7,13 +7,13 @@ import { dateLabel, jstClock } from '../ledger/metrics'
 import { axisLabel, diopterLabel, pdLabel } from './CustomerList'
 
 /*
- * お客様の詳細（承認済みモック docs/frontend/mockups/eyex/images/CUSTOMER-DETAIL.png）。
+ * お客様の詳細（承認済みモック docs/frontend/mockups/eye/images/CUSTOMER-DETAIL.png）。
  *
  * 題材: 「前回どう見えていたか」から接客を始めるための面。
  * シグネチャ: **左の「度数の移り変わり」1 枚が主役で、いま有効な 1 行に
  * 「いま使っています」の札が付くこと**（緑・太字だけで区別しない。AC-CUST-09）。
  *
- * 実測（screens/CUSTOMER-DETAIL.html と assets/eyex.css）:
+ * 実測（screens/CUSTOMER-DETAIL.html と assets/eye.css）:
  *   本文 padding 32px 40px、中は 2 列 `1fr 300px`（w-75）・gap 28px。
  *   お名前 26px/700、ふりがな＋お客様番号 13px、`dt` 13px・`dd` 16px/600・各項目 padding 0 16px。
  *   カードは 1px の --line・角 16px・padding 20px 22px、見出し 14px --ink-2（margin 0 0 14px）。

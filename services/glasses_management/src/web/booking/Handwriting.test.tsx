@@ -6,11 +6,11 @@ import { type CustomerDraft, CustomerStep } from './CustomerStep'
 import { Handwriting } from './Handwriting'
 
 /*
- * ご要望の手書き（承認済みモック docs/frontend/mockups/eyex/images/BOOK-04d-HANDWRITE.png）。
+ * ご要望の手書き（承認済みモック docs/frontend/mockups/eye/images/BOOK-04d-HANDWRITE.png）。
  *
  * この面の仕事は「伺ったことばを文字に直さず、かたちのまま残す」こと。
  *
- * 実測値（screens/BOOK-04d-HANDWRITE.html と assets/eyex.css の `.canvas` / `.pen`）:
+ * 実測値（screens/BOOK-04d-HANDWRITE.html と assets/eye.css の `.canvas` / `.pen`）:
  *   本文 1fr ／ 右の柱 320px、本文の余白 32px 40px・柱 32px 26px。
  *   道具は ペン / マーカー / 消しゴム ｜ 細 / 中 / 太 ｜ 取り消し（`.pen` = 最小 48×44px）。
  *   用紙は高さ 420px・上に 20px、罫の下に「記入　山田 大輔（店長）　11:04」（右寄せ）。

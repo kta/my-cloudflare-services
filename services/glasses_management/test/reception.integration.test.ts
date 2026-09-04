@@ -728,7 +728,7 @@ describe('工程を進める', () => {
    */
   it('同じ会社でも別の店舗の来店を進めようとすると 404 で、1 行も残らない', async () => {
     const t = await receptionTenant()
-    const otherStoreId = await insertStore(t.org, 'EYEX 新宿店')
+    const otherStoreId = await insertStore(t.org, 'EYE 新宿店')
     await insertBusinessHours(t.org, otherStoreId)
     await insertSlotRules(t.org, otherStoreId, {
       slotMinutes: 30,
@@ -753,7 +753,7 @@ describe('工程を進める', () => {
 describe('あとから結びつける', () => {
   it('同じ会社でも別店舗の予約には付け替えられない', async () => {
     const t = await receptionTenant()
-    const otherStoreId = await insertStore(t.org, 'EYEX 新宿店')
+    const otherStoreId = await insertStore(t.org, 'EYE 新宿店')
     const otherReservationId = await insertReservation(t.org, {
       storeId: otherStoreId,
       startsAt: jstAt(LEDGER_DATE, '13:00'),

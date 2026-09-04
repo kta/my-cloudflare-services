@@ -6,7 +6,7 @@ import { OfflineBanner } from './OfflineBanner'
 import { ReservationList } from './ReservationList'
 
 /*
- * 通信断の帯（承認済みモック docs/frontend/mockups/eyex/images/EX-OFFLINE.png）。
+ * 通信断の帯（承認済みモック docs/frontend/mockups/eye/images/EX-OFFLINE.png）。
  *
  * この面の仕事は「書けないことを伝えたうえで、読むことだけは続けられる状態を保つ」こと。
  * 成立したのか／していないのか／再試行できるのか の 3 つが文字で読めることを固定する。

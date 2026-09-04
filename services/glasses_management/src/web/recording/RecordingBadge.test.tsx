@@ -3,9 +3,9 @@ import { describe, expect, it } from 'vitest'
 import { RecordingBadge, type RecordingBadgeState } from './RecordingBadge'
 
 /*
- * 受付中の録音の印（承認済みモック docs/frontend/mockups/eyex）。
+ * 受付中の録音の印（承認済みモック docs/frontend/mockups/eye）。
  *
- * 実測（assets/eyex.css と screens/*.html）:
+ * 実測（assets/eye.css と screens/*.html）:
  *   BOOK-01-DATETIME `.rec`       = 最小高 48px・左右 14px・間 10px・角 pill・
  *                                   1px `--alert` の罫・地 `--alert-tint`・600 14px・
  *                                   点 12px・時間はモノスペース 15px

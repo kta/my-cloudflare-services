@@ -10,8 +10,8 @@ import type { AvailabilityReason } from '@app/contracts'
  * 吸着させる。1px 単位で置けてしまうと、盤が読める位置と実際に押さえる時刻がずれ、
  * 復唱の文と台帳の帯が食い違う。
  *
- * 実測（docs/frontend/mockups/eyex/screens/BOOK-03c-DRAG.html の <style> と
- * assets/eyex.css）: 名前列 170px、見出し行 34px、時間は 30分刻みの 1fr。
+ * 実測（docs/frontend/mockups/eye/screens/BOOK-03c-DRAG.html の <style> と
+ * assets/eye.css）: 名前列 170px、見出し行 34px、時間は 30分刻みの 1fr。
  */
 
 /** 盤の実寸。左上の座標と、名前列・見出し行を除いた格子の割り付け。 */

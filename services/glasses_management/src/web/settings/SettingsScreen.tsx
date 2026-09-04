@@ -25,7 +25,7 @@ import { TerminalPanel } from './TerminalPanel'
 import { WebPublishPanel } from './WebPublishPanel'
 
 /*
- * 設定の器（承認済みモック docs/frontend/mockups/eyex/images/SETTINGS-STORE.png）。
+ * 設定の器（承認済みモック docs/frontend/mockups/eye/images/SETTINGS-STORE.png）。
  *
  * 実測（SETTINGS-*.html の <style>。6 面とも同じ）:
  *   .set             = 236px + 1fr の 2 列
@@ -148,7 +148,7 @@ export function SettingsScreen({ storeId, now, initialSection, panels }: Setting
     })
     if (!response.ok) return false
     const session = (await response.json()) as TerminalSession
-    window.dispatchEvent(new CustomEvent('eyex:terminal-session', { detail: session }))
+    window.dispatchEvent(new CustomEvent('eye:terminal-session', { detail: session }))
     const outcome = await pending.save()
     setRefused(outcome === 'forbidden' ? [...pending.changes] : null)
     setNotice(SAVE_NOTICES[outcome])
@@ -232,7 +232,7 @@ export function SettingsScreen({ storeId, now, initialSection, panels }: Setting
               actor={actor}
               changes={refused}
               staff={staff ?? []}
-              {...(sessionStorage.getItem('eyex.active-terminal-id') === null
+              {...(sessionStorage.getItem('eye.active-terminal-id') === null
                 ? {}
                 : { onElevate: elevateAndSave })}
             />

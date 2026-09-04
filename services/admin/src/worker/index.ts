@@ -219,7 +219,7 @@ app.use(
 )
 
 /*
- * 利用者管理(UC-EYEX-149) は本部管理者だけの操作である。
+ * 利用者管理(UC-EYE-149) は本部管理者だけの操作である。
  *
  * JWT の `role` では判定できない: `STANDARD_ROLE_BASE_ROLE` は店舗管理者にも
  * `admin` を与えるので、ロールだけを門にすると店舗管理者がここを通過し、
@@ -240,7 +240,7 @@ function requireHeadOfficeAdmin(): MiddlewareHandler<{
 
 app.use('/api/users', tenantAuth(), requireRole('admin'), requireHeadOfficeAdmin())
 app.use('/api/users/*', tenantAuth(), requireRole('admin'), requireHeadOfficeAdmin())
-// 個人 PIN(UC-EYEX-151): 本人であればロールを問わない。対象は常に JWT の sub。
+// 個人 PIN(UC-EYE-151): 本人であればロールを問わない。対象は常に JWT の sub。
 app.use('/api/me/*', tenantAuth())
 
 const routes = app
@@ -472,7 +472,7 @@ const routes = app
     },
   )
 
-  // ---- User / role / store assignment administration (UC-EYEX-149) ----
+  // ---- User / role / store assignment administration (UC-EYE-149) ----
   .get('/api/users', zValidator('query', AdminUserQuery), async (c) => {
     const { organizationId } = actor(c)
     return c.json(await listUsers(userAdminDeps(c), organizationId, c.req.valid('query')))
@@ -537,7 +537,7 @@ const routes = app
     const audits = await listAudits(userAdminDeps(c), organizationId, c.req.param('id'))
     return audits ? c.json(audits) : c.json({ error: 'not_found' as const }, 404)
   })
-  // ---- Personal PIN (UC-EYEX-151) ----
+  // ---- Personal PIN (UC-EYE-151) ----
   // 管理者は本人確認の記録つきで再設定を開始できるだけで、PIN は読めず設定もできない。
   .post('/api/users/:id/pin-reset', zValidator('json', PinResetStartRequest), async (c) => {
     const { organizationId, userId } = actor(c)

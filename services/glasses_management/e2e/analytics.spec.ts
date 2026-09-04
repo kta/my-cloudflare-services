@@ -6,7 +6,7 @@ import { completeSeededTerminalStart } from './support/terminal'
  * 012-analytics の受入れ。analytics_daily は seed.mjs の固定データを読む想定で、
  * テストごとに analytics.read membership を internal sync で決定的に配る。
  */
-const ORG = 'eyex'
+const ORG = 'eye'
 const GINZA = '11111111-1111-4111-8111-111111111111'
 const MARUNOUCHI = '22222222-2222-4222-8222-222222222222'
 const OTHER_ORG = 'org-analytics-other-seed'
@@ -46,7 +46,7 @@ async function openAnalytics(page: Page, request: APIRequestContext): Promise<vo
   await page.getByRole('button', { name: '業務を始める' }).click()
   await completeSeededTerminalStart(page)
   expect((await storesResponse).status()).toBe(200)
-  await expect(page.getByRole('button', { name: 'EYEX 丸の内店へ切り替える' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'EYE 丸の内店へ切り替える' })).toBeVisible()
   const reportRequest = page.waitForRequest(
     (request) => request.url().includes('/api/staff/analytics') && request.method() === 'GET',
   )

@@ -12,7 +12,7 @@ import { ReceptionHistory } from '../reception/ReceptionHistory'
 import { type PlaybackSource, RecordingPlayer } from './RecordingPlayer'
 
 /*
- * 受付の録音を聞く導線（承認済みモック docs/frontend/mockups/eyex/images/LEDGER-DETAIL.png /
+ * 受付の録音を聞く導線（承認済みモック docs/frontend/mockups/eye/images/LEDGER-DETAIL.png /
  * CHANGE-SEARCH.png / HISTORY-LIST.png）。
  *
  * この部品の仕事は「持ち出せる形を一切作らずに、その場で 1 件だけ聞かせる」こと。
@@ -39,7 +39,7 @@ function sourceOf(overrides: Partial<PlaybackSource> = {}): PlaybackSource {
       expiresAt: '2026-08-27T02:23:00.000Z',
       durationSeconds: 372,
     })),
-    open: vi.fn(async () => ({ url: 'blob:eyex/one', release: vi.fn() })),
+    open: vi.fn(async () => ({ url: 'blob:eye/one', release: vi.fn() })),
     ...overrides,
   }
 }
@@ -156,7 +156,7 @@ describe('RecordingPlayer', () => {
   it('チケットが切れたら手元の音声を手放し、「もう一度開く」で取り直す', async () => {
     const release = vi.fn()
     const source = sourceOf({
-      open: vi.fn(async () => ({ url: 'blob:eyex/one', release })),
+      open: vi.fn(async () => ({ url: 'blob:eye/one', release })),
     })
     const clock = { at: new Date('2026-08-27T02:10:00.000Z') }
     const { container } = render(
@@ -292,7 +292,7 @@ describe('RecordingPlayer', () => {
   it('画面を離れるときに、その場かぎりの参照を手放す', async () => {
     const releaseSpy = vi.fn()
     const source = sourceOf({
-      open: vi.fn(async () => ({ url: 'blob:eyex/one', release: releaseSpy })),
+      open: vi.fn(async () => ({ url: 'blob:eye/one', release: releaseSpy })),
     })
     const { unmount } = render(
       <RecordingPlayer recording={stored()} source={source} now={nowInside} />,

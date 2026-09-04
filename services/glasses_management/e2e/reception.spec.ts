@@ -5,7 +5,7 @@ import { completeSeededTerminalStart } from './support/terminal'
 /**
  * 来店受付とウォークイン（008-reception-and-walkin）の受け入れ基準を、実ブラウザと
  * 実 Worker で確かめる。`vite preview` が実 workerd を動かし、D1 は `seed.mjs` が入れた
- * EYEX 銀座店である（`playwright test` を叩くたびに使い捨ての D1 が作り直される）。
+ * EYE 銀座店である（`playwright test` を叩くたびに使い捨ての D1 が作り直される）。
  *
  * 1 本の test の直前の行に `// @e2e-covers <ID> ...` を置く。UC は対になる AC の test に
  * 相乗りさせ、45 件（UC-RECEP-01..16 / AC-RECEP-01..29）をちょうど 1 回ずつ並べる。
@@ -37,8 +37,8 @@ import { completeSeededTerminalStart } from './support/terminal'
  *     断るので実データで作れない。AC-RECEP-14 / 15 だけ盤面の応答を差し替える）
  */
 
-const ORG = 'eyex'
-/** seed.mjs が固定 id で入れる EYEX 銀座店。 */
+const ORG = 'eye'
+/** seed.mjs が固定 id で入れる EYE 銀座店。 */
 const GINZA = '11111111-1111-4111-8111-111111111111'
 const INTERNAL_KEY = 'dev-internal-key'
 /**
@@ -524,7 +524,7 @@ async function startWork(page: Page): Promise<void> {
   await page.getByLabel('お店のコード').fill(ORG)
   await page.getByRole('button', { name: '業務を始める' }).click()
   await completeSeededTerminalStart(page)
-  await expect(page.locator('header').first()).toContainText('EYEX 銀座店')
+  await expect(page.locator('header').first()).toContainText('EYE 銀座店')
 }
 
 const destination = (page: Page, label: string) =>

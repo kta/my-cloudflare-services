@@ -185,7 +185,7 @@ import {
 } from '@app/contracts'
 import { describe, expect, it } from 'vitest'
 
-const ORG = 'org-eyex'
+const ORG = 'org-eye'
 const UUID = '11111111-2222-4333-8444-555555555555'
 const UUID2 = '99999999-8888-4777-8666-555555555555'
 const NOW = '2026-08-27T02:08:00.000Z'
@@ -194,7 +194,7 @@ describe('OrganizationSync', () => {
   it('accepts a canonical snapshot from admin', () => {
     const parsed = OrganizationSync.parse({
       id: ORG,
-      name: 'EYEX',
+      name: 'EYE',
       plan: 'contracted',
       isDisabled: false,
       createdAt: NOW,
@@ -207,7 +207,7 @@ describe('OrganizationSync', () => {
     expect(
       OrganizationSync.parse({
         id: ORG,
-        name: 'EYEX',
+        name: 'EYE',
         plan: 'free',
         isDisabled: false,
         createdAt: NOW,
@@ -220,7 +220,7 @@ describe('OrganizationSync', () => {
       expect(() =>
         OrganizationSync.parse({
           id: ORG,
-          name: 'EYEX',
+          name: 'EYE',
           plan: 'free',
           isDisabled: false,
           createdAt: NOW,
@@ -234,7 +234,7 @@ describe('OrganizationSync', () => {
     expect(() =>
       OrganizationSync.parse({
         id: ORG,
-        name: 'EYEX',
+        name: 'EYE',
         plan: 'free',
         isDisabled: false,
         createdAt: NOW,
@@ -248,7 +248,7 @@ describe('OrganizationSync', () => {
     expect(() =>
       OrganizationSync.parse({
         id: '  ',
-        name: 'EYEX',
+        name: 'EYE',
         plan: 'free',
         isDisabled: false,
         createdAt: NOW,
@@ -257,7 +257,7 @@ describe('OrganizationSync', () => {
     expect(() =>
       OrganizationSync.parse({
         id: ORG,
-        name: 'EYEX',
+        name: 'EYE',
         plan: 'free',
         isDisabled: false,
         createdAt: '2026-08-27',
@@ -314,7 +314,7 @@ describe('Store', () => {
   const base = {
     id: UUID,
     organizationId: ORG,
-    name: 'EYEX 銀座店',
+    name: 'EYE 銀座店',
     slug: 'ginza',
     isActive: true,
     createdAt: NOW,
@@ -333,7 +333,7 @@ describe('Store', () => {
   })
 
   it('trims and bounds the display name', () => {
-    expect(Store.parse({ ...base, name: '  EYEX 銀座店  ' }).name).toBe('EYEX 銀座店')
+    expect(Store.parse({ ...base, name: '  EYE 銀座店  ' }).name).toBe('EYE 銀座店')
     expect(() => Store.parse({ ...base, name: 'あ'.repeat(201) })).toThrow()
   })
 })
@@ -389,7 +389,7 @@ const sevenWeeklyRows = [0, 1, 2, 3, 4, 5, 6].map((weekday) => weeklyRow(weekday
 const storeDetail = {
   id: UUID,
   organizationId: ORG,
-  name: 'EYEX 銀座店',
+  name: 'EYE 銀座店',
   slug: 'ginza',
   isActive: true,
   createdAt: NOW,
@@ -506,13 +506,13 @@ describe('StorePatch', () => {
   })
 
   it('version を欠いた本文を落とす（楽観ロックを外させない）', () => {
-    expect(StorePatch.parse({ name: 'EYEX 銀座店', version: Version.parse(0) }).version).toBe(0)
-    expect(() => StorePatch.parse({ name: 'EYEX 銀座店' })).toThrow()
+    expect(StorePatch.parse({ name: 'EYE 銀座店', version: Version.parse(0) }).version).toBe(0)
+    expect(() => StorePatch.parse({ name: 'EYE 銀座店' })).toThrow()
   })
 
   it('知らないキーが混ざった本文を落とす', () => {
     // `publicName` / `intro` のような短縮した別名を作らせない。
-    expect(() => StorePatch.parse({ publicName: 'EYEX 銀座', version: 3 })).toThrow()
+    expect(() => StorePatch.parse({ publicName: 'EYE 銀座', version: 3 })).toThrow()
     expect(() => StorePatch.parse({ intro: 'ようこそ', version: 3 })).toThrow()
   })
 })
@@ -3464,7 +3464,7 @@ const webBookingSettingsInput = {
 const webBookingSettings = {
   ...webBookingSettingsInput,
   storeId: UUID,
-  landingPath: 'eyex.jp/ginza',
+  landingPath: 'eye.jp/ginza',
   updatedAt: NOW,
 }
 
@@ -3482,7 +3482,7 @@ const publicBookingResult = {
   status: 'pending',
   startsAt: START,
   endsAt: END,
-  storeName: 'EYEX 銀座店',
+  storeName: 'EYE 銀座店',
   purposeName: '新しいメガネを作る',
   contactName: '山口 真央',
   managementCode: 'K7M4PXQ2',
@@ -3494,7 +3494,7 @@ const publicReservationStatus = {
   status: 'confirmed',
   startsAt: START,
   endsAt: END,
-  storeName: 'EYEX 銀座店',
+  storeName: 'EYE 銀座店',
   purposeName: '新しいメガネを作る',
   durationMinutes: 60,
   contactName: '山口 真央',
@@ -3611,7 +3611,7 @@ describe('WebBookingSettingsInput', () => {
     ).toThrow()
     // ご案内のページは `stores.slug` から組み立てるので、保存で受け取らない。
     expect(() =>
-      WebBookingSettingsInput.parse({ ...webBookingSettingsInput, landingPath: 'eyex.jp/ginza' }),
+      WebBookingSettingsInput.parse({ ...webBookingSettingsInput, landingPath: 'eye.jp/ginza' }),
     ).toThrow()
     expect(() =>
       WebBookingSettingsInput.parse({ ...webBookingSettingsInput, storeId: UUID }),
@@ -3623,7 +3623,7 @@ describe('WebBookingSettings', () => {
   it('keeps requiresApproval true by default because there is no auto-confirm option', () => {
     const { requiresApproval: _dropped, ...omitted } = webBookingSettings
     expect(WebBookingSettings.parse(omitted).requiresApproval).toBe(true)
-    expect(WebBookingSettings.parse(webBookingSettings).landingPath).toBe('eyex.jp/ginza')
+    expect(WebBookingSettings.parse(webBookingSettings).landingPath).toBe('eye.jp/ginza')
     // 「自動で確定する」を選ばせる UI は作らないが、列としては `false` も持てる。
     expect(
       WebBookingSettings.parse({ ...webBookingSettings, requiresApproval: false }).requiresApproval,
@@ -4106,7 +4106,7 @@ describe('P10 terminal and audit contracts', () => {
     name: '銀座店 レジ横iPad',
     kind: 'shared',
     placeNote: 'レジの右側',
-    deviceLabel: 'EYEX-iPad-07',
+    deviceLabel: 'EYE-iPad-07',
     autoLockSeconds: 120,
     isActive: true,
     hasPin: true,

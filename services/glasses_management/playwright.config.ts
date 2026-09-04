@@ -28,12 +28,12 @@ export default defineConfig({
    * 承認済みモックを基準画像として使う。参照するのは images/ ではなく reference/ —
    * モックは端末そのものを描いていて上に iPadOS のステータスバーが乗っているが、
    * 実装はブラウザの中で動くのでその帯を持たない。reference/ はその帯を外した派生物
-   * （`node docs/frontend/mockups/eyex/reference.mjs` が作る）。
+   * （`node docs/frontend/mockups/eye/reference.mjs` が作る）。
    * `expect(page).toHaveScreenshot('<画面ID>.png')` が重ねて差分を出す
    * （不一致のときは test-results/ に -diff.png が残る）。
    * モックは deviceScaleFactor 2 で撮ってあるので、突き合わせる project も 2 にする。
    */
-  snapshotPathTemplate: '{testDir}/../../../docs/frontend/mockups/eyex/reference/{arg}{ext}',
+  snapshotPathTemplate: '{testDir}/../../../docs/frontend/mockups/eye/reference/{arg}{ext}',
   /*
    * D1 は 1 本しか無く、業務の e2e はその 1 本を書き換える（スタッフ・設備・目的を足す
    * 経路は消す経路を持たない）。並べて走らせると、撮っている最中に別の面が書き込む。
@@ -88,7 +88,7 @@ export default defineConfig({
       'pnpm exec wrangler d1 migrations apply glasses_management --local --persist-to "$E2E_STATE_PATH" && node seed.mjs && pnpm run build && pnpm exec vite preview --port 4175 --strictPort',
     ),
     url: 'http://localhost:4175',
-    name: 'EYEX予約',
+    name: 'EYE予約',
     reuseExistingServer: false,
     timeout: 180_000,
     env: { E2E_TODAY },

@@ -20,8 +20,8 @@ import {
  * 時間の割り付けの正本は `worker/domain/ledger.ts` の 4 定数と `placeOnLedgerWindow` /
  * `nowMarker` である。同じ計算を画面側でもう一度書かない。
  *
- * 実測（docs/frontend/mockups/eyex/screens/LEDGER-STAFF.html の <style> と
- * assets/eyex.css の `.tt-*` / `.appt` / `.nowline`）:
+ * 実測（docs/frontend/mockups/eye/screens/LEDGER-STAFF.html の <style> と
+ * assets/eye.css の `.tt-*` / `.appt` / `.nowline`）:
  *   名前列 170px 固定 ＋ 時間 14 列 1fr、行は 34px / 1fr ×4 / 88px
  *   `.tt-head` min-height 34px、`.tt-name` min-height 64px、`.appt` min-height 54px
  *   `.nowline` 幅 2px・左位置 `170px + (100% − 170px) × 0.1619`（11:08 ＝ 68分 ÷ 420分）

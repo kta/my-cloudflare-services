@@ -180,7 +180,7 @@ beforeAll(async () => {
     .bind(
       fixture.storeId,
       ORG,
-      'EYEX 銀座店',
+      'EYE 銀座店',
       `ginza-${crypto.randomUUID().slice(0, 8)}`,
       '',
       '',
@@ -273,7 +273,7 @@ beforeAll(async () => {
 
   // P2 の 3 本（台帳・空き枠・ご予約 1 件）が 200 で返る足場。
   // 予約を書く API は P3 なので、材料は `helpers.ts` の直 INSERT で置く。
-  fixture.ledgerStoreId = await insertStore(ORG, 'EYEX 台帳確認店')
+  fixture.ledgerStoreId = await insertStore(ORG, 'EYE 台帳確認店')
   await insertBusinessHours(ORG, fixture.ledgerStoreId)
   await insertSlotRules(ORG, fixture.ledgerStoreId)
   fixture.ledgerPurposeId = await insertVisitPurpose(ORG, fixture.ledgerStoreId, {
@@ -345,7 +345,7 @@ beforeAll(async () => {
 
   // P5 の足場。ウォークインは 1 行を PATCH で使い回し（版は送る直前に読み直す）、
   // 工程は追記だけなので同じご予約へ何度でも積める。
-  fixture.walkinStoreId = await insertStore(ORG, 'EYEX 受付確認店')
+  fixture.walkinStoreId = await insertStore(ORG, 'EYE 受付確認店')
   await insertBusinessHours(ORG, fixture.walkinStoreId)
   await insertSlotRules(ORG, fixture.walkinStoreId, { maxParallel: 8 })
   const walkinStaffId = await insertStaff(ORG, fixture.walkinStoreId, { displayName: '伊藤 健' })
@@ -463,10 +463,10 @@ beforeAll(async () => {
   /* --- P8 お客様向け Web 予約 --- */
   // 受付の窓（何時間先から・何日先まで）は実時刻を見るので、`LEDGER_DATE`（過去の 1 日）
   // では 409 `store_closed` に化ける。この店舗だけは「きょうから 1 週間先」で組む。
-  fixture.webStoreId = await insertStore(ORG, 'EYEX Web受付店')
+  fixture.webStoreId = await insertStore(ORG, 'EYE Web受付店')
   fixture.webStoreSlug = `web-${crypto.randomUUID().slice(0, 12)}`
   await env.DB.prepare('UPDATE stores SET slug = ?, name_public = ?, sort_order = ? WHERE id = ?')
-    .bind(fixture.webStoreSlug, 'EYEX 銀座店', 900, fixture.webStoreId)
+    .bind(fixture.webStoreSlug, 'EYE 銀座店', 900, fixture.webStoreId)
     .run()
   await insertBusinessHours(ORG, fixture.webStoreId, { closedWeekdays: [] })
   await insertSlotRules(ORG, fixture.webStoreId)
@@ -910,7 +910,7 @@ const TABLE: Row[] = [
     name: '店舗の情報の保存は店長だけ',
     method: 'PATCH',
     path: () => `/api/staff/stores/${fixture.storeId}`,
-    body: async () => ({ name: 'EYEX 銀座店', version: await currentVersion() }),
+    body: async () => ({ name: 'EYE 銀座店', version: await currentVersion() }),
     expected: WRITE,
   },
 
@@ -1769,7 +1769,7 @@ describe('設定の書き込みは membership だけで決まる', () => {
       .bind(
         otherStore,
         ORG,
-        'EYEX 丸の内店',
+        'EYE 丸の内店',
         `marunouchi-${crypto.randomUUID().slice(0, 8)}`,
         '',
         '',
@@ -1795,7 +1795,7 @@ describe('設定の書き込みは membership だけで決まる', () => {
     const allowed = await SELF.fetch(`${BASE}/api/staff/stores/${otherStore}`, {
       method: 'PATCH',
       headers: { ...JSON_HEADERS, authorization: `Bearer ${token}` },
-      body: JSON.stringify({ name: 'EYEX 丸の内店', version: 1 }),
+      body: JSON.stringify({ name: 'EYE 丸の内店', version: 1 }),
     })
     expect(allowed.status).toBe(200)
   })

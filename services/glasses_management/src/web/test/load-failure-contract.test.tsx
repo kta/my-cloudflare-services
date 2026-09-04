@@ -30,7 +30,7 @@ beforeEach(() => {
   failing = true
   sessionStorage.setItem(
     'app.auth.token',
-    `header.${btoa(JSON.stringify({ sub: 'dev:eyex', org: 'eyex' }))}.signature`,
+    `header.${btoa(JSON.stringify({ sub: 'dev:eye', org: 'eye' }))}.signature`,
   )
   vi.stubGlobal(
     'fetch',

@@ -10,7 +10,7 @@ const terminal = {
   name: '銀座店 レジ横iPad',
   kind: 'shared',
   placeNote: 'レジの右側',
-  deviceLabel: 'EYEX-iPad-07',
+  deviceLabel: 'EYE-iPad-07',
   autoLockSeconds: 120,
   isActive: true,
   hasPin: true,
@@ -21,7 +21,7 @@ const terminal = {
 }
 
 beforeEach(() => {
-  sessionStorage.setItem('eyex.active-terminal-id', terminal.id)
+  sessionStorage.setItem('eye.active-terminal-id', terminal.id)
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
@@ -77,7 +77,7 @@ describe('設定 › 端末', () => {
   })
 
   it('有効なsessionStorage pairはdomainFetchから設定保存へ両方送る', async () => {
-    sessionStorage.setItem('eyex.active-terminal-session', 'a'.repeat(64))
+    sessionStorage.setItem('eye.active-terminal-session', 'a'.repeat(64))
     render(<SettingsScreen storeId={STORE_ID} initialSection="terminals" />)
     await userEvent.selectOptions(await screen.findByLabelText('自動で伏せるまで'), '300')
     await userEvent.click(screen.getByRole('button', { name: '保存' }))
@@ -138,7 +138,7 @@ describe('設定 › 端末', () => {
 
   it('保存した端末を、業務中の端末状態へ通知する', async () => {
     const updated = vi.fn()
-    window.addEventListener('eyex:terminal-updated', updated)
+    window.addEventListener('eye:terminal-updated', updated)
     try {
       render(<SettingsScreen storeId={STORE_ID} initialSection="terminals" />)
       await userEvent.selectOptions(await screen.findByLabelText('自動で伏せるまで'), '300')
@@ -152,7 +152,7 @@ describe('設定 › 端末', () => {
         autoLockSeconds: 300,
       })
     } finally {
-      window.removeEventListener('eyex:terminal-updated', updated)
+      window.removeEventListener('eye:terminal-updated', updated)
     }
   })
 })

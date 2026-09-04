@@ -1,7 +1,7 @@
 # glasses_management 設計 05 — 画面フロー
 
 - サービス: `glasses_management`（`@app/glasses_management`）
-- 見た目の正本: `docs/frontend/mockups/eyex/`（`screens/*.html` 68本 + `images/*.png` 68枚 + `assets/eyex.css`）
+- 見た目の正本: `docs/frontend/mockups/eye/`（`screens/*.html` 68本 + `images/*.png` 68枚 + `assets/eye.css`）
 - 値の正本: `packages/ui/src/theme.css`（セマンティックトークン）。モックの生 hex を React に貼らない
 - ルート・フェーズ・テーブル名の正本: 決定ブリーフ。本書はそれを変えない
 
@@ -47,7 +47,7 @@ wrap         残り（下パディング 120px / 完了 140px / 確認・取消 
 sticky CTA   absolute left:28 right:28 bottom:32、width:100%
 ```
 
-固定値の一覧（画面の中で違う値を使う場所）は `docs/frontend/mockups/eyex/assets/eyex.css` が唯一の出どころである。
+固定値の一覧（画面の中で違う値を使う場所）は `docs/frontend/mockups/eye/assets/eye.css` が唯一の出どころである。
 実装では px と hex を直に書かず、`packages/ui/src/theme.css` のトークンへ翻訳する。
 
 ### 1.1 モックの CSS 変数 → `packages/ui/src/theme.css` のトークン
@@ -57,7 +57,7 @@ sticky CTA   absolute left:28 right:28 bottom:32、width:100%
 （`--line-strong` / `--ink-3` / `--brand-line`）。モックの画像は直さない。実装値の正本は `packages/ui/src/theme.css`、
 コントラストの実測は `design/07-nfr.md` §2.5 にある。
 
-| モック（`eyex.css`） | 値 | 実装（`theme.css`） |
+| モック（`eye.css`） | 値 | 実装（`theme.css`） |
 |---|---|---|
 | `--canvas` | `#f1f4f2` | `--color-paper` |
 | `--surface` | `#ffffff` | `--color-surface` |
@@ -93,7 +93,7 @@ sticky CTA   absolute left:28 right:28 bottom:32、width:100%
 
 **モックが `:root` の外に直書きしている生 hex**（モック README の「`:root` が唯一の出どころ」をモック自身が破っている箇所）
 
-`assets/eyex.css` は `#eceeed` `#e3e7e5` `#d9bb92` `#d9a9a4` `#9aa8a2` `#cfd6d2` `#a8bfd3` `#4d5b55` `#33413b` を
+`assets/eye.css` は `#eceeed` `#e3e7e5` `#d9bb92` `#d9a9a4` `#9aa8a2` `#cfd6d2` `#a8bfd3` `#4d5b55` `#33413b` を
 直書きしている。このうち **2 つは本書が名指しで使えと言っている部品の縁**で、`theme.css` には塗りしか無い。
 
 | 部品 | モックの定義 | 本書での指定 | 実装 |
@@ -111,7 +111,7 @@ sticky CTA   absolute left:28 right:28 bottom:32、width:100%
 
 ## 2. 画面の骨格
 
-### 2.0 引き算の規準（`docs/frontend/mockups/eyex/README.md` の表をそのまま置く）
+### 2.0 引き算の規準（`docs/frontend/mockups/eye/README.md` の表をそのまま置く）
 
 発注元の指摘「シンプルさが足りない。余白の美しさを忘れないで」を受けて全画面を作り直した経緯そのものが、
 この表である。**各 feature spec の T-0xx（デザインのパス1計画）はここを参照するだけにし、書き写さない。**
@@ -172,7 +172,7 @@ sticky CTA   absolute left:28 right:28 bottom:32、width:100%
 アイコンは `data-icon` の 9種（home / ledger / reception / search / history / customer / alerts / analytics / settings）+ `.new`（＋）+ `.navtoggle`。
 `--icon` の data-URI SVG を `mask` で塗り、色は `currentColor` に追従させる（`.nav-item.on` で白へ反転する）。
 
-`.new` のラベルは **「予約を取る」**にする。**「＋」はアイコンが描く** — `assets/eyex.css` の
+`.new` のラベルは **「予約を取る」**にする。**「＋」はアイコンが描く** — `assets/eye.css` の
 `.sidenav .new::before` が `--icon` の data-URI SVG（＋ の線画）を `mask` で必ず描くので、ラベルにも「＋」を
 書くと ＋ が 2 つ出る。実際 38画面の PNG は「＋ ＋ 予約を取る」になっており（`images/ALERTS.png` /
 `images/SETTINGS-EQUIPMENT.png` / `images/EX-EMPTY-SEARCH.png` のサイドバーで確認）、
@@ -245,9 +245,9 @@ appbar は「左＝戻り口 / 中央左＝店名 + `<small>` の面の名前 / 
 | LOGIN-SHARED | **なし** | 「業務を始める　みんなで使う端末」 | 別の店舗（丸の内店・新宿店）・設定 |
 | LOGIN-SHARED-PIN | **なし** | 「業務を始める　みんなで使う端末」 | やめる |
 | MODE-PERSONAL | `⌂` | 「銀座店 レジ横iPad（みんなで使う端末）」 | `.tag`「いまは共有モード」・やめる |
-| Web予約 WEB-01・WEB-CANCEL | `‹` | 「EYEX ご予約」+ 「ステップ 1 / 6　店舗」／「ご予約の確認・変更・取り消し」 | **なし** |
-| Web予約 WEB-02〜05 | `‹` | 「EYEX 銀座店」+ 「ステップ N / 6　◯◯」 | **なし** |
-| Web予約 WEB-06-DONE | **なし** | 「EYEX 銀座店」+ 「ステップ 6 / 6　ご予約が完了しました」 | **なし** |
+| Web予約 WEB-01・WEB-CANCEL | `‹` | 「EYE ご予約」+ 「ステップ 1 / 6　店舗」／「ご予約の確認・変更・取り消し」 | **なし** |
+| Web予約 WEB-02〜05 | `‹` | 「EYE 銀座店」+ 「ステップ N / 6　◯◯」 | **なし** |
+| Web予約 WEB-06-DONE | **なし** | 「EYE 銀座店」+ 「ステップ 6 / 6　ご予約が完了しました」 | **なし** |
 
 **予約番号・電話番号のハイフンは常に半角ハイフン（U+002D）である。**モックの CHANGE-* 5 面は非改行ハイフン
 （U+2011）で描いているが、実装はこれを引用しない（`design/06-use-cases.md` §13 が「保存・表示とも半角ハイフンに
@@ -291,7 +291,7 @@ HOME-PERSONAL の 2 は「お知らせ」カテゴリだけの数＝**対応が�
 
 ### 2.7 モックの部品 → 実装の置き場所
 
-`assets/eyex.css` は共有クラスを **80 種**持ち、画面ごとの `<style>` にローカルクラスがさらに 25〜35 種ある。
+`assets/eye.css` は共有クラスを **80 種**持ち、画面ごとの `<style>` にローカルクラスがさらに 25〜35 種ある。
 **どれを `@app/ui` の共有プリミティブにし、どれをサービス側で素の Tailwind で組むかを決めておかないと、
 P1〜P10 の各フェーズが同じ部品を別々に作り直す**（`.appt` だけで LEDGER 5面・BOOK 3面・LEDGER-WALKIN・
 EX-OFFLINE の 10 画面に出る）。`docs/frontend/DESIGN_RULE.md` §0-3 が必ず要求する判断である。
@@ -743,7 +743,7 @@ RECEPTION-JOURNEY の左上に「＋ ご来店を受け付ける」があり、L
 視力測定だけ 30分）。ここに無いご用件は**自由記述**（`walk_ins.purpose_note`）に残す — LEDGER-STAFF の
 ウォークインの帯が「フレームの相談」という 6 目的に無い語を出しているのがその形である。
 
-**台帳に置ける文字の予算**（`assets/eyex.css` と iPad 1194×834 の実測。30 分帯に目的を出さない根拠）
+**台帳に置ける文字の予算**（`assets/eye.css` と iPad 1194×834 の実測。30 分帯に目的を出さない根拠）
 
 | 項目 | 値 |
 |---|---|
@@ -1300,7 +1300,7 @@ BOOK-04-CUSTOMER / CUSTOMER-NEW / WEB-04-FORM の「ふりがな」は、名前�
 ## 8. 画面とモック画像の対応表
 
 実装後に Playwright（`e2e/mock-compare.spec.ts`）で突き合わせる基準。
-画像は `docs/frontend/mockups/eyex/images/<画面ID>.png`、HTML は `docs/frontend/mockups/eyex/screens/<画面ID>.html`。
+画像は `docs/frontend/mockups/eye/images/<画面ID>.png`、HTML は `docs/frontend/mockups/eye/screens/<画面ID>.html`。
 突き合わせるのは **`id="screen"` の要素の中身だけ**（`.caption` は撮影範囲の外）。
 
 | # | ルート（実装） | 画面ID | 画像 | 枠 |
@@ -1412,7 +1412,7 @@ BOOK-04-CUSTOMER / CUSTOMER-NEW / WEB-04-FORM の「ふりがな」は、名前�
 
 ## 9. 残した不明点
 
-発注元（EYEX）への問いの**台帳は `design/09-open-questions.md`（全 12 件）**である。本節はそのうち
+発注元（EYE）への問いの**台帳は `design/09-open-questions.md`（全 12 件）**である。本節はそのうち
 **この文書の画面に効く 4 件**（Q-07 / Q-01 / Q-03 / Q-04）を、画面の側から見た影響つきで並べ直したものにすぎない。
 問いを増やすときは 09 に行を足してから本節に書く。
 「モックが描いていない・行き先が無い」たぐいの論点は、モックの実測と設計判断で決着させて本文に断定で書いた

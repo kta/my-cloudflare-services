@@ -41,7 +41,7 @@ export function PersonalMode({
     <div className="flex h-dvh flex-col bg-paper text-ink">
       <header className="flex h-16 shrink-0 items-center bg-pine px-6 text-on-pine">
         <div>
-          <p className="text-bar font-bold">EYEX 銀座店</p>
+          <p className="text-bar font-bold">EYE 銀座店</p>
           <p className="text-note opacity-90">銀座店 レジ横iPad（みんなで使う端末）</p>
         </div>
         <span className="ml-auto rounded-ctl bg-surface px-3 py-1.5 text-grid font-semibold text-ink">

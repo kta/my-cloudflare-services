@@ -15,11 +15,11 @@ import type { StepGuard } from './steps'
 
 /*
  * 工程 1「お日にちとお時間」（承認済みモック
- * docs/frontend/mockups/eyex/images/BOOK-01-DATETIME.png）。
+ * docs/frontend/mockups/eye/images/BOOK-01-DATETIME.png）。
  *
  * 電話で最初に伺う順（日 → 時間）のまま、1 画面に 2 問だけを置く。
  *
- * 実測（screens/BOOK-01-DATETIME.html の <style> と assets/eyex.css）:
+ * 実測（screens/BOOK-01-DATETIME.html の <style> と assets/eye.css）:
  *   本文 1fr ／ 右の要約 372px、境目に 1px の罫。本文の余白 36px 44px、要約 36px 28px
  *   暦は 7 列・間 8px、日の札は最小高 58px・角 8px・18px/600、曜日見出し 12px、「定休」10px
  *   選択中は 3px の緑罫 + --brand-tint。定休は --surface-2 + --ink-3

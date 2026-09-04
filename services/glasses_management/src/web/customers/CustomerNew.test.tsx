@@ -6,11 +6,11 @@ import { describe, expect, it } from 'vitest'
 import { CustomerNew } from './CustomerNew'
 
 /*
- * 新しいお客様を登録（承認済みモック docs/frontend/mockups/eyex/images/CUSTOMER-NEW.png）。
+ * 新しいお客様を登録（承認済みモック docs/frontend/mockups/eye/images/CUSTOMER-NEW.png）。
  *
  * この面の仕事は「お電話番号を打った瞬間に同じ番号のご登録を突きつけ、二重の登録を止める」こと。
  *
- * 実測値（screens/CUSTOMER-NEW.html と assets/eyex.css）:
+ * 実測値（screens/CUSTOMER-NEW.html と assets/eye.css）:
  *   本文 1fr ／ 右の柱 356px、本文の余白 32px 36px・間 26px、柱 32px 22px。
  *   お電話番号の欄は 幅 320px・21px の等幅。重複の箱は padding 20px 22px・幅 550px まで、
  *   該当行は白地・1px --line-strong・角 8px・padding 12px 16px・間 24px、

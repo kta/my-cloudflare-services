@@ -12,7 +12,7 @@ import {
 import { nextButtonLabel, type StepGuard } from './steps'
 
 /*
- * 枠が先に埋まっていた面（承認済みモック docs/frontend/mockups/eyex/images/BOOK-CONFLICT.png）。
+ * 枠が先に埋まっていた面（承認済みモック docs/frontend/mockups/eye/images/BOOK-CONFLICT.png）。
  *
  * 実測（screens/BOOK-CONFLICT.html の <style>）:
  *   .flow  = 1fr / 372px。本文 padding 36px 44px、要約 36px 28px・左に 1px の罫

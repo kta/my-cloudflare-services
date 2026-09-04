@@ -97,13 +97,13 @@ describe('複数テナントの相互不可視', () => {
     const [a, b, c] = [orgId(), orgId(), orgId()]
     const [ta, tb, tc] = await Promise.all([tokenFor(a), tokenFor(b), tokenFor(c)])
 
-    await seedStore(a, 'EYEX 銀座店', `ginza-${crypto.randomUUID().slice(0, 8)}`)
-    await seedStore(a, 'EYEX 丸の内店', `marunouchi-${crypto.randomUUID().slice(0, 8)}`)
+    await seedStore(a, 'EYE 銀座店', `ginza-${crypto.randomUUID().slice(0, 8)}`)
+    await seedStore(a, 'EYE 丸の内店', `marunouchi-${crypto.randomUUID().slice(0, 8)}`)
     await seedStore(b, 'B 新宿店', `shinjuku-${crypto.randomUUID().slice(0, 8)}`)
     await seedStore(c, 'C 渋谷店', `shibuya-${crypto.randomUUID().slice(0, 8)}`)
 
     const [ra, rb, rc] = await Promise.all([listStores(ta), listStores(tb), listStores(tc)])
-    expect(ra.stores.map((s) => s.name).sort()).toEqual(['EYEX 丸の内店', 'EYEX 銀座店'])
+    expect(ra.stores.map((s) => s.name).sort()).toEqual(['EYE 丸の内店', 'EYE 銀座店'])
     expect(rb.stores.map((s) => s.name)).toEqual(['B 新宿店'])
     expect(rc.stores.map((s) => s.name)).toEqual(['C 渋谷店'])
   })
@@ -284,7 +284,7 @@ describe('組織の同期状態による遷移', () => {
 describe('内部 API は組織を越えて配れるが、業務 API は越えられない', () => {
   it('共有鍵の一覧は全組織を返す（admin の日次照合のため）', async () => {
     const org = orgId()
-    await syncOrganization({ id: org, name: 'EYEX 照合用', revision: 1 })
+    await syncOrganization({ id: org, name: 'EYE 照合用', revision: 1 })
     const res = await SELF.fetch(`${BASE}/api/internal/organizations`, {
       headers: INTERNAL_HEADERS,
     })
@@ -307,7 +307,7 @@ describe('内部 API は組織を越えて配れるが、業務 API は越えら
  * ─────────────────────────────────────────────────────────────────────────── */
 
 /** 店長として入り、店舗 1 つを持つ組織を用意する。 */
-async function managerOf(name = 'EYEX 銀座店') {
+async function managerOf(name = 'EYE 銀座店') {
   const org = orgId()
   const token = await tokenFor(org)
   const storeId = await seedStore(org, name, `store-${crypto.randomUUID().slice(0, 8)}`)
@@ -513,10 +513,10 @@ describe('受付条件は組織をまたがない', () => {
   })
 
   it('店舗をまたぐ読み取りは無い — 同じ組織の別店舗の営業時間は storeId を変えないと読めない', async () => {
-    const mine = await managerOf('EYEX 銀座店')
+    const mine = await managerOf('EYE 銀座店')
     const another = await seedStore(
       mine.org,
-      'EYEX 丸の内店',
+      'EYE 丸の内店',
       `marunouchi-${crypto.randomUUID().slice(0, 8)}`,
     )
     await saveHours(mine.token, mine.storeId, '10:00', '19:00')
@@ -537,7 +537,7 @@ describe('受付条件は組織をまたがない', () => {
  * ─────────────────────────────────────────────────────────────────────────── */
 
 /** 台帳と空き枠を読める最小の店舗（営業時間・予約の間隔・担当・ご用件）を持つテナント。 */
-async function ledgerTenant(name = 'EYEX 銀座店') {
+async function ledgerTenant(name = 'EYE 銀座店') {
   const org = orgId()
   const token = await tokenFor(org)
   const storeId = await insertStore(org, name)
@@ -1541,7 +1541,7 @@ describe('予約の検索・変更・取消は組織をまたがない', () => {
   it('別の店舗の reservationId は、同じ組織でも選択中店舗の外なら結果に出ない', async () => {
     // Q-04 のいまの前提。別店舗のご予約は見せない（押せない導線を置かない）。
     const mine = await ledgerTenant()
-    const another = await insertStore(mine.org, 'EYEX 丸の内店')
+    const another = await insertStore(mine.org, 'EYE 丸の内店')
     await insertBusinessHours(mine.org, another)
     await insertSlotRules(mine.org, another)
     const here = await insertReservation(mine.org, {
@@ -1575,7 +1575,7 @@ describe('予約の検索・変更・取消は組織をまたがない', () => {
  * ─────────────────────────────────────────────────────────────────────────── */
 
 /** 録音を持てるテナント。再生も保全もできる権限を最初から配る。 */
-async function recordingTenant(name = 'EYEX 銀座店') {
+async function recordingTenant(name = 'EYE 銀座店') {
   const org = orgId()
   const token = await tokenFor(org)
   const storeId = await insertStore(org, name)
@@ -1749,7 +1749,7 @@ describe('録音は組織をまたがない', () => {
   it('権限外の店舗の録音は、同じ組織でも聞けず一覧にも出ない', async () => {
     // Q-03 のいまの前提。`recording.read` は担当している店舗にだけ効く。
     const mine = await recordingTenant()
-    const another = await insertStore(mine.org, 'EYEX 丸の内店')
+    const another = await insertStore(mine.org, 'EYE 丸の内店')
     const outside = await seedRecording({ org: mine.org, storeId: another }, { code: 'EY-R-0002' })
     const here = await seedRecording(mine, { code: 'EY-R-0001' })
 

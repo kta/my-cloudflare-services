@@ -9,11 +9,11 @@ import {
 } from './CustomerHandwrite'
 
 /*
- * 手書きメモ（承認済みモック docs/frontend/mockups/eyex/images/CUSTOMER-HANDWRITE.png）。
+ * 手書きメモ（承認済みモック docs/frontend/mockups/eye/images/CUSTOMER-HANDWRITE.png）。
  *
  * この面の仕事は「測定中に紙へ書いたメモを、言い換えずにそのまま台帳へ置く」こと。
  *
- * 実測値（screens/CUSTOMER-HANDWRITE.html の <style> と assets/eyex.css）:
+ * 実測値（screens/CUSTOMER-HANDWRITE.html の <style> と assets/eye.css）:
  *   本文 2 列 260px / 1fr。左は padding 28px 20px、サムネは 1px の line-strong・角 8px・
  *   SVG の高さ 118px、下の帯は surface-2・padding 10px 12px（日付 14px/600 ＋ 店舗と記入者 13px）。
  *   サムネ間は margin-top 18px。選択中は 3px の緑枠＋帯が薄い緑。

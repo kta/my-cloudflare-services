@@ -6,7 +6,7 @@ import { completeSeededTerminalStart } from './support/terminal'
  * `vite preview` が実 workerd を動かすので、/api も本物である。
  */
 
-const ORG = 'eyex'
+const ORG = 'eye'
 
 /** お店のコードから、共有端末で業務画面まで入る。 */
 async function startWork(
@@ -23,7 +23,7 @@ async function startWork(
 test('お店のコードを入れて業務を始めると、上のバーに店名と営業状態が出る', async ({ page }) => {
   await startWork(page)
   const bar = page.locator('header').first()
-  await expect(bar).toContainText('EYEX 銀座店')
+  await expect(bar).toContainText('EYE 銀座店')
   // 営業状態は保存された営業時間から出す（AC-FOUND-09）。
   await expect(bar).toContainText(/営業中|営業時間外|本日は定休日/)
   await expect(page.getByRole('button', { name: 'トップへ' })).toBeVisible()

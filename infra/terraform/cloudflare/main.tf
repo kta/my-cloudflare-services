@@ -9,7 +9,7 @@ resource "cloudflare_d1_database" "admin" {
   name       = "admin"
 }
 
-# glasses_management owns the EYEX reservation domain data. It is deliberately
+# glasses_management owns the EYE reservation domain data. It is deliberately
 # separate from admin's organization/authentication source of truth.
 resource "cloudflare_d1_database" "glasses_management" {
   account_id = var.cloudflare_account_id

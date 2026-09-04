@@ -19,7 +19,7 @@ import { LinkCustomerPanel } from './LinkCustomerPanel'
 import { STAGE_LABELS, VisitBoard } from './VisitBoard'
 
 /*
- * 来店受付の器（承認済みモック docs/frontend/mockups/eyex/images/RECEPTION-JOURNEY.png ／
+ * 来店受付の器（承認済みモック docs/frontend/mockups/eye/images/RECEPTION-JOURNEY.png ／
  * RECEPTION-CHECKIN.png）。
  *
  * **URL による画面の切り替えを持ち込まない**（この製品に router は無い）。行き先は `App` の

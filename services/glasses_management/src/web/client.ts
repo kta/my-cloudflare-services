@@ -2,8 +2,8 @@ import type { AppType } from '@app/glasses_management'
 import { auth } from '@app/shared'
 import { hc } from 'hono/client'
 
-export const TERMINAL_ID_KEY = 'eyex.active-terminal-id'
-export const TERMINAL_SESSION_KEY = 'eyex.active-terminal-session'
+export const TERMINAL_ID_KEY = 'eye.active-terminal-id'
+export const TERMINAL_SESSION_KEY = 'eye.active-terminal-session'
 
 export function storeTerminalSession(terminalId: string, sessionToken: string): void {
   sessionStorage.setItem(TERMINAL_ID_KEY, terminalId)
@@ -40,7 +40,7 @@ export const domainFetch = async (input: RequestInfo | URL, init: RequestInit = 
       failure.subject !== '設定の変更'
     ) {
       window.dispatchEvent(
-        new CustomEvent('eyex:personal-mode-required', { detail: { subject: failure.subject } }),
+        new CustomEvent('eye:personal-mode-required', { detail: { subject: failure.subject } }),
       )
     }
   }

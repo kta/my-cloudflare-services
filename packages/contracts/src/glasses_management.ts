@@ -1,5 +1,5 @@
 /**
- * EYEX予約（`glasses_management`）の Zod 単一ソース。
+ * EYE予約（`glasses_management`）の Zod 単一ソース。
  *
  * このファイルだけが API の入出力の形を持つ。Worker は `zValidator` で受け、
  * 返すときも必ずここのスキーマで `parse` してから `c.json` する。
@@ -2997,7 +2997,7 @@ export type AnalyticsRollupResult = z.infer<typeof AnalyticsRollupResult>
 
 /* --- 公開設定（SETTINGS-WEB） -------------------------------------------- */
 
-/** ご案内のページ（`eyex.jp/ginza`）。表に持たず `stores.slug` から組み立てる。 */
+/** ご案内のページ（`eye.jp/ginza`）。表に持たず `stores.slug` から組み立てる。 */
 const LandingPath = z.string().trim().min(1).max(60)
 
 /** お知らせ文。画面の「27文字／120文字まで」と同じ**符号位置**で数える。 */

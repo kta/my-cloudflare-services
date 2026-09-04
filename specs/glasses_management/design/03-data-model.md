@@ -3,7 +3,7 @@
 - サービス: `services/glasses_management` (`@app/glasses_management`)
 - 所有 D1: `glasses_management`（binding `DB` / `migrations_dir: migrations`）
 - スキーマの実体: `services/glasses_management/src/worker/db/schema.ts`
-- 対応する UI の正本: `docs/frontend/mockups/eyex/`（68画面）
+- 対応する UI の正本: `docs/frontend/mockups/eye/`（68画面）
 
 この文書はテーブルの**全カラム**を確定させる。決定ブリーフ §3 の「主なカラム」を展開したもので、
 ブリーフが挙げた列は 1 つも削っていない。ブリーフに無くモックが要求する列には **＋** を付ける。
@@ -92,7 +92,7 @@ admin が源泉の組織スナップショット。`requireActiveOrg` が毎リ�
 | 論理名 | SQL 列名 | TS 名 | 型 | NULL | 取りうる値 | 説明 |
 |---|---|---|---|---|---|---|
 | 組織ID | `id` | `id` | text (PK) | 不可 | 1〜200文字 | admin の `organizations.id` をそのまま入れる。**この表だけ ID をアプリ生成しない**（admin 側に UUID でない seed 値がある） |
-| 組織名 | `name` | `name` | text | 不可 | 1〜200文字 | `EYEX` |
+| 組織名 | `name` | `name` | text | 不可 | 1〜200文字 | `EYE` |
 | プラン | `plan` | `plan` | text | 可 | `free` \| `contracted` | NULL は `free` として読む |
 | 無効化 | `is_disabled` | `isDisabled` | text | 可 | `0` \| `1` | NULL は `0` として読む。`1` は 403 `org_disabled` |
 | 作成日時 | `created_at` | `createdAt` | text | 不可 | ISO8601 | admin 側の作成日時をそのまま複製する |
@@ -153,11 +153,11 @@ admin が配る「誰がどの店舗で何をできるか」。`POST /api/intern
 |---|---|---|---|---|---|---|
 | 店舗ID | `id` | `id` | text (PK) | 不可 | UUID v4 | |
 | 組織ID | `organization_id` | `organizationId` | text | 不可 | | |
-| 店名（社内） | `name` | `name` | text | 不可 | 1〜60文字 | `EYEX 銀座店` |
-| 店名（対客）＋ | `name_public` | `namePublic` | text | 可 | 1〜60文字 | `EYEX 銀座店（銀座4丁目）`。NULL なら `name` を使う。**P1 で足す列**（§12） |
-| slug | `slug` | `slug` | text | 不可 | `^[a-z0-9]+(?:-[a-z0-9]+)*$`（2〜40文字） | `ginza` / `marunouchi` / `shinjuku`。`/w/:storeSlug` と `eyex.jp/ginza` の末尾。P0 実装は上限 80 文字なので、P1 で契約側を 40 文字へ狭める |
+| 店名（社内） | `name` | `name` | text | 不可 | 1〜60文字 | `EYE 銀座店` |
+| 店名（対客）＋ | `name_public` | `namePublic` | text | 可 | 1〜60文字 | `EYE 銀座店（銀座4丁目）`。NULL なら `name` を使う。**P1 で足す列**（§12） |
+| slug | `slug` | `slug` | text | 不可 | `^[a-z0-9]+(?:-[a-z0-9]+)*$`（2〜40文字） | `ginza` / `marunouchi` / `shinjuku`。`/w/:storeSlug` と `eye.jp/ginza` の末尾。P0 実装は上限 80 文字なので、P1 で契約側を 40 文字へ狭める |
 | 電話番号 | `phone` | `phone` | text | **不可**（既定 `''`） | 表示用の生文字列 | `03-3571-0001`。**空文字＝未入力**（P0 実装が `NOT NULL DEFAULT ''`。表を作り直さない） |
-| 住所 | `address` | `address` | text | **不可**（既定 `''`） | 0〜120文字 | `東京都中央区銀座4-5-6 EYEXビル 2階`。空文字＝未入力 |
+| 住所 | `address` | `address` | text | **不可**（既定 `''`） | 0〜120文字 | `東京都中央区銀座4-5-6 EYEビル 2階`。空文字＝未入力 |
 | 最寄り駅＋ | `nearest_station` | `nearestStation` | text | 可 | 0〜40文字 | `東京メトロ 銀座駅`。**P1 で足す列**（§12） |
 | 行き方 | `access_note` | `accessNote` | text | **不可**（既定 `''`） | 0〜60文字 | `A1出口から徒歩3分`。空文字＝未入力 |
 | 駐車場＋ | `parking_note` | `parkingNote` | text | 可 | 0〜60文字 | `提携駐車場はありません`。**P1 で足す列** |
@@ -739,7 +739,7 @@ SETTINGS-PURPOSE / BOOK-02 / SETTINGS-WEB の 3 面がそろって `コンタク
 台帳の 30 分枠は 1194px の面で 1 枠およそ 68px しかなく
 （`screens/LEDGER-STAFF.html:10` の `.tt-grid { grid-template-columns: 170px repeat(14, 1fr) }`）、
 帯（`.appt`）は `min-height: 54px` / `font-size: 13px` / `overflow: hidden`
-（`docs/frontend/mockups/eyex/assets/eyex.css:704-714`）。
+（`docs/frontend/mockups/eye/assets/eye.css:704-714`）。
 `name_internal` は最大 30 文字を許すので、そのまま流すと帯の中で「メガネを新し…」に切れて業務上読めなくなる。
 **よって `name_short`（1〜5 文字・NOT NULL）を持つ。**溢れを `overflow: hidden` に任せる案は採らない。
 
@@ -1521,7 +1521,7 @@ LIMIT 50;
 | 名前 | `name` | `name` | text | 不可 | 1〜30文字 | `銀座店 レジ横iPad` |
 | 種別 | `kind` | `kind` | text | 不可 | `shared` \| `personal` | |
 | 置き場所＋ | `place_note` | `placeNote` | text | 可 | 0〜40文字 | `レジの右側　固定スタンド` |
-| 端末名＋ | `device_label` | `deviceLabel` | text | 可 | 0〜30文字 | `EYEX-iPad-07` |
+| 端末名＋ | `device_label` | `deviceLabel` | text | 可 | 0〜30文字 | `EYE-iPad-07` |
 | PINハッシュ | `pin_hash` | `pinHash` | text | 可 | ハッシュ文字列 | `kind='shared'` のときの店舗共通 PIN。`personal` では NULL（個人 PIN は `staff.pin_hash`） |
 | 自動ロック（秒） | `auto_lock_seconds` | `autoLockSeconds` | integer | 不可 | 30〜1800 | 共有端末は 120（2分さわらないと自動で隠す） |
 | 最終通信＋ | `last_seen_at` | `lastSeenAt` | text | 可 | ISO8601 | LOGIN-SHARED の「最終通信 昨日 18:42」「つながっていません」 |
@@ -1666,7 +1666,7 @@ Web 予約の公開設定。**1 店舗 1 行**。SETTINGS-WEB の保存先。
 - `change_deadline_days` の既定は **1**。行が無い店舗も 1 として読む。境界は「来店日 −`change_deadline_days` 日」の
   **23:59:59.999 JST まで受け、その 1 ミリ秒後（翌 00:00:00.000 JST）から 409** とする（`07-nfr.md` §10.3 の境界値表と同じ切り方）。
 - 行が無い店舗は「未公開」として扱う（`is_published='0'` と同じ）。
-- 「ご案内のページ `eyex.jp/ginza`」はこの表に持たない。`stores.slug` から組み立てる。
+- 「ご案内のページ `eye.jp/ginza`」はこの表に持たない。`stores.slug` から組み立てる。
 
 **銀座店の seed（SETTINGS-WEB の「受け付ける内容」4 行そのまま）**
 
@@ -2170,7 +2170,7 @@ D1 に置いたままだと 5 枚 × 5,000 顧客で約 300MB となり、500MB 
 
 ## 16. 残した確認事項
 
-**発注元（EYEX）に聞かないと決められないもの**。ここに挙げた 3 件以外の論点は、本文で決めて `[要確認]` を落とした。
+**発注元（EYE）に聞かないと決められないもの**。ここに挙げた 3 件以外の論点は、本文で決めて `[要確認]` を落とした。
 3 件はいずれも `design/09-open-questions.md` の問いに対応する（新しい問いを足していない）。
 
 | # | 箇所 | 内容 | 止まるフェーズ |

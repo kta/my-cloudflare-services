@@ -4,7 +4,7 @@ import type { StaffMember } from '@app/contracts'
  * 設定 8 面の目次と、器（SettingsScreen）と面（*Panel）のあいだの約束。
  *
  * 第2サイドバーに出すのは実装済みの8項目だけにする。承認済みモック
- * （docs/frontend/mockups/eyex/screens/SETTINGS-STORE.html）は 14 項目を描いているが、
+ * （docs/frontend/mockups/eye/screens/SETTINGS-STORE.html）は 14 項目を描いているが、
  * 残る項目は行き先がまだ無い。押せて何も起きない行を置かない（P1 の決め #1）。
  *
  * P8 が「Web予約」群の「公開」を 1 項目だけ足した。モックの第2サイドバーは「公開」の

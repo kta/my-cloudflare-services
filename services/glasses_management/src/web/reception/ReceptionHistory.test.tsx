@@ -6,13 +6,13 @@ import { type HistoryFilters, ReceptionHistory } from './ReceptionHistory'
 
 /*
  * 受付履歴の一覧・詳細・0 件（承認済みモック
- * docs/frontend/mockups/eyex/images/HISTORY-LIST.png と HISTORY-EMPTY.png）。
+ * docs/frontend/mockups/eye/images/HISTORY-LIST.png と HISTORY-EMPTY.png）。
  *
  * 一覧の仕事は「いつ誰が受け、そのあと何が変わったか」をその場で答えられること、
  * 0 件の仕事は「絞りすぎた店長を、条件を 1 つ緩めるだけで元の道へ戻す」こと。
  * 見た目の寸法は e2e の突き合わせで見るので、ここでは「何が読めて、何が押せるか」を見る。
  *
- * 実測（screens/HISTORY-LIST.html / HISTORY-EMPTY.html の <style> と assets/eyex.css）:
+ * 実測（screens/HISTORY-LIST.html / HISTORY-EMPTY.html の <style> と assets/eye.css）:
  *   `.toolbar` 56px。`.fbtn` min-height 40px / padding 0 12px / 角 8px / 13px・600
  *   （値は 400 の --ink-2。選択中は枠 2px --brand ＋ 地 --brand-tint）。
  *   「お客様名で探す」 min-height 40px / padding 0 14px。

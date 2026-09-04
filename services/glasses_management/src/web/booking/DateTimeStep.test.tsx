@@ -14,9 +14,9 @@ import { emptyDraft, nextButtonLabel, type StepGuard } from './steps'
 
 /*
  * 工程 1「お日にちとお時間」（承認済みモック
- * docs/frontend/mockups/eyex/images/BOOK-01-DATETIME.png）。
+ * docs/frontend/mockups/eye/images/BOOK-01-DATETIME.png）。
  *
- * 実測（screens/BOOK-01-DATETIME.html の <style> と assets/eyex.css）:
+ * 実測（screens/BOOK-01-DATETIME.html の <style> と assets/eye.css）:
  *   本文 1fr ／ 右の要約 372px、本文の余白 36px 44px・要約 36px 28px、境目に 1px の罫
  *   暦は 7 列・間 8px、日の札は最小高 58px・角 8px・18px/600、曜日見出し 12px、「定休」10px
  *   時刻の札は 4 列・間 14px、最小高 72px・角 12px・19px/600、補足 11px

@@ -25,7 +25,7 @@ const NOW = '2026-08-27T02:08:00.000Z'
 beforeEach(() => {
   sessionStorage.setItem(
     'app.auth.token',
-    `header.${btoa(JSON.stringify({ sub: 'dev:eyex', org: 'eyex' }))}.signature`,
+    `header.${btoa(JSON.stringify({ sub: 'dev:eye', org: 'eye' }))}.signature`,
   )
   vi.stubGlobal(
     'fetch',
@@ -48,7 +48,7 @@ const PLACES = [
     name: '銀座店 レジ横iPad',
     kind: 'shared' as const,
     placeNote: 'レジの右側',
-    deviceLabel: 'EYEX-iPad-07',
+    deviceLabel: 'EYE-iPad-07',
     autoLockSeconds: 120,
     lastSeenAt: null,
     isOnline: false,
@@ -64,7 +64,7 @@ const panelProps = { storeId: STORE_ID, now: NOW, onDraftChange: () => {} }
 const SCREENS: Array<[string, () => ReactElement]> = [
   [
     '端末の使い方',
-    () => <DeviceMode deviceLabel="EYEX-iPad-07" onPersonal={() => {}} onShared={() => {}} />,
+    () => <DeviceMode deviceLabel="EYE-iPad-07" onPersonal={() => {}} onShared={() => {}} />,
   ],
   ['置き場所', () => <PlacePick terminals={PLACES} onSelect={() => {}} onChangeMode={() => {}} />],
   [

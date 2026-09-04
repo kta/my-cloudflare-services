@@ -13,7 +13,7 @@ import { completeSeededTerminalStart } from './support/terminal'
  * その `onClick` / `onPointerDown` を見れば、押して何かが起きるボタンかどうかが分かる。
  */
 
-const ORG = 'eyex'
+const ORG = 'eye'
 /** seed が予約を置いている暦日。台帳が最初に尋ねる日は端末の時計で決まる。 */
 const SEEDED_NOW = '2026-08-27T02:08:00.000Z'
 
@@ -113,7 +113,7 @@ test('予約台帳の詳細にある 3 つの操作は、どれも押すと次�
 test('上のバーの営業状態は、その店舗の保存された営業時間から出す', async ({ page }) => {
   await startWork(page)
   const bar = page.locator('header').first()
-  await expect(bar).toContainText('EYEX 銀座店')
+  await expect(bar).toContainText('EYE 銀座店')
   // 銀座店の保存値は 10:00–19:00。定休の火曜には「本日は定休日」に変わる。
   await expect(bar).toContainText(/(営業中|営業時間外)　10:00–19:00|本日は定休日/)
 })

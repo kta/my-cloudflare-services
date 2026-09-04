@@ -4,7 +4,7 @@ import { completeSeededTerminalStart } from './support/terminal'
 
 /**
  * 予約の検索・変更・取消（009-change-and-cancel）の受け入れ基準を、実ブラウザと実 Worker で
- * 確かめる。`vite preview` が実 workerd を動かし、D1 は `seed.mjs` が入れた EYEX 銀座店である
+ * 確かめる。`vite preview` が実 workerd を動かし、D1 は `seed.mjs` が入れた EYE 銀座店である
  * （`playwright test` を叩くたびに使い捨ての D1 が作り直される）。
  *
  * 1 本の test の直前の行に `// @e2e-covers <ID>` を置く。**この面は 1 ID = 1 test** で、
@@ -34,8 +34,8 @@ import { completeSeededTerminalStart } from './support/terminal'
  * EX-CONFLICT の 6 面はすべてブラウザから通しで操作している。
  */
 
-const ORG = 'eyex'
-/** seed.mjs が固定 id で入れる EYEX 銀座店と、丸の内店（別店舗を見せない証明に使う）。 */
+const ORG = 'eye'
+/** seed.mjs が固定 id で入れる EYE 銀座店と、丸の内店（別店舗を見せない証明に使う）。 */
 const GINZA = '11111111-1111-4111-8111-111111111111'
 const MARUNOUCHI = '22222222-2222-4222-8222-222222222222'
 

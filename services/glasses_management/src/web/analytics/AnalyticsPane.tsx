@@ -106,7 +106,7 @@ export function AnalyticsPane({
       storeId={storeId}
       storeOptions={stores
         .filter((store) => store.isActive)
-        .map((store) => ({ id: store.id, label: `店舗：${store.name.replace(/^EYEX\s+/, '')}` }))}
+        .map((store) => ({ id: store.id, label: `店舗：${store.name.replace(/^EYE\s+/, '')}` }))}
       reports={{}}
       initialMonth={toJstDateString(new Date()).slice(0, 7)}
       loadReport={load}

@@ -348,7 +348,7 @@ export type Bindings = {
   /** PINハッシュ用のpepper。本番はwrangler secret、devだけ.dev.vars。 */
   AUTH_PEPPER: string
   /**
-   * お客様のご予約ページの公開ドメイン（`eyex.jp`）。SETTINGS-WEB の「ご案内のページ」を
+   * お客様のご予約ページの公開ドメイン（`eye.jp`）。SETTINGS-WEB の「ご案内のページ」を
    * `stores.slug` と繋いで組み立てるためだけに使う。**この値を表に持たない。**
    */
   PUBLIC_WEB_ORIGIN?: string
@@ -3034,8 +3034,8 @@ async function purgeRecordings(
  * 「無い slug」と「非公開の slug」は status も body も同じにする（`04-api.md` §3.12）。
  * ─────────────────────────────────────────────────────────────────────────── */
 
-/** ご案内のページの前置き（`eyex.jp/ginza`）。表には持たず、slug から組み立てる。 */
-const PUBLIC_ORIGIN_FALLBACK = 'eyex.jp'
+/** ご案内のページの前置き（`eye.jp/ginza`）。表には持たず、slug から組み立てる。 */
+const PUBLIC_ORIGIN_FALLBACK = 'eye.jp'
 
 /**
  * 公開面の 404。**存在しない slug と非公開の店舗で body まで同じにする。**

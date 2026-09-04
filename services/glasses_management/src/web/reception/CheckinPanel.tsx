@@ -7,12 +7,12 @@ import { jstClock } from '../ledger/metrics'
 import { VisitBadge } from '../ledger/Timetable'
 
 /*
- * ご来店の受け付け（承認済みモック docs/frontend/mockups/eyex/images/RECEPTION-CHECKIN.png）。
+ * ご来店の受け付け（承認済みモック docs/frontend/mockups/eye/images/RECEPTION-CHECKIN.png）。
  *
  * 題材: お客様が目の前に立っている 20 秒で、名前と伝え忘れやすいことを確かめて受け付ける面。
  * シグネチャ: **左に確かめること、右に前回のご来店。確かめ終えなくても受け付けられること。**
  *
- * 実測（screens/RECEPTION-CHECKIN.html の <style> と assets/eyex.css）:
+ * 実測（screens/RECEPTION-CHECKIN.html の <style> と assets/eye.css）:
  *   .chk  = 1fr 320px／.main padding 28px 32px・段の間 24px
  *   .side = 左罫 1px --line・地は白・padding 28px 24px／dt 13px（上に 20px）・dd 16px/600
  *   見出しの 1 行 = 13px --brand-dark・下に 10px

@@ -4,11 +4,11 @@ import { describe, expect, it, vi } from 'vitest'
 import { DoneStep } from './DoneStep'
 
 /*
- * 予約が取れた（承認済みモック docs/frontend/mockups/eyex/images/BOOK-06-DONE.png）。
+ * 予約が取れた（承認済みモック docs/frontend/mockups/eye/images/BOOK-06-DONE.png）。
  *
  * この面の仕事は「取れたことを一目で伝え、番号・内容・お伝えごとを同じ面に置く」こと。
  *
- * 実測値（screens/BOOK-06-DONE.html と assets/eyex.css）:
+ * 実測値（screens/BOOK-06-DONE.html と assets/eye.css）:
  *   **stepbar を持たない**。左 1fr ／ 右 372px、余白 40px 44px ／ 40px 28px。
  *   ✓ の丸は 78px、見出し 30px、予約番号 22px のモノスペース。要約は 2 列（`dd` 19px/600）。
  *   「続けて予約を取る」「台帳で見る」は上に 40px。右は 3 点のお伝えごと（1 行 18px 上下）。

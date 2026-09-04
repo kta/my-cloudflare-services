@@ -53,7 +53,7 @@ function callAs(token: string) {
 }
 
 /** 受け付けられる店舗ひとそろい。担当 1 名（同時 1 件）・設備 1 台・60 分のご用件。 */
-async function changeTenant(name = 'EYEX 銀座店') {
+async function changeTenant(name = 'EYE 銀座店') {
   const org = orgId()
   const token = await tokenFor(org)
   const storeId = await insertStore(org, name)
@@ -306,7 +306,7 @@ describe('検索', () => {
     const ginza = await book(tenant, { startsAt: AT_11 })
     await attachCustomer(tenant.org, ginza.id, { name: '田中 花子', kana: 'たなか はなこ' })
 
-    const marunouchi = await insertStore(tenant.org, 'EYEX 丸の内店')
+    const marunouchi = await insertStore(tenant.org, 'EYE 丸の内店')
     await insertBusinessHours(tenant.org, marunouchi)
     await insertSlotRules(tenant.org, marunouchi)
     // ご用件も担当も店舗ごとの行なので、丸の内店にも 1 組置く

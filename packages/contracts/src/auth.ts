@@ -127,7 +127,7 @@ export const IssueTokenRequest = z.strictObject({
 export type IssueTokenRequest = z.infer<typeof IssueTokenRequest>
 
 /* ------------------------------------------------------------------------- *
- * 利用者・標準ロール・担当店舗の管理(UC-EYEX-149)と個人PIN(UC-EYEX-151)。
+ * 利用者・標準ロール・担当店舗の管理(UC-EYE-149)と個人PIN(UC-EYE-151)。
  * admin が利用者・ロール・担当店舗の源泉であり、結果の membership だけを
  * service binding で glasses_management へ配る。
  * ------------------------------------------------------------------------- */

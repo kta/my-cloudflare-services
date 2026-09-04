@@ -41,11 +41,11 @@ import { useIdle } from './shell/useIdle'
 import { DeviceMode } from './start/DeviceMode'
 
 /*
- * P0（基盤）の画面。承認済みモック docs/frontend/mockups/eyex/images/HOME.png の
+ * P0（基盤）の画面。承認済みモック docs/frontend/mockups/eye/images/HOME.png の
  * 骨格 —— 上のバー・左サイドバー・主操作 2 つ・下辺の日付の帯 —— をここで確立し、
  * 以降のフェーズがこの器の中に画面を足していく。
  *
- * 引き算の決め（mockups/eyex/README.md）: 主役は 1 画面に 1 つ、白い箱は 3 枚まで、
+ * 引き算の決め（mockups/eye/README.md）: 主役は 1 画面に 1 つ、白い箱は 3 枚まで、
  * 説明文は 2 つまで。空いた場所を埋めるために要素を足さない。
  */
 
@@ -77,8 +77,8 @@ function StartWork({ onStarted }: { onStarted: (org: string) => void }) {
     /*
      * **入口でコードを畳んでから送る。**
      * dev グラントは知らない組織にもトークンを出したうえで `organizations` に行を作るので、
-     * `EYEX` のまま送ると「EYEX」という空の組織が生まれ、店舗 0 件で
-     * 「このコードのお店が見つかりませんでした。」が出る —— seed 済みの `eyex` は無事なのに。
+     * `EYE` のまま送ると「EYE」という空の組織が生まれ、店舗 0 件で
+     * 「このコードのお店が見つかりませんでした。」が出る —— seed 済みの `eye` は無事なのに。
      * 打ち間違いが組織として永続化するのも同じ経路なので、送る前にここで揃える。
      */
     const code = orgId.trim().toLowerCase()
@@ -120,7 +120,7 @@ function StartWork({ onStarted }: { onStarted: (org: string) => void }) {
     <main className="grid min-h-dvh place-items-center bg-paper px-6">
       <form onSubmit={onSubmit} className="flex w-full max-w-md flex-col gap-6">
         <div>
-          <h1 className="text-title font-bold text-ink">EYEX予約</h1>
+          <h1 className="text-title font-bold text-ink">EYE予約</h1>
           <p className="mt-1 text-grid text-ink-muted">業務を始めます。</p>
         </div>
         <Field label="お店のコード" htmlFor="org" error={error}>
@@ -128,7 +128,7 @@ function StartWork({ onStarted }: { onStarted: (org: string) => void }) {
             id="org"
             value={orgId}
             onChange={(e) => setOrgId(e.target.value)}
-            placeholder="例: eyex"
+            placeholder="例: eye"
             autoFocus
           />
         </Field>
@@ -339,8 +339,8 @@ function Workspace({
       const detail = (event as CustomEvent<{ subject?: unknown }>).detail
       if (typeof detail?.subject === 'string') setPersonalModeSubject(detail.subject)
     }
-    window.addEventListener('eyex:personal-mode-required', required)
-    return () => window.removeEventListener('eyex:personal-mode-required', required)
+    window.addEventListener('eye:personal-mode-required', required)
+    return () => window.removeEventListener('eye:personal-mode-required', required)
   }, [])
 
   // 共有端末では、前のお客様の入力をブラウザ候補へ残さない。後から開いた面も監視する。
@@ -363,8 +363,8 @@ function Workspace({
       storeTerminalSession(session.terminalId, session.sessionToken)
       setTerminalSession(session)
     }
-    window.addEventListener('eyex:terminal-session', elevated)
-    return () => window.removeEventListener('eyex:terminal-session', elevated)
+    window.addEventListener('eye:terminal-session', elevated)
+    return () => window.removeEventListener('eye:terminal-session', elevated)
   }, [])
 
   useEffect(() => {
@@ -375,10 +375,10 @@ function Workspace({
       if (sessionStorage.getItem(TERMINAL_ID_KEY) !== terminal.id) return
       setSelectedTerminal(terminal)
       setTerminalMode(terminal.kind)
-      localStorage.setItem(`eyex.terminal-mode.${org}`, terminal.kind)
+      localStorage.setItem(`eye.terminal-mode.${org}`, terminal.kind)
     }
-    window.addEventListener('eyex:terminal-updated', updated)
-    return () => window.removeEventListener('eyex:terminal-updated', updated)
+    window.addEventListener('eye:terminal-updated', updated)
+    return () => window.removeEventListener('eye:terminal-updated', updated)
   }, [org])
 
   function navigate(key: string, reservationId: string | null = null, walkin = false) {
@@ -480,7 +480,7 @@ function Workspace({
             setStartPhase('ready')
             return
           }
-          const saved = localStorage.getItem(`eyex.terminal-mode.${org}`)
+          const saved = localStorage.getItem(`eye.terminal-mode.${org}`)
           if (saved === 'personal' || saved === 'shared') {
             setTerminalMode(saved)
             setStartPhase(saved === 'personal' ? 'staff' : 'place')
@@ -563,12 +563,12 @@ function Workspace({
       <DeviceMode
         deviceLabel={terminals[0]?.deviceLabel || 'この iPad'}
         onPersonal={() => {
-          localStorage.setItem(`eyex.terminal-mode.${org}`, 'personal')
+          localStorage.setItem(`eye.terminal-mode.${org}`, 'personal')
           setTerminalMode('personal')
           setStartPhase('staff')
         }}
         onShared={() => {
-          localStorage.setItem(`eyex.terminal-mode.${org}`, 'shared')
+          localStorage.setItem(`eye.terminal-mode.${org}`, 'shared')
           setTerminalMode('shared')
           setStartPhase('place')
         }}
@@ -588,7 +588,7 @@ function Workspace({
           setStartPhase('pin')
         }}
         onShared={() => {
-          localStorage.setItem(`eyex.terminal-mode.${org}`, 'shared')
+          localStorage.setItem(`eye.terminal-mode.${org}`, 'shared')
           setTerminalMode('shared')
           setStartPhase('place')
         }}

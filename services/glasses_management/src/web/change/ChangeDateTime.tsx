@@ -12,12 +12,12 @@ import { jstClock, shiftDate } from '../ledger/metrics'
 import { WEEKDAY_NAMES } from '../settings/sections'
 
 /*
- * 日時を変える（承認済みモック docs/frontend/mockups/eyex/images/CHANGE-DATETIME.png）。
+ * 日時を変える（承認済みモック docs/frontend/mockups/eye/images/CHANGE-DATETIME.png）。
  *
  * 題材: いまのご予約を左に置いたまま、所要時間が収まる時刻だけから新しい日時を選ぶ面。
  * シグネチャ: **候補の先頭に「いまのまま」が居座り、時刻を選び直さずに進めること**（AC-CHANGE-25）。
  *
- * 実測（screens/CHANGE-DATETIME.html と assets/eyex.css）:
+ * 実測（screens/CHANGE-DATETIME.html と assets/eye.css）:
  *   2 段組みは 300px 1fr（`w-75`）。左ペイン padding 36px 26px・見出し 15px・
  *   日時 20px/1.4 の --brand-dark・項目名 12px（上 24px）・値 17px/600・補足 13px。
  *   日付は 7 列 gap 10px・min-height 76px（`min-h-19`）・21px/600。選択中は 3px の緑罫 +
@@ -44,7 +44,7 @@ const HOLD_SECONDS = 420
 /** 420 秒を取り直せる回数の上限（同上）。 */
 const MAX_RENEWALS = 10
 /*
- * 時刻の札は 1 画面 8 枚まで（`docs/frontend/mockups/eyex/README.md` の引き算の規準
+ * 時刻の札は 1 画面 8 枚まで（`docs/frontend/mockups/eye/README.md` の引き算の規準
  * 「一覧・表の行 / 選択の札 … 8つまで」）。サーバは営業時間ぶんの格子を全部返すので、
  * そのまま並べると 5 列 × 4 段の 18 枚になり、**選んだ結果の 1 文と仮の押さえの残り時間が
  * 画面の下に押し出されて見えなくなる。**P3 の `booking/DateTimeStep.tsx` と同じ窓にする。
