@@ -67,7 +67,7 @@ Lefthook は開発中の早期フィードバック、CI `verify` は迂回で�
 | `services/patent_research` (`@app/patent_research`) | SPA+API Worker + D1 | 5177 | **典拠（Tenkyo）**: 特許の先行技術調査と明細書ドラフト。公報コーパスは `packages/patent-corpus` の別プロセス（:8899）に持たせ、`x-internal-key` の HTTP で問い合わせる。**ローカル完結・本番デプロイ対象外** |
 | `services/admin` (`@app/admin`) | SPA+API Worker + D1 + KV | 5174 | organizations 源泉 + **認証源泉**（login/refresh/招待）。service binding で各ドメインへ org 同期 + 日次照合 Cron |
 | `services/notifier` (`@app/notifier`) | 同期送信 API Worker + KV | — | 通知（`POST /api/internal/send`・KV 冪等・Resend）。送信手段未設定は **fail close(502)** |
-| `services/ops` (`@app/ops`) | Cron + Workflows Worker + R2 | — | D1 バックアップ（R2 に世代保存）+ 鮮度/容量/死活監視。Workflows は無料枠内 |
+| `services/ops` (`@app/ops`) | **未実装**（設計のみ） | — | D1 バックアップ + 監視の構想。**ディレクトリは存在しない**ので、手順書の ops に関する記述は将来の姿である |
 | `packages/contracts` (`@app/contracts`) | TS | — | **Zod 単一ソース** |
 | `packages/ui` (`@app/ui`) | TS/TSX + theme.css | — | **デザイントークン単一ソース** + 共有プリミティブ |
 | `packages/shared` (`@app/shared`) | TS | — | 認証(JWT/password/hono ミドルウェア) / internal 呼び出し / JST 日付 / 解析(GA4) |
@@ -78,7 +78,8 @@ Lefthook は開発中の早期フィードバック、CI `verify` は迂回で�
 ## セキュリティ / やってはいけない
 - ドメインクエリのテナントスコープを外さない。認証フロー（`packages/shared` の auth）を無断で変えない。
 - secrets をコミットしない。`.dev.vars` は gitignore、本番は `wrangler secret put`。
-- **本番前チェックリスト**（`INTERNAL_KEY` / `JWT_SECRET` / `AUTH_PEPPER` / `AUTH_DEV_GRANT` / `MAIL_FROM` 等）は [`docs/howto/deploy.md`](./docs/howto/deploy.md)。example_service は雛形なので本番デプロイしない（CI の deploy matrix 対象外）。
+- **secrets は GitHub Environment が唯一の源泉**。手で `wrangler secret put` を叩かない。デプロイは `develop` → staging / `main` → production の merge で自動に走る。本番前チェックリストは [`docs/howto/deploy.md`](./docs/howto/deploy.md)。
+- staging は `*.workers.dev` 公開だがゲートトークン（`STAGING_ACCESS_TOKEN`）が要る。production はこの secret を持たないのでゲートは素通りする。example_service は雛形なので本番デプロイしない（CI の deploy matrix 対象外）。
 
 ## コミット / PR
 - **Conventional Commits**（commitlint + lefthook で強制。pre-commit=biome / pre-push=typecheck+test）。
