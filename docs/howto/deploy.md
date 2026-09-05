@@ -17,7 +17,15 @@ merge すると `.github/workflows/ci.yml` の `verify` が走り、緑なら `d
 2. Terraform（`envs/<env>`）を init → 既存リソースの import → apply。
 3. **binding 突合** — Terraform 出力と `wrangler.jsonc` の ID が一致するか。ずれていたら落ちる。
 4. `notifier` → `glasses_management` → `admin` の順に、**deploy してから secrets を同期**。service binding は参照先が先に存在している必要があり、未作成の Worker には secret を打てないため、この順序は動かせない。
-5. staging だけ admin の seed を流す（冪等）。
+5. staging だけ seed を流す（冪等）—— admin（ログインできる管理者）と
+   glasses_management（組織 `eye` と 3 店舗・スタッフ・端末）の 2 本。
+   宛先の D1 は `CLOUDFLARE_ENV` から `wrangler.jsonc` 経由で解決する（seed に DB 名を直書きしない）。
+
+6. production だけ、`glasses_management` / `admin` の Worker に `AUTH_DEV_GRANT` が
+   **残っていないこと**を確かめる。`wrangler secret bulk` は加算で、渡さなかった
+   secret を消さない。一度でも入ると以後どのデプロイでも消えず、`/api/auth/token` の
+   「`'true'` でなければ 404」を素通りし続ける。「入れない」だけでは足りない。
+   `deploy-eye-stack`（手動の逃げ道）にも同じ検査を無条件で置いてある。
 
 **ロールバックはしない。** D1 マイグレーションは戻せず、Worker だけ戻すと整合しない。前方修正が方針である。ただしこの順序を守る限り、途中で失敗しても「新しい Worker がまだ出ていない」だけで、既存の環境は動き続ける。
 
@@ -37,6 +45,7 @@ merge すると `.github/workflows/ci.yml` の `verify` が走り、緑なら `d
 | `WORKER_DOMAIN_AUTH_KEY` | ✓ | ✓ | admin の `DOMAIN_AUTH_KEY` / glasses_management の `ADMIN_DOMAIN_AUTH_KEY` |
 | `WORKER_STAGING_ACCESS_TOKEN` | **入れない** | ✓ | staging ゲート |
 | `WORKER_STAGING_ADMIN_PASSWORD` | **入れない** | ✓ | staging の seed |
+| `vars.STAGING_ADMIN_EMAIL`（secret ではなく variable） | — | 任意 | staging admin のログイン ID。未設定なら `admin@example.com` |
 | `WORKER_RESEND_API_KEY` | ✓ | **入れない** | notifier の送信手段 |
 
 「入れない」欄は preflight が**混入を検出して落とす**。本番に staging の抜け道を持ち込ませないため、また staging から実メールを飛ばさないため（notifier は送信手段が未設定なら fail close する）。
@@ -215,13 +224,37 @@ node scripts/check-binding-ids.mjs admin glasses_management notifier \
 
 staging は `*.workers.dev` で公開されるため、URL を知っていれば誰でも叩ける。独自ドメインを持たず Cloudflare Access を掛けられないので、Worker の中でトークンを要求している。
 
+ゲートは Worker の中にあり、Worker に届くのは `run_worker_first` の **`/api/*` だけ**である。
+つまり `/?gate=…` は静的アセットが返るだけで **Cookie は発行されない**。
+必ず `/api/` から始まるパスで通すこと。
+
 ```
-https://admin-staging.<subdomain>.workers.dev/?gate=<WORKER_STAGING_ACCESS_TOKEN>
+# サービスごとに 1 回ずつ。302 が返り、HttpOnly Cookie（30 日）が付く。
+https://admin-staging.<subdomain>.workers.dev/api/health?gate=<WORKER_STAGING_ACCESS_TOKEN>
+https://glasses-management-staging.<subdomain>.workers.dev/api/health?gate=<WORKER_STAGING_ACCESS_TOKEN>
 ```
 
-一致すると `HttpOnly` Cookie（30 日）が発行され、以後はトークン無しで開ける。`/api/internal/*` は対象外で、これは service binding の正規経路を `x-internal-key` が守っているためである。
+以後は同じブラウザならトークン無しで開ける。`/api/internal/*` は対象外で、これは service binding の正規経路を `x-internal-key` が守っているためである。
+
+**守れているのは API だけ**である。SPA の HTML と JS は assets から直接返るので、URL を知っていれば誰でも取れる。伏せたいのはデータであって画面の骨組みではない、という割り切りの上に立っている。
 
 production には `STAGING_ACCESS_TOKEN` を設定しないので、このゲートは**分岐ごと死ぬ**。
+
+### staging で業務を始める
+
+1. 上の 2 つの `?gate=` URL を順に開く。
+2. `https://glasses-management-staging.<subdomain>.workers.dev/` を開き、**お店のコードに `eye`**。
+   この入口は今も dev グラント（`/api/auth/token`）を通るので、staging では
+   `AUTH_DEV_GRANT=true` を同期している（ゲートの裏なので許容。production には入れない）。
+3. 端末モード → 置き場所 → **暗証番号 `000000`**（seed の値）。
+4. admin は `vars.STAGING_ADMIN_EMAIL`（未設定なら `admin@example.com`）と
+   `WORKER_STAGING_ADMIN_PASSWORD` でログインする。
+
+seed の台帳は **2026-08-27** に入っているので、当日を開くと空に見える。日付を戻すこと。
+
+admin の seed 行は id 固定の `INSERT OR IGNORE` である。**既にある環境で
+`STAGING_ADMIN_EMAIL` を変えても反映されない**（seed がその旨を警告する）。
+変えるなら admin の画面か、D1 を直接 UPDATE する。
 
 ## ローカルから触るとき
 

@@ -126,3 +126,43 @@ test('BINDING_MAP は notifier と glasses_management も覆う', () => {
   assert.ok(BINDING_MAP.notifier.some((b) => b.binding === 'DEDUPE'))
   assert.ok(BINDING_MAP.glasses_management.some((b) => b.binding === 'RECORDINGS'))
 })
+
+test('placeholder のとき、貼り替える実値を Terraform 出力から示す', () => {
+  const r = checkBindings({
+    service: 'admin',
+    resolved: {
+      ...RESOLVED,
+      d1: [
+        {
+          binding: 'DB',
+          database_name: 'admin',
+          database_id: '00000000-0000-0000-0000-000000000000',
+        },
+      ],
+    },
+    tfOutputs: TF,
+  })
+  assert.equal(r.ok, false)
+  // 初回デプロイの鶏と卵はここでしか解けない。値を出さないと人が Actions のログを
+  // 遡って terraform output を探すことになる。
+  assert.match(r.errors[0], /d1-real/)
+})
+
+test('Terraform 出力がまだ無い placeholder は、値を出しようがないので文言だけ', () => {
+  const r = checkBindings({
+    service: 'admin',
+    resolved: {
+      ...RESOLVED,
+      d1: [
+        {
+          binding: 'DB',
+          database_name: 'admin',
+          database_id: '00000000-0000-0000-0000-000000000000',
+        },
+      ],
+    },
+    tfOutputs: { auth_rl_kv_namespace_id: { value: 'kv-real' } },
+  })
+  assert.equal(r.ok, false)
+  assert.match(r.errors[0], /placeholder/)
+})

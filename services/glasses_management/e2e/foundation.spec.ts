@@ -50,30 +50,27 @@ test('サイドバーはつまみで細い柱にたため、もう一度押す�
 })
 
 /*
- * 以前は、店舗が 1 つも無いコードでも器に入れてしまい、
- * 上のバーが実在しない屋号と固定の営業時間を出していた（UX 監査 SHELL-03）。
- *
- * 一時は入口で止めていたが、それでは**まだ 1 店舗も登録していない新しい会社が入れない**。
- * 未知の組織とまだ店舗が無い組織はサーバから見分けられない（どちらも `200 []`）ので、
- * 014-store-provisioning / AC-PROV-01 に合わせて通し、**器の代わりに「はじめの設定」を立てる**。
- * このテストが守るのは「実在しない屋号と、どの店舗のものでもない営業状態を出さない」ことである。
+ * 店舗が 1 つも無いコードでも器に入れてしまい、上のバーが実在しない屋号と固定の
+ * 営業時間を出していた（UX 監査 SHELL-03）。かといって入口で止めると、まだ 1 店舗も
+ * 登録していない新しい会社が永久に入れない（014-store-provisioning）。
+ * 通したうえで、最初のお店を登録する面を立てる。
  */
 // @e2e-covers AC-FOUND-03
-test('店舗が見つからないコードでは、業務の器を立てず、はじめの設定を出す', async ({ page }) => {
+test('店舗が見つからないコードでは、器へ入れず登録の面を立てる', async ({ page }) => {
+  const code = 'e2e-foundation-unknown'
   await page.goto('/')
-  await page.getByLabel('お店のコード').fill('e2e-foundation-unknown')
+  await page.getByLabel('お店のコード').fill(code)
   await page.getByRole('button', { name: '業務を始める' }).click()
 
-  // 立つのは「はじめの設定」。押しても何も起きない行き先は並べない。
   await expect(
     page.getByRole('heading', { name: '最初のお店を登録します', level: 1 }),
   ).toBeVisible()
+  // 実在しない屋号も、営業状態も、行き先の柱も出さない。
   await expect(page.getByRole('navigation', { name: '画面の切り替え' })).toHaveCount(0)
-  await expect(page.getByRole('button', { name: '新しい予約を取る' })).toBeHidden()
-
-  // 実在しない屋号も、どの店舗のものでもない営業状態も出さない（SHELL-03 の再発を止める）。
   await expect(page.getByText('EYE 銀座店')).toBeHidden()
-  await expect(page.getByText('営業中')).toHaveCount(0)
+  await expect(page.getByText(/営業中/)).toBeHidden()
+  // どの会社に入ったかは名乗る（打ち間違いに気づける）。
+  await expect(page.getByRole('banner')).toContainText(code)
 })
 
 // @e2e-covers AC-FOUND-04

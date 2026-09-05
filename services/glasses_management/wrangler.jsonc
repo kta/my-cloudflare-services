@@ -11,20 +11,20 @@
     "not_found_handling": "single-page-application",
     "run_worker_first": ["/api/*"]
   },
-  // 1 ドメイン = 1 D1。database_id は Terraform 出力
-  // (`glasses_management_d1_database_id`) の実 UUID に差し替えてから remote へ出す。
+  // 1 ドメイン = 1 D1。database_id は Terraform(envs/production) の出力
+  // `glasses_management_d1_database_id` の実値。初回 apply で作られた ID をここに固定する。
   // local dev / test はこの値を見ない。`migrations_dir` は drizzle の `out` と一致させる。
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "glasses_management",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "cece3df4-e914-43d3-9e1a-e95b176cc6e8",
       "migrations_dir": "migrations"
     }
   ],
   // 短命な状態（冪等キー・受付中の下書き）だけを置く。正本は D1。
-  // id は Terraform 出力 `glasses_management_short_lived_kv_namespace_id`。
-  "kv_namespaces": [{ "binding": "SHORT_LIVED", "id": "00000000000000000000000000000000" }],
+  // id は Terraform(envs/production) の出力 `glasses_management_short_lived_kv_namespace_id` の実値。
+  "kv_namespaces": [{ "binding": "SHORT_LIVED", "id": "973f36831dc74df49774061080fb494e" }],
   // 受付録音と手書きメモの本体。非公開のまま Worker が仲介し、ダウンロード URL は発行しない。
   "r2_buckets": [{ "binding": "RECORDINGS", "bucket_name": "glasses-management-recordings" }],
   // 予約確定メールと管理コード発行メールは notifier へ同期送信する

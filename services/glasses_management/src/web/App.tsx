@@ -828,6 +828,7 @@ function Workspace({
       /* 上のバーの店名から、ほかのお店へ切り替える（UX 監査 foundation-09）。 */
       stores={(stores ?? []).filter((row) => row.id !== store?.id)}
       onSwitchStore={switchStore}
+      onAddStore={() => setAddingStore(true)}
       onToggleRail={() => {
         setRailTouched(true)
         setRail((v) => !v)
@@ -899,7 +900,6 @@ function Workspace({
               }}
               onStartBooking={() => startBooking()}
               onOpenSearch={() => navigate('search')}
-              onAddStore={() => setAddingStore(true)}
               setupCounts={setupCounts}
               onOpenSettings={() => navigate('settings')}
             />
@@ -1043,16 +1043,11 @@ function Home({
   onPickDate,
   onStartBooking,
   onOpenSearch,
-  onAddStore,
   setupCounts,
   onOpenSettings,
 }: {
+  /** 読み込みの途中だけ null。切り替えと追加は上のバーが持つ。 */
   stores: Store[] | null
-  /*
-   * お店の切り替えは**上のバーの店名**が持つ（UX 監査 foundation-09）。
-   * トップにチップを並べていたころは、台帳や受付を開いている最中に切り替えるには
-   * いちどトップへ戻る必要があった。ここは `currentStoreId` を読むだけにする。
-   */
   currentStoreId?: string
   showSharedReservations: boolean
   sharedTerminal: boolean
@@ -1072,8 +1067,6 @@ function Home({
   onStartBooking: () => void
   /** 予約を探す・直す面（CHANGE-SEARCH）へ移る。 */
   onOpenSearch: () => void
-  /** お店を登録する面を開く。 */
-  onAddStore: () => void
   /** はじめの設定の進み具合。分かるまでは null。 */
   setupCounts: SetupCounts | null
   /** 設定の面へ移る（店員・端末の登録はそこにある）。 */
@@ -1103,29 +1096,16 @@ function Home({
             onPress={onOpenSearch}
           />
           {/*
-            お店の**切り替え**は上のバーの店名が持つ（UX 監査 foundation-09）。
+            お店の**切り替え**も**追加**も、上のバーの店名が持つ
+            （UX 監査 foundation-09 / 014-store-provisioning）。
             ここにチップを並べていたころ、切り替えはトップからしかできず、台帳を
-            見ている最中はいちど戻る必要があった。しかもモックに無いその 2 つのぶん、
-            主操作 2 枚が 50px ほど上に寄っていた。
-            **「お店を追加する」はここに残す** —— 切り替えとは別の操作で、
-            毎日押すものではないから主操作 2 つと同じ強さにしない（014-store-provisioning）。
+            見ている最中はいちど戻る必要があった。しかも承認済みモック `HOME.png`
+            にその行は無く、そのぶん主操作 2 枚が 50px ほど上に寄っていた。
+            読み込み中と 0 件の断りだけはここに残す —— 0 件の会社はそもそも
+            この面に来ない（`SetupScreen` が先に立つ）が、読み込みの途中で
+            主操作だけが出て、どのお店のものか分からない瞬間を作らない。
           */}
-          <section aria-label="ほかのお店" className="mt-2">
-            {stores === null ? (
-              <p className="text-grid text-ink-muted">読み込んでいます…</p>
-            ) : stores.length === 0 ? (
-              // 0 件の会社はそもそもこの面に来ない（SetupScreen が先に立つ）。
-              <p className="text-grid text-ink-muted">お店がまだ登録されていません。</p>
-            ) : (
-              <button
-                type="button"
-                onClick={onAddStore}
-                className={`min-h-11 rounded-full border border-line-strong bg-surface px-4 text-note font-semibold text-ink-muted ${focusRing}`}
-              >
-                お店を追加する
-              </button>
-            )}
-          </section>
+          {stores === null && <p className="mt-2 text-grid text-ink-muted">読み込んでいます…</p>}
         </div>
         {currentStoreId !== undefined && (
           <MyReservations

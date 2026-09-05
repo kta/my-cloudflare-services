@@ -202,6 +202,10 @@ jobs:
             AUTH_PEPPER:process.env.WORKER_AUTH_PEPPER,
             ADMIN_DOMAIN_AUTH_KEY:process.env.WORKER_DOMAIN_AUTH_KEY};
             if(process.env.WORKER_STAGING_ACCESS_TOKEN)s.STAGING_ACCESS_TOKEN=process.env.WORKER_STAGING_ACCESS_TOKEN;
+            // staging の業務開始は今も dev グラント(/api/auth/token)を通る。
+            // ゲートの裏なので許容するが、production には絶対に入れない。
+            // 恒久対応は admin 認証への差し替え(spec 待ち)。
+            if(process.env.DEPLOY_ENVIRONMENT==="staging")s.AUTH_DEV_GRANT="true";
             process.stdout.write(JSON.stringify(s))' \
             | pnpm --filter @app/glasses_management exec wrangler secret bulk ${CLOUDFLARE_ENV:+--env $CLOUDFLARE_ENV}
 
@@ -220,15 +224,46 @@ jobs:
             process.stdout.write(JSON.stringify(s))' \
             | pnpm --filter @app/admin exec wrangler secret bulk ${CLOUDFLARE_ENV:+--env $CLOUDFLARE_ENV}
 
+      # `wrangler secret bulk` は加算で、渡さなかった secret を消さない。一度でも
+      # production へ AUTH_DEV_GRANT が入ると以後どのデプロイでも消えず、
+      # `/api/auth/token` の「'true' でなければ 404」を素通りし続ける。
+      # 「入れない」だけでは足りないので、残っていないことをここで確かめる。
+      # `secret list` は名前だけを返すので、値はログに出ない。
+      - name: Assert no dev grant on production
+        if: env.DEPLOY_ENVIRONMENT == 'production'
+        run: |
+          for pkg in @app/glasses_management @app/admin; do
+            # 一覧を取れないまま素通りさせない。取れない=確かめていない、である。
+            if ! names=$(pnpm --filter "$pkg" exec wrangler secret list 2>&1); then
+              echo "::error::$pkg の secret 一覧を取得できませんでした"
+              echo "$names"
+              exit 1
+            fi
+            if grep -q AUTH_DEV_GRANT <<<"$names"; then
+              echo "::error::$pkg の production に AUTH_DEV_GRANT が残っています"
+              exit 1
+            fi
+          done
+
       # staging は dev グラント無しの fail close なので、ログインできる admin が要る。
       # seed は INSERT OR IGNORE で冪等。production では回さない。
+      # 宛先の D1 は CLOUDFLARE_ENV から wrangler.jsonc 経由で解決される。
       - name: Seed staging admin
         if: env.DEPLOY_ENVIRONMENT == 'staging'
         env:
           AUTH_PEPPER: ${{ secrets.WORKER_AUTH_PEPPER }}
           ADMIN_PASSWORD: ${{ secrets.WORKER_STAGING_ADMIN_PASSWORD }}
-          ADMIN_EMAIL: admin@example.com
+          ADMIN_EMAIL: ${{ vars.STAGING_ADMIN_EMAIL || 'admin@example.com' }}
         run: node services/admin/seed.mjs --remote
+
+      # 業務データが 0 件だと staging は「このコードのお店が見つかりませんでした」で
+      # 行き止まりになる。EYE(組織 eye / 3 店舗 / スタッフ / 端末)をここで入れる。
+      # 同じく INSERT OR IGNORE なので再デプロイで増えない。production では回さない。
+      - name: Seed staging glasses_management
+        if: env.DEPLOY_ENVIRONMENT == 'staging'
+        env:
+          AUTH_PEPPER: ${{ secrets.WORKER_AUTH_PEPPER }}
+        run: node services/glasses_management/seed.mjs --remote
 
   # 手動で EYE スタックだけを production へ流す逃げ道。通常の main push は上の
   # deploy が同じことをする。service binding の参照先が実在している必要があるので、
@@ -260,3 +295,20 @@ jobs:
         run: pnpm --filter @app/glasses_management run db:migrate:remote && pnpm --filter @app/glasses_management run deploy
       - name: Migrate and deploy admin (depends on glasses_management)
         run: pnpm --filter @app/admin run db:migrate:remote && pnpm --filter @app/admin run deploy
+
+      # この job は production 専用で、Terraform も binding 突合も通らない。
+      # 関所が少ない経路ほど、残骸は静かに残る。
+      - name: Assert no dev grant on production
+        run: |
+          for pkg in @app/glasses_management @app/admin; do
+            # 一覧を取れないまま素通りさせない。取れない=確かめていない、である。
+            if ! names=$(pnpm --filter "$pkg" exec wrangler secret list 2>&1); then
+              echo "::error::$pkg の secret 一覧を取得できませんでした"
+              echo "$names"
+              exit 1
+            fi
+            if grep -q AUTH_DEV_GRANT <<<"$names"; then
+              echo "::error::$pkg の production に AUTH_DEV_GRANT が残っています"
+              exit 1
+            fi
+          done

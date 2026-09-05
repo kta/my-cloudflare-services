@@ -255,33 +255,39 @@ describe('トップ', () => {
   })
 
   /*
-   * お店の切り替えは**上のバーの店名**が持つ。トップのチップからしか切り替えられず、
+   * お店の切り替えは**上のバーの店名**も持つ。トップの行からしか切り替えられず、
    * 台帳や受付を開いている最中はいちどトップへ戻る必要があった
    * （UX 監査 SHELL-07 → 実装不足の洗い出し foundation-09）。
-   * チップはモックに無い要素でもあり、そのぶん主操作 2 枚が上へ寄っていた。
+   *
+   * トップの行（承認済みモック HOME.png の姿）は残っているので、切り替えの札は
+   * 画面に 2 か所出る。ここで確かめるのは上のバーのほうなので、**上のバーの中だけを
+   * 見る**（`within(banner)`）。素で `screen` を引くとトップの行に当たる。
    */
+  const banner = () => within(screen.getByRole('banner'))
   async function openStoreMenu() {
-    await userEvent.click(screen.getByRole('button', { name: /お店を切り替える$/ }))
+    await userEvent.click(banner().getByRole('button', { name: /お店を切り替える$/ }))
   }
 
   it('上のバーの店名から、ほかのお店へ切り替えられる', async () => {
     await startWork()
     await waitFor(() => expect(screen.getByText('新しい予約を取る')).toBeInTheDocument())
     // いまは銀座店。畳んでいるあいだ、ほかのお店の名前は出ていない。
-    expect(screen.getByRole('button', { name: 'EYE 銀座店　お店を切り替える' })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'EYE 丸の内店へ切り替える' })).toBeNull()
+    expect(
+      banner().getByRole('button', { name: 'EYE 銀座店　お店を切り替える' }),
+    ).toBeInTheDocument()
+    expect(banner().queryByRole('button', { name: 'EYE 丸の内店へ切り替える' })).toBeNull()
 
     await openStoreMenu()
-    await userEvent.click(screen.getByRole('button', { name: 'EYE 丸の内店へ切り替える' }))
+    await userEvent.click(banner().getByRole('button', { name: 'EYE 丸の内店へ切り替える' }))
     // 切り替わると上のバーの店名が変わり、こんどは銀座店が切り替え先に並ぶ。
     await waitFor(() =>
       expect(
-        screen.getByRole('button', { name: 'EYE 丸の内店　お店を切り替える' }),
+        banner().getByRole('button', { name: 'EYE 丸の内店　お店を切り替える' }),
       ).toBeInTheDocument(),
     )
     await openStoreMenu()
-    expect(screen.getByRole('button', { name: 'EYE 銀座店へ切り替える' })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'EYE 丸の内店へ切り替える' })).toBeNull()
+    expect(banner().getByRole('button', { name: 'EYE 銀座店へ切り替える' })).toBeInTheDocument()
+    expect(banner().queryByRole('button', { name: 'EYE 丸の内店へ切り替える' })).toBeNull()
   })
 
   it('トップ以外の面からも切り替えられる（いちどトップへ戻らせない）', async () => {
@@ -289,10 +295,10 @@ describe('トップ', () => {
     const nav = await screen.findByRole('navigation', { name: '画面の切り替え' })
     await userEvent.click(within(nav).getByRole('button', { name: '予約台帳' }))
     await openStoreMenu()
-    await userEvent.click(screen.getByRole('button', { name: 'EYE 丸の内店へ切り替える' }))
+    await userEvent.click(banner().getByRole('button', { name: 'EYE 丸の内店へ切り替える' }))
     await waitFor(() =>
       expect(
-        screen.getByRole('button', { name: 'EYE 丸の内店　お店を切り替える' }),
+        banner().getByRole('button', { name: 'EYE 丸の内店　お店を切り替える' }),
       ).toBeInTheDocument(),
     )
   })
@@ -307,10 +313,10 @@ describe('トップ', () => {
     await startWork()
     await waitFor(() => expect(screen.getByText('新しい予約を取る')).toBeInTheDocument())
     await openStoreMenu()
-    await userEvent.click(screen.getByRole('button', { name: 'EYE 丸の内店へ切り替える' }))
+    await userEvent.click(banner().getByRole('button', { name: 'EYE 丸の内店へ切り替える' }))
     await waitFor(() =>
       expect(
-        screen.getByRole('button', { name: 'EYE 丸の内店　お店を切り替える' }),
+        banner().getByRole('button', { name: 'EYE 丸の内店　お店を切り替える' }),
       ).toBeInTheDocument(),
     )
     // 左の柱も主操作もそのまま。入口の見出しは 1 つも出ない。

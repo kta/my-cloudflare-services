@@ -96,3 +96,20 @@ export function resolveEnv(config, envName) {
     crons: source.triggers?.crons ?? [],
   }
 }
+
+/**
+ * seed の宛先 D1。`CLOUDFLARE_ENV` の環境の `DB` バインディングを解決し、
+ * wrangler へ渡す `--env` もここで組む。
+ *
+ * DB 名を seed に直書きすると、staging の seed が本番の D1 へ当たる。
+ * `INSERT OR IGNORE` は宛先を間違えても静かに成功するので、事故に気づけない。
+ * 宛先の決め方は 1 か所に閉じ、seed 側では選ばせない。
+ */
+export function resolveSeedTarget(config, envName) {
+  const name = envName || ''
+  const db = resolveEnv(config, name).d1.find((d) => d.binding === 'DB')
+  if (!db) {
+    throw new Error(`wrangler 設定(${name || '上位'})に DB バインディングがありません`)
+  }
+  return { dbName: db.database_name, envArgs: name ? ['--env', name] : [] }
+}

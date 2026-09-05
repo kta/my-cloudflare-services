@@ -52,7 +52,11 @@ export function checkBindings({ service, resolved, tfOutputs }) {
     const actual = actualValue(kind, entry)
     if (isPlaceholder(actual)) {
       errors.push(
-        `${service}: ${binding} が placeholder のままです (${actual})。Terraform 出力 ${output} の実値に差し替えてください`,
+        // 初回作成の「鶏と卵」はここでしか解けない。貼り替える値をその場に出す。
+        // 出さないと人が Actions のログを遡って terraform output を探すことになる。
+        tfOutputs[output]?.value === undefined
+          ? `${service}: ${binding} が placeholder のままです (${actual})。Terraform 出力 ${output} の実値に差し替えてください`
+          : `${service}: ${binding} が placeholder のままです (${actual})。services/${service}/wrangler.jsonc を ${tfOutputs[output].value} に差し替えてコミットしてください (terraform output ${output})`,
       )
       continue
     }
