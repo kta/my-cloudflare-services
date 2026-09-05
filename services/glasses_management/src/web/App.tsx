@@ -32,7 +32,8 @@ import { PersonalMode } from './mode/PersonalMode'
 import { type HistoryFilters, ReceptionHistory } from './reception/ReceptionHistory'
 import { ReceptionScreen } from './reception/ReceptionScreen'
 import { SettingsScreen } from './settings/SettingsScreen'
-import { StoreCreateForm } from './settings/StoreCreateForm'
+import { type SetupCounts, SetupProgress } from './setup/SetupProgress'
+import { SetupScreen } from './setup/SetupScreen'
 import { AppShell } from './shell/AppShell'
 import { DESTINATIONS, RAIL_BY_DEFAULT } from './shell/destinations'
 import { openStateLabel } from './shell/hours'
@@ -156,6 +157,12 @@ function Workspace({
   const [stores, setStores] = useState<Store[] | null>(null)
   /** お店を登録する面を開いているか。0 件の会社はここが唯一の出口になる。 */
   const [addingStore, setAddingStore] = useState(false)
+  /**
+   * はじめの設定の進み具合。**業務の読み込みに相乗りしない** —— そちらは端末が
+   * 0 件のときに早期 return するので、店員がいるお店でも「店員 0」という嘘になる。
+   * 分かるまでは null のままにし、分からない数を 0 と言わない。
+   */
+  const [setupCounts, setSetupCounts] = useState<SetupCounts | null>(null)
   /**
    * いま見ているお店。トップの「◯◯へ切り替える」で変える。
    * `null` の間は既定（`isActive` の 1 店目）を見る。
@@ -419,6 +426,51 @@ function Workspace({
 
   const store =
     stores?.find((s) => s.id === selectedStoreId) ?? stores?.find((s) => s.isActive) ?? stores?.[0]
+
+  /*
+   * はじめの設定の数を、選んでいるお店ごとに読む。足りないものがある間しか使わない
+   * ので、揃った会社では 1 度読んで消えるだけである。読めなければ案内は出さない
+   * （数が分からないことを 0 と言わない）。
+   */
+  const storeIdForCounts = store?.id ?? null
+  useEffect(() => {
+    if (storeIdForCounts === null || stores === null) {
+      setSetupCounts(null)
+      return
+    }
+    let cancelled = false
+    void (async () => {
+      try {
+        const [staffRes, terminalRes, purposeRes] = await Promise.all([
+          auth.authFetch(`/api/staff/stores/${storeIdForCounts}/staff`),
+          auth.authFetch(`/api/staff/terminals?storeId=${storeIdForCounts}`),
+          auth.authFetch(`/api/staff/purposes?storeId=${storeIdForCounts}`),
+        ])
+        if (cancelled) return
+        if (!staffRes.ok || !terminalRes.ok || !purposeRes.ok) {
+          setSetupCounts(null)
+          return
+        }
+        const [staffRows, terminalRows, purposeRows] = (await Promise.all([
+          staffRes.json(),
+          terminalRes.json(),
+          purposeRes.json(),
+        ])) as [unknown[], unknown[], unknown[]]
+        if (cancelled) return
+        setSetupCounts({
+          stores: stores.length,
+          staff: staffRows.length,
+          terminals: terminalRows.length,
+          purposes: purposeRows.length,
+        })
+      } catch {
+        if (!cancelled) setSetupCounts(null)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [storeIdForCounts, stores])
 
   useEffect(() => {
     if (!store) return
@@ -713,6 +765,33 @@ function Workspace({
     )
   }
 
+  /*
+   * お店が 1 つも無い会社は、業務の器の手前に「はじめの設定」を立てる。
+   * 行き先（台帳・受付・分析）はどれもお店が無いと開けないので、押しても何も
+   * 起きない柱を並べない（014-store-provisioning）。読み込み中は立てない。
+   */
+  if (addingStore || (stores !== null && stores.length === 0)) {
+    return (
+      <SetupScreen
+        organizationId={org}
+        existingCount={stores?.length ?? 0}
+        send={(input) =>
+          auth.authFetch('/api/staff/stores', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(input),
+          })
+        }
+        onCreated={(created) => {
+          setAddingStore(false)
+          setSelectedStoreId(created.id)
+          void load()
+        }}
+        onCancel={stores !== null && stores.length > 0 ? () => setAddingStore(false) : undefined}
+      />
+    )
+  }
+
   return (
     <AppShell
       // 店舗が分からないときに屋号を作らない。利用者が入れたコードをそのまま出す。
@@ -804,6 +883,8 @@ function Workspace({
               onStartBooking={() => startBooking()}
               onOpenSearch={() => navigate('search')}
               onAddStore={() => setAddingStore(true)}
+              setupCounts={setupCounts}
+              onOpenSettings={() => navigate('settings')}
             />
           ) : current === 'ledger' ? (
             store ? (
@@ -929,40 +1010,6 @@ function Workspace({
           )}
         </div>
       )}
-      {addingStore && (
-        /*
-         * お店を登録する面。0 件の会社にとってはここが最初の一手なので、
-         * 業務の面に重ねて出し、登録が終わったら一覧を読み直してそのお店へ移る。
-         */
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="お店を登録する"
-          className="fixed inset-0 z-40 grid place-items-center bg-ink/30 p-6"
-        >
-          <div className="max-h-full w-full max-w-lg overflow-auto rounded-card bg-surface p-8">
-            <h2 className="text-lead font-bold text-ink">お店を登録する</h2>
-            <p className="mt-1 mb-5 text-note text-ink-muted">
-              営業時間・予約の間隔・ご来店の目的は、よく使う形で先に入れておきます。あとから設定で変えられます。
-            </p>
-            <StoreCreateForm
-              send={(input) =>
-                auth.authFetch('/api/staff/stores', {
-                  method: 'POST',
-                  headers: { 'content-type': 'application/json' },
-                  body: JSON.stringify(input),
-                })
-              }
-              onCreated={(created) => {
-                setAddingStore(false)
-                setSelectedStoreId(created.id)
-                void load()
-              }}
-              onCancel={() => setAddingStore(false)}
-            />
-          </div>
-        </div>
-      )}
     </AppShell>
   )
 }
@@ -981,6 +1028,8 @@ function Home({
   onStartBooking,
   onOpenSearch,
   onAddStore,
+  setupCounts,
+  onOpenSettings,
 }: {
   stores: Store[] | null
   /** ほかのお店へ切り替える。**押して何も起きないチップを置かない。** */
@@ -1004,14 +1053,23 @@ function Home({
   onStartBooking: () => void
   /** 予約を探す・直す面（CHANGE-SEARCH）へ移る。 */
   onOpenSearch: () => void
-  /** お店を登録する面を開く。0 件のときはここが唯一の出口になる。 */
+  /** お店を登録する面を開く。 */
   onAddStore: () => void
+  /** はじめの設定の進み具合。分かるまでは null。 */
+  setupCounts: SetupCounts | null
+  /** 設定の面へ移る（店員・端末の登録はそこにある）。 */
+  onOpenSettings: () => void
 }) {
   const others = stores?.filter((s) => s.id !== currentStoreId) ?? []
   return (
     <div className="relative h-full">
       <div className="grid h-full grid-flow-col content-center justify-start gap-12 pb-31 pl-11">
         <div className="grid content-center gap-6">
+          <SetupProgress
+            counts={setupCounts}
+            onOpenSettings={onOpenSettings}
+            onOpenTerminals={onOpenSettings}
+          />
           <PrimaryAction
             title="新しい予約を取る"
             note="お電話・ご来店のお客様"
@@ -1030,13 +1088,8 @@ function Home({
             {stores === null ? (
               <p className="text-grid text-ink-muted">読み込んでいます…</p>
             ) : stores.length === 0 ? (
-              /* 行き止まりにしない。ここが新しい会社の最初の一手になる。 */
-              <div className="grid gap-2">
-                <p className="text-grid text-ink-muted">お店がまだ登録されていません。</p>
-                <Button type="button" onClick={onAddStore}>
-                  最初のお店を登録する
-                </Button>
-              </div>
+              // 0 件の会社はそもそもこの面に来ない（SetupScreen が先に立つ）。
+              <p className="text-grid text-ink-muted">お店がまだ登録されていません。</p>
             ) : others.length > 0 ? (
               <ul className="flex flex-wrap gap-2">
                 {others.map((s) => (
@@ -1061,9 +1114,14 @@ function Home({
                 </li>
               </ul>
             ) : (
-              <Button type="button" onClick={onAddStore}>
+              /* 毎日押すものではない。主操作 2 つと同じ強さにしない。 */
+              <button
+                type="button"
+                onClick={onAddStore}
+                className={`min-h-11 rounded-full border border-line-strong bg-surface px-4 text-note font-semibold text-ink-muted ${focusRing}`}
+              >
                 お店を追加する
-              </Button>
+              </button>
             )}
           </section>
         </div>

@@ -34,9 +34,9 @@
 
 **受け入れ基準**:
 
-- AC-PROV-01: Given お店が 1 つも無い会社の管理者 When 業務画面を開く Then 「最初のお店を登録する」導線が出る。
-- AC-PROV-02: Given お店の登録フォーム When 店名と合い言葉を入れて登録する Then お店が作られ、お店の一覧に出る。
-- AC-PROV-03: Given 既にお店が 1 つある会社の管理者 When もう 1 つ登録する Then 一覧が 2 件になる。
+- AC-PROV-01: Given お店が 1 つも無い会社の管理者 When 業務を始める Then 最初のお店を登録する面が立ち、押しても何も起きない業務の行き先は並ばない。
+- AC-PROV-02: Given 最初のお店を登録する面 When 店名だけを入れて登録する Then 会社のコードが合い言葉になったお店が作られ、業務画面へ入れる。
+- AC-PROV-03: Given 既にお店が 1 つある会社の管理者 When 業務画面からお店を追加する Then 合い言葉の既定に連番が付き、一覧が 2 件になる。
 - AC-PROV-04: Given 既に使われている合い言葉 When 登録する Then 断られ、「この合い言葉は使われています」と読める文言が出る。
 - AC-PROV-05: Given 大文字や記号を含む合い言葉 When 登録する Then 断られ、使える文字が読める文言で示される。
 - AC-PROV-06: Given お店を登録した直後 When 営業時間の面を開く Then 月曜から土曜が 10:00-19:00、日曜が定休として入っている。
@@ -70,8 +70,10 @@
 | `packages/contracts/src/index.ts` | 上を re-export |
 | `services/glasses_management/src/worker/index.ts` | `POST /api/staff/stores` / `GET /api/internal/stores` |
 | `services/glasses_management/src/worker/store-provisioning.ts` | 既定値の定義と組み立て（新規） |
-| `services/glasses_management/src/web/settings/StoreCreateDialog.tsx` | 登録フォーム（新規） |
-| `services/glasses_management/src/web/login/StorePick.tsx` 相当 | 0 件のときの導線 |
+| `services/glasses_management/src/web/setup/parts.tsx` | 骨格（AdminLTE の content-header / box / small-box をトークンへ翻訳） |
+| `services/glasses_management/src/web/setup/StoreForm.tsx` | 登録の入力（新規） |
+| `services/glasses_management/src/web/setup/SetupScreen.tsx` | 0 件の会社が最初に見る面（新規） |
+| `services/glasses_management/src/web/setup/SetupProgress.tsx` | 足りないものがある間だけ出す案内（新規） |
 | `services/admin/src/worker/index.ts` | `GET /api/organizations/:id/stores`（domain へ service binding） |
 | `services/admin/src/web/routes/Users.tsx` | 担当店舗を手打ちから一覧選択へ |
 
