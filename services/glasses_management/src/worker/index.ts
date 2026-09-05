@@ -8673,8 +8673,16 @@ const routes = app
       // 行の識別子は受付セッション → ご予約 → ウォークイン の順に決まる。
       entryId: row.sessionId ?? row.reservationId,
       sessionId: row.sessionId,
-      // 並びは「お着きになった順」。ウォークインは受付時刻、ご予約は予定時刻で並ぶ。
-      startedAt: row.arrivedAt ?? row.sessionStartedAt ?? row.startsAt,
+      /*
+       * 並びは「お着きになった順」。ウォークインは受付時刻、**ご予約は予定時刻**で並ぶ。
+       *
+       * ここに `sessionStartedAt` を挟んではいけない。挟むと、電話で承ったご予約が
+       * **受け付けた日**の側に並んで表示される —— 8月20日に承った 8月27日のご予約が
+       * 「8月20日」の見出しの下に出る。期間の絞り込みは `visitDate`（ご来店日）で
+       * かけているので、8月21日〜27日を選んだ一覧に 8月20日の見出しが混ざり、
+       * 選んだ期間の外の日付が並ぶ。受け付けた時刻は `receivedAt` が持っている。
+       */
+      startedAt: row.arrivedAt ?? row.startsAt,
       // 「中村 彩 が 8月20日（木）14:32 に電話で受け付け」の時刻。**絞り込みには使わない。**
       receivedAt: row.sessionStartedAt ?? row.arrivedAt ?? row.createdAt,
       visitDate: jstVisitDate(row.startsAt),

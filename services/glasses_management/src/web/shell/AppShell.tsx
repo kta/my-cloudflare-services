@@ -100,7 +100,6 @@ export function AppShell({
   const [storeMenuOpen, setStoreMenuOpen] = useState(false)
   const otherStores = onSwitchStore === undefined ? [] : stores
   // 面が変わったら畳む（開いたまま別の面へ持ち越さない）。
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 面が変わったときだけ畳む
   useEffect(() => {
     setStoreMenuOpen(false)
   }, [current])

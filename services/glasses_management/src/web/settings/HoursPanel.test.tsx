@@ -201,7 +201,12 @@ describe('営業時間', () => {
     await waitFor(() => expect(screen.getByText('保存しました')).toBeInTheDocument())
 
     const put = sent.find((call) => call.url.endsWith('/business-hours') && call.method === 'PUT')
-    const rows = (put?.body as { rows: { weekday: number; opensAt: string | null }[] }).rows
+    expect(put, '営業時間の PUT が飛んでいない').toBeDefined()
+    const rows = (
+      (put as { body: unknown }).body as {
+        rows: { weekday: number; opensAt: string | null }[]
+      }
+    ).rows
     expect(rows.find((row) => row.weekday === 5)?.opensAt).toBe('12:00')
     // ほかの曜日は動かさない。
     expect(rows.find((row) => row.weekday === 0)?.opensAt).toBe('10:00')

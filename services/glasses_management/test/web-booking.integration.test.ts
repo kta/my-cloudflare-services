@@ -1474,7 +1474,7 @@ describe('確認メール', () => {
     expect(detail.status).toBe(200)
 
     const jobs: unknown[] = []
-    vi.spyOn(env.NOTIFIER, 'fetch').mockImplementation(async (input, init) => {
+    vi.spyOn(env.NOTIFIER, 'fetch').mockImplementation(async (_input, init) => {
       jobs.push(JSON.parse(String((init as RequestInit | undefined)?.body ?? '{}')))
       return new Response(JSON.stringify({ status: 'sent' }), { status: 200 })
     })

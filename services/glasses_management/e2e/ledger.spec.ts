@@ -362,8 +362,13 @@ test('60分の帯にはご用件の短い名前が出て、30分の狭い帯に�
   await expect(
     band(page, '11:00から12:00　田中 花子 様　4回目　新調相談・視力測定　佐藤 美咲'),
   ).toContainText('新調相談・視力測定')
+  /*
+   * 30分 1 列の文字予算はおよそ 6 字（13px で 1 行 3.0 字 × 2 行）しかない。
+   * そこへ入れるのは**誰の予約か**であって、ご用件でも時刻でもない
+   * —— 時刻は帯の置かれた列そのものが持ち、読み上げには aria-label が持たせてある。
+   */
   const narrow = band(page, '10:00から10:30　伊藤 健 様　2回目　調整　高橋 健')
-  await expect(narrow).toContainText('10:00')
+  await expect(narrow).toContainText('伊藤')
   await expect(narrow).not.toContainText('調整')
 })
 

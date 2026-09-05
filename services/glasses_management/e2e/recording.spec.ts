@@ -534,7 +534,8 @@ test('受付を始めると、その押した操作のなかで許可を求め�
   expect(await micAsks(page)).toBe(0)
   await openLedger(page)
   expect(await micAsks(page)).toBe(0)
-  await sidebar(page).getByRole('button', { name: 'トップ', exact: true }).click()
+  // 台帳からトップへ戻る道は、柱ではなく上のバーの ⌂ になった（AppShell の `aria-label="トップへ"`）。
+  await page.getByRole('button', { name: 'トップへ' }).click()
   expect(await micAsks(page)).toBe(0)
 
   // 「新しい予約を取る」を押したその処理の中で 1 回だけ求める。

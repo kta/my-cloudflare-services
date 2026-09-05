@@ -884,7 +884,6 @@ function Workspace({
             <Home
               stores={stores}
               currentStoreId={store?.id}
-              onSwitchStore={switchStore}
               showSharedReservations={idle.isMasked}
               sharedTerminal={terminalSession?.mode === 'shared'}
               onSharedSnapshot={setLockSnapshot}
@@ -1035,7 +1034,6 @@ function Workspace({
 function Home({
   stores,
   currentStoreId,
-  onSwitchStore,
   showSharedReservations,
   sharedTerminal,
   onSharedSnapshot,
@@ -1050,8 +1048,11 @@ function Home({
   onOpenSettings,
 }: {
   stores: Store[] | null
-  /** ほかのお店へ切り替える。**押して何も起きないチップを置かない。** */
-  onSwitchStore: (storeId: string) => void
+  /*
+   * お店の切り替えは**上のバーの店名**が持つ（UX 監査 foundation-09）。
+   * トップにチップを並べていたころは、台帳や受付を開いている最中に切り替えるには
+   * いちどトップへ戻る必要があった。ここは `currentStoreId` を読むだけにする。
+   */
   currentStoreId?: string
   showSharedReservations: boolean
   sharedTerminal: boolean
@@ -1078,7 +1079,6 @@ function Home({
   /** 設定の面へ移る（店員・端末の登録はそこにある）。 */
   onOpenSettings: () => void
 }) {
-  const others = stores?.filter((s) => s.id !== currentStoreId) ?? []
   return (
     <div className="relative h-full">
       <div className="grid h-full grid-flow-col content-center justify-start gap-12 pb-31 pl-11">

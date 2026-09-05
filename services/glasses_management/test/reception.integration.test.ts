@@ -1241,6 +1241,57 @@ describe('受付履歴', () => {
     expect(entry?.startedAt).toBe(jstAt(PREV_DATE, '11:02'))
   })
 
+  /*
+   * 一覧の時刻は**ご来店の時刻**である。受け付けた時刻をここへ出すと、電話で先に承った
+   * ご予約が「受け付けた日」の側に並ぶ —— 8月26日に承った 8月27日のご予約が「8月26日」の
+   * 見出しの下に出る。期間はご来店日で絞っているので、選んだ期間の外の日付が一覧に
+   * 混ざることになる。受け付けた時刻は詳細の 1 行（`receivedAt`）が持つ。
+   */
+  it('前日に受け付けた翌日のご予約は、受け付けた時刻ではなくご来店の時刻で並ぶ', async () => {
+    const t = await receptionTenant()
+    const startsAt = jstAt(LEDGER_DATE, '13:00')
+    const reservationId = await insertReservation(t.org, {
+      storeId: t.storeId,
+      startsAt,
+      durationMinutes: 45,
+      source: 'phone',
+      staffId: null,
+    })
+    // 受け付けたのは前日の 14:32。
+    await env.DB.prepare(
+      'INSERT INTO reception_sessions (id, organization_id, store_id, reservation_id, terminal_id, actor_id, started_at, ended_at, outcome, draft_json, created_at) ' +
+        "VALUES (?,?,?,?,NULL,NULL,?,NULL,'booked',NULL,?)",
+    )
+      .bind(
+        crypto.randomUUID(),
+        t.org,
+        t.storeId,
+        reservationId,
+        jstAt(PREV_DATE, '14:32'),
+        jstAt(PREV_DATE, '14:32'),
+      )
+      .run()
+
+    const listed = await readHistory(t.token, {
+      storeId: t.storeId,
+      from: LEDGER_DATE,
+      to: LEDGER_DATE,
+    })
+    const entry = listed.items.find(
+      (row) => row.entryId !== undefined && row.startedAt === startsAt,
+    )
+    expect(entry, 'ご来店の時刻で並んでいない').toBeDefined()
+    expect(entry?.startedAt).toBe(startsAt)
+
+    // 前日を選んでも出てこない（期間はご来店日で絞る）。
+    const prev = await readHistory(t.token, {
+      storeId: t.storeId,
+      from: PREV_DATE,
+      to: PREV_DATE,
+    })
+    expect(prev.items.map((row) => row.entryId)).not.toContain(reservationId)
+  })
+
   it('1 件を選ぶと受け付けた人・時刻・手段と、そのあとの変更が古い順に読める', async () => {
     const t = await receptionTenant()
     const walkin = await createWalkin(t.token, walkinBody(t.storeId, '11:02'))
