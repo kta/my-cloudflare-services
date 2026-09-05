@@ -117,6 +117,12 @@ const MANAGEMENT_ROUTES = [
     body: { email: 'x@y.test' },
   },
   // default-deny の証明: 存在しない /api/* もゲートを通らないと 404 にすら到達しない
+  {
+    // 014-store-provisioning: 担当店舗の割り当てで店舗 id を手打ちさせないための読み取り。
+    name: 'GET /api/organizations/:id/stores',
+    method: 'GET',
+    path: '/api/organizations/unknown/stores',
+  },
   { name: 'GET /api/not-a-route(未知パス)', method: 'GET', path: '/api/not-a-route' },
 ] as const
 
