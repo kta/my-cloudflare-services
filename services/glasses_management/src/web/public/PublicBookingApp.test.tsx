@@ -228,3 +228,35 @@ describe('通信', () => {
 function setOnline(online: boolean): void {
   Object.defineProperty(navigator, 'onLine', { configurable: true, get: () => online })
 }
+
+describe('ご希望の時刻を差し替える', () => {
+  /*
+   * 満席のときに代わりの時刻を押した道で使う。押した時刻を捨てて日時の工程へ
+   * 戻していたころ、お客様は自分で選んだはずの時刻をもう一度探すことになった
+   * （実装不足の洗い出し booking-01）。
+   */
+  it('`pickStartsAt` で工程を戻さずに時刻だけが変わる', async () => {
+    render(
+      <PublicBookingApp
+        slug="ginza"
+        flow="manage"
+        today={TODAY}
+        loaders={loaders()}
+        laterSteps={(seam) => (
+          <>
+            <p data-testid="picked">{seam.startsAt ?? 'まだ'}</p>
+            <p data-testid="step">{seam.step}</p>
+            <button type="button" onClick={() => seam.pickStartsAt('2026-08-29T02:30:00.000Z')}>
+              代わりの時刻にする
+            </button>
+          </>
+        )}
+      />,
+    )
+    const stepBefore = screen.getByTestId('step').textContent
+    await userEvent.click(screen.getByRole('button', { name: '代わりの時刻にする' }))
+    expect(screen.getByTestId('picked')).toHaveTextContent('2026-08-29T02:30:00.000Z')
+    // 工程は動かない（ご確認の面に留まる）。
+    expect(screen.getByTestId('step')).toHaveTextContent(String(stepBefore))
+  })
+})

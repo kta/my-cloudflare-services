@@ -232,6 +232,12 @@ export type PublicSeam = {
   storeDetail: PublicStoreDetail | null
   purpose: PublicStorePurpose | null
   startsAt: string | null
+  /**
+   * ご希望の時刻を差し替える。満席のときに代わりの時刻を押した道で使う ——
+   * 押した時刻を捨てて日時の工程へ戻すと、お客様は同じ選び直しをもう一度させられる
+   * （実装不足の洗い出し booking-01）。
+   */
+  pickStartsAt: (startsAt: string) => void
   next: () => void
   back: () => void
   /** WEB-06-DONE の「予約を変更・取り消す」から WEB-CANCEL の 2 手順へ移る。 */
@@ -371,6 +377,7 @@ export function PublicBookingApp({
     storeDetail,
     purpose,
     startsAt,
+    pickStartsAt: setStartsAt,
     next: () => goTo(step + 1),
     back: goBack,
     toManage: () => {

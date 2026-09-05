@@ -103,7 +103,17 @@ export function VerticalBars({
   ticks?: readonly number[]
 }) {
   const maximum = Math.max(1, target ?? 0, ...points.map((point) => point.value))
-  const gridTicks = ticks ?? niceTicks(maximum)
+  /*
+   * 決め打ちの目盛（モックの 0/6/12/18/24）は、**その中に収まる日だけ**使う。
+   * 収まらない日にそのまま当てると、25 件の棒が天井を突き抜けて枠の外へ出る
+   * （実装不足の洗い出し analytics-02）。越えた日は目盛のほうを取り直す
+   * —— 棒を切るより、軸を伸ばすほうが読み違えない。
+   */
+  const fixedCeiling = ticks?.[0]
+  const gridTicks =
+    ticks !== undefined && fixedCeiling !== undefined && maximum <= fixedCeiling
+      ? ticks
+      : niceTicks(maximum)
   const scaleMaximum = gridTicks[0] ?? maximum
   return (
     <div
@@ -134,6 +144,7 @@ export function VerticalBars({
             >
               <span
                 aria-hidden="true"
+                data-chart-bar
                 className={cn(
                   'mx-auto block w-3/4 rounded-t-ctl bg-pine',
                   point.isClosed && 'analytics-pattern-hatch text-pine',

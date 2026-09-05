@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { VerticalBars } from './OfficialTab'
 
@@ -91,5 +91,42 @@ describe('目盛の線と棒の前後', () => {
     const plot = chart().querySelector('[data-chart-plot]')
     const column = plot?.querySelector('[data-chart-today]')
     expect(column?.className).toContain('z-10')
+  })
+})
+
+describe('目盛より多い日', () => {
+  /*
+   * 決め打ちの目盛（モックの 0/6/12/18/24）をそのまま当てていたころ、25 件以上の日は
+   * 棒が天井を突き抜けて枠の外へ出ていた（実装不足の洗い出し analytics-02）。
+   * 越えた日は目盛のほうを取り直す —— 棒を切るより、軸を伸ばすほうが読み違えない。
+   */
+  function tallChart() {
+    render(
+      <VerticalBars
+        points={[
+          { label: '8/26', value: 10, secondaryValue: null },
+          { label: '8/27', value: 30, secondaryValue: null },
+        ]}
+        ariaLabel="予約の入り具合"
+        ticks={[24, 18, 12, 6, 0]}
+        target={24}
+      />,
+    )
+    return screen.getByRole('img', { name: '予約の入り具合' })
+  }
+
+  it('目盛の天井が 24 より上へ伸びる', () => {
+    const view = tallChart()
+    expect(within(view).queryByText('24')).toBeNull()
+    // 30 を収める目盛（`niceTicks`）に取り替わる。
+    expect(within(view).getByText('40')).toBeVisible()
+  })
+
+  it('どの棒も枠の外へ出ない', () => {
+    const view = tallChart()
+    for (const bar of view.querySelectorAll('[data-chart-bar]')) {
+      const height = Number.parseFloat((bar as HTMLElement).style.height)
+      expect(height).toBeLessThanOrEqual(100)
+    }
   })
 })

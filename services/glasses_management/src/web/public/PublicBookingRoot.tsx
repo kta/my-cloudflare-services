@@ -293,7 +293,15 @@ export function PublicBookingRoot({ slug, flow }: PublicBookingRootProps) {
             onEdit={(target) => editFrom(seam.step, target)}
             onSubmit={(key) => void send(seam, key)}
             onReselect={() => editFrom(seam.step, 'datetime')}
-            onPickAlternative={() => editFrom(seam.step, 'datetime')}
+            /*
+             * 代わりの時刻を押したら、**その時刻でご確認の面に留まる**。
+             * 押した時刻を捨てて日時の工程へ戻していたころ、お客様は自分で選んだ
+             * はずの時刻をもう一度探すことになった（実装不足の洗い出し booking-01）。
+             */
+            onPickAlternative={(startsAt) => {
+              seam.pickStartsAt(startsAt)
+              setConflict(null)
+            }}
           />
         )
       }
