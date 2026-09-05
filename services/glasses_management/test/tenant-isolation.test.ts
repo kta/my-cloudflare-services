@@ -333,7 +333,10 @@ function callAs(token: string) {
       headers: authed(token),
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     })
-    return { status: res.status, body: (await res.json().catch(() => null)) as never }
+    return {
+      status: res.status,
+      body: (await res.json().catch(() => null)) as { id?: string } | null,
+    }
   }
 }
 
@@ -2076,7 +2079,10 @@ describe('お店の登録は自分の会社にしか作れない', () => {
       headers: { ...JSON_HEADERS, ...authed(token) },
       body: JSON.stringify(body),
     })
-    return { status: res.status, body: (await res.json().catch(() => null)) as never }
+    return {
+      status: res.status,
+      body: (await res.json().catch(() => null)) as { id?: string; error?: string } | null,
+    }
   }
 
   it('本文に他テナントの organizationId を混ぜても、JWT の会社に作られる', async () => {
@@ -2112,7 +2118,7 @@ describe('お店の登録は自分の会社にしか作れない', () => {
     const rows = await env.DB.prepare(
       'SELECT organization_id AS organizationId FROM store_memberships WHERE store_id = ?',
     )
-      .bind(created.body.id)
+      .bind(created.body?.id)
       .all<{ organizationId: string }>()
     expect(rows.results.map((r) => r.organizationId)).toEqual([mine])
   })
@@ -2147,6 +2153,6 @@ describe('お店の登録は自分の会社にしか作れない', () => {
     const ids = ((await res.json()) as Array<{ id: string }>).map((s) => s.id)
 
     expect(res.status).toBe(200)
-    expect(ids).not.toContain(ours.body.id)
+    expect(ids).not.toContain(ours.body?.id)
   })
 })

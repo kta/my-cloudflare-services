@@ -32,6 +32,7 @@ import { PersonalMode } from './mode/PersonalMode'
 import { type HistoryFilters, ReceptionHistory } from './reception/ReceptionHistory'
 import { ReceptionScreen } from './reception/ReceptionScreen'
 import { SettingsScreen } from './settings/SettingsScreen'
+import { StoreCreateForm } from './settings/StoreCreateForm'
 import { AppShell } from './shell/AppShell'
 import { DESTINATIONS, RAIL_BY_DEFAULT } from './shell/destinations'
 import { openStateLabel } from './shell/hours'
@@ -98,16 +99,13 @@ function StartWork({ onStarted }: { onStarted: (org: string) => void }) {
        * 同期がまだ届いていない（503）のは「コードが違う」とは別なので、そのまま通す
        * —— その先の面が「お店の情報がまだ届いていません」を出す。
        */
-      const res = await auth.authFetch('/api/staff/stores')
-      if (res.ok) {
-        const rows: Store[] = await res.json()
-        if (rows.length === 0) {
-          setError(
-            'このコードのお店が見つかりませんでした。お店のコードをお確かめのうえ、もう一度お試しください。',
-          )
-          return
-        }
-      }
+      /*
+       * 0 件は「コードが違う」と「まだ 1 店舗も登録していない新しい会社」の両方でありうる。
+       * ここで止めると新しい会社は永久に入れないので、通したうえでトップに
+       * 「最初のお店を登録する」を出す（014-store-provisioning / AC-PROV-01）。
+       * 登録できるのは会社の管理者だけで、その判定はサーバが持つ。
+       */
+      await auth.authFetch('/api/staff/stores')
       onStarted(code)
     } catch {
       setError('業務を始められませんでした。コードを確かめて、もう一度お試しください。')
@@ -156,6 +154,8 @@ function Workspace({
   // 個人トップの 1 行から来たとき、台帳のその帯の詳細を開いた状態で出す。
   const [openReservation, setOpenReservation] = useState<string | null>(null)
   const [stores, setStores] = useState<Store[] | null>(null)
+  /** お店を登録する面を開いているか。0 件の会社はここが唯一の出口になる。 */
+  const [addingStore, setAddingStore] = useState(false)
   /**
    * いま見ているお店。トップの「◯◯へ切り替える」で変える。
    * `null` の間は既定（`isActive` の 1 店目）を見る。
@@ -803,6 +803,7 @@ function Workspace({
               }}
               onStartBooking={() => startBooking()}
               onOpenSearch={() => navigate('search')}
+              onAddStore={() => setAddingStore(true)}
             />
           ) : current === 'ledger' ? (
             store ? (
@@ -928,6 +929,40 @@ function Workspace({
           )}
         </div>
       )}
+      {addingStore && (
+        /*
+         * お店を登録する面。0 件の会社にとってはここが最初の一手なので、
+         * 業務の面に重ねて出し、登録が終わったら一覧を読み直してそのお店へ移る。
+         */
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="お店を登録する"
+          className="fixed inset-0 z-40 grid place-items-center bg-ink/40 p-6"
+        >
+          <div className="max-h-full w-full max-w-lg overflow-auto rounded-card bg-surface p-8">
+            <h2 className="text-lead font-bold text-ink">お店を登録する</h2>
+            <p className="mt-1 mb-5 text-note text-ink-muted">
+              営業時間・予約の間隔・ご来店の目的は、よく使う形で先に入れておきます。あとから設定で変えられます。
+            </p>
+            <StoreCreateForm
+              send={(input) =>
+                auth.authFetch('/api/staff/stores', {
+                  method: 'POST',
+                  headers: { 'content-type': 'application/json' },
+                  body: JSON.stringify(input),
+                })
+              }
+              onCreated={(created) => {
+                setAddingStore(false)
+                setSelectedStoreId(created.id)
+                void load()
+              }}
+              onCancel={() => setAddingStore(false)}
+            />
+          </div>
+        </div>
+      )}
     </AppShell>
   )
 }
@@ -945,6 +980,7 @@ function Home({
   onPickDate,
   onStartBooking,
   onOpenSearch,
+  onAddStore,
 }: {
   stores: Store[] | null
   /** ほかのお店へ切り替える。**押して何も起きないチップを置かない。** */
@@ -968,6 +1004,8 @@ function Home({
   onStartBooking: () => void
   /** 予約を探す・直す面（CHANGE-SEARCH）へ移る。 */
   onOpenSearch: () => void
+  /** お店を登録する面を開く。0 件のときはここが唯一の出口になる。 */
+  onAddStore: () => void
 }) {
   const others = stores?.filter((s) => s.id !== currentStoreId) ?? []
   return (
@@ -992,7 +1030,13 @@ function Home({
             {stores === null ? (
               <p className="text-grid text-ink-muted">読み込んでいます…</p>
             ) : stores.length === 0 ? (
-              <p className="text-grid text-ink-muted">お店がまだ登録されていません。</p>
+              /* 行き止まりにしない。ここが新しい会社の最初の一手になる。 */
+              <div className="grid gap-2">
+                <p className="text-grid text-ink-muted">お店がまだ登録されていません。</p>
+                <Button type="button" onClick={onAddStore}>
+                  最初のお店を登録する
+                </Button>
+              </div>
             ) : others.length > 0 ? (
               <ul className="flex flex-wrap gap-2">
                 {others.map((s) => (
@@ -1006,8 +1050,21 @@ function Home({
                     </button>
                   </li>
                 ))}
+                <li>
+                  <button
+                    type="button"
+                    onClick={onAddStore}
+                    className={`min-h-11 rounded-full border border-line-strong bg-surface px-4 text-note font-semibold text-ink-muted ${focusRing}`}
+                  >
+                    お店を追加する
+                  </button>
+                </li>
               </ul>
-            ) : null}
+            ) : (
+              <Button type="button" onClick={onAddStore}>
+                お店を追加する
+              </Button>
+            )}
           </section>
         </div>
         {currentStoreId !== undefined && (
