@@ -6,6 +6,7 @@
  * 尋ねて返す。**内部キーは応答にも記録にも出さない。**
  */
 import { env, SELF } from 'cloudflare:test'
+import { signAccessToken } from '@app/shared'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const BASE = 'https://admin.test'
@@ -137,5 +138,52 @@ describe('GET /api/organizations/:id/stores', () => {
 
     const response = await SELF.fetch(`${BASE}/api/organizations/${orgId}/stores`)
     expect(response.status).toBe(401)
+  })
+
+  it('自分の会社なら、運営でない本部管理者でも引ける', async () => {
+    // dev グラントは運営 org を作るので、テナントの org 行を別に用意して騙る。
+    const tenantOrg = `tenant-${crypto.randomUUID()}`
+    await env.DB.prepare(
+      "INSERT INTO organizations (id, name, plan, is_disabled, is_operator, sync_revision, created_at) VALUES (?,?,'free','0','0',1,?)",
+    )
+      .bind(tenantOrg, 'テナント', '2026-09-05T00:00:00.000Z')
+      .run()
+    const token = await signAccessToken(
+      { sub: `dev:${tenantOrg}`, org: tenantOrg, email: 'ho@tenant.test', role: 'admin' },
+      'dev-jwt-secret-change-me',
+    )
+    vi.spyOn(env.GLASSES_MANAGEMENT, 'fetch').mockImplementation(
+      async () => new Response('[]', { status: 200, headers: JSON_HEADERS }) as unknown as never,
+    )
+
+    const response = await SELF.fetch(`${BASE}/api/organizations/${tenantOrg}/stores`, {
+      headers: { authorization: `Bearer ${token}` },
+    })
+
+    expect(response.status).toBe(200)
+  })
+
+  it('他社のお店は、運営でなければ引けない', async () => {
+    const tenantOrg = `tenant-${crypto.randomUUID()}`
+    const otherOrg = `tenant-${crypto.randomUUID()}`
+    for (const id of [tenantOrg, otherOrg]) {
+      await env.DB.prepare(
+        "INSERT INTO organizations (id, name, plan, is_disabled, is_operator, sync_revision, created_at) VALUES (?,?,'free','0','0',1,?)",
+      )
+        .bind(id, 'テナント', '2026-09-05T00:00:00.000Z')
+        .run()
+    }
+    const token = await signAccessToken(
+      { sub: `dev:${tenantOrg}`, org: tenantOrg, email: 'ho@tenant.test', role: 'admin' },
+      'dev-jwt-secret-change-me',
+    )
+    const spy = vi.spyOn(env.GLASSES_MANAGEMENT, 'fetch')
+
+    const response = await SELF.fetch(`${BASE}/api/organizations/${otherOrg}/stores`, {
+      headers: { authorization: `Bearer ${token}` },
+    })
+
+    expect(response.status).toBe(403)
+    expect(spy).not.toHaveBeenCalled()
   })
 })

@@ -219,6 +219,9 @@ app.use(
       '/api/users',
       '/api/users/*',
       '/api/me/*',
+      // 担当店舗の割り当てで使う。運営限定ではなく、**自社なら本部管理者も引ける**
+      // （下のハンドラが JWT の org と突き合わせる）。014-store-provisioning
+      '/api/organizations/:id/stores',
     ],
     tenantAuth(),
     requireRole('admin'),
@@ -250,6 +253,12 @@ app.use('/api/users', tenantAuth(), requireRole('admin'), requireHeadOfficeAdmin
 app.use('/api/users/*', tenantAuth(), requireRole('admin'), requireHeadOfficeAdmin())
 // 個人 PIN(UC-EYE-151): 本人であればロールを問わない。対象は常に JWT の sub。
 app.use('/api/me/*', tenantAuth())
+/*
+ * 会社のお店の一覧（014-store-provisioning）は、担当店舗の割り当てで使う。
+ * 運営限定ゲートの外に出してあるので、認証とロールはここで必ず要求する。
+ * 他社を見られるのは運営だけ — その突き合わせはハンドラが行う。
+ */
+app.use('/api/organizations/:id/stores', tenantAuth(), requireRole('admin'))
 
 const routes = app
   .get('/api/health', (c) => c.json({ status: 'ok' as const }))
@@ -438,6 +447,19 @@ const routes = app
     const id = c.req.param('id')
     const rows = await db.select().from(organizations).where(eq(organizations.id, id))
     if (!rows[0]) return c.json({ error: 'not_found' }, 404)
+
+    /*
+     * 自社なら本部管理者が引ける。他社を見られるのは運営だけ。
+     * 運営限定ゲートの外に出したぶん、ここで必ず突き合わせる。
+     */
+    const callerOrg = c.get('auth').org
+    if (callerOrg !== id) {
+      const caller = await db
+        .select({ isOperator: organizations.isOperator })
+        .from(organizations)
+        .where(eq(organizations.id, callerOrg))
+      if (caller[0]?.isOperator !== '1') return c.json({ error: 'forbidden' }, 403)
+    }
 
     const binding = c.env.GLASSES_MANAGEMENT
     const internalKey = c.env.INTERNAL_KEY
