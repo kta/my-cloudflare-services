@@ -261,6 +261,8 @@ import {
 import {
   DEVICE_TTL_SECONDS,
   deviceExpiresAt,
+  hashDeviceToken,
+  isDeviceUsable,
   newDeviceCredential,
 } from './domain/device-credential'
 import { deleteHold, HOLD_RENEW_MAX, listHoldOccupancies, putHold } from './domain/holds'
@@ -10066,6 +10068,88 @@ const routes = app
       return c.json({ token, session: TerminalSession.parse(result.session) })
     },
   )
+
+  /**
+   * 端末の資格情報で業務トークンを更新する。
+   *
+   * これが無いと 15 分ごとに暗証番号を打ち直すことになる。逆に切れ方が甘いと、
+   * 30 日以上放置された端末がそのまま開く。**パスワードは決して求めない** ——
+   * 切れたときは `/s/:slug` の置き場所選択と暗証番号へ戻す。
+   *
+   * 使うたびにローテーションする。古い行は消さずに失効させるので、盗まれた
+   * Cookie の再利用があとから追える。
+   */
+  .post('/api/public/sites/:storeSlug/terminals/:terminalId/sessions/refresh', async (c) => {
+    const now = new Date(c.env.TEST_NOW ?? Date.now())
+    const presented = getCookie(c, DEVICE_COOKIE)
+    if (presented === undefined) return c.json({ error: 'unauthorized' }, 401)
+
+    const terminalId = c.req.param('terminalId')
+    const terminal = await resolveSiteTerminal(c.env.DB, c.req.param('storeSlug'), terminalId)
+    if (terminal === null) return c.json({ error: 'not_found' }, 404)
+
+    const hash = await hashDeviceToken(presented)
+    const row = await c.env.DB.prepare(
+      'SELECT id, organization_id AS organizationId, terminal_id AS terminalId, expires_at AS expiresAt, revoked_at AS revokedAt FROM terminal_devices WHERE credential_hash = ?',
+    )
+      .bind(hash)
+      .first<{
+        id: string
+        organizationId: string
+        terminalId: string
+        expiresAt: string
+        revokedAt: string | null
+      }>()
+    // 期限切れ・失効済み・別端末・別テナントの Cookie を、同じ 401 に畳む。
+    if (
+      row === null ||
+      row.terminalId !== terminalId ||
+      row.organizationId !== terminal.organizationId ||
+      !isDeviceUsable(row, now)
+    ) {
+      return c.json({ error: 'unauthorized' }, 401)
+    }
+
+    const next = await newDeviceCredential()
+    const nowIso = now.toISOString()
+    await c.env.DB.batch([
+      c.env.DB.prepare(
+        'UPDATE terminal_devices SET revoked_at = ?, last_used_at = ? WHERE id = ?',
+      ).bind(nowIso, nowIso, row.id),
+      c.env.DB.prepare(
+        'INSERT INTO terminal_devices (id, organization_id, terminal_id, credential_hash, expires_at, last_used_at, revoked_at, created_at) VALUES (?,?,?,?,?,NULL,NULL,?)',
+      ).bind(
+        crypto.randomUUID(),
+        row.organizationId,
+        row.terminalId,
+        next.hash,
+        deviceExpiresAt(now),
+        nowIso,
+      ),
+    ])
+
+    setCookie(c, DEVICE_COOKIE, next.token, {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'Strict',
+      path: DEVICE_COOKIE_PATH,
+      maxAge: DEVICE_TTL_SECONDS,
+    })
+
+    const token = await signAccessToken(
+      {
+        sub: `terminal:${row.terminalId}`,
+        org: row.organizationId,
+        email: TERMINAL_TOKEN_EMAIL,
+        role: 'staff',
+        kind: 'terminal',
+      },
+      c.env.JWT_SECRET,
+      ACCESS_TTL_SECONDS,
+      Math.floor(now.getTime() / 1000),
+    )
+    return c.json({ token })
+  })
 
   /* --- 公開面（P8。未認証。10 本） ---------------------------------------- */
 

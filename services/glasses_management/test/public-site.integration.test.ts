@@ -246,3 +246,91 @@ describe('POST /api/public/sites/:storeSlug/terminals/:terminalId/sessions', () 
     expect(claims.org).toBe(s.org)
   })
 })
+
+/**
+ * 端末の資格情報での更新。
+ *
+ * ここが働かないと、業務中に 15 分でトークンが切れて暗証番号を打ち直すことになる。
+ * 逆に切れ方が甘いと、30 日以上放置された端末がそのまま開く。
+ *
+ * 30 日の計算そのものは `device-credential.test.ts` が境界まで押さえているので、
+ * ここでは「期限切れの行で入れないこと」を DB を動かして確かめる。
+ */
+describe('POST /api/public/sites/:slug/terminals/:id/sessions/refresh', () => {
+  const refreshPath = (slug: string, terminalId: string) =>
+    `${BASE}/api/public/sites/${slug}/terminals/${terminalId}/sessions/refresh`
+
+  async function signedIn() {
+    const s = await site()
+    const res = await SELF.fetch(
+      `${BASE}/api/public/sites/${s.slug}/terminals/${s.shared}/sessions`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ pin: '135790' }),
+      },
+    )
+    const setCookie = res.headers.get('set-cookie') ?? ''
+    const value = /eye_device=([^;]+)/.exec(setCookie)?.[1] ?? ''
+    return { ...s, cookie: `eye_device=${value}` }
+  }
+
+  it('Cookie があれば暗証番号なしで新しいトークンが出る', async () => {
+    const s = await signedIn()
+    const res = await SELF.fetch(refreshPath(s.slug, s.shared), {
+      method: 'POST',
+      headers: { cookie: s.cookie },
+    })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { token: string }
+    const claims = JSON.parse(atob(body.token.split('.')[1] ?? '')) as Record<string, unknown>
+    expect(claims.org).toBe(s.org)
+    expect(claims.kind).toBe('terminal')
+  })
+
+  it('使うたびに Cookie がローテーションし、同じ値は 2 度使えない', async () => {
+    const s = await signedIn()
+    const first = await SELF.fetch(refreshPath(s.slug, s.shared), {
+      method: 'POST',
+      headers: { cookie: s.cookie },
+    })
+    expect(first.status).toBe(200)
+    expect(first.headers.get('set-cookie') ?? '').toContain('eye_device=')
+
+    const replay = await SELF.fetch(refreshPath(s.slug, s.shared), {
+      method: 'POST',
+      headers: { cookie: s.cookie },
+    })
+    expect(replay.status).toBe(401)
+  })
+
+  it('期限が切れた資格情報では入れない', async () => {
+    const s = await signedIn()
+    await env.DB.prepare(
+      "UPDATE terminal_devices SET expires_at = '2020-01-01T00:00:00.000Z' WHERE organization_id = ?",
+    )
+      .bind(s.org)
+      .run()
+    const res = await SELF.fetch(refreshPath(s.slug, s.shared), {
+      method: 'POST',
+      headers: { cookie: s.cookie },
+    })
+    expect(res.status).toBe(401)
+  })
+
+  it('Cookie が無ければ 401（パスワードは求めない）', async () => {
+    const s = await site()
+    const res = await SELF.fetch(refreshPath(s.slug, s.shared), { method: 'POST' })
+    expect(res.status).toBe(401)
+  })
+
+  it('別の端末の Cookie では入れない', async () => {
+    const s = await signedIn()
+    const other = await site()
+    const res = await SELF.fetch(refreshPath(other.slug, other.shared), {
+      method: 'POST',
+      headers: { cookie: s.cookie },
+    })
+    expect(res.status).toBe(401)
+  })
+})
