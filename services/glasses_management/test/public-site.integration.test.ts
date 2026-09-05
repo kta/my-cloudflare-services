@@ -164,3 +164,85 @@ describe('GET /api/public/sites/:storeSlug', () => {
     }
   })
 })
+
+describe('POST /api/public/sites/:storeSlug/terminals/:terminalId/sessions', () => {
+  const start = (slug: string, terminalId: string, body: unknown) =>
+    SELF.fetch(`${BASE}/api/public/sites/${slug}/terminals/${terminalId}/sessions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+  it('共有端末は正しい暗証番号でトークンと端末セッションを返す', async () => {
+    const s = await site()
+    const res = await start(s.slug, s.shared, { pin: '135790' })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      token: string
+      session: { mode: string; staffId: string | null; sessionToken: string }
+    }
+    expect(body.session.mode).toBe('shared')
+    expect(body.session.staffId).toBeNull()
+    const claims = JSON.parse(atob(body.token.split('.')[1] ?? '')) as Record<string, unknown>
+    expect(claims.org).toBe(s.org)
+    // 端末トークンだと名乗る。admin 側はこれを見て拒む。
+    expect(claims.kind).toBe('terminal')
+  })
+
+  it('端末の資格情報を HttpOnly Cookie で返す', async () => {
+    const s = await site()
+    const res = await start(s.slug, s.shared, { pin: '135790' })
+    const cookie = res.headers.get('set-cookie') ?? ''
+    expect(cookie).toContain('eye_device=')
+    expect(cookie.toLowerCase()).toContain('httponly')
+    expect(cookie.toLowerCase()).toContain('secure')
+  })
+
+  it('個人端末は紐づくスタッフの暗証番号で個人モードになる', async () => {
+    const s = await site()
+    const res = await start(s.slug, s.personal, { pin: '246810' })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { session: { mode: string; staffId: string | null } }
+    expect(body.session.mode).toBe('personal')
+    expect(body.session.staffId).toBe(s.staffId)
+  })
+
+  /*
+   * staffId をクライアントに名乗らせない。名乗れると、端末を選んだうえで
+   * 相手だけ差し替えて他人の暗証番号を総当たりする経路になる。
+   * `z.strictObject` は未知のキーを「無視」ではなく「拒否」する。
+   */
+  it('body に staffId を混ぜると 400 で拒む（無視ではない）', async () => {
+    const s = await site()
+    const res = await start(s.slug, s.personal, { pin: '246810', staffId: 'someone-else' })
+    expect(res.status).toBe(400)
+  })
+
+  it('slug と端末の組が食い違うと 404（存在を漏らさない）', async () => {
+    const a = await site()
+    const b = await site()
+    const res = await start(b.slug, a.shared, { pin: '135790' })
+    expect(res.status).toBe(404)
+  })
+
+  it('持ち主が決まっていない個人端末は 404', async () => {
+    const s = await site()
+    const res = await start(s.slug, s.unassigned, { pin: '135790' })
+    expect(res.status).toBe(404)
+  })
+
+  it('違う暗証番号は 401 と残り回数を返す', async () => {
+    const s = await site()
+    const res = await start(s.slug, s.shared, { pin: '999999' })
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ error: 'pin_invalid', remainingAttempts: 2 })
+  })
+
+  it('発行するトークンの org は slug から引いた組織（入力は混ざらない）', async () => {
+    const s = await site()
+    const res = await start(s.slug, s.shared, { pin: '135790' })
+    const body = (await res.json()) as { token: string }
+    const claims = JSON.parse(atob(body.token.split('.')[1] ?? '')) as Record<string, unknown>
+    expect(claims.org).toBe(s.org)
+  })
+})

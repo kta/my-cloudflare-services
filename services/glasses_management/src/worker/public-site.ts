@@ -12,6 +12,17 @@
 import { PublicSite } from '@app/contracts'
 import type { D1Database } from '@cloudflare/workers-types'
 
+/** 端末の資格情報を運ぶ Cookie。届く範囲を公開の入口だけに絞る。 */
+export const DEVICE_COOKIE = 'eye_device'
+export const DEVICE_COOKIE_PATH = '/api/public/sites'
+
+/**
+ * 端末トークンの合成アドレス。人のアドレスではないことが読めば分かる値にする。
+ * `.invalid` は RFC 2606 の予約 TLD（ドットが要る —— `z.string().email()` は
+ * ドット無しのドメインを通さない）。
+ */
+export const TERMINAL_TOKEN_EMAIL = 'terminal@terminal.invalid'
+
 type SiteTerminalRow = {
   id: string
   name: string
