@@ -549,6 +549,7 @@ test.describe('承認済みモックとの突き合わせ', () => {
      * モックより 50px ほど上に寄っている。チップを上のバーの店名へ移せば
      * （FINDINGS.md の foundation-09）この値は下がる見込みで、そのときに下げ直す。
      */
+    // 2026-09-05 の実測 119,956 / 3,868,560 ＝ 3.1008%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('HOME.png', { scale: 'device', maxDiffPixelRatio: 0.032 })
   })
 
@@ -582,9 +583,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      *     AC-LEDGER-11 が名指ししている名前で、見出し行の `--color-surface-2` とは別の値。
      * **この値は下げるだけ。上げてはいけない。**
      */
+    // 2026-09-05 の実測 94,047 / 3,868,560 ＝ 2.4311%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('LEDGER-STAFF.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0319,
+      maxDiffPixelRatio: 0.0245,
     })
   })
 
@@ -608,9 +610,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      *   - 日付の帯の位置・「お知らせ 3」・「絞り込み」・行見出しの小さい文字は LEDGER-STAFF と同じ。
      * **この値は下げるだけ。上げてはいけない。**
      */
+    // 2026-09-05 の実測 118,197 / 3,868,560 ＝ 3.0553%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('LEDGER-RESOURCE.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0369,
+      maxDiffPixelRatio: 0.0307,
     })
   })
 
@@ -643,9 +646,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      *   - 日付の帯の位置・「お知らせ 3」・「絞り込み」は LEDGER-STAFF と同じ。
      * **この値は下げるだけ。上げてはいけない。**
      */
+    // 2026-09-05 の実測 174,673 / 3,868,560 ＝ 4.5152%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('LEDGER-LIST.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0516,
+      maxDiffPixelRatio: 0.0453,
     })
   })
 
@@ -684,9 +688,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      *     共有端末で Esc が使えない（IDX-LEDGER-04 の 6d）。
      * **この値は下げるだけ。上げてはいけない。**
      */
+    // 2026-09-05 の実測 204,991 / 3,868,560 ＝ 5.2989%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('LEDGER-DETAIL.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.079,
+      maxDiffPixelRatio: 0.0531,
     })
   })
 
@@ -720,9 +725,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      *   - 日付の帯の位置・「お知らせ 3」は LEDGER-STAFF と同じ。
      * **この値は下げるだけ。上げてはいけない。**
      */
+    // 2026-09-05 の実測 212,350 / 3,868,560 ＝ 5.4891%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('EX-OFFLINE.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0613,
+      maxDiffPixelRatio: 0.055,
     })
   })
 
@@ -748,9 +754,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      * 押しのけないため。UX 監査 J-04）。モックに合わせたのに 78 画素だけ増えたのは、
      * 下の 3 行がまとめて 32px 下がって、その縁が別の場所と擦れたためである。
      */
+    // 2026-09-05 の実測 106,461 / 3,868,560 ＝ 2.7520%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('SETTINGS-STORE.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0362,
+      maxDiffPixelRatio: 0.0277,
     })
   })
 
@@ -765,9 +772,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      * 実測 4.3223%（2026-08-30）。本日の輪が実行日に付くぶんだけ余裕を持たせて 4.40% にしてある。
      * **この値は下げるだけ。上げてはいけない。**
      */
+    // 2026-09-05 の実測 134,090 / 3,868,560 ＝ 3.4661%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('SETTINGS-CALENDAR.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.044,
+      maxDiffPixelRatio: 0.0348,
     })
   })
 
@@ -784,9 +792,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      * 実測 3.7907%（2026-08-30）。最後の 1 行が実行日の曜日で書き変わるぶんだけ余裕を持たせて
      * 3.85% にしてある。**この値は下げるだけ。上げてはいけない。**
      */
+    // 2026-09-05 の実測 121,720 / 3,868,560 ＝ 3.1464%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('SETTINGS-HOURS.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0385,
+      maxDiffPixelRatio: 0.0316,
     })
   })
 
@@ -801,9 +810,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      *   - 「台帳に出す短い名前」の 1 行を足している（台帳の帯に収める唯一の追加）。
      * 実測 4.8447%（2026-08-31。第2サイドバーの 1 行ぶん）。**この値は下げるだけ。上げてはいけない。**
      */
+    // 2026-09-05 の実測 154,054 / 3,868,560 ＝ 3.9822%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('SETTINGS-PURPOSE.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0485,
+      maxDiffPixelRatio: 0.04,
     })
   })
 
@@ -820,9 +830,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      *     「お休み」の印は字ごと label で包んで 44pt にしたので、7 列が縦に伸びる（決め #14）。
      * 実測 4.7974%（2026-08-31。第2サイドバーの 1 行ぶん）。**この値は下げるだけ。上げてはいけない。**
      */
+    // 2026-09-05 の実測 151,513 / 3,868,560 ＝ 3.9165%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('SETTINGS-STAFF.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.048,
+      maxDiffPixelRatio: 0.0393,
     })
   })
 
@@ -837,9 +848,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      *   - 影響するご予約の件数はご予約の行が入る P3 まで 0 件のままである。
      * 実測 4.4055%（2026-08-31。第2サイドバーの 1 行ぶん）。**この値は下げるだけ。上げてはいけない。**
      */
+    // 2026-09-05 の実測 137,067 / 3,868,560 ＝ 3.5431%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('SETTINGS-EQUIPMENT.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0441,
+      maxDiffPixelRatio: 0.0356,
     })
   })
   test('SETTINGS-WEB — 設定・Web予約の公開', async ({ page }) => {
@@ -860,9 +872,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      *   - 残りは和文の字形（承認済みモックは端末の実機、こちらは Chromium）。
      */
     // 実測 262,168 / 3,868,560 ＝ 6.7770%（2026-08-31）。**この値は下げるだけ。上げてはいけない。**
+    // 2026-09-05 の実測 227,831 / 3,868,560 ＝ 5.8893%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('SETTINGS-WEB.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.068,
+      maxDiffPixelRatio: 0.059,
     })
   })
 
@@ -888,6 +901,7 @@ test.describe('承認済みモックとの突き合わせ', () => {
        *   - 下辺の日付の帯・上のバーの「お知らせ 3」は HOME と同じ。
        * 実測 4.7504%（2026-08-31 の初測）。**この値は下げるだけ。上げてはいけない。**
        */
+      // 2026-09-05 の実測 194,558 / 3,868,560 ＝ 5.0292%（モックを撮り直したあと）。
       await expect(page).toHaveScreenshot('HOME-PERSONAL.png', {
         scale: 'device',
         // 2026-09-04: 0.0476 → 0.0512。HOME と同じ理由（日付の帯を実装した）。
@@ -1014,9 +1028,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      * 実測は下の値のとおり。**この値は下げるだけ。上げてはいけない。**
      */
     // 実測 134,359 / 3,868,560 ＝ 3.4730%（2026-08-31 の 3 巡目）。**この値は下げるだけ。**
+    // 2026-09-05 の実測 143,323 / 3,868,560 ＝ 3.7048%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('BOOK-01-DATETIME.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0401,
+      maxDiffPixelRatio: 0.0372,
     })
   })
 
@@ -1032,9 +1047,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      *   - 上のバーの「お知らせ 3」… P10。
      */
     // 実測 86,138 / 3,868,560 ＝ 2.2267%（2026-08-31 の 3 巡目）。**この値は下げるだけ。**
+    // 2026-09-05 の実測 84,570 / 3,868,560 ＝ 2.1861%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('BOOK-02-PURPOSE.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0223,
+      maxDiffPixelRatio: 0.022,
     })
   })
 
@@ -1054,9 +1070,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      */
     // 実測 113,711 / 3,868,560 ＝ 2.9394%（2026-08-31 の 3 巡目。モックと同じく
     // 「お取りする時間」の 4 列を落として、その場所を警告の箱へ渡した）。**この値は下げるだけ。**
+    // 2026-09-05 の実測 112,073 / 3,868,560 ＝ 2.8970%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('BOOK-02b-PURPOSE-CONFLICT.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0295,
+      maxDiffPixelRatio: 0.0291,
     })
   })
 
@@ -1078,9 +1095,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      *   - 録音の帯・「あとで続ける」… BOOK-01 に書いた 12 面共通の差。
      */
     // 実測 148,288 / 3,868,560 ＝ 3.8332%（2026-08-31 の 3 巡目）。**この値は下げるだけ。**
+    // 2026-09-05 の実測 146,839 / 3,868,560 ＝ 3.7957%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('BOOK-03-SLOT-STAFF.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0384,
+      maxDiffPixelRatio: 0.0381,
     })
   })
 
@@ -1099,9 +1117,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      *   - 録音の帯・「あとで続ける」… BOOK-01 に書いた 12 面共通の差。
      */
     // 実測 166,038 / 3,868,560 ＝ 4.2920%（2026-08-31 の 3 巡目）。**この値は下げるだけ。**
+    // 2026-09-05 の実測 164,814 / 3,868,560 ＝ 4.2603%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('BOOK-03b-SLOT-RESOURCE.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.043,
+      maxDiffPixelRatio: 0.0428,
     })
   })
 
@@ -1132,9 +1151,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      *   - 録音の帯・「あとで続ける」… BOOK-01 に書いた 12 面共通の差。
      */
     // 実測 133,738 / 3,868,560 ＝ 3.4569%（2026-08-31 の 3 巡目）。**この値は下げるだけ。**
+    // 2026-09-05 の実測 132,275 / 3,868,560 ＝ 3.4192%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('BOOK-03c-DRAG.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0347,
+      maxDiffPixelRatio: 0.0343,
     })
     await page.mouse.up()
   })
@@ -1153,9 +1173,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      *   - 録音の帯・「あとで続ける」… BOOK-01 に書いた 12 面共通の差。
      */
     // 実測 99,892 / 3,868,560 ＝ 2.5822%（2026-08-31 の 3 巡目）。**この値は下げるだけ。**
+    // 2026-09-05 の実測 98,311 / 3,868,560 ＝ 2.5413%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('BOOK-04-CUSTOMER.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0259,
+      maxDiffPixelRatio: 0.0256,
     })
   })
 
@@ -1178,9 +1199,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      *   - 録音の帯・「あとで続ける」… BOOK-01 に書いた 12 面共通の差。
      */
     // 実測 106,277 / 3,868,560 ＝ 2.7472%（2026-08-31 の 3 巡目）。**この値は下げるだけ。**
+    // 2026-09-05 の実測 104,696 / 3,868,560 ＝ 2.7063%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('BOOK-04c-KEYPAD.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0276,
+      maxDiffPixelRatio: 0.0272,
     })
   })
 
@@ -1197,9 +1219,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      *   - 録音の帯・「あとで続ける」… BOOK-01 に書いた 12 面共通の差。
      */
     // 実測 159,450 / 3,868,560 ＝ 4.1217%（2026-08-31 の 3 巡目）。**この値は下げるだけ。**
+    // 2026-09-05 の実測 157,869 / 3,868,560 ＝ 4.0808%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('BOOK-04d-HANDWRITE.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0413,
+      maxDiffPixelRatio: 0.041,
     })
   })
 
@@ -1234,9 +1257,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      *   - 上のバー右の「お知らせ 3」… P10。
      * **この値は下げるだけ。上げてはいけない。**
      */
+    // 2026-09-05 の実測 212,847 / 3,868,560 ＝ 5.5020%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('BOOK-04b-CUSTOMER-MATCH.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0555,
+      maxDiffPixelRatio: 0.0552,
     })
   })
 
@@ -1260,9 +1284,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
     // ＝ 3.4412〜3.4425% で、右下の灰の印から影を外し文言の色を地に戻したぶん下がった）。
     // 閾値は 4 桁で 0.0337 ＝ 588 画素ぶんの余り —— 押さえの期限の時刻だけが走るたびに動く。
     // **この値は下げるだけ。**
+    // 2026-09-05 の実測 128,663 / 3,868,560 ＝ 3.3259%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('BOOK-05-CONFIRM.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0337,
+      maxDiffPixelRatio: 0.0334,
     })
   })
 
@@ -1281,6 +1306,7 @@ test.describe('承認済みモックとの突き合わせ', () => {
      *   - 完了の面は工程の帯を持たないので、録音の表示もここには無い。
      */
     // 実測 63,690 / 3,868,560 ＝ 1.6464%（2026-08-31 の 3 巡目）。**この値は下げるだけ。**
+    // 2026-09-05 の実測 63,671 / 3,868,560 ＝ 1.6459%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('BOOK-06-DONE.png', {
       scale: 'device',
       maxDiffPixelRatio: 0.0166,
@@ -1335,9 +1361,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      * 「済んだ工程」と「まだの工程」の違いが**色だけ**になる（§2.5 に反する）。
      * 増分は ✓ 1 文字ぶんに限られ、ほかの 11 面はすべて下がっている。
      */
+    // 2026-09-05 の実測 109,890 / 3,868,560 ＝ 2.8406%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('BOOK-CONFLICT.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0289,
+      maxDiffPixelRatio: 0.0286,
     })
   })
 
@@ -1402,9 +1429,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      *   - 検索欄の左の虫めがねの字が無い（`type="search"` の欄に飾りを足していない）。
      * **この値は下げるだけ。上げてはいけない。**
      */
+    // 2026-09-05 の実測 128,038 / 3,868,560 ＝ 3.3097%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('CUSTOMER-LIST.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0419,
+      maxDiffPixelRatio: 0.0332,
     })
   })
 
@@ -1436,9 +1464,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      *   - 上のバー右の「お知らせ 3」… P10。
      * **この値は下げるだけ。上げてはいけない。**
      */
+    // 2026-09-05 の実測 130,386 / 3,868,560 ＝ 3.3704%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('CUSTOMER-DETAIL.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0675,
+      maxDiffPixelRatio: 0.0339,
     })
   })
 
@@ -1478,9 +1507,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      *   - 上のバー右の「お知らせ 3」… P10。
      * **この値は下げるだけ。上げてはいけない。**
      */
+    // 2026-09-05 の実測 295,615 / 3,868,560 ＝ 7.6415%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('CUSTOMER-NEW.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0856,
+      maxDiffPixelRatio: 0.0766,
     })
   })
 
@@ -1520,9 +1550,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      *   - 上のバー右の「お知らせ 3」… P10。
      * **この値は下げるだけ。上げてはいけない。**
      */
+    // 2026-09-05 の実測 293,241 / 3,868,560 ＝ 7.5801%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('CUSTOMER-MERGE.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.085,
+      maxDiffPixelRatio: 0.076,
     })
   })
 
@@ -1562,9 +1593,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      *   - 上のバー右の「お知らせ 3」… P10。
      * **この値は下げるだけ。上げてはいけない。**
      */
+    // 2026-09-05 の実測 248,316 / 3,868,560 ＝ 6.4188%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('CUSTOMER-HANDWRITE.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0734,
+      maxDiffPixelRatio: 0.0643,
     })
   })
   /* --- 来店受付とウォークイン（008-reception-and-walkin） ------------------ */
@@ -1716,9 +1748,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      *   - 盤面の 4 行は上の `stubBoard` が返している（理由はその関数の頭に書いた）。
      * **この値は下げるだけ。上げてはいけない。**
      */
+    // 2026-09-05 の実測 42,153 / 3,868,560 ＝ 1.0896%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('RECEPTION-JOURNEY.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0198,
+      maxDiffPixelRatio: 0.011,
     })
   })
 
@@ -1770,9 +1803,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      *   - 上のバー右が「業務を終える」（モックは「お知らせ 3」… P10）。
      * **この値は下げるだけ。上げてはいけない。**
      */
+    // 2026-09-05 の実測 222,655 / 3,868,560 ＝ 5.7555%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('RECEPTION-CHECKIN.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0669,
+      maxDiffPixelRatio: 0.0577,
     })
   })
 
@@ -1804,9 +1838,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      *   - 上のバー右が「業務を終える」（モックは「お知らせ 3」… P10）。
      * **この値は下げるだけ。上げてはいけない。**
      */
+    // 2026-09-05 の実測 218,866 / 3,868,560 ＝ 5.6576%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('LEDGER-WALKIN.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0641,
+      maxDiffPixelRatio: 0.0567,
     })
   })
 
@@ -1840,9 +1875,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      * 「お知らせ 3」を描いているので**実装が近づいた**が、個人端末の
      * 「業務を終える」が隣に残るぶん 250 画素だけ増えた。
      */
+    // 2026-09-05 の実測 103,257 / 3,868,560 ＝ 2.6691%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('HISTORY-LIST.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0609,
+      maxDiffPixelRatio: 0.0268,
     })
   })
 
@@ -1868,9 +1904,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      *   - 上のバー右が「業務を終える」（モックは「お知らせ 3」… P10）。
      * **この値は下げるだけ。上げてはいけない。**
      */
+    // 2026-09-05 の実測 174,108 / 3,868,560 ＝ 4.5006%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('HISTORY-EMPTY.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0796,
+      maxDiffPixelRatio: 0.0452,
     })
   })
 
@@ -1951,9 +1988,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      *   - 上のバー右が「業務を終える」（モックは「お知らせ 3」… P10）。
      * 実測 258,056 / 3,868,560 ＝ 6.6706%。**この値は下げるだけ。上げてはいけない。**
      */
+    // 2026-09-05 の実測 126,998 / 3,868,560 ＝ 3.2828%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('CHANGE-SEARCH.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0668,
+      maxDiffPixelRatio: 0.033,
     })
   })
 
@@ -1986,9 +2024,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      *   - サイドバーの行き先が 1 つ多い（柱だけで差の 49%）。
      * 実測 232,644 / 3,868,560 ＝ 6.0137%。**この値は下げるだけ。上げてはいけない。**
      */
+    // 2026-09-05 の実測 99,997 / 3,868,560 ＝ 2.5849%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('EX-EMPTY-SEARCH.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0602,
+      maxDiffPixelRatio: 0.026,
     })
   })
 
@@ -2046,6 +2085,7 @@ test.describe('承認済みモックとの突き合わせ', () => {
      * 書体の描き分けで数十画素は揺れ、閾値を割った 1 本が上の押さえを返さないまま
      * 止まると、あとの面と業務の e2e が道連れになる（上の `test.afterEach` を参照）。
      */
+    // 2026-09-05 の実測 182,415 / 3,868,560 ＝ 4.7153%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('CHANGE-DATETIME.png', {
       scale: 'device',
       // 午後と夕方の枠を畳まず全部出すようにしたぶん、札の段が増えて差が広がった
@@ -2078,9 +2118,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      *   - サイドバーの行き先が 1 つ多い（柱だけで差の 29%）。
      * 実測 275,956 / 3,868,560 ＝ 7.1333%。**この値は下げるだけ。上げてはいけない。**
      */
+    // 2026-09-05 の実測 144,886 / 3,868,560 ＝ 3.7452%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('CHANGE-DIFF.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0714,
+      maxDiffPixelRatio: 0.0376,
     })
     await page.getByRole('button', { name: '戻って直す' }).click()
     await releaseHold(page)
@@ -2145,9 +2186,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      * 撮った値である。器が `ConflictPanel` を載せた回に測り直す、と前の回のコメントが
      * 決めていたので、その基準線を引き直した（緩めたのではなく、対象が入れ替わった）。
      */
+    // 2026-09-05 の実測 263,508 / 3,868,560 ＝ 6.8115%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('EX-CONFLICT.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0769,
+      maxDiffPixelRatio: 0.0683,
     })
     await page.getByRole('button', { name: 'やめて台帳に戻る' }).click()
   })
@@ -2170,9 +2212,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      *   - サイドバーの行き先が 1 つ多い（柱だけで差の 41%）。
      * 実測 229,195 / 3,868,560 ＝ 5.9246%。**この値は下げるだけ。上げてはいけない。**
      */
+    // 2026-09-05 の実測 98,012 / 3,868,560 ＝ 2.5336%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('CHANGE-CANCEL.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0593,
+      maxDiffPixelRatio: 0.0255,
     })
     await page.getByRole('button', { name: '取り消さずに戻る' }).click()
   })
@@ -2245,9 +2288,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      *     残った差のうち柱の占める割合がいちばん大きい）。
      * 実測 191,316 / 3,868,560 ＝ 4.9454%。**この値は下げるだけ。上げてはいけない。**
      */
+    // 2026-09-05 の実測 60,178 / 3,868,560 ＝ 1.5556%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('CHANGE-DONE.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0495,
+      maxDiffPixelRatio: 0.0157,
     })
   })
 
@@ -2319,9 +2363,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
     // 実測 67,982 / 3,868,560 ＝ 1.7573%（2026-08-31 の 2 巡目。1 巡目の 69,008 ＝ 1.7838%
     // から、右下の印の影を外し・文言の色を戻し・注記の位置を揃えたぶん下がった）。
     // **この値は下げるだけ。**
+    // 2026-09-05 の実測 67,522 / 3,868,560 ＝ 1.7454%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('EX-MIC-DENIED.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0177,
+      maxDiffPixelRatio: 0.0176,
     })
   })
 
@@ -2361,9 +2406,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
     // から、右の 4 項目と注記の高さを揃え・右下の印の影を外したぶん下がった）。
     // 閾値は 4 桁で 0.0163 ＝ 719 画素ぶんの余りを残す —— 予約番号はその場で採る番号なので
     // 走るたびに数字が変わり、その字形ぶん数百画素は揺れる。**この値は下げるだけ。**
+    // 2026-09-05 の実測 61,962 / 3,868,560 ＝ 1.6017%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('EX-UPLOAD-FAILED.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0163,
+      maxDiffPixelRatio: 0.0162,
     })
   })
 
@@ -2384,9 +2430,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      * 作りとは別の話である（`findings/analytics.md` ANA-01 の撤回を参照）。
      * **この値はここから下げるだけ。上げてはいけない。**
      */
+    // 2026-09-05 の実測 268,171 / 3,868,560 ＝ 6.9321%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('ANALYTICS-TOP.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0778,
+      maxDiffPixelRatio: 0.0695,
     })
   })
 
@@ -2405,9 +2452,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      * 目盛を背面へ）、ラベルが枠の外へ出たぶん 31 本ぶんの縦位置がずれる。
      * **この値はここから下げるだけ。上げてはいけない。**
      */
+    // 2026-09-05 の実測 326,998 / 3,868,560 ＝ 8.4527%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('ANALYTICS-COUNT.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.093,
+      maxDiffPixelRatio: 0.0847,
     })
   })
 
@@ -2421,9 +2469,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      * モックの骨格は維持。ロールアップsnapshotに無い職種の補足は表示せず、上バー差はP10。
      * **この値は下げるだけ。上げてはいけない。**
      */
+    // 2026-09-05 の実測 250,898 / 3,868,560 ＝ 6.4856%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('ANALYTICS-STAFF.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0738,
+      maxDiffPixelRatio: 0.065,
     })
   })
 
@@ -2437,9 +2486,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      * モック値へ固定。目安線は色だけに頼らず、地模様と文の凡例で同じ意味を伝える。
      * 装飾Y軸と上バー通知（P10）が残る主差分。**この値は下げるだけ。上げてはいけない。**
      */
+    // 2026-09-05 の実測 235,354 / 3,868,560 ＝ 6.0838%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('ANALYTICS-WAIT.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.0891,
+      maxDiffPixelRatio: 0.061,
     })
   })
 
@@ -2453,9 +2503,10 @@ test.describe('承認済みモックとの突き合わせ', () => {
      * 理由を誤集約しないよう承認仕様の正式5分類（モックは3分類）を色＋地模様で描く。
      * 装飾Y軸と上バー通知（P10）が残る差分。**この値は下げるだけ。上げてはいけない。**
      */
+    // 2026-09-05 の実測 299,015 / 3,868,560 ＝ 7.7294%（モックを撮り直したあと）。
     await expect(page).toHaveScreenshot('ANALYTICS-CANCEL.png', {
       scale: 'device',
-      maxDiffPixelRatio: 0.11,
+      maxDiffPixelRatio: 0.0774,
     })
   })
 })

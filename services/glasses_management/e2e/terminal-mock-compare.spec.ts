@@ -6,20 +6,24 @@ const NOW = new Date('2026-08-27T02:08:00.000Z')
 
 /*
  * 承認済み mock と実ブラウザ描画は、書体の字幅・OS のアンチエイリアス・既存 Shell の
- * 共通領域ぶんだけ完全一致しない。値は各画面の実測差に 0.2pt だけ余裕を持たせた上限。
+ * 共通領域ぶんだけ完全一致しない。値は各画面の実測差を 4 桁で切り上げた上限。
  * 構成要素の欠落や位置の大きなずれは、この上限を越えて検知する。
+ *
+ * **この値は下げるだけ。上げてはいけない。** 上げたくなったときは、実装かモックの
+ * どちらかがずれている。2026-09-05 に呼び名を EYE へ揃えたモックを撮り直し、
+ * 全 10 枚を実測へ締め直した（前は 0.2pt の余白を足した値だった）。
  */
 const VISUAL_LIMIT = {
-  'START-DEVICE-MODE.png': 0.052,
-  'LOGIN-STAFF.png': 0.032,
-  'LOGIN-STAFF-PIN.png': 0.032,
-  'LOGIN-SHARED.png': 0.032,
-  'LOGIN-SHARED-PIN.png': 0.042,
-  'LOGIN-PIN-ERROR.png': 0.052,
-  'MODE-PERSONAL.png': 0.052,
-  'HOME-SHARED-LOCKED.png': 0.032,
-  'ALERTS.png': 0.062,
-  'EX-PERMISSION.png': 0.092,
+  'START-DEVICE-MODE.png': 0.0475, // 実測 4.7390%
+  'LOGIN-STAFF.png': 0.0201, // 実測 1.9989%
+  'LOGIN-STAFF-PIN.png': 0.0243, // 実測 2.4189%
+  'LOGIN-SHARED.png': 0.0217, // 実測 2.1543%
+  'LOGIN-SHARED-PIN.png': 0.0264, // 実測 2.6234%
+  'LOGIN-PIN-ERROR.png': 0.0416, // 実測 4.1477%
+  'MODE-PERSONAL.png': 0.0438, // 実測 4.3642%
+  'HOME-SHARED-LOCKED.png': 0.0224, // 実測 2.2295%
+  'ALERTS.png': 0.0381, // 実測 3.7980%
+  'EX-PERMISSION.png': 0.0766, // 実測 7.6409%
 } as const
 
 async function matchesMock(page: Page, name: keyof typeof VISUAL_LIMIT): Promise<void> {
