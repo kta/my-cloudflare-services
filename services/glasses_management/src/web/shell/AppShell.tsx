@@ -156,13 +156,23 @@ export function AppShell({
             <span className={rail ? 'sr-only' : undefined}>たたむ</span>
           </button>
 
-          <NavItem
-            destination={HOME_DESTINATION}
-            rail={rail}
-            current={current}
-            onNavigate={onNavigate}
-            alertCount={alertCount}
-          />
+          {/*
+            「トップ」の行はトップにいるときだけ置く。承認済みモックの柱は
+            `HOME.png` にしか この行を持たず、ほかの面（`LEDGER-STAFF.html` ほか）は
+            「＋ 予約を取る」から始まる。ほかの面からトップへ戻る道は上のバーの
+            ⌂（`aria-label="トップへ"`）である。全画面に置いていたころ、行き先が
+            1 つ多く、押しても「いまいる場所」に見えない行が柱の頭に居座っていた
+            （実装不足の洗い出し foundation-03）。
+          */}
+          {current === 'home' && (
+            <NavItem
+              destination={HOME_DESTINATION}
+              rail={rail}
+              current={current}
+              onNavigate={onNavigate}
+              alertCount={alertCount}
+            />
+          )}
 
           <button
             type="button"

@@ -810,7 +810,13 @@ export function ChangeScreen({
   const equipmentNames = before?.equipmentNames.filter((name) => name !== '') ?? []
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    /*
+      画面の器は `<main>` で、名前を持つ。持たなかったころ、この面には読み上げの
+      ランドマークが 1 つも無く、画面を切り替えても「いまどこにいるか」を耳で
+      確かめる手がかりが無かった（実装不足の洗い出し foundation-01 / T-011）。
+      名前は左の柱の行き先と同じ語にする（2 通りの呼び方を覚えさせない）。
+    */
+    <main aria-label="予約を探す" className="flex h-full min-h-0 flex-col">
       {notice !== null && (
         <p
           role="status"
@@ -1032,6 +1038,6 @@ export function ChangeScreen({
           <p className="px-11 py-9 text-body text-ink-muted">読み込んでいます…</p>
         )}
       </div>
-    </div>
+    </main>
   )
 }

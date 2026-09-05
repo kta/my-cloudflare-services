@@ -102,6 +102,13 @@ function StartWork({ onStarted }: { onStarted: (org: string) => void }) {
       if (res.ok) {
         const rows: Store[] = await res.json()
         if (rows.length === 0) {
+          /*
+           * **持たせたトークンをここで捨てる。**残したまま断ると、その場では
+           * 入口に留まるのに、次に読み込み直したときは「もう業務が始まっている」
+           * と見なされて業務画面へ入れてしまう（実装不足の洗い出し foundation-04）。
+           * 断った以上、この端末はまだ何も始めていない状態へ戻す。
+           */
+          auth.logout()
           setError(
             'このコードのお店が見つかりませんでした。お店のコードをお確かめのうえ、もう一度お試しください。',
           )
@@ -404,6 +411,21 @@ function Workspace({
   function openChange(reservationId: string, intent: 'datetime' | 'slot' | 'cancel') {
     setChangeIntent(intent)
     navigate('search', reservationId)
+  }
+
+  /*
+   * お店を切り替える。**その店で見ていた条件は持ち越さない。**
+   * 台帳の日付・受付履歴の絞り込み・開いていたご予約は、いまの店の中でしか
+   * 意味を持たない。持ち越すと、切り替えた先で「先週の絞り込みのまま 0 件」や
+   * 「他店のご予約 id を開こうとして見つかりません」になる
+   * （実装不足の洗い出し foundation-08）。
+   */
+  function switchStore(storeId: string) {
+    setSelectedStoreId(storeId)
+    setLedgerDate(null)
+    setHistoryQuery(undefined)
+    setOpenReservation(null)
+    setCustomerQuery('')
   }
 
   /** 顧客台帳から「ご予約を取る」（AC-CUST-26）。渡さなければ、いつもの白紙の受付になる。 */
@@ -787,7 +809,7 @@ function Workspace({
             <Home
               stores={stores}
               currentStoreId={store?.id}
-              onSwitchStore={setSelectedStoreId}
+              onSwitchStore={switchStore}
               showSharedReservations={idle.isMasked}
               sharedTerminal={terminalSession?.mode === 'shared'}
               onSharedSnapshot={setLockSnapshot}

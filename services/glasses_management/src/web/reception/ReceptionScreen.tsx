@@ -331,7 +331,13 @@ export function ReceptionScreen({
 
   return (
     /* 結びつけのパネルは盤面に重なる（`position: absolute` の受け皿がここに要る）。 */
-    <div className="relative flex h-full min-h-0 flex-col">
+    /*
+      画面の器は `<main>` で、名前を持つ。持たなかったころ、この面には読み上げの
+      ランドマークが 1 つも無く、画面を切り替えても「いまどこにいるか」を耳で
+      確かめる手がかりが無かった（実装不足の洗い出し foundation-01 / T-011）。
+      名前は左の柱の行き先と同じ語にする（2 通りの呼び方を覚えさせない）。
+    */
+    <main aria-label="来店受付" className="relative flex h-full min-h-0 flex-col">
       {/*
        * 一度読めたあとに取り直せなくなった状態（通信断）。盤面は残したまま、
        * **いつ時点の姿か**と**いま書けないこと**を文字で言う。60 秒ごとの取り直しが
@@ -412,7 +418,7 @@ export function ReceptionScreen({
           onClose={() => setLinking(null)}
         />
       )}
-    </div>
+    </main>
   )
 }
 

@@ -172,6 +172,21 @@ describe('左サイドバー', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'トップ' })).toBeInTheDocument())
     expect(screen.getByRole('button', { name: 'トップ' })).toHaveAttribute('aria-current', 'page')
   })
+
+  it('トップ以外の面では柱に「トップ」を置かない（戻る道は上のバーの ⌂）', async () => {
+    /*
+     * 承認済みモックの柱は `HOME.png` にしかこの行を持たず、ほかの面
+     * （`LEDGER-STAFF.html` ほか）は「＋ 予約を取る」から始まる。全画面に置いていた
+     * ころ、行き先が 1 つ多く、押しても「いまいる場所」に見えない行が柱の頭に
+     * 居座っていた（実装不足の洗い出し foundation-03）。
+     */
+    await startWork()
+    const nav = await screen.findByRole('navigation', { name: '画面の切り替え' })
+    await userEvent.click(within(nav).getByRole('button', { name: '予約台帳' }))
+    expect(within(nav).queryByRole('button', { name: 'トップ' })).toBeNull()
+    // 戻る道は残っている。
+    expect(screen.getByRole('button', { name: 'トップへ' })).toBeInTheDocument()
+  })
 })
 
 describe('分析', () => {
@@ -459,7 +474,8 @@ describe('器の安定', () => {
     expect(screen.getByRole('button', { name: 'サイドバーをひらく' })).toBeInTheDocument()
     // 自分でひらいたら、その意思が残る。
     await userEvent.click(screen.getByRole('button', { name: 'サイドバーをひらく' }))
-    await userEvent.click(within(nav).getByRole('button', { name: 'トップ' }))
+    // トップへは上のバーの ⌂ で戻る（柱の「トップ」はトップにいるときだけ出る）。
+    await userEvent.click(screen.getByRole('button', { name: 'トップへ' }))
     await userEvent.click(within(nav).getByRole('button', { name: '予約台帳' }))
     expect(screen.getByRole('button', { name: 'サイドバーをたたむ' })).toBeInTheDocument()
   })

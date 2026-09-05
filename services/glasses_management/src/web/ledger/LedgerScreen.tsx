@@ -338,7 +338,13 @@ export function LedgerScreen({
       .filter((name) => name !== '') ?? []
 
   return (
-    <div className="flex h-full min-h-0 flex-1 flex-col">
+    /*
+      画面の器は `<main>` で、名前を持つ。持たなかったころ、この面には読み上げの
+      ランドマークが 1 つも無く、画面を切り替えても「いまどこにいるか」を耳で
+      確かめる手がかりが無かった（実装不足の洗い出し foundation-01 / T-011）。
+      名前は左の柱の行き先と同じ語にする（2 通りの呼び方を覚えさせない）。
+    */
+    <main aria-label="予約台帳" className="flex h-full min-h-0 flex-1 flex-col">
       {/* 上のバーへ差し込む口が無い器（テストや単体での確認）では、緑の帯を自分で出す。 */}
       {onBarCenter === undefined && (
         <div className="flex shrink-0 items-center bg-pine px-4 py-2 text-on-pine">
@@ -481,7 +487,7 @@ export function LedgerScreen({
           )}
         </div>
       )}
-    </div>
+    </main>
   )
 }
 
