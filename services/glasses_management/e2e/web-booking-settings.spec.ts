@@ -422,7 +422,7 @@ test('受付スタッフは、確認待ちで届いた Web 予約を確かめて
   // 届いたご予約は台帳に載り、担当が決まっていない（＝確認待ち）。
   const listed = await request.get('/api/staff/reservations', {
     ...(await authed(request)),
-    params: { storeId: GINZA, from: slot.date, to: slot.date, limit: '50' },
+    params: { storeId: GINZA, from: slot.date, to: slot.date, limit: '200' },
   })
   expect(listed.status()).toBe(200)
   const items = ((await listed.json()) as { items: { id: string; startsAt: string }[] }).items
@@ -501,7 +501,7 @@ test('台帳の「確認待ち」からその 1 件を確定すると、確認�
   const idsOn = async (): Promise<Map<string, string>> => {
     const res = await request.get('/api/staff/reservations', {
       ...(await authed(request)),
-      params: { storeId: GINZA, from: slot.date, to: slot.date, limit: '50' },
+      params: { storeId: GINZA, from: slot.date, to: slot.date, limit: '200' },
     })
     expect(res.status()).toBe(200)
     const items = ((await res.json()) as { items: { id: string; startsAt: string }[] }).items
