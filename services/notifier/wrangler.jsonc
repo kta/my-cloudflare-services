@@ -13,10 +13,10 @@
       "id": "0cd401c4a4fa4f1caaf8f8f99c6a5b87"
     }
   ],
-  // MAIL_FROM is not a secret, but an empty default keeps the Worker
-  // fail-closed until a verified sender is configured per environment.
+  // MAIL_FROM is not a secret. 環境ごとに書き、空なら notifier は fail close(502) する。
+  // production の送信元。Resend 側で bakumie.jp のドメイン認証(SPF/DKIM)が要る。
   "vars": {
-    "MAIL_FROM": ""
+    "MAIL_FROM": "noreply@bakumie.jp"
   },
   // staging(develop からの自動デプロイ先)。Worker 名は notifier-staging になる。
   // kv_namespaces は wrangler の非継承キーなので環境ごとに書き下ろす。
