@@ -14,7 +14,7 @@
  *
  * WebCrypto のみ(Workers ネイティブ / node 22 でも動く)。
  */
-import { AuthTokenPayload, type Role } from '@app/contracts'
+import { AuthTokenPayload, type Role, type TokenKind } from '@app/contracts'
 import { sign, verify } from 'hono/jwt'
 
 export const ACCESS_TTL_SECONDS = 15 * 60 // 15 分
@@ -25,6 +25,8 @@ export type AccessClaims = {
   org: string
   email: string
   role: Role
+  /** 省略時は 'user'。端末が名乗るトークンは必ず 'terminal' を明示する。 */
+  kind?: TokenKind
 }
 
 /** access JWT を発行(exp = now + ttl)。 */
@@ -34,7 +36,7 @@ export async function signAccessToken(
   ttlSeconds = ACCESS_TTL_SECONDS,
   now = Math.floor(Date.now() / 1000),
 ): Promise<string> {
-  return sign({ ...claims, exp: now + ttlSeconds }, secret, 'HS256')
+  return sign({ kind: 'user', ...claims, exp: now + ttlSeconds }, secret, 'HS256')
 }
 
 /**

@@ -5,13 +5,13 @@
  * (admin はローカル、他ドメインは同期コピー)ため resolver を注入する。
  * **plan はここで org 行から読む**(クレームに入れず毎リクエスト参照 = 即時反映)。
  */
-import type { Plan, Role } from '@app/contracts'
+import type { Plan, Role, TokenKind } from '@app/contracts'
 import type { Context, MiddlewareHandler } from 'hono'
 import { verifyAccessToken } from './jwt'
 
 /** tenantAuth が set する context 変数。アプリは Variables にこれを含める。 */
 export type AuthVariables = {
-  auth: { sub: string; org: string; email: string; role: Role }
+  auth: { sub: string; org: string; email: string; role: Role; kind: TokenKind }
   org?: { plan: Plan; isDisabled: boolean }
 }
 
@@ -42,6 +42,7 @@ export function tenantAuth(): MiddlewareHandler<Env> {
       org: payload.org,
       email: payload.email,
       role: payload.role,
+      kind: payload.kind,
     })
     await next()
   }
@@ -60,6 +61,22 @@ export function requireActiveOrg(resolve: OrgResolver): MiddlewareHandler<Env> {
     if (!row) return c.json({ error: 'not_synced' }, 503)
     if (row.isDisabled) return c.json({ error: 'org_disabled' }, 403)
     c.set('org', row)
+    await next()
+  }
+}
+
+/**
+ * 端末トークンを拒む。
+ *
+ * JWT_SECRET は全サービス共有で `aud`/`iss` が無いので、ドメインサービスが
+ * 発行した端末トークンは admin でも**署名としては正しい**。人の認証だけを扱う
+ * サービスは、ロールを見るまでもなくここで断る。tenantAuth の直後に置く。
+ */
+export function rejectTerminalToken(): MiddlewareHandler<Env> {
+  return async (c, next) => {
+    if (c.get('auth')?.kind === 'terminal') {
+      return c.json({ error: 'terminal_token_rejected' }, 403)
+    }
     await next()
   }
 }

@@ -8,8 +8,8 @@ import type {
   TerminalSession,
 } from '@app/contracts'
 import { auth, toJstDateString } from '@app/shared'
-import { Button, Field, focusRing, focusRingOnPine, Notice, TextInput } from '@app/ui'
-import { type FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
+import { focusRing, focusRingOnPine, Notice } from '@app/ui'
+import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { AlertScreen } from './alerts/AlertScreen'
 import { AnalyticsPane } from './analytics/AnalyticsPane'
 import { BookingScreen } from './booking/BookingScreen'
@@ -51,90 +51,58 @@ import { DeviceMode } from './start/DeviceMode'
  * 説明文は 2 つまで。空いた場所を埋めるために要素を足さない。
  */
 
-export function App({ now = () => new Date() }: { now?: () => Date }) {
+export function App({
+  now = () => new Date(),
+  initialSession = null,
+  onExit,
+}: {
+  now?: () => Date
+  /** `/s/:storeSlug` の入口が開いた端末セッション。渡されたら開始フローを飛ばす。 */
+  initialSession?: TerminalSession | null
+  /** 業務を終えたとき。入口の面を持つ側が受け取る。 */
+  onExit?: () => void
+}) {
   const [org, setOrg] = useState(() => auth.getOrganization())
   return org ? (
     <Workspace
       org={org}
       now={now}
+      initialSession={initialSession}
       onSignOut={() => {
         clearTerminalSession()
         auth.logout()
         setOrg(null)
+        onExit?.()
       }}
     />
   ) : (
-    <StartWork onStarted={setOrg} />
+    <NoSession />
   )
 }
 
-/** 業務開始。実運用では admin の認証に差し替わる（いまは dev グラント）。 */
-function StartWork({ onStarted }: { onStarted: (org: string) => void }) {
-  const [orgId, setOrgId] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-
-  async function onSubmit(e: FormEvent) {
-    e.preventDefault()
-    /*
-     * **入口でコードを畳んでから送る。**
-     * dev グラントは知らない組織にもトークンを出したうえで `organizations` に行を作るので、
-     * `EYE` のまま送ると「EYE」という空の組織が生まれ、店舗 0 件で
-     * 「このコードのお店が見つかりませんでした。」が出る —— seed 済みの `eye` は無事なのに。
-     * 打ち間違いが組織として永続化するのも同じ経路なので、送る前にここで揃える。
-     */
-    const code = orgId.trim().toLowerCase()
-    if (!code) {
-      setError('お店のコードを入れてください。')
-      return
-    }
-    setBusy(true)
-    setError(null)
-    try {
-      await auth.login(code)
-      /*
-       * **入るまえに、そのコードのお店が本当にあるかを確かめる。**
-       * dev グラントは知らない組織にもトークンを出すので、ここを見ないと
-       * 端末モードも置き場所も暗証番号も飛ばしてアプリ本体に入れてしまい、
-       * 上のバーに実在しない店の営業時間まで出る（UX 監査 SHELL-03）。
-       * 同期がまだ届いていない（503）のは「コードが違う」とは別なので、そのまま通す
-       * —— その先の面が「お店の情報がまだ届いていません」を出す。
-       */
-      /*
-       * 0 件は「コードが違う」と「まだ 1 店舗も登録していない新しい会社」の両方でありうる。
-       * ここで止めると新しい会社は永久に入れないので、通したうえでトップに
-       * 「最初のお店を登録する」を出す（014-store-provisioning / AC-PROV-01）。
-       * 登録できるのは会社の管理者だけで、その判定はサーバが持つ。
-       */
-      await auth.authFetch('/api/staff/stores')
-      onStarted(code)
-    } catch {
-      setError('業務を始められませんでした。コードを確かめて、もう一度お試しください。')
-    } finally {
-      setBusy(false)
-    }
-  }
-
+/**
+ * 業務を始めていない状態で `/` を直に開いたとき。
+ *
+ * かつてここに「お店のコード」を打つ画面があり、dev グラント
+ * （`POST /api/auth/token`）でトークンを取っていた。あれは credential を
+ * 検査せずに任意の組織のトークンを出す経路で本番に出せず、撤去した。
+ *
+ * いまの入口は `/s/:storeSlug` である。ここで打たせるものは無いので、
+ * どこを開けばよいかだけを言う。**行き止まりの画面を出さない**ために、
+ * 押しても何も起きないボタンや、意味のない入力欄は置かない。
+ */
+function NoSession() {
   return (
     <main className="grid min-h-dvh place-items-center bg-paper px-6">
-      <form onSubmit={onSubmit} className="flex w-full max-w-md flex-col gap-6">
-        <div>
-          <h1 className="text-title font-bold text-ink">EYE予約</h1>
-          <p className="mt-1 text-grid text-ink-muted">業務を始めます。</p>
-        </div>
-        <Field label="お店のコード" htmlFor="org" error={error}>
-          <TextInput
-            id="org"
-            value={orgId}
-            onChange={(e) => setOrgId(e.target.value)}
-            placeholder="例: eye"
-            autoFocus
-          />
-        </Field>
-        <Button type="submit" disabled={busy}>
-          {busy ? '開いています…' : '業務を始める'}
-        </Button>
-      </form>
+      <div className="flex w-full max-w-md flex-col gap-3">
+        <h1 className="text-title font-bold text-ink">EYE予約</h1>
+        <p className="text-body text-ink-muted">
+          この iPad の置き場所の住所を開いてください。ホーム画面のアイコンから開けます。
+        </p>
+        <p className="text-note text-ink-muted">
+          住所が分からないときは店長にお尋ねください（例: <code>/s/ginza</code>）。
+        </p>
+      </div>
     </main>
   )
 }
@@ -142,10 +110,12 @@ function StartWork({ onStarted }: { onStarted: (org: string) => void }) {
 function Workspace({
   org,
   now,
+  initialSession,
   onSignOut,
 }: {
   org: string
   now: () => Date
+  initialSession: TerminalSession | null
   onSignOut: () => void
 }) {
   const [current, setCurrent] = useState('home')
@@ -198,13 +168,15 @@ function Workspace({
   const [startPhase, setStartPhase] = useState<
     'loading' | 'device' | 'staff' | 'place' | 'pin' | 'ready'
   >('loading')
-  const [terminalMode, setTerminalMode] = useState<'personal' | 'shared' | null>(null)
+  const [terminalMode, setTerminalMode] = useState<'personal' | 'shared' | null>(
+    initialSession?.mode ?? null,
+  )
   const [terminals, setTerminals] = useState<Terminal[]>([])
   const [staffMembers, setStaffMembers] = useState<StaffMember[]>([])
   const [offIds, setOffIds] = useState<ReadonlySet<string>>(new Set())
   const [selectedTerminal, setSelectedTerminal] = useState<Terminal | null>(null)
   const [selectedStaff, setSelectedStaff] = useState<StaffMember | null>(null)
-  const [terminalSession, setTerminalSession] = useState<TerminalSession | null>(null)
+  const [terminalSession, setTerminalSession] = useState<TerminalSession | null>(initialSession)
   /*
    * いま業務が始まっているか。お店を読み直す effect から読むが、**依存には入れない** ——
    * 入れると業務を始めた瞬間に読み直しが走り、開いたばかりの面が作り直される。
@@ -615,7 +587,13 @@ function Workspace({
     }
     clearTerminalSession()
     setTerminalSession(null)
-    setStartPhase(terminalMode === 'personal' ? 'staff' : 'place')
+    /*
+     * **入口へ戻す。**
+     * 以前はここで端末の選び直し（staff / place）へ戻していたが、業務を始める入口は
+     * `/s/:storeSlug` へ移った。ここで戻すと、入口と同じことを聞く面が業務画面の中に
+     * もう 1 つある状態になる。資格情報も捨てて、置き場所を選ぶところからやり直す。
+     */
+    onSignOut()
   }
 
   if (startPhase === 'loading') {

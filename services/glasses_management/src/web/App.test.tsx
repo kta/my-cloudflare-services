@@ -1,3 +1,5 @@
+import type { TerminalSession } from '@app/contracts'
+import { auth } from '@app/shared'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -8,6 +10,9 @@ import { App } from './App'
  * 実際に描かれていることを固定する。見た目の寸法は e2e の突き合わせで見るので、
  * ここでは「何が読めて、何が押せるか」を見る。
  */
+
+/** 端末の fixture（`terminals` の 1 台目と揃える）。 */
+const TERMINAL_ID = '33333333-2222-4333-8444-555555555555'
 
 const stores = [
   {
@@ -89,19 +94,33 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-async function startWork() {
-  render(<App />)
-  await userEvent.type(screen.getByLabelText('お店のコード'), 'eye')
-  await userEvent.click(screen.getByRole('button', { name: '業務を始める' }))
+/*
+ * 業務を始めた状態を作る。
+ *
+ * 入口（`/s/:storeSlug`）は `SiteEntry` が持つので、ここでは**その先**だけを見る。
+ * 資格情報はメモリに置き、開いた端末セッションを渡す —— 渡さないと業務画面が
+ * 自分の開始フローをもう一度出す。
+ */
+function startedSession(mode: 'shared' | 'personal' = 'shared'): TerminalSession {
+  return {
+    id: 'session-1',
+    terminalId: TERMINAL_ID,
+    staffId: null,
+    mode,
+    startedAt: '2026-08-27T02:08:00.000Z',
+    expiresAt: '2026-08-27T14:00:00.000Z',
+    sessionToken: 'x'.repeat(64),
+  }
+}
+
+async function startWork(mode: 'shared' | 'personal' = 'shared') {
+  auth.setSession('test-token', 'eye')
+  sessionStorage.setItem('eye.active-terminal-id', TERMINAL_ID)
+  sessionStorage.setItem('eye.active-terminal-session', 'x'.repeat(64))
+  render(<App initialSession={startedSession(mode)} />)
 }
 
 describe('業務開始', () => {
-  it('コードが空のまま始めようとすると、何を入れるか教える', async () => {
-    render(<App />)
-    await userEvent.click(screen.getByRole('button', { name: '業務を始める' }))
-    expect(screen.getByText('お店のコードを入れてください。')).toBeInTheDocument()
-  })
-
   it('始めると店舗名が上のバーに出る', async () => {
     await startWork()
     await waitFor(() => expect(screen.getByText('EYE 銀座店')).toBeInTheDocument())
@@ -376,11 +395,13 @@ describe('お店が 0 件のコード', () => {
     )
   }
 
+  /** 店舗 0 件の会社で業務画面に入った状態。入口そのものは `SiteEntry` が持つ。 */
   async function enter(code = 'nonexistent'): Promise<void> {
     noStores()
-    render(<App />)
-    await userEvent.type(screen.getByLabelText('お店のコード'), code)
-    await userEvent.click(screen.getByRole('button', { name: '業務を始める' }))
+    auth.setSession('test-token', code)
+    sessionStorage.setItem('eye.active-terminal-id', TERMINAL_ID)
+    sessionStorage.setItem('eye.active-terminal-session', 'x'.repeat(64))
+    render(<App initialSession={startedSession()} />)
   }
 
   it('入口では止めず、最初のお店を登録する面を立てる', async () => {
@@ -414,7 +435,7 @@ describe('お店が 0 件のコード', () => {
     expect(screen.queryByText(/営業中/)).toBeNull()
   })
 
-  it('入れたコードを、いまいる場所と合い言葉の既定に使う', async () => {
+  it('いまいる会社を、お客様のページの住所と上の帯の既定に使う', async () => {
     await enter('eyex')
 
     await screen.findByLabelText('お店の名前')
@@ -424,88 +445,16 @@ describe('お店が 0 件のコード', () => {
   })
 })
 
-/*
- * お店のコードは大文字で入れても同じ店に入れる。
- * dev グラントは知らない組織にもトークンを出したうえで `organizations` に行を作るので、
- * `EYE` のまま送ると「EYE」という空の組織が生まれ、店舗 0 件で
- * 「このコードのお店が見つかりませんでした。」が出る（seed 済みの `eye` は無事なのに）。
- * **入口で畳んでから送る。**
- */
-describe('お店のコードの正規化', () => {
-  function captureFetch() {
-    const calls: { url: string; body: string }[] = []
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = String(input)
-        calls.push({ url, body: String(init?.body ?? '') })
-        if (url.includes('/api/auth/token')) {
-          return new Response(JSON.stringify({ token: 'test-token' }), {
-            status: 200,
-            headers: { 'content-type': 'application/json' },
-          })
-        }
-        if (url.includes('/business-hours')) {
-          return new Response(JSON.stringify({ rows: businessHours }), {
-            status: 200,
-            headers: { 'content-type': 'application/json' },
-          })
-        }
-        if (url.includes('/api/staff/alerts')) {
-          return new Response(
-            JSON.stringify({ items: [], counts: { all: 0, alert: 0, info: 0, done: 0 } }),
-            { status: 200, headers: { 'content-type': 'application/json' } },
-          )
-        }
-        if (url.includes('/api/staff/stores')) {
-          return new Response(JSON.stringify(stores), {
-            status: 200,
-            headers: { 'content-type': 'application/json' },
-          })
-        }
-        return new Response('not found', { status: 404 })
-      }),
-    )
-    return calls
-  }
-
-  it('大文字で入れても小文字にして送る', async () => {
-    const calls = captureFetch()
-    render(<App />)
-    await userEvent.type(screen.getByLabelText('お店のコード'), 'EYE')
-    await userEvent.click(screen.getByRole('button', { name: '業務を始める' }))
-    await waitFor(() => expect(calls.some((c) => c.url.includes('/api/auth/token'))).toBe(true))
-    const token = calls.find((c) => c.url.includes('/api/auth/token'))
-    expect(JSON.parse(token?.body ?? '{}')).toEqual({ organizationId: 'eye' })
-  })
-
-  it('前後に空白があっても大文字でも、そのまま業務に入れる', async () => {
-    captureFetch()
-    render(<App />)
-    await userEvent.type(screen.getByLabelText('お店のコード'), '  Eye  ')
-    await userEvent.click(screen.getByRole('button', { name: '業務を始める' }))
-    await waitFor(() => expect(screen.queryByLabelText('お店のコード')).toBeNull())
-    // 入口を抜けた先で、そのコードの店舗名が読める。
-    await waitFor(() => expect(screen.getByText('EYE 銀座店')).toBeInTheDocument())
-  })
-
-  it('畳んだコードを覚えるので、再読み込みしても同じ店に戻る', async () => {
-    captureFetch()
-    render(<App />)
-    await userEvent.type(screen.getByLabelText('お店のコード'), 'EYE')
-    await userEvent.click(screen.getByRole('button', { name: '業務を始める' }))
-    await waitFor(() => expect(sessionStorage.getItem('app.auth.org')).toBe('eye'))
-  })
-})
-
 describe('業務を終える', () => {
-  it('終えると業務開始の画面へ戻る', async () => {
-    await startWork()
+  // 「業務を終える」を上のバーに持つのは個人端末だけ（AC-FOUND-04）。
+  it('終えると入口の案内へ戻る', async () => {
+    await startWork('personal')
     await waitFor(() =>
       expect(screen.getByRole('button', { name: '業務を終える' })).toBeInTheDocument(),
     )
     await userEvent.click(screen.getByRole('button', { name: '業務を終える' }))
-    expect(screen.getByLabelText('お店のコード')).toBeInTheDocument()
+    // 入口は `/s/:storeSlug` なので、ここでは打たせるものが無い。どこを開くかだけ言う。
+    expect(screen.getByText(/この iPad の置き場所の住所を開いてください/)).toBeInTheDocument()
   })
 })
 

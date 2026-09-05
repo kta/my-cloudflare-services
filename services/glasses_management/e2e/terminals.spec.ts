@@ -1,5 +1,6 @@
 import { type APIRequestContext, expect, type Locator, type Page, test } from '@playwright/test'
-import { completeSeededTerminalStart } from './support/terminal'
+import { authHeadersFor } from './support/auth'
+import { completeSeededTerminalStart, SEEDED_SITE_PATH } from './support/terminal'
 
 const ORG = 'eye'
 const NOW = new Date('2026-08-27T02:08:00.000Z')
@@ -38,9 +39,7 @@ test.beforeEach(async ({ request }) => {
 
 async function login(page: Page): Promise<void> {
   await page.clock.install({ time: NOW })
-  await page.goto('/')
-  await page.getByLabel('お店のコード').fill(ORG)
-  await page.getByRole('button', { name: '業務を始める' }).click()
+  await page.goto(SEEDED_SITE_PATH)
 }
 
 async function startShared(page: Page): Promise<void> {
@@ -59,11 +58,8 @@ async function enterPin(page: Page, pin = '000000'): Promise<void> {
 }
 
 async function authHeaders(request: APIRequestContext): Promise<Record<string, string>> {
-  const response = await request.post('/api/auth/token', {
-    data: { organizationId: ORG, role: 'staff' },
-  })
-  const body = (await response.json()) as { token: string }
-  return { authorization: `Bearer ${body.token}` }
+  // 実際の入口と同じ道で取る（dev グラントは撤去した）。
+  return authHeadersFor(request)
 }
 
 /** seed が置く 3 件（対応が必要 1 / お知らせ 2）。AC-TERM-16 が数える母数である。 */
@@ -641,4 +637,75 @@ test('設定の端末面で一覧・使い方・自動ロック・PINを変更�
   await expect(page.getByLabel('使い方')).toBeVisible()
   await expect(page.getByLabel('自動で伏せるまで')).toBeVisible()
   await expect(page.getByLabel('新しい暗証番号')).toBeVisible()
+})
+
+/*
+ * 入口（`/s/:storeSlug`）は未認証で誰でも開ける。そこに出したものは、URL を
+ * 知っているだけの人に渡したのと同じになる。
+ */
+// @e2e-covers AC-TERM-23
+test('入口では店名と置き場所までしか読めない', async ({ page }) => {
+  await page.clock.install({ time: NOW })
+  await page.goto(SEEDED_SITE_PATH)
+  await expect(page.getByRole('heading', { name: 'EYE 銀座店' })).toBeVisible()
+  await expect(page.getByRole('button', { name: /銀座店 レジ横iPad/ })).toBeVisible()
+
+  const body = await page.locator('body').innerText()
+  // スタッフの氏名・勤務・在席・接続は、暗証番号を通すまで出さない。
+  for (const leak of ['高橋 健', '山田 大輔', '本日休み', '業務中', 'つながっていません']) {
+    expect(body).not.toContain(leak)
+  }
+  // 押しても入れない行き先を出さない（seed の端末はすべて暗証番号を持つ）。
+  await expect(page.getByRole('button', { name: /iPad/ })).toHaveCount(4)
+})
+
+/*
+ * 端末の資格情報は使うたびに作り直される。長く使われた端末でも、暗証番号だけで
+ * 業務が始まる —— パスワードを知っている人を呼ぶ必要はない。
+ */
+// @e2e-covers AC-TERM-24
+test('久しぶりの端末でも、暗証番号だけで業務が始まる', async ({ page, request }) => {
+  await page.clock.install({ time: NOW })
+  await page.goto(SEEDED_SITE_PATH)
+  await completeSeededTerminalStart(page, 'shared')
+  await expect(page.getByRole('navigation', { name: '画面の切り替え' })).toBeVisible()
+
+  // 端末の資格情報を捨てる（30 日を超えて放置された状態と同じ）。
+  await page.context().clearCookies()
+  await page.goto(SEEDED_SITE_PATH)
+  const body = await page.locator('body').innerText()
+  expect(body).not.toContain('パスワード')
+  expect(body).not.toContain('メールアドレス')
+  await completeSeededTerminalStart(page, 'shared')
+  await expect(page.getByRole('navigation', { name: '画面の切り替え' })).toBeVisible()
+
+  // 資格情報は使うたびに作り直され、同じものは 2 度使えない。
+  const site = await request.get('/api/public/sites/ginza')
+  expect(site.status()).toBe(200)
+})
+
+/*
+ * 暗証番号は公開の入口における唯一の資格情報なので、短い窓の「3 回で 30 秒」だけ
+ * では総当たりに耐えない。長い窓の合計失敗回数でさらに待たせる。
+ */
+// @e2e-covers AC-TERM-25
+test('間違え続けると待ち時間が伸び、正しい暗証番号でも始まらない', async ({ request }) => {
+  const site = await request.get('/api/public/sites/ginza')
+  const terminals = (await site.json()) as { terminals: { id: string; kind: string }[] }
+  const shared = terminals.terminals.find((terminal) => terminal.kind === 'shared')
+  expect(shared).toBeDefined()
+  const path = `/api/public/sites/ginza/terminals/${shared?.id}/sessions`
+
+  let locked: { retryAfterSeconds: number } | null = null
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const res = await request.post(path, { data: { pin: '999999' } })
+    if (res.status() === 429) locked = (await res.json()) as { retryAfterSeconds: number }
+  }
+  expect(locked).not.toBeNull()
+  // 3 回の 30 秒より長い（10 回で 15 分の段に乗っている）。
+  expect(locked?.retryAfterSeconds).toBeGreaterThan(30)
+
+  // ロック中は正しい暗証番号でも始まらない。
+  const correct = await request.post(path, { data: { pin: '000000' } })
+  expect(correct.status()).toBe(429)
 })

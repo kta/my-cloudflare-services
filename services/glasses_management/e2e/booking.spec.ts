@@ -1,6 +1,7 @@
 import type { APIRequestContext, Locator, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
-import { completeSeededTerminalStart } from './support/terminal'
+import { authHeadersFor } from './support/auth'
+import { completeSeededTerminalStart, SEEDED_SITE_PATH } from './support/terminal'
 
 /**
  * 電話・店頭からの予約受付（006-booking-flow）の受け入れ基準を、実ブラウザと実 Worker で
@@ -84,9 +85,7 @@ const at = (hhmm: string): string =>
 
 async function startWork(page: Page): Promise<void> {
   await page.clock.setFixedTime(new Date(NOW))
-  await page.goto('/')
-  await page.getByLabel('お店のコード').fill(ORG)
-  await page.getByRole('button', { name: '業務を始める' }).click()
+  await page.goto(SEEDED_SITE_PATH)
   await completeSeededTerminalStart(page)
   await expect(page.locator('header').first()).toContainText('EYE 銀座店')
 }
@@ -231,12 +230,8 @@ async function walkToConfirm(page: Page, hhmm: string, purpose: string): Promise
 /* --- API を直に叩く（前提づくりと検算） ---------------------------------- */
 
 async function authed(request: APIRequestContext): Promise<{ headers: Record<string, string> }> {
-  const res = await request.post('/api/auth/token', {
-    data: { organizationId: ORG, role: 'staff' },
-  })
-  expect(res.status()).toBe(200)
-  const { token } = (await res.json()) as { token: string }
-  return { headers: { authorization: `Bearer ${token}` } }
+  // 実際の入口と同じ道で取る（dev グラントは撤去した）。
+  return { headers: await authHeadersFor(request) }
 }
 
 type CreateInput = {

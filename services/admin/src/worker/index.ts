@@ -21,6 +21,7 @@ import {
   internalAuth,
   internalAuthFor,
   REFRESH_TTL_SECONDS,
+  rejectTerminalToken,
   requireRole,
   signAccessToken,
   stagingGate,
@@ -202,6 +203,22 @@ app.use(
     Bindings: Bindings
     Variables: AuthVariables
   }>,
+)
+
+/*
+ * 端末トークンを最初に断る。
+ *
+ * `JWT_SECRET` は admin と各ドメインサービスで共有され `aud`/`iss` が無いので、
+ * glasses_management が発行する端末トークンは admin でも署名としては正しい。
+ * admin は人の認証だけを扱うため、ロールを見るまでもなくここで落とす。
+ *
+ * **下の運営限定ゲートより前に置く。** あちらは `/api/users`・`/api/me/*`・
+ * `/api/organizations/:id/stores` を except で外しており、そこが素通りすると
+ * 店頭の iPad から社員名簿が引ける。この門はその 3 つも含めて掛かる。
+ */
+app.use(
+  '/api/*',
+  except(['/api/health', '/api/auth/*', '/api/internal/*'], tenantAuth(), rejectTerminalToken()),
 )
 
 // Default-deny: EVERY /api/* route requires an operator-org admin JWT unless

@@ -47,7 +47,6 @@ import {
   EquipmentPatch,
   Hold,
   HoldInput,
-  IssueTokenRequest,
   LedgerQuery,
   LedgerView,
   LoginRequest,
@@ -73,6 +72,7 @@ import {
   PublicStorePurpose,
   PublicStoreSearchQuery,
   PublicStoreSummary,
+  PublicTerminalSessionStart,
   PurposeListQuery,
   PurposeOrderInput,
   PurposeRequirementsInput,
@@ -156,6 +156,7 @@ import {
   WebPublicationApplyResult,
 } from '@app/contracts'
 import {
+  ACCESS_TTL_SECONDS,
   type AuthVariables,
   hashStretched,
   internalAuth,
@@ -256,6 +257,13 @@ import {
   searchFilter,
   toCustomerSummary,
 } from './domain/customers'
+import {
+  DEVICE_TTL_SECONDS,
+  deviceExpiresAt,
+  hashDeviceToken,
+  isDeviceUsable,
+  newDeviceCredential,
+} from './domain/device-credential'
 import { deleteHold, HOLD_RENEW_MAX, listHoldOccupancies, putHold } from './domain/holds'
 import { buildLedgerView } from './domain/ledger'
 import {
@@ -330,7 +338,15 @@ import {
   type WebWindow,
   webBookingCodeMonth,
 } from './domain/web-booking'
+import {
+  DEVICE_COOKIE,
+  DEVICE_COOKIE_PATH,
+  readPublicSite,
+  resolveSiteTerminal,
+  TERMINAL_TOKEN_EMAIL,
+} from './public-site'
 import { buildNewStore } from './store-provisioning'
+import { startTerminalSession } from './terminal-session-start'
 
 // 明示的に import している（ambient global を使わない）ので、export した AppType は
 // それ自体で完結し、web 側が Workers の型なしに読める。SPA も同じ Worker が静的資産
@@ -356,8 +372,6 @@ export type Bindings = {
    * `stores.slug` と繋いで組み立てるためだけに使う。**この値を表に持たない。**
    */
   PUBLIC_WEB_ORIGIN?: string
-  /** credential 無しの dev トークングラントを開ける。本番では設定しない。 */
-  AUTH_DEV_GRANT?: string
   /** integration test の基準時刻。本番では設定せず、実時刻を使う。 */
   TEST_NOW?: string
   /** staging だけに設定される。未設定なら stagingGate は何もしない(production)。 */
@@ -1237,9 +1251,6 @@ function toReport(input: {
  * ルート
  * ─────────────────────────────────────────────────────────────────────────── */
 
-// dev 専用のトークン発行（RPC のルートには載せない）。credential を検査せずに
-// 任意の organizationId のアクセス JWT を作る。AUTH_DEV_GRANT === 'true' の
-// ときだけ開く（fail close）。実運用では admin の認証へ差し替える。
 /* ───────────────────────────────────────────────────────────────────────────
  * 顧客台帳（P4）が共有する道具
  *
@@ -1822,29 +1833,14 @@ async function oneNote(
   return note ?? null
 }
 
-app.post('/api/auth/token', zValidator('json', IssueTokenRequest), async (c) => {
-  if (c.env.AUTH_DEV_GRANT !== 'true') return c.json({ error: 'not_found' }, 404)
-  const { organizationId, role, email } = c.req.valid('json')
-  // dev の便宜: 同期行を作っておかないと業務 API が 503 になる。
-  // 実際の経路では admin が service binding で押し込む。
-  const db = drizzle(c.env.DB)
-  await db
-    .insert(organizations)
-    .values({
-      id: organizationId,
-      name: organizationId,
-      plan: 'free',
-      isDisabled: '0',
-      createdAt: new Date().toISOString(),
-      revision: '0',
-    })
-    .onConflictDoNothing({ target: organizations.id })
-  const token = await signAccessToken(
-    { sub: `dev:${organizationId}`, org: organizationId, email, role },
-    c.env.JWT_SECRET,
-  )
-  return c.json({ token })
-})
+/*
+ * dev グラント（`POST /api/auth/token`）は撤去した。
+ *
+ * あれは「知らない組織にもトークンを出したうえで組織行を作る」経路で、本番では
+ * 決して有効にできなかった。つまり業務開始が本番に出せない抜け道の上に立っていた。
+ * いまは `/s/:storeSlug` で置き場所を選んで暗証番号を入れる経路が正本である
+ * （`docs/superpowers/specs/2026-09-05-terminal-pin-entry-design.md`）。
+ */
 
 const REFRESH_COOKIE = 'refresh_token'
 
@@ -4113,7 +4109,7 @@ const routes = app
       params.push(query.kind)
     }
     const rows = await c.env.DB.prepare(
-      'SELECT id, store_id AS storeId, name, kind, place_note AS placeNote, ' +
+      'SELECT id, store_id AS storeId, name, kind, staff_id AS staffId, place_note AS placeNote, ' +
         'device_label AS deviceLabel, pin_hash AS pinHash, auto_lock_seconds AS autoLockSeconds, ' +
         'last_seen_at AS lastSeenAt, is_active AS isActive, version, created_at AS createdAt ' +
         `FROM terminals WHERE ${clauses.join(' AND ')} ORDER BY created_at ASC`,
@@ -4124,6 +4120,7 @@ const routes = app
         storeId: string
         name: string
         kind: 'shared' | 'personal'
+        staffId: string | null
         placeNote: string | null
         deviceLabel: string | null
         pinHash: string | null
@@ -4141,6 +4138,7 @@ const routes = app
           storeId: row.storeId,
           name: row.name,
           kind: row.kind,
+          staffId: row.staffId,
           placeNote: row.placeNote ?? '',
           deviceLabel: row.deviceLabel ?? '',
           autoLockSeconds: row.autoLockSeconds,
@@ -4160,167 +4158,20 @@ const routes = app
     zValidator('json', TerminalSessionStart),
     async (c) => {
       const { org } = c.get('auth')
-      const terminalId = c.req.param('terminalId')
       const input = c.req.valid('json')
-      const terminal = await c.env.DB.prepare(
-        "SELECT id, store_id AS storeId, pin_hash AS pinHash, auto_lock_seconds AS autoLockSeconds FROM terminals WHERE organization_id = ? AND id = ? AND is_active = '1'",
-      )
-        .bind(org, terminalId)
-        .first<{ id: string; storeId: string; pinHash: string | null; autoLockSeconds: number }>()
-      if (terminal === null) return c.json({ error: 'not_found' }, 404)
-
-      const staffId = input.mode === 'personal' ? input.staffId : null
-      let storedHash = terminal.pinHash
-      if (staffId !== null) {
-        const member = await c.env.DB.prepare(
-          "SELECT pin_hash AS pinHash FROM staff WHERE organization_id = ? AND store_id = ? AND id = ? AND is_active = '1'",
-        )
-          .bind(org, terminal.storeId, staffId)
-          .first<{ pinHash: string | null }>()
-        if (member === null) return c.json({ error: 'not_found' }, 404)
-        storedHash = member.pinHash
-      }
-
-      const failureKey = pinFailureKey(org, terminalId, staffId)
-      const now = new Date(c.env.TEST_NOW ?? Date.now())
-      const nowIso = now.toISOString()
-      const rawFailure = await c.env.SHORT_LIVED.get(failureKey)
-      const failure = parsePinFailure(rawFailure)
-      // Workers KV のTTL下限は60秒。値の時刻で30秒境界を守り、物理削除は60秒に任せる。
-      const previous =
-        failure !== null && now.getTime() - Date.parse(failure.failedAt) <= 30_000
-          ? failure.attempts
-          : 0
-      if (
-        failure !== null &&
-        failure.attempts >= 3 &&
-        isPinLocked(new Date(failure.failedAt), now)
-      ) {
-        const elapsedSeconds = Math.floor((now.getTime() - Date.parse(failure.failedAt)) / 1000)
-        return c.json(
-          {
-            error: 'pin_locked',
-            retryAfterSeconds: Math.max(1, 30 - elapsedSeconds),
-            remainingAttempts: 0,
-          },
-          429,
-        )
-      }
-
-      const stretched = await stretchPin(
-        input.pin,
-        org,
-        staffId ?? terminalId,
-        c.env.TEST_NOW === undefined ? undefined : 1,
-      )
-      const verified =
-        storedHash !== null && (await verifyStretched(stretched, c.env.AUTH_PEPPER, storedHash))
-      if (!verified) {
-        const state = nextFailureState(previous)
-        await c.env.SHORT_LIVED.put(
-          failureKey,
-          JSON.stringify({ attempts: state.attempts, failedAt: nowIso }),
-          { expirationTtl: 60 },
-        )
-        await c.env.DB.prepare(
-          'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
-            "VALUES (?,?,?,'terminal',?,?, 'terminal.pin.failed','terminals',?,NULL,?,?,?)",
-        )
-          .bind(
-            crypto.randomUUID(),
-            org,
-            terminal.storeId,
-            terminalId,
-            terminalId,
-            terminalId,
-            JSON.stringify({ staffId, remainingAttempts: state.remainingAttempts }),
-            crypto.randomUUID(),
-            nowIso,
-          )
-          .run()
-        if (state.locked) {
-          return c.json({ error: 'pin_locked', retryAfterSeconds: 30, remainingAttempts: 0 }, 429)
-        }
-        return c.json({ error: 'pin_invalid', remainingAttempts: state.remainingAttempts }, 401)
-      }
-
-      await c.env.SHORT_LIVED.delete(failureKey)
-      const sessionId = crypto.randomUUID()
-      const expiresAt =
-        input.mode === 'shared'
-          ? sharedExpiresAtFrom(now)
-          : expiresAtFrom(now, terminal.autoLockSeconds)
-      const correlationId = crypto.randomUUID()
-      const credential = await sessionCredential()
-      // stale read を置かず、既存行の終了監査→全 revoke→新規行→開始監査を1 batchにする。
-      const result = await c.env.DB.batch([
-        c.env.DB.prepare(
-          'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
-            "SELECT id, organization_id, store_id, ?, ?, terminal_id, 'terminal.session.ended', 'terminals', terminal_id, NULL, json_object('reason','taken_over','sessionId',id), ?, ? FROM terminal_sessions " +
-            'WHERE organization_id = ? AND terminal_id = ? AND revoked_at IS NULL',
-        ).bind(
-          input.mode === 'personal' ? 'staff' : 'terminal',
-          staffId ?? terminalId,
-          correlationId,
-          nowIso,
-          org,
-          terminalId,
-        ),
-        c.env.DB.prepare(
-          'UPDATE terminal_sessions SET revoked_at = ? WHERE organization_id = ? AND terminal_id = ? AND revoked_at IS NULL',
-        ).bind(nowIso, org, terminalId),
-        c.env.DB.prepare(
-          'INSERT INTO terminal_sessions (id, organization_id, store_id, terminal_id, staff_id, mode, credential_hash, started_at, expires_at, revoked_at, created_at) ' +
-            "SELECT ?,?,?,?,?,?,?,?,?,NULL,? WHERE EXISTS (SELECT 1 FROM terminals WHERE organization_id = ? AND id = ? AND is_active = '1')",
-        ).bind(
-          sessionId,
-          org,
-          terminal.storeId,
-          terminalId,
-          staffId,
-          input.mode,
-          credential.hash,
-          nowIso,
-          expiresAt,
-          nowIso,
-          org,
-          terminalId,
-        ),
-        c.env.DB.prepare(
-          'INSERT INTO audit_events (id, organization_id, store_id, actor_type, actor_id, terminal_id, action, target_type, target_id, before_json, after_json, correlation_id, occurred_at) ' +
-            "SELECT ?,?,?,?,?,?,?,'terminals',?,NULL,?,?,? WHERE EXISTS (SELECT 1 FROM terminal_sessions WHERE organization_id = ? AND id = ? AND credential_hash = ? AND revoked_at IS NULL)",
-        ).bind(
-          crypto.randomUUID(),
-          org,
-          terminal.storeId,
-          input.mode === 'personal' ? 'staff' : 'terminal',
-          staffId ?? terminalId,
-          terminalId,
-          'terminal.session.started',
-          terminalId,
-          JSON.stringify({ mode: input.mode, sessionId }),
-          correlationId,
-          nowIso,
-          org,
-          sessionId,
-          credential.hash,
-        ),
-        c.env.DB.prepare(
-          "UPDATE terminals SET last_seen_at = ? WHERE organization_id = ? AND id = ? AND is_active = '1'",
-        ).bind(nowIso, org, terminalId),
-      ])
-      if ((result[2]?.meta.changes ?? 0) === 0) return c.json({ error: 'not_found' }, 404)
-      return c.json(
-        TerminalSession.parse({
-          id: sessionId,
-          terminalId,
-          staffId,
+      const result = await startTerminalSession(
+        c.env,
+        {
+          organizationId: org,
+          terminalId: c.req.param('terminalId'),
+          pin: input.pin,
+          staffId: input.mode === 'personal' ? input.staffId : null,
           mode: input.mode,
-          startedAt: nowIso,
-          expiresAt,
-          sessionToken: credential.token,
-        }),
+        },
+        new Date(c.env.TEST_NOW ?? Date.now()),
       )
+      if (!result.ok) return c.json(result.body, result.status)
+      return c.json(TerminalSession.parse(result.session))
     },
   )
 
@@ -10103,6 +9954,181 @@ const routes = app
       return c.json(detail)
     },
   )
+
+  /* --- 業務端末の入口（未認証） -------------------------------------------- */
+
+  /**
+   * `/s/:storeSlug` が読む、店舗と置き場所。
+   *
+   * 人が打つのは暗証番号だけなので、「どの会社のどの端末か」は URL が運ぶ。
+   * `stores.slug` が全組織横断で一意なのは、まさに未認証で組織を引くためである。
+   *
+   * 出すのは店名と置き場所の名前まで。スタッフの氏名・勤務・在席は出さない。
+   */
+  .get('/api/public/sites/:storeSlug', async (c) => {
+    const site = await readPublicSite(c.env.DB, c.req.param('storeSlug'))
+    if (site === null) return c.json({ error: 'not_found' }, 404)
+    return c.json(site)
+  })
+
+  /**
+   * 置き場所を選んで暗証番号を入れる、業務開始の入口。
+   *
+   * 受けるのは暗証番号だけ。`mode` と `staffId` は**クライアントに名乗らせない**
+   * —— 名乗れるなら、端末を選んだうえで相手だけ差し替えて他人の暗証番号を
+   * 総当たりできてしまう。サーバが `terminals.kind` と `terminals.staff_id` から引く。
+   *
+   * 成功したら 3 つを返す。業務トークン(15 分・メモリ保持)、端末の資格情報
+   * (HttpOnly Cookie・30 日)、端末セッション(既存の x-terminal-session)。
+   * トークンは `kind: 'terminal'` と名乗る —— JWT_SECRET は全サービス共有で
+   * `aud` が無いので、admin 側がこれを見て拒む。
+   */
+  .post(
+    '/api/public/sites/:storeSlug/terminals/:terminalId/sessions',
+    zValidator('json', PublicTerminalSessionStart),
+    async (c) => {
+      const now = new Date(c.env.TEST_NOW ?? Date.now())
+      const terminalId = c.req.param('terminalId')
+      const terminal = await resolveSiteTerminal(c.env.DB, c.req.param('storeSlug'), terminalId)
+      // 存在しない slug・別テナントの端末・無効な端末・割り当て待ちの個人端末を、
+      // すべて同じ 404 に畳む。区別して返すと総当たりで存在が読み取れる。
+      if (terminal === null) return c.json({ error: 'not_found' }, 404)
+      if (terminal.kind === 'personal' && terminal.staffId === null) {
+        return c.json({ error: 'not_found' }, 404)
+      }
+
+      const result = await startTerminalSession(
+        c.env,
+        {
+          organizationId: terminal.organizationId,
+          terminalId,
+          pin: c.req.valid('json').pin,
+          staffId: terminal.kind === 'personal' ? terminal.staffId : null,
+          mode: terminal.kind,
+        },
+        now,
+      )
+      if (!result.ok) return c.json(result.body, result.status)
+
+      const credential = await newDeviceCredential()
+      await c.env.DB.prepare(
+        'INSERT INTO terminal_devices (id, organization_id, terminal_id, credential_hash, expires_at, last_used_at, revoked_at, created_at) VALUES (?,?,?,?,?,NULL,NULL,?)',
+      )
+        .bind(
+          crypto.randomUUID(),
+          terminal.organizationId,
+          terminalId,
+          credential.hash,
+          deviceExpiresAt(now),
+          now.toISOString(),
+        )
+        .run()
+
+      setCookie(c, DEVICE_COOKIE, credential.token, {
+        httpOnly: true,
+        secure: true,
+        sameSite: 'Strict',
+        path: DEVICE_COOKIE_PATH,
+        maxAge: DEVICE_TTL_SECONDS,
+      })
+
+      const token = await signAccessToken(
+        {
+          sub: result.session.staffId ?? `terminal:${terminalId}`,
+          org: terminal.organizationId,
+          email: TERMINAL_TOKEN_EMAIL,
+          role: 'staff',
+          kind: 'terminal',
+        },
+        c.env.JWT_SECRET,
+        ACCESS_TTL_SECONDS,
+        Math.floor(now.getTime() / 1000),
+      )
+      return c.json({ token, session: TerminalSession.parse(result.session) })
+    },
+  )
+
+  /**
+   * 端末の資格情報で業務トークンを更新する。
+   *
+   * これが無いと 15 分ごとに暗証番号を打ち直すことになる。逆に切れ方が甘いと、
+   * 30 日以上放置された端末がそのまま開く。**パスワードは決して求めない** ——
+   * 切れたときは `/s/:slug` の置き場所選択と暗証番号へ戻す。
+   *
+   * 使うたびにローテーションする。古い行は消さずに失効させるので、盗まれた
+   * Cookie の再利用があとから追える。
+   */
+  .post('/api/public/sites/:storeSlug/terminals/:terminalId/sessions/refresh', async (c) => {
+    const now = new Date(c.env.TEST_NOW ?? Date.now())
+    const presented = getCookie(c, DEVICE_COOKIE)
+    if (presented === undefined) return c.json({ error: 'unauthorized' }, 401)
+
+    const terminalId = c.req.param('terminalId')
+    const terminal = await resolveSiteTerminal(c.env.DB, c.req.param('storeSlug'), terminalId)
+    if (terminal === null) return c.json({ error: 'not_found' }, 404)
+
+    const hash = await hashDeviceToken(presented)
+    const row = await c.env.DB.prepare(
+      'SELECT id, organization_id AS organizationId, terminal_id AS terminalId, expires_at AS expiresAt, revoked_at AS revokedAt FROM terminal_devices WHERE credential_hash = ?',
+    )
+      .bind(hash)
+      .first<{
+        id: string
+        organizationId: string
+        terminalId: string
+        expiresAt: string
+        revokedAt: string | null
+      }>()
+    // 期限切れ・失効済み・別端末・別テナントの Cookie を、同じ 401 に畳む。
+    if (
+      row === null ||
+      row.terminalId !== terminalId ||
+      row.organizationId !== terminal.organizationId ||
+      !isDeviceUsable(row, now)
+    ) {
+      return c.json({ error: 'unauthorized' }, 401)
+    }
+
+    const next = await newDeviceCredential()
+    const nowIso = now.toISOString()
+    await c.env.DB.batch([
+      c.env.DB.prepare(
+        'UPDATE terminal_devices SET revoked_at = ?, last_used_at = ? WHERE id = ?',
+      ).bind(nowIso, nowIso, row.id),
+      c.env.DB.prepare(
+        'INSERT INTO terminal_devices (id, organization_id, terminal_id, credential_hash, expires_at, last_used_at, revoked_at, created_at) VALUES (?,?,?,?,?,NULL,NULL,?)',
+      ).bind(
+        crypto.randomUUID(),
+        row.organizationId,
+        row.terminalId,
+        next.hash,
+        deviceExpiresAt(now),
+        nowIso,
+      ),
+    ])
+
+    setCookie(c, DEVICE_COOKIE, next.token, {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'Strict',
+      path: DEVICE_COOKIE_PATH,
+      maxAge: DEVICE_TTL_SECONDS,
+    })
+
+    const token = await signAccessToken(
+      {
+        sub: `terminal:${row.terminalId}`,
+        org: row.organizationId,
+        email: TERMINAL_TOKEN_EMAIL,
+        role: 'staff',
+        kind: 'terminal',
+      },
+      c.env.JWT_SECRET,
+      ACCESS_TTL_SECONDS,
+      Math.floor(now.getTime() / 1000),
+    )
+    return c.json({ token })
+  })
 
   /* --- 公開面（P8。未認証。10 本） ---------------------------------------- */
 

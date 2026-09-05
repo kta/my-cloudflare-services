@@ -91,7 +91,8 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # e2e は dev グラント(AUTH_DEV_GRANT)等の dev 値に依存する。.dev.vars は
+      # e2e は JWT_SECRET / AUTH_PEPPER 等の dev 値に依存する(seed の暗証番号を
+      # 照合し、テナント分離の面では e2e 自身がトークンを署名する)。.dev.vars は
       # gitignore なので、CI では example からコピーして用意する(make dev-vars)。
       - run: make dev-vars
       - run: pnpm --filter ${{ matrix.pkg }} exec playwright install --with-deps chromium
@@ -202,10 +203,6 @@ jobs:
             AUTH_PEPPER:process.env.WORKER_AUTH_PEPPER,
             ADMIN_DOMAIN_AUTH_KEY:process.env.WORKER_DOMAIN_AUTH_KEY};
             if(process.env.WORKER_STAGING_ACCESS_TOKEN)s.STAGING_ACCESS_TOKEN=process.env.WORKER_STAGING_ACCESS_TOKEN;
-            // staging の業務開始は今も dev グラント(/api/auth/token)を通る。
-            // ゲートの裏なので許容するが、production には絶対に入れない。
-            // 恒久対応は admin 認証への差し替え(spec 待ち)。
-            if(process.env.DEPLOY_ENVIRONMENT==="staging")s.AUTH_DEV_GRANT="true";
             process.stdout.write(JSON.stringify(s))' \
             | pnpm --filter @app/glasses_management exec wrangler secret bulk ${CLOUDFLARE_ENV:+--env $CLOUDFLARE_ENV}
 

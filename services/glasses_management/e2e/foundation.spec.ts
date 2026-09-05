@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { completeSeededTerminalStart } from './support/terminal'
+import { completeSeededTerminalStart, SEEDED_SITE_PATH } from './support/terminal'
 
 /**
  * 土台の受け入れ基準（AC-FOUND-01..05）を、実際のブラウザと実 Worker で確かめる。
@@ -8,19 +8,17 @@ import { completeSeededTerminalStart } from './support/terminal'
 
 const ORG = 'eye'
 
-/** お店のコードから、共有端末で業務画面まで入る。 */
+/** 置き場所の住所から、共有端末で業務画面まで入る。 */
 async function startWork(
   page: import('@playwright/test').Page,
   mode: 'shared' | 'personal' = 'shared',
 ) {
-  await page.goto('/')
-  await page.getByLabel('お店のコード').fill(ORG)
-  await page.getByRole('button', { name: '業務を始める' }).click()
+  await page.goto(SEEDED_SITE_PATH)
   await completeSeededTerminalStart(page, mode)
 }
 
 // @e2e-covers AC-FOUND-01
-test('お店のコードを入れて業務を始めると、上のバーに店名と営業状態が出る', async ({ page }) => {
+test('置き場所と暗証番号で業務を始めると、上のバーに店名と営業状態が出る', async ({ page }) => {
   await startWork(page)
   const bar = page.locator('header').first()
   await expect(bar).toContainText('EYE 銀座店')
@@ -58,9 +56,7 @@ test('サイドバーはつまみで細い柱にたため、もう一度押す�
 // @e2e-covers AC-FOUND-03
 test('店舗が見つからないコードでは、器へ入れず登録の面を立てる', async ({ page }) => {
   const code = 'e2e-foundation-unknown'
-  await page.goto('/')
-  await page.getByLabel('お店のコード').fill(code)
-  await page.getByRole('button', { name: '業務を始める' }).click()
+  await page.goto(SEEDED_SITE_PATH)
 
   await expect(
     page.getByRole('heading', { name: '最初のお店を登録します', level: 1 }),

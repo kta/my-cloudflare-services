@@ -151,11 +151,30 @@ const terminals = [
     placeNote: '検査室 1　測定機の脇',
     deviceLabel: 'EYE-iPad-07',
   },
+  /*
+   * 個人端末は 1 人に紐づく（`terminals.staff_id`）。未認証の入口では
+   * スタッフ一覧を出せないので、「端末を選ぶ → その人の PIN」で暗証番号を
+   * 1 回に収める。照合するのは佐藤 美咲の `staff.pin_hash` なので、
+   * この行は自分の pin_hash を持たない。
+   */
+  {
+    id: uid('c0100000', 3),
+    name: '佐藤 美咲の iPad',
+    kind: 'personal',
+    staffId: uid('c0010000', 0),
+    placeNote: '本人が持ち歩く',
+    deviceLabel: 'EYE-iPad-11',
+  },
 ]
 const terminalSeedRows = await Promise.all(
   terminals.map(async (terminal) => ({
     ...terminal,
-    pinHash: await hashStretched(await stretchPin('000000', ORG, terminal.id), PEPPER),
+    staffId: terminal.staffId ?? null,
+    // 個人端末は持ち主の staff.pin_hash で照合するので、端末側は PIN を持たない。
+    pinHash:
+      terminal.kind === 'personal'
+        ? null
+        : await hashStretched(await stretchPin('000000', ORG, terminal.id), PEPPER),
   })),
 )
 
@@ -963,6 +982,11 @@ const memberships = [
 /* --- 分析（P9 E2E 固定集計） ---------------------------------------------- */
 const ANALYTICS_OTHER_ORG = 'org-analytics-other-seed'
 const ANALYTICS_OTHER_STORE = '44444444-4444-4444-8444-444444444444'
+const ANALYTICS_OTHER_TERMINAL = '44444444-4444-4444-8444-444444444445'
+const analyticsOtherPinHash = await hashStretched(
+  await stretchPin('000000', ANALYTICS_OTHER_ORG, ANALYTICS_OTHER_TERMINAL),
+  PEPPER,
+)
 const analyticsRows = []
 const analyticsRow = (storeId, date, metric, dimension, key, label, value) => {
   analyticsRows.push({ storeId, date, metric, dimension, key, label, value })
@@ -1135,6 +1159,9 @@ const lines = [
   `INSERT OR IGNORE INTO organizations (id, name, plan, is_disabled, created_at, revision) VALUES (${q(ORG)}, 'EYE', 'contracted', '0', ${q(NOW)}, '1');`,
   `INSERT OR IGNORE INTO organizations (id, name, plan, is_disabled, created_at, revision) VALUES (${q(ANALYTICS_OTHER_ORG)}, '別組織', 'contracted', '0', ${q(NOW)}, '1');`,
   `INSERT OR IGNORE INTO stores (id, organization_id, name, slug, phone, address, access_note, is_active, created_at) VALUES (${q(ANALYTICS_OTHER_STORE)}, ${q(ANALYTICS_OTHER_ORG)}, '別組織店', 'analytics-other', '', '', '', '1', ${q(NOW)});`,
+  // 別組織にも端末を 1 台置く。入口(/s/:storeSlug)は店舗と端末を前提にするので、
+  // これが無いと「別の会社は自分のデータしか見えない」を実際の導線で確かめられない。
+  `INSERT OR IGNORE INTO terminals (id, organization_id, store_id, name, kind, staff_id, place_note, device_label, pin_hash, auto_lock_seconds, last_seen_at, is_active, version, created_at) VALUES (${q(ANALYTICS_OTHER_TERMINAL)}, ${q(ANALYTICS_OTHER_ORG)}, ${q(ANALYTICS_OTHER_STORE)}, '別組織店 レジ横iPad', 'shared', NULL, 'レジの右側', 'EYE-iPad-90', ${q(analyticsOtherPinHash)}, 120, NULL, '1', 1, ${q(NOW)});`,
   ...stores.map(
     (s) =>
       `INSERT OR IGNORE INTO stores (id, organization_id, name, slug, phone, address, access_note, is_active, created_at) VALUES (${q(s.id)}, ${q(ORG)}, ${q(s.name)}, ${q(s.slug)}, ${q(s.phone)}, ${q(s.address)}, ${q(s.accessNote)}, '1', ${q(NOW)});`,
@@ -1143,7 +1170,7 @@ const lines = [
   // ここには状態列や平文PINを置かない。
   ...terminalSeedRows.map(
     (terminal) =>
-      `INSERT OR IGNORE INTO terminals (id, organization_id, store_id, name, kind, place_note, device_label, pin_hash, auto_lock_seconds, last_seen_at, is_active, version, created_at) VALUES (${q(terminal.id)}, ${q(ORG)}, ${q(GINZA)}, ${q(terminal.name)}, ${q(terminal.kind)}, ${q(terminal.placeNote)}, ${q(terminal.deviceLabel)}, ${q(terminal.pinHash)}, 120, NULL, '1', 1, ${q(NOW)});`,
+      `INSERT OR IGNORE INTO terminals (id, organization_id, store_id, name, kind, staff_id, place_note, device_label, pin_hash, auto_lock_seconds, last_seen_at, is_active, version, created_at) VALUES (${q(terminal.id)}, ${q(ORG)}, ${q(GINZA)}, ${q(terminal.name)}, ${q(terminal.kind)}, ${terminal.staffId === null ? 'NULL' : q(terminal.staffId)}, ${q(terminal.placeNote)}, ${q(terminal.deviceLabel)}, ${terminal.pinHash === null ? 'NULL' : q(terminal.pinHash)}, 120, NULL, '1', 1, ${q(NOW)});`,
   ),
   ...storeInfo.flatMap((info) =>
     Object.entries(info)
@@ -1377,7 +1404,7 @@ console.log(
     `田中 花子 様の度数 ${prescriptionSeeds.length} 件・メガネ ${glassesSeeds.length} 本・` +
     `接客のメモ ${noteSeeds.length} 件・過去のご予約 ${pastVisitRows.length} 件`,
 )
-console.log('   業務開始の画面では、お店のコードに eye を入れる。暗証番号は 000000。')
+console.log('   業務は /s/ginza を開いて置き場所を選び、暗証番号 000000 で始める。')
 /*
  * 台帳の中身は承認済みモックが描いている瞬間（2026年8月27日）に固定してある。
  * e2e が丸ごとこの日付に依存しているので動かせない。**実時間が進むほど「今日」は

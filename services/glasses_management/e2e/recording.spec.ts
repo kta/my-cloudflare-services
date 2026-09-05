@@ -1,7 +1,8 @@
 import type { APIRequestContext, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
+import { authHeadersFor, signedHeadersFor } from './support/auth'
 import type { SeededTerminalSession } from './support/terminal'
-import { completeSeededTerminalStart } from './support/terminal'
+import { completeSeededTerminalStart, SEEDED_SITE_PATH } from './support/terminal'
 
 /**
  * 受付の録音（010-recording）の受け入れ基準を、実ブラウザと実 Worker で確かめる。
@@ -184,9 +185,7 @@ async function startWork(
   await page.addInitScript(mic((options.mic ?? 'granted') === 'granted'))
   if (options.frozen === true) await page.clock.install({ time: new Date(options.now ?? NOW) })
   else await page.clock.setFixedTime(new Date(options.now ?? NOW))
-  await page.goto('/')
-  await page.getByLabel('お店のコード').fill(ORG)
-  await page.getByRole('button', { name: '業務を始める' }).click()
+  await page.goto(SEEDED_SITE_PATH)
   const session = await completeSeededTerminalStart(page)
   await expect(page.locator('header').first()).toContainText('EYE 銀座店')
   expect(session).not.toBeNull()
@@ -302,12 +301,9 @@ async function authed(
   request: APIRequestContext,
   organizationId: string = ORG,
 ): Promise<{ headers: Record<string, string> }> {
-  const res = await request.post('/api/auth/token', {
-    data: { organizationId, role: 'staff' },
-  })
-  expect(res.status()).toBe(200)
-  const { token } = (await res.json()) as { token: string }
-  return { headers: { authorization: `Bearer ${token}` } }
+  // seed の組織は実際の入口から、それ以外は e2e 自身の署名から取る。
+  if (organizationId === ORG) return { headers: await authHeadersFor(request) }
+  return { headers: await signedHeadersFor(organizationId) }
 }
 
 /** seed の端末とスタッフ（`seed.mjs` の `uid()` は決め打ちの UUID を配る）。 */

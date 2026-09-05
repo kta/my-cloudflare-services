@@ -1,6 +1,7 @@
 import type { APIRequestContext, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
-import { completeSeededTerminalStart } from './support/terminal'
+import { authHeadersFor, startSeededTerminal } from './support/auth'
+import { completeSeededTerminalStart, SEEDED_SITE_PATH } from './support/terminal'
 
 /*
  * 実装した画面を、承認済みモックの基準画像（docs/frontend/mockups/eye/reference/<画面ID>.png）と
@@ -138,11 +139,7 @@ async function grantStore(request: APIRequestContext): Promise<void> {
  * **必ず元へ戻す。** ほかの面は seed のままの盤面で撮る決めである。
  */
 async function beMe(request: APIRequestContext, adminUserId: string | null): Promise<void> {
-  const token = await request.post('/api/auth/token', {
-    data: { organizationId: ORG, role: 'staff' },
-  })
-  const { token: bearer } = (await token.json()) as { token: string }
-  const headers = { authorization: `Bearer ${bearer}` }
+  const headers = await authHeadersFor(request)
   const store = await request.get(`/api/staff/stores/${GINZA}`, { headers })
   const { settingsVersion } = (await store.json()) as { settingsVersion: number }
   const res = await request.patch(`/api/staff/stores/${GINZA}/staff/${SATO}`, {
@@ -178,9 +175,7 @@ async function startWork(page: Page, mode: 'shared' | 'personal' = 'shared'): Pr
     },
   })
   expect(membership.status()).toBe(200)
-  await page.goto('/')
-  await page.getByLabel('お店のコード').fill(ORG)
-  await page.getByRole('button', { name: '業務を始める' }).click()
+  await page.goto(SEEDED_SITE_PATH)
   await completeSeededTerminalStart(page, mode)
   await page.getByRole('navigation', { name: '画面の切り替え' }).waitFor()
 }
@@ -502,11 +497,8 @@ async function stubBoard(
 
 /** 業務トークン 1 本。seed の実データを id で引くために使う。 */
 async function bearer(request: APIRequestContext): Promise<string> {
-  const res = await request.post('/api/auth/token', {
-    data: { organizationId: ORG, role: 'staff' },
-  })
-  const { token } = (await res.json()) as { token: string }
-  return token
+  // 実際の入口と同じ道で取る（dev グラントは撤去した）。
+  return (await startSeededTerminal(request)).token
 }
 
 /** seed の 8月27日 11:00 のご予約（田中 花子 様）。受け付ける面はこの 1 件を開く。 */
@@ -1318,12 +1310,8 @@ test.describe('承認済みモックとの突き合わせ', () => {
     // ほかの端末が同じ担当の同じ時刻を先に取る。
     const holding = await page.getByRole('complementary', { name: '確保する内容' }).innerText()
     const staffId = holding.includes('佐藤 美咲') ? SATO : null
-    const token = await request.post('/api/auth/token', {
-      data: { organizationId: ORG, role: 'staff' },
-    })
-    const { token: bearer } = (await token.json()) as { token: string }
     const taken = await request.post('/api/staff/reservations', {
-      headers: { authorization: `Bearer ${bearer}` },
+      headers: await authHeadersFor(request),
       data: {
         storeId: GINZA,
         startsAt: new Date(Date.parse('2026-09-02T14:00:00.000+09:00')).toISOString(),
