@@ -90,7 +90,7 @@ it('kind を省いたトークンは user として読める（既存トーク�
 
 it('kind: terminal を発行して読み戻せる', async () => {
   const token = await signAccessToken(
-    { sub: 't1', org: 'o1', email: 'terminal@invalid', role: 'staff', kind: 'terminal' },
+    { sub: 't1', org: 'o1', email: 'terminal@terminal.invalid', role: 'staff', kind: 'terminal' },
     SECRET,
   )
   const payload = await verifyAccessToken(token, SECRET)
@@ -189,7 +189,7 @@ const TERMINAL_TOKEN_PATHS = [
 for (const path of TERMINAL_TOKEN_PATHS) {
   it(`kind=terminal のトークンは ${path} で拒まれる`, async () => {
     const token = await signAccessToken(
-      { sub: 'terminal-1', org: 'org-1', email: 'terminal@invalid', role: 'admin', kind: 'terminal' },
+      { sub: 'terminal-1', org: 'org-1', email: 'terminal@terminal.invalid', role: 'admin', kind: 'terminal' },
       JWT_SECRET,
     )
     const res = await SELF.fetch(`${BASE}${path}`, { headers: { authorization: `Bearer ${token}` } })
@@ -1110,7 +1110,7 @@ export async function resolveSiteTerminal(
         {
           sub: result.session.staffId ?? `terminal:${c.req.param('terminalId')}`,
           org: terminal.organizationId,
-          email: 'terminal@invalid',
+          email: 'terminal@terminal.invalid',
           role: 'staff',
           kind: 'terminal',
         },
@@ -1272,7 +1272,7 @@ Expected: FAIL
       {
         sub: `terminal:${row.terminalId}`,
         org: row.organizationId,
-        email: 'terminal@invalid',
+        email: 'terminal@terminal.invalid',
         role: 'staff',
         kind: 'terminal',
       },

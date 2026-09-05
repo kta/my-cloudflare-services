@@ -18,11 +18,23 @@ export type Role = z.infer<typeof Role>
  * (アップグレード時は既存トークンが失効 = 全員再ログイン。fail-closed で安全側)。
  * **plan はクレームに入れない**(org 同期行を毎リクエスト参照 = 即時反映)。
  */
+/**
+ * トークンの主体。`user` は admin が発行する人のトークン、`terminal` は
+ * ドメインサービスが発行する端末のトークン。
+ *
+ * JWT_SECRET は全サービスで共有され `aud`/`iss` が無いため(`packages/shared/src/jwt.ts`
+ * の注記)、発行者が 2 人になった時点で「どのサービス向けか」を本文で名乗らせる
+ * 必要がある。省略時は `user` とし、この変更より前に出たトークンをそのまま通す。
+ */
+export const TokenKind = z.enum(['user', 'terminal'])
+export type TokenKind = z.infer<typeof TokenKind>
+
 export const AuthTokenPayload = z.looseObject({
   sub: z.string(), // users.id
   org: z.string(), // organizations.id(旧テンプレ既存クレームと同名・同義)
   email: z.string().email(),
   role: Role,
+  kind: TokenKind.default('user'),
   exp: z.number(),
 })
 export type AuthTokenPayload = z.infer<typeof AuthTokenPayload>

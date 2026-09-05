@@ -25,6 +25,7 @@ export {
   STANDARD_ROLE_PERMISSIONS,
   StandardRole,
   StoreMembershipSyncFailed,
+  TokenKind,
   UserAdministrationAction,
   UserAdministrationAudit,
   UserAssignmentUpdate,
