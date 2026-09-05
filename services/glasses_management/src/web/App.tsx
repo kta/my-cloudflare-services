@@ -1103,18 +1103,14 @@ function Home({
                     </button>
                   </li>
                 ))}
-                <li>
-                  <button
-                    type="button"
-                    onClick={onAddStore}
-                    className={`min-h-11 rounded-full border border-line-strong bg-surface px-4 text-note font-semibold text-ink-muted ${focusRing}`}
-                  >
-                    お店を追加する
-                  </button>
-                </li>
               </ul>
             ) : (
-              /* 毎日押すものではない。主操作 2 つと同じ強さにしない。 */
+              /*
+                ほかのお店がある会社では、この行は切り替えのためだけに使う
+                （承認済みモック HOME.png の姿）。**行を増やさない。**
+                お店が 1 つだけの会社にはここが 2 店舗目への入口になる。
+                毎日押すものではないので、主操作 2 つと同じ強さにしない。
+              */
               <button
                 type="button"
                 onClick={onAddStore}
