@@ -40,7 +40,7 @@
   "triggers": { "crons": ["0 15 * * *"] },
   // staging。service binding は自動でサフィックスが付かないので明示的に -staging を指す。
   // Cron はアカウント全体で 5 本しか無い共有枠なので staging では 0 本にする。
-  // 各 id は Terraform(envs/staging) の出力の実値に差し替える。
+  // 各 id は Terraform(envs/staging) の出力の実値。初回 apply で作られた ID をここに固定する。
   "env": {
     "staging": {
       "assets": {
@@ -51,11 +51,11 @@
         {
           "binding": "DB",
           "database_name": "glasses_management_staging",
-          "database_id": "00000000-0000-0000-0000-000000000000",
+          "database_id": "763105b9-b88d-45ac-83a8-587c25a81a9f",
           "migrations_dir": "migrations"
         }
       ],
-      "kv_namespaces": [{ "binding": "SHORT_LIVED", "id": "00000000000000000000000000000000" }],
+      "kv_namespaces": [{ "binding": "SHORT_LIVED", "id": "037363090c1d40d9907d4389a20a7fd5" }],
       "r2_buckets": [
         { "binding": "RECORDINGS", "bucket_name": "glasses-management-recordings-staging" }
       ],
