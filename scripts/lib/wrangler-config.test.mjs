@@ -4,6 +4,7 @@ import {
   parseWranglerConfig,
   readWranglerConfig,
   resolveEnv,
+  resolveSeedTarget,
   stripJsonc,
 } from './wrangler-config.mjs'
 
@@ -93,4 +94,34 @@ test('リポジトリの実物の wrangler.jsonc を読める', () => {
   const r = resolveEnv(cfg, '')
   assert.equal(r.d1.find((d) => d.binding === 'DB').database_name, 'admin')
   assert.ok(r.kv.some((k) => k.binding === 'AUTH_RL'))
+})
+
+test('seed の宛先: 環境未指定なら上位の DB を返し、--env を付けない', () => {
+  const t = resolveSeedTarget(CONFIG, '')
+  assert.equal(t.dbName, 'admin')
+  assert.deepEqual(t.envArgs, [])
+})
+
+test('seed の宛先: staging は env.staging の DB と --env staging を返す', () => {
+  const t = resolveSeedTarget(CONFIG, 'staging')
+  assert.equal(t.dbName, 'admin_staging')
+  assert.deepEqual(t.envArgs, ['--env', 'staging'])
+})
+
+test('seed の宛先: DB バインディングが無ければ失敗させる', () => {
+  const noDb = { ...CONFIG, d1_databases: [{ binding: 'OTHER', database_name: 'x' }], env: {} }
+  assert.throws(() => resolveSeedTarget(noDb, ''), /DB/)
+})
+
+/*
+ * 宛先の取り違えは静かに成功する（INSERT OR IGNORE）ので、実物の設定で押さえる。
+ * glasses_management の seed は DB 名を直書きしていて、staging の seed が本番の
+ * D1 へ当たっていた。ここが名前を返さなくなったら、それは再発である。
+ */
+test('seed の宛先: 実物の glasses_management は staging で staging の D1 を指す', () => {
+  const cfg = readWranglerConfig(
+    new URL('../../services/glasses_management/wrangler.jsonc', import.meta.url),
+  )
+  assert.equal(resolveSeedTarget(cfg, '').dbName, 'glasses_management')
+  assert.equal(resolveSeedTarget(cfg, 'staging').dbName, 'glasses_management_staging')
 })

@@ -2,8 +2,11 @@
  * glasses_management の D1 に、開発用の世界観データを入れる。
  * 何度実行しても同じ（INSERT OR IGNORE なので、手で直した行は上書きしない）。
  *
- *   local : pnpm --filter @app/glasses_management db:seed:local   （make init から呼ばれる）
- *   本番   : node services/glasses_management/seed.mjs --remote
+ *   local  : pnpm --filter @app/glasses_management db:seed:local   （make init から呼ばれる）
+ *   staging: CLOUDFLARE_ENV=staging AUTH_PEPPER=<stg> node services/glasses_management/seed.mjs --remote
+ *   本番   : AUTH_PEPPER=<prod> node services/glasses_management/seed.mjs --remote
+ *
+ * 宛先の D1 は `CLOUDFLARE_ENV` から wrangler.jsonc 経由で解決する（直書きしない）。
  *
  * 入れるもの: EYE（組織）と 3 店舗（銀座・丸の内・新宿）、および銀座店の受付条件 6 面
  * （営業時間 / 止める帯 / 予約の間隔 / スタッフと技能と勤務 / 設備と点検 / ご来店の目的）。
@@ -21,6 +24,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { readWranglerConfig, resolveSeedTarget } from '../../scripts/lib/wrangler-config.mjs'
 import { dynamicE2eShiftDates } from './seed-e2e.mjs'
 import {
   legacySeedMigrationStatements,
@@ -28,6 +32,13 @@ import {
 } from './seed-migration.mjs'
 
 const REMOTE = process.argv.includes('--remote')
+// 宛先の D1 は wrangler.jsonc から解決する。DB 名を直書きすると staging の seed が
+// 本番へ当たり、INSERT OR IGNORE は静かに成功するので気づけない。
+const ENV_NAME = process.env.CLOUDFLARE_ENV ?? ''
+const TARGET = resolveSeedTarget(
+  readWranglerConfig(new URL('./wrangler.jsonc', import.meta.url)),
+  ENV_NAME,
+)
 // 端末共有 PIN の pepper は Worker の AUTH_PEPPER と同じ値を使う。local は毎回同じ
 // 開発用値にして `make init` だけで再現可能にし、remote は secret と一致する値を要求する。
 const DEV_PEPPER = 'dev-auth-pepper-change-me'
@@ -1333,7 +1344,8 @@ execFileSync(
     'wrangler',
     'd1',
     'execute',
-    'glasses_management',
+    TARGET.dbName,
+    ...TARGET.envArgs,
     REMOTE ? '--remote' : '--local',
     ...(REMOTE || PERSIST_TO === undefined ? [] : ['--persist-to', PERSIST_TO]),
     '--file',
@@ -1343,7 +1355,9 @@ execFileSync(
   { cwd: import.meta.dirname, stdio: 'inherit' },
 )
 
-console.log(`\n✅ seeded glasses_management D1 [${REMOTE ? 'REMOTE(本番)' : 'local'}]`)
+console.log(
+  `\n✅ seeded glasses_management D1 [${REMOTE ? `REMOTE(${TARGET.dbName})` : `local(${TARGET.dbName})`}]`,
+)
 console.log(`   組織: ${ORG}（EYE）／ 店舗: ${stores.map((s) => s.name).join('・')}`)
 console.log(
   `   銀座店の受付条件: 営業時間 ${businessHours.length} 行 ／ 止める帯 ${blackoutWindows.length} 行 ／ ` +
