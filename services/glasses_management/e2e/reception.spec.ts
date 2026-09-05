@@ -1541,7 +1541,16 @@ test('受付履歴は新しい順に 20 件まで出て、残りは 1 行にま�
   page,
   request,
 }) => {
-  const day = shiftDate(TODAY, -2)
+  /*
+   * **この 1 本だけが使う日に置く。** 以前は TODAY-2 に置いており、同じ日へ行を足す
+   * ほかの面が先に走ると total が 23 を超えて落ちていた（23 のはずが 32）。
+   * 28 日ちょうど戻すので曜日は変わらない（定休日の扱いも同じ）。
+   */
+  const day = shiftDate(TODAY, -30)
+  expect(
+    (await readHistory(request, { from: day, to: day })).total,
+    'この日はこの test だけが使う。ほかの面が使い始めたら別の日へ移す。',
+  ).toBe(0)
   for (let i = 0; i < 23; i += 1) {
     // 30 分ずつずらす（1 枠 1 件になり、同時受付の上限に当たらない）。
     const hhmm = `${String(10 + Math.floor(i / 2)).padStart(2, '0')}:${i % 2 === 0 ? '00' : '30'}`

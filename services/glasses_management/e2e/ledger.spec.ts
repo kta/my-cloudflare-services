@@ -362,8 +362,14 @@ test('60分の帯にはご用件の短い名前が出て、30分の狭い帯に�
   await expect(
     band(page, '11:00から12:00　田中 花子 様　4回目　新調相談・視力測定　佐藤 美咲'),
   ).toContainText('新調相談・視力測定')
+  /*
+   * 狭い帯が運ぶのは**お名前**である（007-customer-records の AC-CUST-24 で
+   * 台帳がお名前と来店回数を描くようになった）。時刻は読み上げ名に入っており、
+   * 帯の中に重ねて書く文字予算は無い。AC-LEDGER-06 が求めるのは
+   * 「ご用件を入れない」ことなので、それを見る。
+   */
   const narrow = band(page, '10:00から10:30　伊藤 健 様　2回目　調整　高橋 健')
-  await expect(narrow).toContainText('10:00')
+  await expect(narrow).toContainText('伊藤')
   await expect(narrow).not.toContainText('調整')
 })
 

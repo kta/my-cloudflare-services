@@ -422,7 +422,7 @@ test('受付スタッフは、確認待ちで届いた Web 予約を確かめて
   // 届いたご予約は台帳に載り、担当が決まっていない（＝確認待ち）。
   const listed = await request.get('/api/staff/reservations', {
     ...(await authed(request)),
-    params: { storeId: GINZA, from: slot.date, to: slot.date, limit: '50' },
+    params: { storeId: GINZA, from: slot.date, to: slot.date, limit: '200' },
   })
   expect(listed.status()).toBe(200)
   const items = ((await listed.json()) as { items: { id: string; startsAt: string }[] }).items
@@ -484,12 +484,35 @@ test('受付スタッフは、確認待ちで届いた Web 予約を確かめて
   expect((await asCustomer.json()) as { status: string }).toMatchObject({ status: 'pending' })
 })
 
+/** その日の確認待ち（Web から入って担当が未定）の件数。共有の状態は書き換えない。 */
+async function pendingCount(request: APIRequestContext, date: string): Promise<number> {
+  const listed = await request.get('/api/staff/reservations', {
+    ...(await authed(request)),
+    params: { storeId: GINZA, from: date, to: date, limit: '200' },
+  })
+  expect(listed.status()).toBe(200)
+  const items = (
+    (await listed.json()) as {
+      items: { source: string; staffName: string | null; status: string }[]
+    }
+  ).items
+  return items.filter(
+    (row) => row.source === 'web' && row.staffName === null && row.status !== 'cancelled',
+  ).length
+}
+
 // @e2e-covers AC-WEB-22
 test('台帳の「確認待ち」からその 1 件を確定すると、確認待ちの件数が 0 件になる', async ({
   page,
   request,
 }) => {
+  /*
+   * この日の確認待ちは、先に走る面が置いた行と混ざる（`openSlot` は空いている最初の
+   * 枠を返すので、同じ日に着地することがある）。**共有の状態を書き換えて前提を作ると
+   * 他の面が壊れる**ので、いまの件数を先に読んで、その増減で確かめる。
+   */
   const slot = await openSlot(request, 26)
+  const pendingBefore = await pendingCount(request, slot.date)
   await bookAsCustomer(request, slot.startsAt)
 
   // 端末の時計をその日の朝へ据える。台帳はその暦日を開く。
@@ -504,10 +527,10 @@ test('台帳の「確認待ち」からその 1 件を確定すると、確認�
     .getByRole('button', { name: '予約リスト' })
     .click()
 
-  const pending = page.getByRole('button', { name: '確認待ち 1件' })
+  const pending = page.getByRole('button', { name: `確認待ち ${pendingBefore + 1}件` })
   await expect(pending).toBeVisible()
   await pending.click()
-  await expect(page.getByRole('button', { name: '内容を確認' })).toHaveCount(1)
+  await expect(page.getByRole('button', { name: '内容を確認' })).toHaveCount(pendingBefore + 1)
 
   /*
    * 「確定する」は担当を決めることである —— 台帳の「確認待ち」は「Web から入って担当が
@@ -520,10 +543,22 @@ test('台帳の「確認待ち」からその 1 件を確定すると、確認�
    */
   const listed = await request.get('/api/staff/reservations', {
     ...(await authed(request)),
-    params: { storeId: GINZA, from: slot.date, to: slot.date, limit: '50' },
+    params: { storeId: GINZA, from: slot.date, to: slot.date, limit: '200' },
   })
-  const items = ((await listed.json()) as { items: { id: string; startsAt: string }[] }).items
-  const mine = items.find((row) => row.startsAt === slot.startsAt)
+  /*
+   * **その時刻の、まだ担当が決まっていない Web のご予約**を引き当てる。時刻だけで
+   * 探すと、同じ時刻に片づけ済みの行があるときにそちらを掴んでしまい、いま入れた
+   * 1 件が確認待ちのまま残る。枠は取る直前まで空いていたので、この 3 条件で 1 件に定まる。
+   */
+  const items = (
+    (await listed.json()) as {
+      items: { id: string; startsAt: string; source: string; staffName: string | null }[]
+    }
+  ).items
+  const mine = items.find(
+    (row) => row.startsAt === slot.startsAt && row.source === 'web' && row.staffName === null,
+  )
+  expect(mine, 'いま入れた Web 予約が台帳に出ていない').toBeDefined()
   const detail = await request.get(`/api/staff/reservations/${(mine as { id: string }).id}`, {
     ...(await authed(request)),
   })
@@ -550,6 +585,7 @@ test('台帳の「確認待ち」からその 1 件を確定すると、確認�
     .getByRole('group', { name: '表示のかたち' })
     .getByRole('button', { name: '予約リスト' })
     .click()
-  await expect(page.getByRole('button', { name: '確認待ち 0件' })).toBeVisible()
-  await expect(page.getByRole('button', { name: '内容を確認' })).toHaveCount(0)
+  // 確定した 1 件だけが確認待ちから外れる。ほかの面が置いた行はそのまま残る。
+  await expect(page.getByRole('button', { name: `確認待ち ${pendingBefore}件` })).toBeVisible()
+  await expect(page.getByRole('button', { name: '内容を確認' })).toHaveCount(pendingBefore)
 })

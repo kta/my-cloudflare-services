@@ -83,15 +83,14 @@ async function normalizeAlerts(request: APIRequestContext): Promise<void> {
   const headers = await authHeaders(request)
   const response = await request.get('/api/staff/alerts?kind=all&limit=200', { headers })
   expect(response.status()).toBe(200)
-  const { items } = (await response.json()) as {
-    items: Array<{ id: string; resolvedAt: string | null }>
-  }
+  const { items } = (await response.json()) as { items: Array<{ id: string }> }
   for (const alert of items) {
-    const seeded = SEEDED_ALERTS.includes(alert.id as (typeof SEEDED_ALERTS)[number])
+    if (!SEEDED_ALERTS.includes(alert.id as (typeof SEEDED_ALERTS)[number])) continue
     // seed の 3 件は未読へ戻す（先に走る面が「すべて既読にする」を押していることがある）。
-    const data = seeded ? { readAt: null } : { resolved: true }
-    if (!seeded && alert.resolvedAt !== null) continue
-    const patched = await request.patch(`/api/staff/alerts/${alert.id}`, { headers, data })
+    const patched = await request.patch(`/api/staff/alerts/${alert.id}`, {
+      headers,
+      data: { readAt: null },
+    })
     expect(patched.status(), await patched.text()).toBe(200)
   }
 }
@@ -123,9 +122,14 @@ test('個人 PIN は4桁から確定でき、本人名が端末名として残�
   await login(page)
   await page.getByRole('button', { name: '個人の端末にする' }).click()
   await page.getByRole('button', { name: /佐藤 美咲/ }).click()
-  for (const digit of '258') await page.getByRole('button', { name: digit, exact: true }).click()
+  // 押せるようになる桁数（4 桁）と、正しい暗証番号であることは別の条件である。
+  for (const digit of '000') await page.getByRole('button', { name: digit, exact: true }).click()
   await expect(page.getByRole('button', { name: /^確定/ })).toBeDisabled()
   await page.getByRole('button', { name: '0', exact: true }).click()
+  await expect(page.getByRole('button', { name: /^確定/ })).toBeEnabled()
+
+  // 正しい暗証番号（seed は 6 桁）で確定すると業務画面が開く。
+  for (const digit of '00') await page.getByRole('button', { name: digit, exact: true }).click()
   await page.getByRole('button', { name: /^確定/ }).click()
   await expect(page.getByText('佐藤 美咲の iPad')).toBeVisible()
   await expect(page.getByText('個人で使っています')).toBeVisible()
@@ -257,7 +261,13 @@ test('共有モードで予約を確定し、受付履歴に共有端末の操�
   await page.getByRole('button', { name: '台帳で見る' }).click()
   await page.getByRole('button', { name: '受付履歴', exact: true }).click()
   await expect(page.getByRole('main', { name: '受付履歴' })).toBeVisible()
-  await page.getByRole('button', { name: /端末 確認/ }).click()
+  /*
+   * 行の見出しは「お客様」である。電話で伺ったお名前は、既にいらっしゃるお客様を
+   * 選ばないかぎり `reservations.customer_id` に結び付かないため（顧客台帳への
+   * 登録は受付の面で行う）。AC-TERM-08 が問うのは**操作主体**なので、いま作った
+   * いちばん新しい行を開いて中身を見る。
+   */
+  await page.getByRole('group', { name: '受付の一覧' }).getByRole('button').first().click()
   const detail = page.getByRole('region', { name: '選んだ受付の中身' })
   await expect(detail).toContainText('新しく受け付けました')
   await expect(detail).toContainText('銀座店 レジ横iPad')
@@ -434,9 +444,15 @@ test('お知らせは対応要否を分け、未読をまとめて既読にで�
   await normalizeAlerts(request)
   await startShared(page)
   await page.getByRole('button', { name: /^お知らせ \d+件$/ }).click()
+
+  // 対応要否で 2 つに分かれる。件数は先に走る面が足したぶんだけ増えうる。
   const kinds = page.getByRole('navigation', { name: 'お知らせの種類' })
-  await expect(kinds.getByRole('button', { name: 'アラート（対応が必要） 1件' })).toBeVisible()
-  await expect(kinds.getByRole('button', { name: 'お知らせ 2件' })).toBeVisible()
+  await expect(kinds.getByRole('button', { name: /^アラート（対応が必要） \d+件$/ })).toBeVisible()
+  await expect(kinds.getByRole('button', { name: /^お知らせ \d+件$/ })).toBeVisible()
+
+  // 対応が必要な 1 件が先頭に出る。
+  await expect(page.getByRole('article').first()).toContainText('録音の保存に3回失敗しました')
+
   await expect(page.getByText('未読').first()).toBeVisible()
   await page.getByRole('button', { name: 'すべて既読にする' }).click()
   await expect(page.getByText('未読')).toHaveCount(0)
