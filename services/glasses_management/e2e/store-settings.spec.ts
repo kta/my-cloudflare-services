@@ -232,8 +232,9 @@ test('紹介文は 200 文字ちょうどなら保存でき、201 文字は 2 �
 // @e2e-covers UC-SET-03 AC-SET-05
 test('閉店を開店と同じ時刻にすると 2 文で拒み、営業時間は元のままである', async ({ page }) => {
   await openSettings(page, '営業時間')
-  const opens = page.getByLabel('開店')
-  const closes = page.getByLabel('閉店')
+  // 曜日ごとの上書きにも「金曜日の開店」等が並ぶので、基準の 1 つを厳密に指す。
+  const opens = page.getByLabel('開店', { exact: true })
+  const closes = page.getByLabel('閉店', { exact: true })
   await expect(opens).toHaveValue('10:00')
   await expect(closes).toHaveValue('19:00')
 
@@ -254,7 +255,7 @@ test('閉店を開店と同じ時刻にすると 2 文で拒み、営業時間�
 
   await discardButton(page).click()
   await reopenSection(page, '営業時間')
-  await expect(page.getByLabel('閉店')).toHaveValue('19:00')
+  await expect(page.getByLabel('閉店', { exact: true })).toHaveValue('19:00')
 })
 
 // @e2e-covers UC-SET-04 AC-SET-06
@@ -590,8 +591,8 @@ test('スタッフの権限で保存すると、店長だけができると断�
     await openSettings(page, '営業時間')
     // 帯（10:00–10:15 / 18:40–19:00）が営業時間の内側に収まる値にする。
     // はみ出すと保存そのものが拒まれ、権限で断られる面まで行き着かない。
-    await page.getByLabel('開店').fill('09:00')
-    await page.getByLabel('閉店').fill('20:00')
+    await page.getByLabel('開店', { exact: true }).fill('09:00')
+    await page.getByLabel('閉店', { exact: true }).fill('20:00')
     await expect(unsavedBadge(page)).toHaveText('未保存の変更 2件')
     await saveButton(page).click()
 
@@ -605,8 +606,8 @@ test('スタッフの権限で保存すると、店長だけができると断�
     await expect(page.getByText('開店を 10:00 から 09:00 に変える')).toBeVisible()
     await expect(page.getByText('閉店を 19:00 から 20:00 に変える')).toBeVisible()
     // 打ち込んだ値は消さない。押せて何も起きない「店長に依頼する」も出さない（Q-10）。
-    await expect(page.getByLabel('開店')).toHaveValue('09:00')
-    await expect(page.getByLabel('閉店')).toHaveValue('20:00')
+    await expect(page.getByLabel('開店', { exact: true })).toHaveValue('09:00')
+    await expect(page.getByLabel('閉店', { exact: true })).toHaveValue('20:00')
     await expect(page.getByRole('button', { name: /店長に依頼/ })).toHaveCount(0)
   } finally {
     await grant(request, MANAGER_PERMISSIONS)

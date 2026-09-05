@@ -863,7 +863,9 @@ test('お客様を「あとで登録する」のまま受け付けて、その�
     subjectId: rows[0]?.id ?? '',
     stage: 'consulting',
   })
-  await destination(page, 'トップ').click()
+  // 柱の「トップ」はトップにいるときだけ出る。ほかの面から戻る道は上のバーの ⌂
+  // （承認済みモックの柱と同じ。実装不足の洗い出し foundation-03）。
+  await page.getByRole('button', { name: 'トップへ' }).click()
   await destination(page, '来店受付').click()
   await expect(cell(page, ticket, 'ご相談')).toHaveAccessibleName(
     new RegExp(`^${ticket}\\s+ご相談\\s+対応中`),
@@ -1052,6 +1054,19 @@ test('来店受付ボードは 7 列をこの順で並べ、右上にその日�
 })
 
 // @e2e-covers AC-RECEP-12 UC-RECEP-05
+/*
+ * 工程を始める。**誰が始めるのかを先に聞かれる**（AC-RECEP-12。聞かずに積むと
+ * `visit_events.staff_id` が NULL のままで、受付履歴にも分析にも誰が対応したかが
+ * 残らない。実装不足の洗い出し reception-04）。
+ * 名前を選べる状態でなければ「担当はあとで決める」を押す。
+ */
+async function beginStage(page: Page, name: string, stage: string): Promise<void> {
+  await cell(page, name, stage).click()
+  const sheet = page.getByRole('dialog', { name: 'この工程を始める担当' })
+  await sheet.waitFor()
+  await sheet.getByRole('button', { name: '担当はあとで決める' }).click()
+}
+
 test('「次にやること　視力測定機 A」を押すと対応中になり、前の工程が済みましたに変わる', async ({
   page,
   request,
@@ -1082,7 +1097,7 @@ test('「次にやること　視力測定機 A」を押すと対応中になり
     /^お客様\s+視力測定\s+次にやること\s+視力測定機 A/,
   )
 
-  await cell(page, 'お客様', '視力測定').click()
+  await beginStage(page, 'お客様', '視力測定')
   await expect(cell(page, 'お客様', '視力測定')).toHaveAccessibleName(
     /^お客様\s+視力測定\s+対応中\s+\d{2}:\d{2}から$/,
   )
@@ -1116,7 +1131,7 @@ test('工程を進めた直後に「元に戻す」が出て、押すと前の�
   })
 
   await openBoard(page)
-  await cell(page, 'お客様', '視力測定').click()
+  await beginStage(page, 'お客様', '視力測定')
   await expect(cell(page, 'お客様', '視力測定')).toHaveAccessibleName(
     /^お客様\s+視力測定\s+対応中\s+\d{2}:\d{2}から$/,
   )
@@ -1331,6 +1346,10 @@ test('盤面はキーボードだけでたどれて、Tab で通り抜けるの�
   for (let i = 0; i < 4; i += 1) await page.keyboard.press('ArrowRight')
   await expect(cell(page, 'お客様', '視力測定')).toBeFocused()
   await page.keyboard.press('Enter')
+  // Enter でも「誰が始めますか」を先に聞く（AC-RECEP-12）。キーボードだけで抜けられる。
+  const sheet = page.getByRole('dialog', { name: 'この工程を始める担当' })
+  await sheet.waitFor()
+  await sheet.getByRole('button', { name: '担当はあとで決める' }).click()
   await expect(cell(page, 'お客様', '視力測定')).toHaveAccessibleName(/^お客様\s+視力測定\s+対応中/)
 })
 
