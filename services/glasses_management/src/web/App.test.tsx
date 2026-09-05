@@ -326,41 +326,51 @@ describe('お店が 0 件のコード', () => {
     )
   }
 
-  it('入口では止めず、まだお店が無いことをトップで伝える', async () => {
+  async function enter(code = 'nonexistent'): Promise<void> {
     noStores()
     render(<App />)
-    await userEvent.type(screen.getByLabelText('お店のコード'), 'nonexistent')
+    await userEvent.type(screen.getByLabelText('お店のコード'), code)
     await userEvent.click(screen.getByRole('button', { name: '業務を始める' }))
+  }
 
-    await waitFor(() =>
-      expect(screen.getByText('お店がまだ登録されていません。')).toBeInTheDocument(),
-    )
+  it('入口では止めず、最初のお店を登録する面を立てる', async () => {
+    await enter()
+
+    expect(
+      await screen.findByRole('heading', { name: '最初のお店を登録します', level: 1 }),
+    ).toBeInTheDocument()
   })
 
-  it('行き止まりにせず、最初のお店を登録する道を出す', async () => {
-    noStores()
-    render(<App />)
-    await userEvent.type(screen.getByLabelText('お店のコード'), 'nonexistent')
-    await userEvent.click(screen.getByRole('button', { name: '業務を始める' }))
+  it('別の面を開かせず、その場で店名を聞く', async () => {
+    await enter()
 
-    const open = await screen.findByRole('button', { name: '最初のお店を登録する' })
-    await userEvent.click(open)
-
-    expect(await screen.findByRole('dialog', { name: 'お店を登録する' })).toBeInTheDocument()
-    expect(screen.getByLabelText('お店の名前')).toBeInTheDocument()
-    expect(screen.getByLabelText('お客様向けページの合い言葉')).toBeInTheDocument()
+    expect(await screen.findByLabelText('お店の名前')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'このお店で始める' })).toBeInTheDocument()
   })
 
-  it('お店が無い間は、偽の営業時間を出さない', async () => {
-    noStores()
-    render(<App />)
-    await userEvent.type(screen.getByLabelText('お店のコード'), 'nonexistent')
-    await userEvent.click(screen.getByRole('button', { name: '業務を始める' }))
+  it('押しても何も起きない行き先の柱を並べない', async () => {
+    await enter()
 
-    await waitFor(() =>
-      expect(screen.getByText('お店がまだ登録されていません。')).toBeInTheDocument(),
-    )
+    await screen.findByLabelText('お店の名前')
+    expect(screen.queryByRole('navigation', { name: '画面の切り替え' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '新しい予約を取る' })).toBeNull()
+  })
+
+  it('お店が無い間は、実在しない店名も営業状態も出さない', async () => {
+    await enter()
+
+    await screen.findByLabelText('お店の名前')
+    expect(screen.queryByText('EYE 銀座店')).toBeNull()
     expect(screen.queryByText(/営業中/)).toBeNull()
+  })
+
+  it('入れたコードを、いまいる場所と合い言葉の既定に使う', async () => {
+    await enter('eyex')
+
+    await screen.findByLabelText('お店の名前')
+    expect(screen.getByText('/w/eyex')).toBeInTheDocument()
+    // どの会社にいるかは上の帯が言う。
+    expect(screen.getByText('eyex')).toBeInTheDocument()
   })
 })
 

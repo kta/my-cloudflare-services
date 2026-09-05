@@ -56,25 +56,35 @@ async function startAsAdmin(page: Page, request: APIRequestContext, org: string)
 }
 
 // @e2e-covers UC-PROV-01 AC-PROV-01
-test('お店が 1 つも無い会社は、トップから登録へ進める', async ({ page, request }) => {
-  await startAsAdmin(page, request, newOrg())
+test('お店が 1 つも無い会社には、登録する面が最初に立つ', async ({ page, request }) => {
+  const org = newOrg()
+  await startAsAdmin(page, request, org)
 
-  await expect(page.getByText('お店がまだ登録されていません。')).toBeVisible()
-  await expect(page.getByRole('button', { name: '最初のお店を登録する' })).toBeVisible()
+  await expect(
+    page.getByRole('heading', { name: '最初のお店を登録します', level: 1 }),
+  ).toBeVisible()
+  await expect(page.getByLabel('お店の名前')).toBeVisible()
+  // 押しても何も起きない行き先を並べない。
+  await expect(page.getByRole('navigation', { name: '画面の切り替え' })).toBeHidden()
+  await expect(page.getByRole('button', { name: '新しい予約を取る' })).toBeHidden()
+  // 3 段が別々のことを言う。上の帯 = どの会社か、いまいる場所 = どの面か。
+  // 実在しない店名は出さない。
+  await expect(page.getByRole('banner')).toContainText(org)
+  await expect(page.getByRole('navigation', { name: 'いまいる場所' })).toContainText('はじめの設定')
+  await expect(page.getByText('EYE 銀座店')).toBeHidden()
 })
 
 // @e2e-covers AC-PROV-02
-test('名前と合い言葉を入れて登録すると、そのお店に入れる', async ({ page, request }) => {
-  await startAsAdmin(page, request, newOrg())
-  await page.getByRole('button', { name: '最初のお店を登録する' }).click()
+test('店名だけ入れれば、会社のコードが合い言葉になって業務へ入れる', async ({ page, request }) => {
+  const org = newOrg()
+  await startAsAdmin(page, request, org)
 
-  const dialog = page.getByRole('dialog', { name: 'お店を登録する' })
-  await dialog.getByLabel('お店の名前').fill('銀座店')
-  await dialog.getByLabel('お客様向けページの合い言葉').fill(newSlug())
-  await dialog.getByRole('button', { name: 'このお店を登録する' }).click()
+  // 合い言葉は聞かれない。出来上がる住所として見えているだけ。
+  await expect(page.getByText(`/w/${org}`)).toBeVisible()
+  await page.getByLabel('お店の名前').fill('銀座店')
+  await page.getByRole('button', { name: 'このお店で始める' }).click()
 
-  await expect(page.getByText('お店がまだ登録されていません。')).toBeHidden()
-  await expect(page.getByRole('button', { name: 'お店を追加する' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '新しい予約を取る' })).toBeVisible()
 })
 
 // @e2e-covers UC-PROV-02 AC-PROV-03
@@ -86,11 +96,12 @@ test('2 店舗目以降も同じ導線から増やせる', async ({ page, reques
   )
 
   await startAsAdmin(page, request, org)
-  await page.getByRole('button', { name: 'お店を追加する' }).click()
-  const dialog = page.getByRole('dialog', { name: 'お店を登録する' })
-  await dialog.getByLabel('お店の名前').fill('丸の内店')
-  await dialog.getByLabel('お客様向けページの合い言葉').fill(newSlug())
-  await dialog.getByRole('button', { name: 'このお店を登録する' }).click()
+  await page.getByRole('button', { name: 'お店を追加する' }).first().click()
+  await expect(page.getByRole('heading', { name: 'お店を追加します', level: 1 })).toBeVisible()
+  // 2 店舗目の合い言葉には連番が付く。
+  await expect(page.getByText(`/w/${org}-2`)).toBeVisible()
+  await page.getByLabel('お店の名前').fill('丸の内店')
+  await page.getByRole('button', { name: 'このお店で始める' }).click()
 
   const list = await request.get('/api/staff/stores', { headers: bearer(token) })
   expect(((await list.json()) as unknown[]).length).toBe(2)
@@ -115,27 +126,27 @@ test('使われている合い言葉は、別の言葉を選べるように断�
   expect((await createStore(request, owner, { name: '先客', slug: taken })).status()).toBe(201)
 
   await startAsAdmin(page, request, newOrg())
-  await page.getByRole('button', { name: '最初のお店を登録する' }).click()
-  const dialog = page.getByRole('dialog', { name: 'お店を登録する' })
-  await dialog.getByLabel('お店の名前').fill('後から来た店')
-  await dialog.getByLabel('お客様向けページの合い言葉').fill(taken)
-  await dialog.getByRole('button', { name: 'このお店を登録する' }).click()
+  await page.getByLabel('お店の名前').fill('後から来た店')
+  await page.getByRole('button', { name: '変える' }).click()
+  await page.getByLabel('お客様のページの合い言葉').fill(taken)
+  await page.getByRole('button', { name: 'このお店で始める' }).click()
 
   await expect(
-    dialog.getByText('この合い言葉は使われています。別の合い言葉を入れてください。'),
+    page.getByText('この合い言葉は使われています。別の合い言葉を入れてください。'),
   ).toBeVisible()
+  // 使われていた合い言葉を握ったままにせず、次の案を入れて見せる。
+  await expect(page.getByLabel('お客様のページの合い言葉')).toHaveValue(`${taken}-2`)
 })
 
 // @e2e-covers AC-PROV-05
 test('使えない文字の合い言葉は、使える文字を示して断る', async ({ page, request }) => {
   await startAsAdmin(page, request, newOrg())
-  await page.getByRole('button', { name: '最初のお店を登録する' }).click()
-  const dialog = page.getByRole('dialog', { name: 'お店を登録する' })
-  await dialog.getByLabel('お店の名前').fill('記号の店')
-  await dialog.getByLabel('お客様向けページの合い言葉').fill('Ginza_本店')
-  await dialog.getByRole('button', { name: 'このお店を登録する' }).click()
+  await page.getByLabel('お店の名前').fill('記号の店')
+  await page.getByRole('button', { name: '変える' }).click()
+  await page.getByLabel('お客様のページの合い言葉').fill('Ginza_本店')
+  await page.getByRole('button', { name: 'このお店で始める' }).click()
 
-  await expect(dialog.getByText('合い言葉は小文字の英数字とハイフンだけが使えます。')).toBeVisible()
+  await expect(page.getByText('合い言葉は小文字の英数字とハイフンだけが使えます。')).toBeVisible()
 })
 
 // @e2e-covers UC-PROV-05 AC-PROV-06
