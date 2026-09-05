@@ -6,17 +6,34 @@
 # 名前の接尾辞で環境を分ける。D1 はアンダースコア、KV / R2 はハイフンで命名の
 # 慣習が違うため、接尾辞を 2 つ受け取る。
 
-# --- D1: admin owns its own database. ---
+# --- D1 ---
+# D1 の read_replication は provider 5.24.0 で optional かつ **computed ではない**。
+# API は常に {mode = "disabled"} を返すので、config に書かないと refresh のたびに
+# 「消す」差分が立ち、PUT に read_replication: null が乗って API が 400(code 7400,
+# "Expected object, received null") を返す。初回の create は通るが 2 回目以降の
+# apply が必ず落ちるので、実体と同じ値を明示して差分を消す。
+# 読み取りレプリカは有料機能なので無料枠の方針どおり disabled で固定する。
+
+# admin owns its own database.
 resource "cloudflare_d1_database" "admin" {
   account_id = var.cloudflare_account_id
   name       = "admin${var.d1_suffix}"
+
+  read_replication = {
+    mode = "disabled"
+  }
 }
 
 # glasses_management owns the EYE reservation domain data. It is deliberately
 # separate from admin's organization/authentication source of truth.
+# read_replication を明示する理由は上の admin と同じ。
 resource "cloudflare_d1_database" "glasses_management" {
   account_id = var.cloudflare_account_id
   name       = "glasses_management${var.d1_suffix}"
+
+  read_replication = {
+    mode = "disabled"
+  }
 }
 
 # --- KV ---
