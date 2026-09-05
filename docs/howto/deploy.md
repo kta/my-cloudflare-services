@@ -243,10 +243,11 @@ production には `STAGING_ACCESS_TOKEN` を設定しないので、このゲー
 ### staging で業務を始める
 
 1. 上の 2 つの `?gate=` URL を順に開く。
-2. `https://glasses-management-staging.<subdomain>.workers.dev/` を開き、**お店のコードに `eye`**。
-   この入口は今も dev グラント（`/api/auth/token`）を通るので、staging では
-   `AUTH_DEV_GRANT=true` を同期している（ゲートの裏なので許容。production には入れない）。
-3. 端末モード → 置き場所 → **暗証番号 `000000`**（seed の値）。
+2. `https://glasses-management-staging.<subdomain>.workers.dev/s/ginza` を開く。
+   店名と置き場所が並ぶので、1 つ選んで **暗証番号 `000000`**（seed の値）を入れる。
+   打つのは暗証番号だけで、パスワードはどこにも出ない。
+3. 「どの会社のどの端末か」は URL が運ぶ（`stores.slug` は全組織横断で一意）。
+   iPad ではこの URL をホーム画面に置く。
 4. admin は `vars.STAGING_ADMIN_EMAIL`（未設定なら `admin@example.com`）と
    `WORKER_STAGING_ADMIN_PASSWORD` でログインする。
 
@@ -267,7 +268,7 @@ CLOUDFLARE_API_TOKEN=$CF_TOKEN terraform -chdir=infra/terraform/cloudflare/envs/
 
 ## ⚠️ 本番前に必ず潰すこと
 
-- **`AUTH_DEV_GRANT` を本番 secrets/vars に入れない**（未設定 = dev グラント 404 fail close。`true` を入れると任意 org の JWT 発行 = 認証バイパスが開く）。実運用は `/api/auth/login` を使う。
+- **`AUTH_DEV_GRANT` の残骸が無いことを確かめる**（`deploy` job の `Assert no dev grant on production` が自動で見る）。dev グラント（`POST /api/auth/token`）は 2026-09-05 に**経路ごと撤去**したので、いま値を入れても何も開かない。それでも検査を残しているのは、`wrangler secret bulk` が**渡さなかった secret を消さない**ためである —— 過去に一度でも入った Worker には残り続ける。名前が残っていること自体を、設定の誤りとして扱う。
 - `MAIL_FROM` は secret ではなく `services/notifier/wrangler.jsonc` の `vars` に置く。Resend は from ドメインの検証が要るので**検証済み運用ドメイン**を入れる。空のままだと notifier は Resend を呼ばずに fail close する。
 - `example_service` は雛形なので**本番にデプロイしない**（CI の deploy 対象外）。EYE の実サービスは `glasses_management` である。
 - D1 / バックアップ R2 を消されたくない環境では、Terraform の該当リソースに `lifecycle { prevent_destroy = true }` を足す。

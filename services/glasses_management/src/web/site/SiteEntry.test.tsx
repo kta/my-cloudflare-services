@@ -80,7 +80,18 @@ describe('暗証番号', () => {
     mockFetch((url, init) => {
       if (url.includes('/api/public/sites/ginza/terminals/t1/sessions')) {
         expect(JSON.parse(String(init?.body))).toEqual({ pin: '135790' })
-        return json({ token: 'tok', session: { id: 's1', terminalId: 't1', sessionToken: 'st' } })
+        return json({
+          token: 'tok',
+          session: {
+            id: 's1',
+            terminalId: 't1',
+            staffId: null,
+            mode: 'shared',
+            startedAt: '2026-08-27T02:08:00.000Z',
+            expiresAt: '2026-08-27T14:00:00.000Z',
+            sessionToken: 'st',
+          },
+        })
       }
       return url.includes('/api/public/sites/ginza') ? json(SITE) : json({}, 404)
     })
@@ -92,7 +103,12 @@ describe('暗証番号', () => {
       fireEvent.click(screen.getByRole('button', { name: digit }))
     }
     fireEvent.click(screen.getByRole('button', { name: /確定/ }))
-    await waitFor(() => expect(onStarted).toHaveBeenCalledWith('tok', 't1', 'st'))
+    await waitFor(() =>
+      expect(onStarted).toHaveBeenCalledWith(
+        'tok',
+        expect.objectContaining({ terminalId: 't1', sessionToken: 'st', mode: 'shared' }),
+      ),
+    )
   })
 
   it('違う暗証番号は残り回数を出す', async () => {

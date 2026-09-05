@@ -1,7 +1,7 @@
 import type { APIRequestContext, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
 import { authHeadersFor } from './support/auth'
-import { completeSeededTerminalStart } from './support/terminal'
+import { completeSeededTerminalStart, SEEDED_SITE_PATH } from './support/terminal'
 
 /**
  * 予約の検索・変更・取消（009-change-and-cancel）の受け入れ基準を、実ブラウザと実 Worker で
@@ -261,20 +261,13 @@ async function fillSlot(request: APIRequestContext, date: string, hhmm: string):
 
 async function startWork(page: Page, nowIso: string): Promise<void> {
   await page.clock.setFixedTime(new Date(nowIso))
-  await page.goto('/')
+  await page.goto(SEEDED_SITE_PATH)
   /*
-   * 業務の合図（`sessionStorage`）は同じ context のあいだ残るので、1 本の test が
-   * 2 度目に開いたときは業務開始の面が出ない。**出ないことを失敗にしない** —— どちらが
-   * 出たかを見てから進める。
+   * 業務の合図は同じ context のあいだ残るので、1 本の test が 2 度目に開いたときは
+   * 入口の面が出ない。**出ないことを失敗にしない** —— どちらが出たかを見てから進める
+   * （`completeSeededTerminalStart` がその分岐を持つ）。
    */
-  const code = page.getByLabel('お店のコード')
   const rail = page.getByRole('navigation', { name: '画面の切り替え' })
-  const placePick = page.getByRole('heading', { name: 'この端末はどこに置きますか？' })
-  await expect(code.or(rail).or(placePick).first()).toBeVisible()
-  if (await code.isVisible()) {
-    await code.fill(ORG)
-    await page.getByRole('button', { name: '業務を始める' }).click()
-  }
   await completeSeededTerminalStart(page)
   await rail.waitFor()
 }

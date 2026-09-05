@@ -1,7 +1,7 @@
 import type { APIRequestContext, Locator, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
 import { authHeadersFor, signedHeadersFor } from './support/auth'
-import { completeSeededTerminalStart } from './support/terminal'
+import { completeSeededTerminalStart, SEEDED_SITE_PATH } from './support/terminal'
 
 /**
  * 顧客台帳（007-customer-records）の受け入れ基準を、実ブラウザと実 Worker で確かめる。
@@ -242,15 +242,7 @@ const sheet = (label: string): string =>
  */
 async function startWork(page: Page): Promise<void> {
   await page.clock.setFixedTime(new Date(NOW))
-  await page.goto('/')
-  const code = page.getByLabel('お店のコード')
-  const nav = page.getByRole('navigation', { name: '画面の切り替え' })
-  const placePick = page.getByRole('heading', { name: 'この端末はどこに置きますか？' })
-  await expect(code.or(nav).or(placePick).first()).toBeVisible()
-  if ((await code.count()) > 0) {
-    await code.fill(ORG)
-    await page.getByRole('button', { name: '業務を始める' }).click()
-  }
+  await page.goto(SEEDED_SITE_PATH)
   await completeSeededTerminalStart(page)
   await expect(page.locator('header').first()).toContainText('EYE 銀座店')
 }

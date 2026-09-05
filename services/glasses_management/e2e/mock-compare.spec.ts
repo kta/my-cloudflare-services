@@ -1,7 +1,7 @@
 import type { APIRequestContext, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
 import { authHeadersFor, startSeededTerminal } from './support/auth'
-import { completeSeededTerminalStart } from './support/terminal'
+import { completeSeededTerminalStart, SEEDED_SITE_PATH } from './support/terminal'
 
 /*
  * 実装した画面を、承認済みモックの基準画像（docs/frontend/mockups/eye/reference/<画面ID>.png）と
@@ -175,9 +175,7 @@ async function startWork(page: Page, mode: 'shared' | 'personal' = 'shared'): Pr
     },
   })
   expect(membership.status()).toBe(200)
-  await page.goto('/')
-  await page.getByLabel('お店のコード').fill(ORG)
-  await page.getByRole('button', { name: '業務を始める' }).click()
+  await page.goto(SEEDED_SITE_PATH)
   await completeSeededTerminalStart(page, mode)
   await page.getByRole('navigation', { name: '画面の切り替え' }).waitFor()
 }

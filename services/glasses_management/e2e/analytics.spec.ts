@@ -1,6 +1,6 @@
 import type { APIRequestContext, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
-import { completeSeededTerminalStart } from './support/terminal'
+import { completeSeededTerminalStart, SEEDED_SITE_PATH } from './support/terminal'
 
 /**
  * 012-analytics の受入れ。analytics_daily は seed.mjs の固定データを読む想定で、
@@ -37,13 +37,11 @@ async function grantAnalytics(request: APIRequestContext): Promise<void> {
 async function openAnalytics(page: Page, request: APIRequestContext): Promise<void> {
   await grantAnalytics(request)
   await page.clock.setFixedTime(new Date(NOW))
-  await page.goto('/')
-  await page.getByLabel('お店のコード').fill(ORG)
+  await page.goto(SEEDED_SITE_PATH)
   const storesResponse = page.waitForResponse(
     (response) =>
       response.url().endsWith('/api/staff/stores') && response.request().method() === 'GET',
   )
-  await page.getByRole('button', { name: '業務を始める' }).click()
   await completeSeededTerminalStart(page)
   expect((await storesResponse).status()).toBe(200)
   // お店の切り替えは上のバーの店名が持つ（トップのチップは外した。foundation-09）。
@@ -73,14 +71,15 @@ async function openOtherOrganizationAnalytics(
   })
   expect(membership.status()).toBe(200)
   await page.clock.setFixedTime(new Date(NOW))
-  await page.goto('/')
-  await page.getByLabel('お店のコード').fill(OTHER_ORG)
+  await page.goto('/s/analytics-other')
   const storesResponse = page.waitForResponse(
     (response) =>
       response.url().endsWith('/api/staff/stores') && response.request().method() === 'GET',
   )
-  await page.getByRole('button', { name: '業務を始める' }).click()
-  await completeSeededTerminalStart(page)
+  await completeSeededTerminalStart(page, 'shared', {
+    storeName: '別組織店',
+    place: /別組織店 レジ横iPad/,
+  })
   expect((await storesResponse).status()).toBe(200)
   await expect(page.locator('header').first()).toContainText('別組織店')
   const reportRequest = page.waitForRequest(

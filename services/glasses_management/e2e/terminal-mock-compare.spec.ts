@@ -1,5 +1,5 @@
 import { expect, type Page, test } from '@playwright/test'
-import { completeSeededTerminalStart } from './support/terminal'
+import { completeSeededTerminalStart, SEEDED_SITE_PATH } from './support/terminal'
 
 const ORG = 'eye'
 const NOW = new Date('2026-08-27T02:08:00.000Z')
@@ -63,9 +63,7 @@ test.beforeEach(async ({ page, request }) => {
 })
 
 async function login(page: Page): Promise<void> {
-  await page.goto('/')
-  await page.getByLabel('お店のコード').fill(ORG)
-  await page.getByRole('button', { name: '業務を始める' }).click()
+  await page.goto(SEEDED_SITE_PATH)
 }
 
 async function sharedPin(page: Page): Promise<void> {

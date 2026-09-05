@@ -1,4 +1,4 @@
-import type { PublicSite, PublicTerminal } from '@app/contracts'
+import type { PublicSite, PublicTerminal, TerminalSession } from '@app/contracts'
 import { cn, focusRing } from '@app/ui'
 import { useEffect, useState } from 'react'
 import { PinEntry } from '../login/PinEntry'
@@ -25,8 +25,8 @@ export function SiteEntry({
   onStarted,
 }: {
   slug: string
-  /** 業務トークン・端末 id・端末セッションの平文を渡す。保存先は呼出元が決める。 */
-  onStarted: (token: string, terminalId: string, sessionToken: string) => void
+  /** 業務トークンと、開いた端末セッション。保存先は呼出元が決める。 */
+  onStarted: (token: string, session: TerminalSession) => void
 }) {
   const [site, setSite] = useState<PublicSite | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -70,11 +70,8 @@ export function SiteEntry({
       },
     )
     if (res.ok) {
-      const body = (await res.json()) as {
-        token: string
-        session: { sessionToken: string }
-      }
-      onStarted(body.token, terminal.id, body.session.sessionToken)
+      const body = (await res.json()) as { token: string; session: TerminalSession }
+      onStarted(body.token, body.session)
       return
     }
     // 401(違う) と 429(待ち) は、どちらも同じ面で残り回数・待ち時間として出す。
