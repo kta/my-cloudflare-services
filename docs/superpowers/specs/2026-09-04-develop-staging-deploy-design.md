@@ -168,17 +168,32 @@ staging でも同じロジックがそのまま動く（初回は何も見つか
 
 ## 6. D1 マイグレーションと seed の安全化（最大の事故ポイント）
 
-現状、D1 の名前が 3 箇所にハードコードされている。
+D1 の名前がハードコードされている箇所は、数え直すと **3 箇所ではなく 6 箇所**だった。
+`glasses_management/seed.mjs` が当初この表から漏れており、`db:migrate:remote` は全サービスにある。
 
-| 箇所 | 現在の値 |
-|---|---|
-| `services/admin/package.json` の `db:migrate:remote` | `wrangler d1 migrations apply admin --remote` |
-| `services/glasses_management/package.json` の同 | `wrangler d1 migrations apply glasses_management --remote` |
-| `services/admin/seed.mjs` | `wrangler d1 execute admin --remote` |
+| 箇所 | 直書きだった値 | 本番に出るか | 塞ぎ方 |
+|---|---|---|---|
+| `services/admin/seed.mjs` | `wrangler d1 execute admin --remote` | 出る | `resolveSeedTarget` |
+| `services/glasses_management/seed.mjs` | `wrangler d1 execute glasses_management --remote` | 出る | `resolveSeedTarget` |
+| `services/admin/package.json` の `db:migrate:remote` | `wrangler d1 migrations apply admin --remote` | 出る | `scripts/d1-migrate-manual.mjs` |
+| `services/glasses_management/package.json` の同 | `wrangler d1 migrations apply glasses_management --remote` | 出る | 同上 |
+| `services/example_service/package.json` の同 | `wrangler d1 migrations apply example_service --remote` | 出ない（雛形） | 同上 |
+| `services/patent_research/package.json` の同 | `wrangler d1 migrations apply patent_research --remote` | 出ない（ローカル完結） | 同上 |
 
 このまま `develop` の CI を有効にすると、**staging のデプロイが production の D1 に
 マイグレーションと seed を当てる**。seed は `INSERT OR IGNORE` で冪等なため静かに成功し、
 気づけない。ここを塞がずに自動化してはならない。
+
+塞ぎ方は経路で 3 つに分かれる。**CI** は §6.1 のラッパー（`scripts/d1-migrate.mjs`）で、
+Terraform 出力との突合まで通す。**seed** は `resolveSeedTarget`（`scripts/lib/wrangler-config.mjs`）。
+**人が手で叩く `db:migrate:*`** は `scripts/d1-migrate-manual.mjs` で、同じ解決を通して
+宛先を必ず印字する（手元には Terraform state が無いのが普通なので、突合は持たない）。
+宛先の決め方が 1 か所に閉じたので、DB 名を二重管理する場所は無くなった。
+
+**残っている非対称**: `deploy-eye-stack` job は `db:migrate:remote` を呼んでおり、
+宛先は正しくなったが **Terraform 出力との ID 突合は通らない**。逃げ道のほうが関所が
+少ないのは、緊急時ほど間違えるという点で逆立ちしている。あの job を残すかどうかは
+別途の判断とする（通常の `main` push は `deploy` job が同じことを、関所付きで行う）。
 
 ### 6.1 採用案 — ラッパースクリプト
 

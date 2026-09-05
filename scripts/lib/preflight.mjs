@@ -28,7 +28,16 @@ const REQUIRED = {
   staging: [...COMMON_REQUIRED, 'WORKER_STAGING_ACCESS_TOKEN', 'WORKER_STAGING_ADMIN_PASSWORD'],
 }
 
-/** その環境に**あってはいけない**もの。混ざると事故になる secret を名指しで拒む。 */
+/**
+ * その環境に**あってはいけない**もの。混ざると事故になる secret を名指しで拒む。
+ *
+ * **検査できるのは job の env に載る名前だけ**である（`checkPreflight` は
+ * `secrets: process.env` を受け取る）。GitHub Environment の secret は載るが、
+ * ワークフローの中でリテラルとして組み立てて `wrangler secret bulk` の stdin に
+ * 流すだけの値（`AUTH_DEV_GRANT` など）はここに書いても**永久に光らない**。
+ * その手の値は「デプロイ後に Worker 側へ残っていないこと」を確かめる
+ * （ci.yml の `Assert no dev grant on production`）。
+ */
 const FORBIDDEN = {
   // 本番に staging の抜け道を持ち込ませない。
   production: ['WORKER_STAGING_ACCESS_TOKEN', 'WORKER_STAGING_ADMIN_PASSWORD'],

@@ -116,8 +116,14 @@ describe('担当と場所を変える', () => {
     await waitFor(() => expect(screen.getByText('鈴木 一郎')).toBeInTheDocument())
     // SlotStep は開いた直後にも 1 度だけ上げる（器が押さえも確定も打てるように）。
     expect(onChange).toHaveBeenCalled()
-    const last = onChange.mock.calls.at(-1)?.[0]
-    expect(last).toMatchObject({ staffId: SATO, startsAt: TARGET.startsAt })
+    // 盤が出た直後の 1 度目は lanes がまだ無く staffId=null で上がる。担当が乗った
+    // 報告は passive effect で届くので、DOM が出た瞬間に読むと取りこぼす（フレーキー）。
+    await waitFor(() =>
+      expect(onChange.mock.calls.at(-1)?.[0]).toMatchObject({
+        staffId: SATO,
+        startsAt: TARGET.startsAt,
+      }),
+    )
   })
 
   it('工程の帯は「2　担当と場所を変える」で、まだ選んでいなければ理由を読み上げる', async () => {
