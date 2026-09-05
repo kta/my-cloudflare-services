@@ -482,11 +482,17 @@ test('お知らせは対応要否を分け、未読をまとめて既読にで�
   const counts = await normalizeAlerts(request)
   await startShared(page)
   await page.getByRole('button', { name: /^お知らせ \d+件$/ }).click()
+
+  // 対応要否で 2 つに分かれる。件数は先に走る面が足したぶんだけ増えうる。
   const kinds = page.getByRole('navigation', { name: 'お知らせの種類' })
   await expect(
     kinds.getByRole('button', { name: `アラート（対応が必要） ${counts.action}件` }),
   ).toBeVisible()
   await expect(kinds.getByRole('button', { name: `お知らせ ${counts.info}件` })).toBeVisible()
+
+  // 対応が必要な 1 件が先頭に出る。
+  await expect(page.getByRole('article').first()).toContainText('録音の保存に3回失敗しました')
+
   await expect(page.getByText('未読').first()).toBeVisible()
   await page.getByRole('button', { name: 'すべて既読にする' }).click()
   await expect(page.getByText('未読')).toHaveCount(0)
