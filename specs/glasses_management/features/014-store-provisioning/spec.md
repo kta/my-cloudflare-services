@@ -1,7 +1,7 @@
 # 014-store-provisioning: 会社を作ってから使い始めるまで
 
 - サービス: `glasses_management` / `admin`
-- ステータス: Draft
+- ステータス: Approved
 
 ## 1. WHAT / WHY
 
@@ -48,8 +48,8 @@
 - AC-PROV-12: Given 別の会社が使っている合い言葉 When 登録する Then 断られる。
 - AC-PROV-13: Given 会社 A の管理者 When お店の一覧を見る Then 会社 B のお店は出ない。
 - AC-PROV-14: Given 本文に他社の会社 ID を入れた登録 When 登録する Then 自分の会社に作られ、他社には作られない。
-- AC-PROV-15: Given 運営の管理者 When 会社のお店の一覧を取得する Then その会社のお店が返る。
-- AC-PROV-16: Given 運営の担当店舗の編集画面 When 一覧からお店を選んで保存する Then 担当店舗として同期される。
+- AC-PROV-15: Given 運営の管理者 When 会社のお店の一覧を求める Then ドメインへその会社を指定して尋ね、ドメインが応えられないときは内部の様子を漏らさずに断る。
+- AC-PROV-16: Given お店の一覧を読み込めないとき When 権限と担当店舗を保存する Then 保存は止まらず、いまの担当がそのまま送られる。
 - AC-PROV-17: Given お店の登録が成功した後 When 監査を見る Then お店を作った記録が残っている。
 - AC-PROV-18: Given 停止された会社の管理者 When お店を登録する Then 断られる。
 
