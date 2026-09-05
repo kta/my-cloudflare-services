@@ -773,7 +773,8 @@ test.describe('承認済みモックとの突き合わせ', () => {
 
   test('SETTINGS-HOURS — 設定・営業時間', async ({ page }) => {
     await openSection(page, '営業時間')
-    await expect(page.getByLabel('閉店')).toHaveValue('19:00')
+    // 曜日ごとの上書きにも「金曜日の閉店」等が並ぶので、基準の 1 つを厳密に指す。
+    await expect(page.getByLabel('閉店', { exact: true })).toHaveValue('19:00')
     /*
      * いま許している差:
      *   - 第2サイドバーの 7 項目・「変更を捨てる」・「お知らせ 3」。

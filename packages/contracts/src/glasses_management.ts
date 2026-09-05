@@ -1581,6 +1581,14 @@ export const CustomerNoteInput = z
     kind: CustomerNoteKind,
     body: z.string().refine(codePointsAtMost(2000)).default(''),
     handwritingSvg: HandwritingSvg.nullable().default(null),
+    /*
+     * 6 枚目を置き換えるとき、どの 1 枚と入れ替えるか。
+     * 無かったころ、画面は「どれと置き換えますか」と尋ねて選ばせておきながら、
+     * その答えを送る先が無く、**押しても何も起きなかった**
+     * （実装不足の洗い出し customers-02）。**黙って古い 1 枚を消さない**という
+     * 決めは変えず、人が選んだ 1 枚だけを入れ替える。
+     */
+    replacesId: Uuid.nullable().default(null),
     storeId: Uuid,
   })
   .refine((value) => value.body.trim() !== '' || value.handwritingSvg !== null, {

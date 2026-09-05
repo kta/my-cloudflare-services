@@ -6265,6 +6265,44 @@ const routes = app
 
       const detail = await reservationDetailOf(c.env, org, reservationId)
       if (detail === null) return c.json({ error: 'not_found' }, 404)
+
+      /*
+       * Web のご予約の日時が動いたら、確定のメールを新しい日時で送り直す。
+       *
+       * 変更・取消の型は `NotificationJob` に無く、足すのは別サービスの契約変更
+       * （＝人間の承認事項）なので、**日時だけを変えたときに `reservation.confirmed`
+       * を送り直す**という決めでこれを賄う。決めはあったのに配線が無く、変更の面が
+       * 「変更をメールでお知らせします」と言いながら 1 通も送っていなかった
+       * （実装不足の洗い出し change-cancel-02）。
+       * 鍵は「ご予約 id + 新しい日時」なので、同じ日時へ何度直しても 1 通に収まる。
+       */
+      if (startsAt !== null && startsAt !== reservation.startsAt) {
+        const web = await c.env.DB.prepare(
+          'SELECT w.contact_email AS contactEmail, w.public_code AS publicCode, ' +
+            's.name AS storeName, s.name_public AS storeNamePublic ' +
+            'FROM web_bookings w JOIN stores s ON s.organization_id = w.organization_id AND s.id = w.store_id ' +
+            "WHERE w.organization_id = ? AND w.reservation_id = ? AND w.status <> 'cancelled' LIMIT 1",
+        )
+          .bind(org, reservationId)
+          .first<{
+            contactEmail: string
+            publicCode: string
+            storeName: string
+            storeNamePublic: string | null
+          }>()
+        if (web !== null && web !== undefined && web.contactEmail !== '') {
+          await sendReservationMail(c.env, {
+            organizationId: org,
+            reservationId,
+            to: web.contactEmail,
+            managementCode: web.publicCode,
+            reservationNumber: web.publicCode,
+            // 店内名をお客様のメールに漏らさない。
+            storeName: web.storeNamePublic ?? web.storeName,
+            appointmentAt: startsAt,
+          }).catch(() => undefined)
+        }
+      }
       return c.json(detail)
     },
   )
@@ -7470,6 +7508,27 @@ const routes = app
       const noteId = crypto.randomUUID()
       let key: string | null = null
       if (input.handwritingSvg !== null) {
+        /*
+         * 置き換える 1 枚を人が選んでいれば、先にその 1 枚を退ける。
+         * **黙って古い 1 枚を消さない**という決めはそのままで、消すのは
+         * 画面で選ばれた 1 枚だけである（実装不足の洗い出し customers-02）。
+         * R2 の実体も一緒に片づける（行だけ消すと鍵の無い実体が残り続ける）。
+         */
+        if (input.replacesId !== null) {
+          const old = await c.env.DB.prepare(
+            'SELECT handwriting_key AS handwritingKey FROM customer_notes ' +
+              'WHERE organization_id = ? AND customer_id = ? AND id = ? AND handwriting_key IS NOT NULL',
+          )
+            .bind(org, customerId, input.replacesId)
+            .first<{ handwritingKey: string }>()
+          if (old === null || old === undefined) return c.json({ error: 'not_found' }, 404)
+          await c.env.RECORDINGS.delete(old.handwritingKey).catch(() => undefined)
+          await c.env.DB.prepare(
+            'DELETE FROM customer_notes WHERE organization_id = ? AND customer_id = ? AND id = ?',
+          )
+            .bind(org, customerId, input.replacesId)
+            .run()
+        }
         const sheets = await c.env.DB.prepare(
           'SELECT id, created_at AS createdAt FROM customer_notes ' +
             'WHERE organization_id = ? AND customer_id = ? AND handwriting_key IS NOT NULL ORDER BY created_at ASC',

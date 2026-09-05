@@ -1452,6 +1452,50 @@ describe('確認メール', () => {
     expect(failed.body.emailed).toBe(false)
   })
 
+  it('店舗側で日時を変えると、新しい日時で確定のメールを送り直す', async () => {
+    /*
+     * 変更・取消の型は `NotificationJob` に無いので、**日時だけを変えたときに
+     * `reservation.confirmed` を送り直す**という決めでこれを賄う。決めはあったのに
+     * 配線が無く、変更の面が「変更をメールでお知らせします」と言いながら 1 通も
+     * 送っていなかった（実装不足の洗い出し change-cancel-02）。
+     */
+    const t = await webTenant()
+    const booked = await book(t)
+    expect(booked.status).toBe(200)
+    const row = await env.DB.prepare(
+      'SELECT reservation_id AS reservationId FROM web_bookings WHERE organization_id = ?',
+    )
+      .bind(t.org)
+      .first<{ reservationId: string }>()
+    const reservationId = String(row?.reservationId)
+    const detail = await call(`/api/staff/reservations/${reservationId}`, {
+      headers: authed(t.token),
+    })
+    expect(detail.status).toBe(200)
+
+    const jobs: unknown[] = []
+    vi.spyOn(env.NOTIFIER, 'fetch').mockImplementation(async (input, init) => {
+      jobs.push(JSON.parse(String((init as RequestInit | undefined)?.body ?? '{}')))
+      return new Response(JSON.stringify({ status: 'sent' }), { status: 200 })
+    })
+
+    const moved = at(VISIT, '15:00')
+    const patched = await call(`/api/staff/reservations/${reservationId}`, {
+      method: 'PATCH',
+      headers: authed(t.token),
+      body: { version: (detail.body as { version: number }).version, startsAt: moved },
+    })
+    expect(patched.status, JSON.stringify(patched.body)).toBe(200)
+
+    expect(jobs).toHaveLength(1)
+    expect(jobs[0]).toMatchObject({
+      type: 'reservation.confirmed',
+      payload: { appointmentAt: moved },
+    })
+    // 鍵は「ご予約 id + 新しい日時」。同じ日時へ何度直しても 1 通に収まる。
+    expect(String((jobs[0] as { id: string }).id)).toContain(moved)
+  })
+
   it('notifier が 502 を返しても予約は成立し、ご予約番号と確認番号が返る', async () => {
     const t = await webTenant()
     vi.spyOn(env.NOTIFIER, 'fetch').mockResolvedValue(

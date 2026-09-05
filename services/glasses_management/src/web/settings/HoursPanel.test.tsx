@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SettingsScreen } from './SettingsScreen'
@@ -181,12 +181,45 @@ describe('営業時間', () => {
     const lines = within(group)
       .getAllByRole('listitem')
       .map((li) => li.textContent?.replace(/\s+/g, ''))
-    expect(lines).toEqual([
-      '火曜日お休み（定休日）',
-      '金曜日11:00–20:00',
-      '日曜日10:00–18:00',
-      '月・水・木・土曜日通常どおり',
-    ])
+    // 基準と違う曜日は**その場で直せる**（読むだけだったころ、金曜だけ 11:00 開店に
+    // したい店は設定の画面では変えられなかった。実装不足の洗い出し settings-03）。
+    expect(lines[0]).toContain('火曜日')
+    expect(lines[0]).toContain('お休み（定休日）')
+    expect(lines[3]).toBe('月・水・木・土曜日通常どおり')
+    expect(within(group).getByLabelText('金曜日の開店')).toHaveValue('11:00')
+    expect(within(group).getByLabelText('金曜日の閉店')).toHaveValue('20:00')
+    expect(within(group).getByLabelText('日曜日の開店')).toHaveValue('10:00')
+  })
+
+  it('曜日ごとの上書きを直して保存すると、その曜日だけが変わる', async () => {
+    await openHours()
+    const group = screen.getByRole('group', { name: '曜日ごとの上書き' })
+    fireEvent.change(within(group).getByLabelText('金曜日の開店'), {
+      target: { value: '12:00' },
+    })
+    await userEvent.click(screen.getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(screen.getByText('保存しました')).toBeInTheDocument())
+
+    const put = sent.find((call) => call.url.endsWith('/business-hours') && call.method === 'PUT')
+    const rows = (put?.body as { rows: { weekday: number; opensAt: string | null }[] }).rows
+    expect(rows.find((row) => row.weekday === 5)?.opensAt).toBe('12:00')
+    // ほかの曜日は動かさない。
+    expect(rows.find((row) => row.weekday === 0)?.opensAt).toBe('10:00')
+  })
+
+  it('お休みと営業日を行き来できる（片道にしない）', async () => {
+    await openHours()
+    const group = screen.getByRole('group', { name: '曜日ごとの上書き' })
+    const tuesday = within(group).getAllByRole('listitem')[0]
+    expect(tuesday).toBeDefined()
+    await userEvent.click(
+      within(tuesday as HTMLElement).getByRole('button', { name: '営業日にする' }),
+    )
+    expect(within(group).getByLabelText('火曜日の開店')).toBeInTheDocument()
+    await userEvent.click(
+      within(tuesday as HTMLElement).getByRole('button', { name: 'お休みにする' }),
+    )
+    expect(within(group).queryByLabelText('火曜日の開店')).toBeNull()
   })
 
   it('予約の間隔は 片付け 10分・刻み 30分ごと・同じ時刻に受けられる件数 3件まで を出す', async () => {

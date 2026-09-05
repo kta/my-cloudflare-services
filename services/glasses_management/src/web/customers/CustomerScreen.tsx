@@ -164,6 +164,33 @@ type MergePaneState =
   | { phase: 'submitting'; primary: CustomerDetailShape; secondary: CustomerDetailShape }
   | { phase: 'error'; message: string }
 
+/**
+ * 下見のときの姿と、いまの姿の違いを 1 行ずつにする。
+ * 「もう一度下見してください」とだけ言われても、どちらの登録の何が変わったのかを
+ * 利用者が自分で探すことになる（実装不足の洗い出し customers-06）。
+ * 読み比べるのは画面に出ている欄だけにする —— 内部の版だけが動いた（内容は同じ）
+ * ときに「何かが変わりました」とだけ言うと、探しても見つからない。
+ */
+export function movedLines(
+  before: CustomerDetailShape,
+  after: CustomerDetailShape | null,
+): readonly string[] {
+  if (after === null) return []
+  const fields: readonly { label: string; read: (row: CustomerDetailShape) => string }[] = [
+    { label: 'お名前', read: (row) => row.name },
+    { label: 'ふりがな', read: (row) => row.kana ?? '' },
+    { label: 'お電話番号', read: (row) => row.phone ?? '' },
+    { label: '覚えておくこと', read: (row) => row.memo ?? '' },
+  ]
+  const shown = (value: string) => (value === '' ? '（未入力）' : value)
+  return fields
+    .filter((field) => field.read(before) !== field.read(after))
+    .map(
+      (field) =>
+        `${before.name} 様の${field.label}が ${shown(field.read(before))} から ${shown(field.read(after))} に変わりました`,
+    )
+}
+
 export function CustomerScreen({
   storeId,
   stores,
@@ -376,12 +403,32 @@ export function CustomerScreen({
       { headers: { 'Idempotency-Key': mergeIdempotencyKey.current } },
     )
     if (res.status === 409) {
+      /*
+       * 下見のあとに登録が動いた。**何が動いたのかを言う。**
+       * 固定の 1 文だけを出していたころ、利用者は「もう一度下見してください」と
+       * 言われても、どちらの登録の何が変わったのかを自分で探すしかなかった
+       * （実装不足の洗い出し customers-06）。いまの姿を取り直して読み比べる。
+       */
+      const [freshPrimary, freshSecondary] = await Promise.all([
+        client.api.staff.customers[':customerId']
+          .$get({ param: { customerId: primary.id } })
+          .then(async (found) => (found.ok ? ((await found.json()) as CustomerDetailShape) : null))
+          .catch(() => null),
+        client.api.staff.customers[':customerId']
+          .$get({ param: { customerId: secondary.id } })
+          .then(async (found) => (found.ok ? ((await found.json()) as CustomerDetailShape) : null))
+          .catch(() => null),
+      ])
+      const moved = [...movedLines(primary, freshPrimary), ...movedLines(secondary, freshSecondary)]
       setMergeState({
         phase: 'ready',
-        primary,
-        secondary,
+        primary: freshPrimary ?? primary,
+        secondary: freshSecondary ?? secondary,
         rejection: {
-          changes: ['下見のあとに、いずれかの登録が動きました。もう一度下見してください。'],
+          changes:
+            moved.length === 0
+              ? ['下見のあとに、いずれかの登録が動きました。もう一度下見してください。']
+              : [...moved, 'もう一度下見してから、まとめてください。'],
         },
       })
       return
@@ -575,7 +622,15 @@ export function CustomerScreen({
               client.api.staff.customers[':customerId'].notes
                 .$post({
                   param: { customerId: detail.id },
-                  json: { kind: 'memo', body: '', handwritingSvg: sheet.svg, storeId },
+                  json: {
+                    kind: 'memo',
+                    body: '',
+                    handwritingSvg: sheet.svg,
+                    // 6 枚目のときに人が選んだ「置き換える 1 枚」。渡していなかった
+                    // ころ、選ばせておいて押しても何も起きなかった（customers-02）。
+                    replacesId: sheet.replacesId,
+                    storeId,
+                  },
                 })
                 .then((res) => (res.ok ? loadSheets(detail.id) : undefined))
                 .catch(() => setSheetsError('保存できませんでした。もう一度お試しください。'))

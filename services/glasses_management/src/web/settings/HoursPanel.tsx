@@ -48,6 +48,13 @@ type SlotRulesResponse = {
 type Draft = {
   opensAt: string
   closesAt: string
+  /*
+   * 基準と違う曜日の営業時間。**読むだけではなく直せる。**
+   * 読むだけだったころ、金曜だけ 11:00 開店にしたい店は設定の画面では変えられず、
+   * 誰も触れないまま seed の値が残り続けた（実装不足の洗い出し settings-03）。
+   * 鍵は曜日（0〜6）。`null` はその曜日をお休みにするという意味である。
+   */
+  overrides: Record<number, { opensAt: string; closesAt: string } | null>
   bands: Band[]
   slotMinutes: number
   cleanupMinutes: number
@@ -137,9 +144,21 @@ export function HoursPanel({ storeId, now, onDraftChange }: SettingsPanelProps) 
   const save = useCallback(async (): Promise<SaveOutcome> => {
     if (!loaded || !draft) return 'failed'
     const days = baseWeekdays(loaded.hours.rows)
-    const rows: BusinessHoursRow[] = loaded.hours.rows.map((row) =>
-      days.has(row.weekday) ? { ...row, opensAt: draft.opensAt, closesAt: draft.closesAt } : row,
-    )
+    const rows: BusinessHoursRow[] = loaded.hours.rows.map((row) => {
+      if (days.has(row.weekday)) {
+        return { ...row, opensAt: draft.opensAt, closesAt: draft.closesAt }
+      }
+      // 基準と違う曜日は、この面で直した値をそのまま送る。
+      const override = draft.overrides[row.weekday]
+      if (override === undefined) return row
+      if (override === null) return { ...row, isClosed: true, opensAt: null, closesAt: null }
+      return {
+        ...row,
+        isClosed: false,
+        opensAt: override.opensAt,
+        closesAt: override.closesAt,
+      }
+    })
     const blackouts = [
       // 基準と違う曜日（定休・金・日）の帯はこの面で触っていないので、そのまま返す。
       ...loaded.hours.blackouts
@@ -229,6 +248,11 @@ export function HoursPanel({ storeId, now, onDraftChange }: SettingsPanelProps) 
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) =>
     setDraft((prev) => (prev ? { ...prev, [key]: value } : prev))
 
+  const setOverride = (weekday: number, value: { opensAt: string; closesAt: string } | null) =>
+    setDraft((prev) =>
+      prev ? { ...prev, overrides: { ...prev.overrides, [weekday]: value } } : prev,
+    )
+
   const setBand = (key: string, patch: Partial<Band>) =>
     setDraft((prev) =>
       prev
@@ -298,19 +322,80 @@ export function HoursPanel({ storeId, now, onDraftChange }: SettingsPanelProps) 
           <fieldset className="min-w-0">
             <Legend>曜日ごとの上書き</Legend>
             <ul>
-              {overrideLines(loaded.hours.rows).map((line) => (
-                <li
-                  key={line.label}
-                  className="flex min-h-14 items-center gap-4 border-t border-line py-4 first:border-t-0"
-                >
-                  <span className="whitespace-nowrap text-body text-ink">{line.label}</span>
-                  <span
-                    className={cn('ml-auto text-body text-ink-muted', line.mono && 'font-mono')}
+              {overrideWeekdays(loaded.hours.rows).map((weekday) => {
+                const override = draft.overrides[weekday] ?? null
+                const name = `${WEEKDAY_NAMES[weekday]}曜日`
+                return (
+                  <li
+                    key={weekday}
+                    className="flex min-h-14 flex-wrap items-center gap-2.5 border-t border-line py-4 first:border-t-0"
                   >
-                    {line.value}
+                    <span className="whitespace-nowrap text-body text-ink">{name}</span>
+                    {override === null ? (
+                      <span className="ml-auto text-body text-ink-muted">お休み（定休日）</span>
+                    ) : (
+                      <span className="ml-auto flex items-center gap-1.5">
+                        <input
+                          aria-label={`${name}の開店`}
+                          type="time"
+                          value={override.opensAt}
+                          onChange={(event) =>
+                            setOverride(weekday, { ...override, opensAt: event.target.value })
+                          }
+                          className={cn(
+                            'min-h-11 rounded-ctl bg-surface px-2 text-right font-mono text-body text-ink',
+                            focusRing,
+                          )}
+                        />
+                        <span aria-hidden="true" className="text-ink-muted">
+                          –
+                        </span>
+                        <input
+                          aria-label={`${name}の閉店`}
+                          type="time"
+                          value={override.closesAt}
+                          onChange={(event) =>
+                            setOverride(weekday, { ...override, closesAt: event.target.value })
+                          }
+                          className={cn(
+                            'min-h-11 rounded-ctl bg-surface px-2 text-right font-mono text-body text-ink',
+                            focusRing,
+                          )}
+                        />
+                      </span>
+                    )}
+                    {/*
+                      お休みと営業を行き来できるようにする。片道しか無いと、
+                      間違えてお休みにした曜日を画面から戻せない。
+                    */}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setOverride(
+                          weekday,
+                          override === null
+                            ? { opensAt: draft.opensAt, closesAt: draft.closesAt }
+                            : null,
+                        )
+                      }
+                      className={cn(
+                        'min-h-11 rounded-ctl border border-line-strong bg-surface px-3 text-grid font-semibold text-ink',
+                        focusRing,
+                      )}
+                    >
+                      {override === null ? '営業日にする' : 'お休みにする'}
+                    </button>
+                  </li>
+                )
+              })}
+              {normalWeekdayLine(loaded.hours.rows) !== null && (
+                <li className="flex min-h-14 items-center gap-4 border-t border-line py-4">
+                  <span className="whitespace-nowrap text-body text-ink">
+                    {normalWeekdayLine(loaded.hours.rows)}
                   </span>
+                  <span className="ml-auto text-body text-ink-muted">通常どおり</span>
                 </li>
-              ))}
+              )}
             </ul>
           </fieldset>
         </div>
@@ -543,33 +628,31 @@ function toDraft(loaded: Loaded): Draft {
     slotMinutes: loaded.rules.slotMinutes,
     cleanupMinutes: loaded.rules.cleanupMinutes,
     maxParallel: loaded.rules.maxParallel,
+    overrides: Object.fromEntries(
+      loaded.hours.rows
+        .filter((row) => !baseWeekdays(loaded.hours.rows).has(row.weekday))
+        .map((row) => [
+          row.weekday,
+          row.isClosed || row.opensAt === null || row.closesAt === null
+            ? null
+            : { opensAt: row.opensAt, closesAt: row.closesAt },
+        ]),
+    ),
   }
 }
 
-/** モックの「曜日ごとの上書き」。基準と違う曜日を月曜始まりで並べ、残りを 1 行にまとめる。 */
-function overrideLines(
-  rows: readonly BusinessHoursRow[],
-): { label: string; value: string; mono: boolean }[] {
+/** 基準と違う曜日を月曜始まりで。 */
+function overrideWeekdays(rows: readonly BusinessHoursRow[]): number[] {
   const days = baseWeekdays(rows)
-  const lines: { label: string; value: string; mono: boolean }[] = []
-  for (const weekday of WEEKDAYS_FROM_MONDAY) {
-    if (days.has(weekday)) continue
-    const row = rows.find((r) => r.weekday === weekday)
-    const name = `${WEEKDAY_NAMES[weekday]}曜日`
-    if (!row || row.isClosed || !row.opensAt || !row.closesAt) {
-      lines.push({ label: name, value: 'お休み（定休日）', mono: false })
-      continue
-    }
-    lines.push({ label: name, value: `${row.opensAt}–${row.closesAt}`, mono: true })
-  }
+  return WEEKDAYS_FROM_MONDAY.filter((weekday) => !days.has(weekday))
+}
+
+/** 「月・火・水・木・土曜日」。基準どおりの曜日が 1 つも無ければ null。 */
+function normalWeekdayLine(rows: readonly BusinessHoursRow[]): string | null {
+  const days = baseWeekdays(rows)
   const normal = WEEKDAYS_FROM_MONDAY.filter((weekday) => days.has(weekday))
-  if (normal.length > 0)
-    lines.push({
-      label: `${normal.map((weekday) => WEEKDAY_NAMES[weekday]).join('・')}曜日`,
-      value: '通常どおり',
-      mono: false,
-    })
-  return lines
+  if (normal.length === 0) return null
+  return `${normal.map((weekday) => WEEKDAY_NAMES[weekday]).join('・')}曜日`
 }
 
 /** EX-PERMISSION の「下書きは残っています」に並べる行。件数がそのまま未保存の札になる。 */
@@ -579,6 +662,18 @@ function describeChanges(base: Draft, draft: Draft): string[] {
     lines.push(`開店を ${base.opensAt} から ${draft.opensAt} に変える`)
   if (base.closesAt !== draft.closesAt)
     lines.push(`閉店を ${base.closesAt} から ${draft.closesAt} に変える`)
+
+  // 曜日ごとの上書き。ここを数えないと、直しても「未保存の変更 0件」で保存が押せない。
+  for (const weekday of WEEKDAYS_FROM_MONDAY) {
+    const was = base.overrides[weekday]
+    const now = draft.overrides[weekday]
+    if (was === undefined && now === undefined) continue
+    const label = `${WEEKDAY_NAMES[weekday]}曜日`
+    const shown = (value: { opensAt: string; closesAt: string } | null | undefined) =>
+      value === null || value === undefined ? 'お休み' : `${value.opensAt}–${value.closesAt}`
+    if (shown(was) !== shown(now))
+      lines.push(`${label}を ${shown(was)} から ${shown(now)} に変える`)
+  }
 
   const before = new Map(base.bands.map((band) => [band.key, band]))
   for (const band of draft.bands) {

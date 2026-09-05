@@ -6,7 +6,7 @@ import type {
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { CustomerScreen } from './CustomerScreen'
+import { CustomerScreen, movedLines } from './CustomerScreen'
 
 /*
  * 顧客台帳の器。**URL による画面の切り替えを持ち込まない**ので、一覧・詳細・新規登録・
@@ -421,5 +421,45 @@ describe('おまとめ（CUSTOMER-MERGE）', () => {
       expect(screen.getByRole('table', { name: '度数の移り変わり' })).toBeVisible(),
     )
     expect(screen.queryByRole('button', { name: 'おまとめ' })).not.toBeInTheDocument()
+  })
+})
+
+describe('おまとめを断られたとき', () => {
+  /*
+   * 下見のあとに登録が動いたら、**何が動いたのかを言う**。固定の 1 文だけを
+   * 出していたころ、利用者は「もう一度下見してください」と言われても、
+   * どちらの登録の何が変わったのかを自分で探すしかなかった
+   * （実装不足の洗い出し customers-06）。
+   */
+  const BEFORE = {
+    id: 'c1',
+    customerNumber: 'G-01842',
+    name: '田中 花子',
+    kana: 'たなか はなこ',
+    phone: '090-1234-5678',
+    memo: '',
+  } as unknown as Parameters<typeof movedLines>[0]
+
+  it('変わった欄だけを、前と後ろを並べて言う', () => {
+    const after = { ...BEFORE, phone: '080-9999-0000' } as typeof BEFORE
+    expect(movedLines(BEFORE, after)).toEqual([
+      '田中 花子 様のお電話番号が 090-1234-5678 から 080-9999-0000 に変わりました',
+    ])
+  })
+
+  it('空欄になった欄は「（未入力）」と言う（黙って消さない）', () => {
+    const after = { ...BEFORE, memo: '' } as typeof BEFORE
+    const filled = { ...BEFORE, memo: '金属アレルギー' } as typeof BEFORE
+    expect(movedLines(filled, after)).toEqual([
+      '田中 花子 様の覚えておくことが 金属アレルギー から （未入力） に変わりました',
+    ])
+  })
+
+  it('中身が同じなら何も言わない（探しても見つからない知らせを出さない）', () => {
+    expect(movedLines(BEFORE, { ...BEFORE } as typeof BEFORE)).toEqual([])
+  })
+
+  it('取り直せなかったら何も言わない', () => {
+    expect(movedLines(BEFORE, null)).toEqual([])
   })
 })
