@@ -253,6 +253,16 @@ function defaultApi(): RecorderApi {
       if (res.ok) return 'stored'
       // 404（消された）と 409（`deleted` からは動かせない）は、送り直しても直らない。
       if (res.status === 404 || res.status === 409) return 'abandoned'
+      /*
+       * 送れなかったことを**サーバへも知らせる**。知らせないと `upload_attempts` が
+       * 増えず、「録音の保存に3回失敗しました」のお知らせが実運用では一度も立たない
+       * （実装不足の洗い出し recording-04）。数えるのはサーバの仕事なので、
+       * ここは状態を `failed` へ動かすだけでよい。
+       * 届かなくても再送そのものは続ける（数えられないことで録音を失わせない）。
+       */
+      await client.api.staff.recordings[':recordingId']
+        .$patch({ param: { recordingId }, json: { state: 'failed' } })
+        .catch(() => undefined)
       return 'retry'
     },
   }

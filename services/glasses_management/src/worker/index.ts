@@ -2771,7 +2771,11 @@ async function readSessionLink(
  *
  * **同じ原因で連打しない。**同じ `code` + `target_id` の未解決行があれば作らない
  * （4 回目・5 回目の失敗でお知らせが増えると、対応の 1 件が数に埋もれる）。
- * 端末名は `terminals` 表ができる P10 まで `null` で、そのぶん本文の一句が落ちる。
+ *
+ * 端末名はその録音の受付が使っていた端末から引く。`null` で固定していたころ、
+ * 本文の一句が落ち、**どの iPad に実体が残っているのかが分からなかった** ——
+ * 直しに行く人はお店じゅうの端末を順に見ることになる
+ * （実装不足の洗い出し recording-05。P10 で `terminals` 表が入ったので引ける）。
  */
 async function raiseUploadFailedAlert(
   db: D1Database,
@@ -2793,11 +2797,20 @@ async function raiseUploadFailedAlert(
     .bind(input.organizationId, input.recordingId)
     .first<{ id: string }>()
   if (existing !== null) return
+  const terminal = await db
+    .prepare(
+      'SELECT t.name AS name FROM recordings r ' +
+        'JOIN reception_sessions s ON s.organization_id = r.organization_id AND s.id = r.reception_session_id ' +
+        'JOIN terminals t ON t.organization_id = s.organization_id AND t.id = s.terminal_id ' +
+        'WHERE r.organization_id = ? AND r.id = ? LIMIT 1',
+    )
+    .bind(input.organizationId, input.recordingId)
+    .first<{ name: string }>()
   const alert = uploadFailedAlert({
     code: input.code,
     customerName: input.customerName,
     hasReservation: input.hasReservation,
-    terminalName: null,
+    terminalName: terminal?.name ?? null,
   })
   await db
     .prepare(
@@ -8618,6 +8631,31 @@ const routes = app
               .where(and(eq(staff.organizationId, org), eq(staff.id, session.actorId)))
           )[0]?.displayName ?? null)
 
+    /*
+     * その受付の録音。**`stored` の 1 本だけ**を載せる。以前はここを null で
+     * 固定していたので、録音が保管庫にあってもこの面に「受付のときの録音」が
+     * 一度も出なかった（実装不足の洗い出し recording-01）。送信の途中や
+     * 失敗した録音は載せない —— 押しても鳴らないボタンを作らない（AC-REC-07）。
+     */
+    const heardRow =
+      session === null
+        ? null
+        : await c.env.DB.prepare(
+            'SELECT id, state, duration_seconds AS durationSeconds FROM recordings ' +
+              "WHERE organization_id = ? AND reception_session_id = ? AND state = 'stored' " +
+              'ORDER BY created_at DESC LIMIT 1',
+          )
+            .bind(org, session.id)
+            .first<{ id: string; state: string; durationSeconds: number | null }>()
+    const heard =
+      heardRow === null || heardRow === undefined
+        ? null
+        : {
+            id: heardRow.id,
+            state: heardRow.state,
+            durationSeconds: heardRow.durationSeconds,
+          }
+
     return c.json(
       ReceptionHistoryDetail.parse({
         entryId,
@@ -8632,7 +8670,7 @@ const routes = app
             actorName: row.actorName,
           }))
           .filter((row) => row.what !== null),
-        recording: null,
+        recording: heard,
       }),
     )
   })
