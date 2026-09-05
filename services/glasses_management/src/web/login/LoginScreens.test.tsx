@@ -25,6 +25,7 @@ const terminal = (id: string, name: string, online = true): Terminal => ({
   storeId: '11111111-1111-4111-8111-111111111111',
   name,
   kind: 'shared',
+  staffId: null,
   placeNote: 'レジの右側',
   deviceLabel: 'EYE-iPad-07',
   autoLockSeconds: 120,

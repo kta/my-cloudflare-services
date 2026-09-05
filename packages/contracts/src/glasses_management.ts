@@ -2686,6 +2686,14 @@ export const Terminal = z.strictObject({
   storeId: Uuid,
   name: z.string().trim().min(1).max(60),
   kind: TerminalKind,
+  /**
+   * 個人端末の持ち主。共有端末では null。
+   *
+   * 未認証の入口ではスタッフ一覧を出せないので、「端末を選ぶ → その人の PIN」で
+   * 暗証番号を 1 回に収める。既定を null にしてあるのは、共有端末しか作らない
+   * 呼び出しに毎回 null を書かせないため。
+   */
+  staffId: Uuid.nullable().default(null),
   placeNote: z.string().trim().max(40).default(''),
   deviceLabel: z.string().trim().max(30).default(''),
   autoLockSeconds: z.number().int().min(30).max(1800).default(120),

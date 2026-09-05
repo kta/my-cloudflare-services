@@ -52,6 +52,7 @@ const PLACES = [
     storeId: 's1',
     name: '銀座店 レジ横iPad',
     kind: 'shared' as const,
+    staffId: null,
     placeNote: 'レジの右側',
     deviceLabel: 'EYE-iPad-07',
     autoLockSeconds: 120,

@@ -4113,7 +4113,7 @@ const routes = app
       params.push(query.kind)
     }
     const rows = await c.env.DB.prepare(
-      'SELECT id, store_id AS storeId, name, kind, place_note AS placeNote, ' +
+      'SELECT id, store_id AS storeId, name, kind, staff_id AS staffId, place_note AS placeNote, ' +
         'device_label AS deviceLabel, pin_hash AS pinHash, auto_lock_seconds AS autoLockSeconds, ' +
         'last_seen_at AS lastSeenAt, is_active AS isActive, version, created_at AS createdAt ' +
         `FROM terminals WHERE ${clauses.join(' AND ')} ORDER BY created_at ASC`,
@@ -4124,6 +4124,7 @@ const routes = app
         storeId: string
         name: string
         kind: 'shared' | 'personal'
+        staffId: string | null
         placeNote: string | null
         deviceLabel: string | null
         pinHash: string | null
@@ -4141,6 +4142,7 @@ const routes = app
           storeId: row.storeId,
           name: row.name,
           kind: row.kind,
+          staffId: row.staffId,
           placeNote: row.placeNote ?? '',
           deviceLabel: row.deviceLabel ?? '',
           autoLockSeconds: row.autoLockSeconds,

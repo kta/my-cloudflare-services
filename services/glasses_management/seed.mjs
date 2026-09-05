@@ -151,11 +151,30 @@ const terminals = [
     placeNote: '検査室 1　測定機の脇',
     deviceLabel: 'EYE-iPad-07',
   },
+  /*
+   * 個人端末は 1 人に紐づく（`terminals.staff_id`）。未認証の入口では
+   * スタッフ一覧を出せないので、「端末を選ぶ → その人の PIN」で暗証番号を
+   * 1 回に収める。照合するのは佐藤 美咲の `staff.pin_hash` なので、
+   * この行は自分の pin_hash を持たない。
+   */
+  {
+    id: uid('c0100000', 3),
+    name: '佐藤 美咲の iPad',
+    kind: 'personal',
+    staffId: uid('c0010000', 0),
+    placeNote: '本人が持ち歩く',
+    deviceLabel: 'EYE-iPad-11',
+  },
 ]
 const terminalSeedRows = await Promise.all(
   terminals.map(async (terminal) => ({
     ...terminal,
-    pinHash: await hashStretched(await stretchPin('000000', ORG, terminal.id), PEPPER),
+    staffId: terminal.staffId ?? null,
+    // 個人端末は持ち主の staff.pin_hash で照合するので、端末側は PIN を持たない。
+    pinHash:
+      terminal.kind === 'personal'
+        ? null
+        : await hashStretched(await stretchPin('000000', ORG, terminal.id), PEPPER),
   })),
 )
 
@@ -1143,7 +1162,7 @@ const lines = [
   // ここには状態列や平文PINを置かない。
   ...terminalSeedRows.map(
     (terminal) =>
-      `INSERT OR IGNORE INTO terminals (id, organization_id, store_id, name, kind, place_note, device_label, pin_hash, auto_lock_seconds, last_seen_at, is_active, version, created_at) VALUES (${q(terminal.id)}, ${q(ORG)}, ${q(GINZA)}, ${q(terminal.name)}, ${q(terminal.kind)}, ${q(terminal.placeNote)}, ${q(terminal.deviceLabel)}, ${q(terminal.pinHash)}, 120, NULL, '1', 1, ${q(NOW)});`,
+      `INSERT OR IGNORE INTO terminals (id, organization_id, store_id, name, kind, staff_id, place_note, device_label, pin_hash, auto_lock_seconds, last_seen_at, is_active, version, created_at) VALUES (${q(terminal.id)}, ${q(ORG)}, ${q(GINZA)}, ${q(terminal.name)}, ${q(terminal.kind)}, ${terminal.staffId === null ? 'NULL' : q(terminal.staffId)}, ${q(terminal.placeNote)}, ${q(terminal.deviceLabel)}, ${terminal.pinHash === null ? 'NULL' : q(terminal.pinHash)}, 120, NULL, '1', 1, ${q(NOW)});`,
   ),
   ...storeInfo.flatMap((info) =>
     Object.entries(info)
