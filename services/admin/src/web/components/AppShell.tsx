@@ -7,7 +7,11 @@ import { logout } from '../auth/session'
  * テンプレートの管理領域は「組織」のみ — サービスを増やしたら NAV に追記する。
  */
 
-const NAV = [{ to: '/', label: '組織', end: true }] as const
+const NAV = [
+  { to: '/', label: '組織', end: true },
+  { to: '/users', label: '利用者', end: false },
+  { to: '/me/pin', label: '個人 PIN', end: false },
+] as const
 
 export function AppShell() {
   const navigate = useNavigate()

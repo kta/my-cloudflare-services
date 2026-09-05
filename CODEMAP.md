@@ -24,10 +24,13 @@ topology and ownership boundary.
 |---|---|---|
 | [`services/admin`](./services/admin) | [`src/worker/index.ts`](./services/admin/src/worker/index.ts) | Operator SPA/API, organization source of truth, authentication, invitations, and organization reconciliation. |
 | [`services/example_service`](./services/example_service) | [`src/worker/index.ts`](./services/example_service/src/worker/index.ts) | Template domain Worker: same-origin SPA/API, tenant-scoped items, and received organization records. |
+| [`services/patent_research`](./services/patent_research) | [`src/worker/index.ts`](./services/patent_research/src/worker/index.ts) | 典拠 (Tenkyo): patent prior-art research and drafting workbench. Owns matters, invention disclosures, claim elements, search records, machine-verified evidence, patentability assessments, and specification drafts. Local-only; never deployed. |
+| [`services/glasses_management`](./services/glasses_management) | [`src/worker/index.ts`](./services/glasses_management/src/worker/index.ts) | EYE reservation domain Worker: same-origin SPA/API, dedicated D1, private recording R2, and short-lived KV state. |
 | [`services/notifier`](./services/notifier) | [`src/index.ts`](./services/notifier/src/index.ts) | Internal notification endpoint, KV deduplication, and Resend delivery. |
 | [`services/ops`](./services/ops) | [`src/index.ts`](./services/ops/src/index.ts) | Cron and Workflow entry points for D1 backup, freshness/capacity checks, and service health checks. |
 | [`packages/contracts`](./packages/contracts) | [`src/index.ts`](./packages/contracts/src/index.ts) | Zod API contracts shared by Workers and web clients. |
 | [`packages/shared`](./packages/shared) | [`src/index.ts`](./packages/shared/src/index.ts) | Shared authentication, internal-call, date, and analytics utilities. |
+| [`packages/patent-corpus`](./packages/patent-corpus) | [`src/cli.ts`](./packages/patent-corpus/src/cli.ts), [`src/server.ts`](./packages/patent-corpus/src/server.ts) | Local Japanese patent corpus engine: bulk-media importers, bigram full-text index, quote verification, and vector search. Runs as a Node CLI and a localhost sidecar; it is a rebuildable derived artifact, not a service. |
 | [`packages/ui`](./packages/ui) | [`src/theme.css`](./packages/ui/src/theme.css), [`src/index.ts`](./packages/ui/src/index.ts) | Design tokens and shared UI primitives. |
 | [`infra/terraform`](./infra/terraform) | [`cloudflare/`](./infra/terraform/cloudflare) | Cloudflare resource definitions and Terraform outputs consumed by Wrangler configuration. |
 
@@ -40,14 +43,16 @@ and required tests; the sibling `CLAUDE.md` is a symlink to that same source.
 
 | Service | Runtime bindings |
 |---|---|
-| `admin` | D1, `AUTH_RL` KV, `EXAMPLE_SERVICE`, `NOTIFIER`, Cron |
+| `admin` | D1, `AUTH_RL` KV, `GLASSES_MANAGEMENT`, `NOTIFIER`, Cron |
 | `example_service` | D1, `NOTIFIER` |
+| `patent_research` | D1, corpus sidecar over `CORPUS_URL` (`x-internal-key`) |
+| `glasses_management` | D1, `RECORDINGS` R2, `SHORT_LIVED` KV, `NOTIFIER` |
 | `notifier` | `DEDUPE` KV |
 | `ops` | `BACKUPS` R2, `BACKUP_WF`, `ADMIN`, `NOTIFIER`, Cron |
 
 All services consume `packages/contracts` and `packages/shared`; SPA services
-(`admin` and `example_service`) also consume `packages/ui`. These packages do
-not depend on services.
+(`admin`, `example_service`, and `glasses_management`) also consume
+`packages/ui`. These packages do not depend on services.
 
 ## Core flows
 

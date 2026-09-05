@@ -1,0 +1,33 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "notifier",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-25",
+  "observability": { "enabled": true },
+  // Notifications are synchronous and use one KV namespace for a 24-hour
+  // best-effort idempotency record. id は Terraform(envs/production) の出力
+  // `notifier_dedupe_kv_namespace_id` の実値。
+  "kv_namespaces": [
+    {
+      "binding": "DEDUPE",
+      "id": "0cd401c4a4fa4f1caaf8f8f99c6a5b87"
+    }
+  ],
+  // MAIL_FROM is not a secret. 環境ごとに書き、空なら notifier は fail close(502) する。
+  // production の送信元。Resend 側で bakumie.jp のドメイン認証(SPF/DKIM)が要る。
+  "vars": {
+    "MAIL_FROM": "noreply@bakumie.jp"
+  },
+  // staging(develop からの自動デプロイ先)。Worker 名は notifier-staging になる。
+  // kv_namespaces は wrangler の非継承キーなので環境ごとに書き下ろす。
+  // id は Terraform(envs/staging) の notifier_dedupe_kv_namespace_id の実値。
+  "env": {
+    "staging": {
+      "kv_namespaces": [{ "binding": "DEDUPE", "id": "4d46d278f7544950a7370628b92bffe0" }],
+      // staging では RESEND_API_KEY を設定しないので、この空値のまま fail close する。
+      "vars": { "MAIL_FROM": "" }
+    }
+  }
+  // No secrets are stored in vars. INTERNAL_KEY and RESEND_API_KEY are set
+  // with `wrangler secret put`; MAIL_FROM is an ordinary deployment variable.
+}

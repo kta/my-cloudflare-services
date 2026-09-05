@@ -106,6 +106,11 @@ const MANAGEMENT_ROUTES = [
   },
   { name: 'DELETE /api/organizations/:id', method: 'DELETE', path: '/api/organizations/unknown' },
   {
+    name: 'POST /api/organizations/:id/sync',
+    method: 'POST',
+    path: '/api/organizations/unknown/sync',
+  },
+  {
     name: 'POST /api/organizations/:id/invitations',
     method: 'POST',
     path: '/api/organizations/unknown/invitations',
@@ -113,6 +118,9 @@ const MANAGEMENT_ROUTES = [
   },
   // default-deny の証明: 存在しない /api/* もゲートを通らないと 404 にすら到達しない
   { name: 'GET /api/not-a-route(未知パス)', method: 'GET', path: '/api/not-a-route' },
+  // NOTE: GET /api/organizations/:id/stores はこの表に載せない。担当店舗の割り当てで
+  // 使うため運営限定ゲートの外に出してあり、**自社なら本部管理者も引ける**。
+  // 自社 200 / 他社 403 / 未認証 401 / 未知の会社 404 は organization-stores.test.ts が見る。
 ] as const
 
 async function call(
@@ -163,6 +171,93 @@ describe('管理 API の権限マトリクス', () => {
       })
     })
   }
+})
+
+/**
+ * 利用者管理(UC-EYE-149)と個人 PIN(UC-EYE-151)は**テナントの本部管理者**の
+ * 業務であり、運営限定ゲート(requireOperator)の対象ではない。テナント admin が
+ * 通ること、staff が通らないこと、未認証・期限切れ・別 secret が 401 になることを
+ * 運営ルートと同じ表で固定する。
+ */
+const USER_ADMINISTRATION_ROUTES = [
+  { name: 'GET /api/users', method: 'GET', path: '/api/users' },
+  { name: 'GET /api/users/:id', method: 'GET', path: '/api/users/unknown-user' },
+  {
+    name: 'PATCH /api/users/:id',
+    method: 'PATCH',
+    path: '/api/users/unknown-user',
+    body: { standardRole: 'staff' },
+  },
+  { name: 'POST /api/users/:id/sync', method: 'POST', path: '/api/users/unknown-user/sync' },
+  { name: 'GET /api/users/:id/audits', method: 'GET', path: '/api/users/unknown-user/audits' },
+  {
+    name: 'POST /api/users/:id/pin-reset',
+    method: 'POST',
+    path: '/api/users/unknown-user/pin-reset',
+    body: { verificationMethod: 'in_person', verificationNote: '店頭で確認' },
+  },
+] as const
+
+async function callUserRoute(
+  route: (typeof USER_ADMINISTRATION_ROUTES)[number],
+  actor: Actor,
+): Promise<{ status: number; error?: string }> {
+  const auth = await headersFor(actor)
+  const res = await SELF.fetch(`${BASE}${route.path}`, {
+    method: route.method,
+    headers: 'body' in route ? { ...JSON_HEADERS, ...auth } : auth,
+    ...('body' in route ? { body: JSON.stringify(route.body) } : {}),
+  })
+  const body = (await res.json().catch(() => ({}))) as { error?: string }
+  return { status: res.status, error: body.error }
+}
+
+describe('利用者管理 API の権限マトリクス', () => {
+  for (const route of USER_ADMINISTRATION_ROUTES) {
+    describe(route.name, () => {
+      it('未認証は 401', async () => {
+        expect((await callUserRoute(route, 'none')).status).toBe(401)
+      })
+
+      it('期限切れトークンは 401', async () => {
+        expect((await callUserRoute(route, 'expired')).status).toBe(401)
+      })
+
+      it('別 secret のトークンは 401', async () => {
+        expect((await callUserRoute(route, 'wrong-secret')).status).toBe(401)
+      })
+
+      it('staff ロールは 403 forbidden', async () => {
+        const { status, error } = await callUserRoute(route, 'staff')
+        expect(status).toBe(403)
+        expect(error).toBe('forbidden')
+      })
+
+      it('テナント org の admin は自組織の利用者管理へ到達できる', async () => {
+        const { status } = await callUserRoute(route, 'tenant-admin')
+        expect([200, 201, 400, 404]).toContain(status)
+      })
+    })
+  }
+})
+
+describe('個人 PIN ルート(本人のみ・admin 限定ではない)', () => {
+  it('未認証は 401', async () => {
+    for (const method of ['GET', 'POST']) {
+      const res = await SELF.fetch(`${BASE}/api/me/pin`, {
+        method,
+        headers: JSON_HEADERS,
+        ...(method === 'POST' ? { body: JSON.stringify({ stretchedPin: 'x' }) } : {}),
+      })
+      expect(res.status).toBe(401)
+    }
+  })
+
+  it('staff は自分の PIN ルートへ到達できる(403 にならない)', async () => {
+    const auth = await headersFor('staff')
+    const res = await SELF.fetch(`${BASE}/api/me/pin`, { method: 'GET', headers: auth })
+    expect([200, 404]).toContain(res.status)
+  })
 })
 
 describe('公開ルート(認証不要)', () => {
@@ -217,5 +312,20 @@ describe('dev トークングラントの fail close', () => {
       createExecutionContext(),
     )
     expect(res.status).toBe(404)
+  })
+})
+
+/**
+ * staging ゲート(`app.use('*', stagingGate())`)は STAGING_ACCESS_TOKEN が
+ * 設定された環境でだけ働く。この環境には設定が無いので、全リクエストが素通り
+ * しなければならない — 誤って有効化されると本番まで 401 で塞がる。
+ */
+describe('staging ゲート', () => {
+  it('STAGING_ACCESS_TOKEN 未設定のこの環境では素通りする', async () => {
+    const token = await devToken('admin', 'operator-org')
+    const res = await SELF.fetch(`${BASE}/api/organizations`, {
+      headers: { authorization: `Bearer ${token}` },
+    })
+    expect(res.status).toBe(200)
   })
 })

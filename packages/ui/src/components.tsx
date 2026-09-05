@@ -21,8 +21,30 @@ import { cn } from './cn'
  */
 
 /** Shared focus treatment — amber is spent ONLY here (see theme.css). */
+/**
+ * フォーカスの輪。白・下地・薄い緑の上で 5.8:1 あり、地の色に紛れない。
+ * `--color-focus` は他のどの役割にも使わない専用トークン。
+ */
 export const focusRing =
-  'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber'
+  'focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-focus'
+
+/**
+ * 緑の面（上のバー・主操作ボタン）の上に置く操作用。青い輪は緑の上で 1.03:1 になり
+ * 消えてしまうので、そこだけ白い輪にする（緑の上で 6.0:1）。
+ */
+export const focusRingOnPine =
+  'focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-focus-on-pine'
+
+/**
+ * 押せないことの見せ方。**色を変えずに彩度だけ落とす。**
+ *
+ * 別の色へ塗り替えると、主操作が副ボタンや説明文に化けて序列が逆転する
+ * （設定の「保存」が無効のとき副ボタンと同じ姿になり、逆に押せる「変更を捨てる」が
+ * 枠なしの文字だけになっていた。UX 監査 UI-11）。
+ * `focusRing` と同じく**文字列**で配る —— コンポーネントの中に閉じると、
+ * 素の `<button>` を手書きした場所へ届かない（同 HIG-01）。
+ */
+export const disabledLook = 'disabled:cursor-not-allowed disabled:opacity-40'
 
 // All interactive controls meet the 44px touch-target floor.
 const controlBase = 'min-h-11 rounded-ctl font-sans text-sm'
@@ -159,12 +181,6 @@ export function Field({
   )
 }
 
-export function Card({ children, className }: { children: ReactNode; className?: string }) {
-  return (
-    <div className={cn('rounded-ctl border border-line bg-surface p-5', className)}>{children}</div>
-  )
-}
-
 /**
  * Soft status chip: pill shape, soft fill, strong-color text and a 6px
  * leading dot. Tones are semantic — `success` for good/done/saved, `warning`
@@ -185,7 +201,7 @@ export function Chip({
       className={cn(
         'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 font-sans text-xs font-medium',
         tone === 'success' && 'bg-pine/10 text-pine',
-        tone === 'warning' && 'bg-amber/15 text-amber-deep',
+        tone === 'warning' && 'bg-amber/15 text-amber',
         tone === 'danger' && 'bg-danger/10 text-danger',
         tone === 'neutral' && 'bg-line/60 text-ink-muted',
         className,
@@ -196,7 +212,7 @@ export function Chip({
         className={cn(
           'size-1.5 rounded-full',
           tone === 'success' && 'bg-pine',
-          tone === 'warning' && 'bg-amber-deep',
+          tone === 'warning' && 'bg-amber',
           tone === 'danger' && 'bg-danger',
           tone === 'neutral' && 'bg-ink-muted',
         )}

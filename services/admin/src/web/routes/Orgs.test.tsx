@@ -7,6 +7,7 @@ import { toast } from '../store/toast'
 type CreateRequest = { json: { name: string; plan: Plan } }
 type PatchRequest = { param: { id: string }; json: { plan?: Plan; isDisabled?: boolean } }
 type DeleteRequest = { param: { id: string } }
+type SyncRequest = { param: { id: string } }
 type InviteRequest = { param: { id: string }; json: { email: string; role: 'staff' } }
 
 const api = vi.hoisted(() => ({
@@ -14,6 +15,7 @@ const api = vi.hoisted(() => ({
   createOrganization: vi.fn<(request: CreateRequest) => Promise<Response>>(),
   patchOrganization: vi.fn<(request: PatchRequest) => Promise<Response>>(),
   deleteOrganization: vi.fn<(request: DeleteRequest) => Promise<Response>>(),
+  syncOrganization: vi.fn<(request: SyncRequest) => Promise<Response>>(),
   createInvitation: vi.fn<(request: InviteRequest) => Promise<Response>>(),
 }))
 
@@ -29,6 +31,7 @@ vi.mock('../client', async () => {
           ':id': {
             $patch: api.patchOrganization,
             $delete: api.deleteOrganization,
+            sync: { $post: api.syncOrganization },
             invitations: { $post: api.createInvitation },
           },
         },
@@ -106,6 +109,7 @@ describe('Orgs', () => {
     api.createOrganization.mockReset()
     api.patchOrganization.mockReset()
     api.deleteOrganization.mockReset()
+    api.syncOrganization.mockReset()
     api.createInvitation.mockReset()
     toast.clear()
   })
@@ -212,6 +216,40 @@ describe('Orgs', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('組織の作成に失敗しました')
     expect(screen.getByLabelText('組織名')).toHaveValue('Northwind')
     expect(screen.getByLabelText('プラン')).toHaveValue('contracted')
+  })
+
+  it('recovers a persisted organization after its initial domain synchronization fails', async () => {
+    const user = userEvent.setup()
+    api.getOrganizations
+      .mockResolvedValueOnce(response([]))
+      .mockResolvedValueOnce(response([organization({ name: 'Northwind' })]))
+      .mockResolvedValueOnce(response([organization({ name: 'Northwind' })]))
+    api.createOrganization.mockResolvedValue(
+      response(
+        { error: 'organization_sync_failed', organizationId: 'org-1', retryable: true },
+        502,
+      ),
+    )
+    api.syncOrganization.mockResolvedValue(response({ ...organization(), revision: 1 }))
+
+    renderOrgs()
+    await screen.findByText(/まだ組織がありません/)
+    await user.type(screen.getByLabelText('組織名'), 'Northwind')
+    await user.click(screen.getByRole('button', { name: '作成する' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      '組織は作成済みです。EYEへの同期を再試行してください。',
+    )
+    expect(screen.getByLabelText('組織名')).toHaveValue('')
+    expect(await screen.findByText('Northwind')).toBeVisible()
+
+    await user.click(screen.getByRole('button', { name: '同期を再試行' }))
+
+    expect(api.syncOrganization).toHaveBeenCalledWith({ param: { id: 'org-1' } })
+    expect(toast.list()).toContainEqual(
+      expect.objectContaining({ tone: 'success', message: 'EYEへの同期を完了しました。' }),
+    )
+    expect(screen.queryByRole('button', { name: '同期を再試行' })).not.toBeInTheDocument()
   })
 
   it('changes a plan and refreshes the row with the updated plan', async () => {

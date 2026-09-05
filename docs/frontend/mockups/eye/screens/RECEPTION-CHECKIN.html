@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EYE予約 — ご来店の受け付け</title>
+<link rel="stylesheet" href="../assets/eye.css">
+<style>
+  /* 左のサイドバー（216px）のぶん本文が狭いので、右の欄と余白を詰める。 */
+  .chk { height: 100%; display: grid; grid-template-columns: 1fr 320px; }
+  .main { padding: 28px 32px; display: flex; flex-direction: column; gap: 24px; overflow: hidden; }
+  .side { border-left: 1px solid var(--line); background: var(--surface); padding: 28px 24px; }
+
+  .who { display: flex; align-items: flex-start; gap: 16px; padding: 22px; }
+  .who .face {
+    flex: none; width: 56px; height: 56px; border-radius: 50%;
+    background: var(--brand-tint); border: 1px solid var(--brand-line);
+    display: grid; place-items: center; font-size: 24px; color: var(--brand);
+  }
+  .who .nm { display: flex; align-items: center; gap: 10px; font-size: 26px; font-weight: 700; line-height: 1.2; }
+  .who .kn { margin-top: 2px; font-size: 13px; color: var(--ink-2); }
+  .who dl { margin: 18px 0 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 0 16px; }
+  .who dt { font-size: 13px; color: var(--ink-2); }
+  .who dd { margin: 2px 0 0; font-size: 16px; font-weight: 600; }
+
+  .ck { display: flex; align-items: center; gap: 14px; min-height: 52px; }
+  .ck .box {
+    flex: none; width: 30px; height: 30px;
+    border: 2px solid var(--line-strong); border-radius: var(--r-s);
+    background: var(--surface); display: grid; place-items: center;
+    font-size: 17px; color: var(--surface);
+  }
+  .ck.on .box { background: var(--brand); border-color: var(--brand); color: var(--on-brand); }
+  .ck.att .box { border-color: var(--walkin); color: var(--walkin); }
+  .ck span { font-size: 15px; }
+  .ck .tag { margin-left: auto; }
+
+  .go { display: flex; align-items: center; gap: 12px; }
+  .go .btn.primary { min-width: 280px; min-height: 56px; font-size: 19px; }
+
+  .side dt { font-size: 13px; color: var(--ink-2); margin-top: 20px; }
+  .side dd { margin: 2px 0 0; font-size: 16px; font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="caption">
+  <h1>ご来店の受け付け</h1>
+  <p>ご予約のお客様がお着きになったときの1画面。名前を確かめ、伝え忘れやすい3点を見てから受け付ける。</p>
+</div>
+
+<main class="device" id="screen">
+  <div class="statusbar"><span>11:08</span><span>EYE 銀座店</span><span>Wi‑Fi　100%</span></div>
+
+  <header class="appbar">
+    <button class="homebtn" aria-label="トップへ">⌂</button>
+    <div class="storename">EYE 銀座店<small>来店受付</small></div>
+  </header>
+
+  <div class="body">
+    <div class="shell">
+      <nav class="sidenav" aria-label="画面の切り替え">
+        <button class="navtoggle" aria-label="サイドバーをたたむ">たたむ</button>
+        <button class="new">＋ 予約を取る</button>
+        <button class="nav-item" data-icon="ledger">予約台帳</button>
+        <button class="nav-item on" data-icon="reception">来店受付</button>
+        <button class="nav-item" data-icon="search">予約を検索</button>
+        <button class="nav-item" data-icon="history">受付履歴</button>
+        <button class="nav-item" data-icon="customer">顧客台帳</button>
+        <div class="group">お店の運用</div>
+        <button class="nav-item" data-icon="analytics">分析</button>
+        <button class="nav-item" data-icon="settings">設定</button>
+        <div class="foot">銀座店 レジ横iPad<br>共有で使っています</div>
+      </nav>
+
+      <div class="content">
+        <div class="toolbar">
+          <button class="btn" style="min-height:40px;padding:0 14px">‹ 来店受付ボードへ戻る</button>
+          <h2>ご来店を受け付けます</h2>
+        </div>
+
+        <div class="inner">
+          <div class="chk">
+            <section class="main">
+              <div>
+                <p class="small" style="margin:0 0 10px;color:var(--brand-dark)">11:00 のご予約　5分早くお着きです</p>
+                <div class="card who">
+                  <span class="face" aria-hidden="true">☺</span>
+                  <div style="flex:1">
+                    <div class="nm">田中 花子 様<span class="visits many">4回目</span></div>
+                    <div class="kn">たなか はなこ　090-1234-5678</div>
+                    <dl>
+                      <div><dt>ご予約</dt><dd>11:00 〜 12:00</dd></div>
+                      <div><dt>ご来店の目的</dt><dd>メガネを新しく作る</dd></div>
+                      <div><dt>担当</dt><dd>佐藤 美咲</dd></div>
+                    </dl>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <h3 class="section-title">受け付ける前に確かめること</h3>
+                <div class="lines">
+                  <div class="ck on">
+                    <span class="box" aria-hidden="true">✓</span>
+                    <span>お名前を確かめました</span>
+                  </div>
+                  <div class="ck">
+                    <span class="box" aria-hidden="true">✓</span>
+                    <span>前回からの変化をお伺いする</span>
+                  </div>
+                  <div class="ck att">
+                    <span class="box" aria-hidden="true">✓</span>
+                    <span>金属アレルギー　フレームはチタン製からご案内</span>
+                    <span class="tag walkin">要確認</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="go">
+                <button class="btn primary">ご来店を受け付ける</button>
+                <button class="btn">お待ちいただく</button>
+              </div>
+            </section>
+
+            <aside class="side">
+              <h3 style="margin:0 0 4px;font-size:15px">前回のご来店（2026年3月12日）</h3>
+              <dl style="margin:0">
+                <dt>度数（右 R ／ 左 L）</dt><dd class="mono">-2.25 ／ -2.00</dd>
+                <dt>PD</dt><dd class="mono">62.0</dd>
+                <dt>担当</dt><dd>佐藤 美咲</dd>
+                <dt>ご希望メモ</dt><dd>PC作業用。鼻パッドは低め</dd>
+              </dl>
+            </aside>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="rec-float">
+      <span class="dot" aria-hidden="true" style="width:12px;height:12px;border-radius:50%;background:var(--alert)"></span>
+      <b style="font-size:14px;color:var(--alert)">録音しています</b>
+      <span class="mono" style="font-size:15px;color:var(--alert)">00:42</span>
+      <button class="btn" style="min-height:44px;padding:0 14px">止める</button>
+    </div>
+  </div>
+</main>
+</body>
+</html>

@@ -18,7 +18,7 @@ export {
   toJstDateString,
   toJstMonthKey,
 } from './dates'
-export { internalAuth } from './internal'
+export { internalAuth, internalAuthFor } from './internal'
 export {
   ACCESS_TTL_SECONDS,
   type AccessClaims,
@@ -28,4 +28,5 @@ export {
   signAccessToken,
   verifyAccessToken,
 } from './jwt'
-export { hashStretched, stretchPassword, verifyStretched } from './password'
+export { hashStretched, stretchPassword, stretchPin, verifyStretched } from './password'
+export { STAGING_GATE_COOKIE, stagingGate } from './staging-gate'

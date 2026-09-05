@@ -14,8 +14,17 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { readWranglerConfig, resolveSeedTarget } from '../../scripts/lib/wrangler-config.mjs'
 
 const REMOTE = process.argv.includes('--remote')
+// 宛先の D1 は wrangler.jsonc から解決する。DB 名を直書きすると staging の seed が
+// 本番へ当たり、INSERT OR IGNORE は静かに成功するので気づけない。
+const ENV_NAME = process.env.CLOUDFLARE_ENV ?? ''
+const TARGET = resolveSeedTarget(
+  readWranglerConfig(new URL('./wrangler.jsonc', import.meta.url)),
+  ENV_NAME,
+)
+const DB_NAME = TARGET.dbName
 // pepper は local は dev 値、remote は環境変数(本番 secret と一致)を要求する。
 const DEV_PEPPER = 'dev-auth-pepper-change-me' // == .dev.vars(.example) AUTH_PEPPER (local)
 const PEPPER = REMOTE ? (process.env.AUTH_PEPPER ?? '') : DEV_PEPPER
@@ -90,7 +99,7 @@ const orgs = [
 const lines = [
   ...orgs.map(
     (o) =>
-      `INSERT OR IGNORE INTO organizations (id, name, plan, is_disabled, is_operator, created_at) VALUES (${q(o.id)}, ${q(o.name)}, ${q(o.plan)}, '0', ${q(o.operator)}, ${q(NOW)});`,
+      `INSERT OR IGNORE INTO organizations (id, name, plan, is_disabled, is_operator, sync_revision, created_at) VALUES (${q(o.id)}, ${q(o.name)}, ${q(o.plan)}, '0', ${q(o.operator)}, 1, ${q(NOW)});`,
   ),
   `INSERT OR IGNORE INTO users (id, organization_id, email, password_hash, role, created_at) VALUES ('user-admin-seed', 'org-admin-seed', ${q(ADMIN_EMAIL)}, ${q(passwordHash)}, 'admin', ${q(NOW)});`,
 ]
@@ -105,8 +114,9 @@ execFileSync(
     'wrangler',
     'd1',
     'execute',
-    'admin',
+    DB_NAME,
     REMOTE ? '--remote' : '--local',
+    ...TARGET.envArgs,
     '--file',
     sqlPath,
     '--yes',
@@ -114,9 +124,50 @@ execFileSync(
   { cwd: import.meta.dirname, stdio: 'inherit' },
 )
 
-const where = REMOTE ? 'REMOTE(本番)' : 'local'
+/*
+ * **入った行を読み直してから名乗る。**
+ * seed 行は id 固定の `INSERT OR IGNORE` なので、既にある環境で ADMIN_EMAIL を
+ * 変えても黙って無視される。それでも `管理者ログイン: <新しい email>` と出していたため、
+ * 入れないアドレスを案内していた。実際に入っている値を出す。
+ */
+function seededAdminEmail() {
+  try {
+    const out = execFileSync(
+      'pnpm',
+      [
+        'exec',
+        'wrangler',
+        'd1',
+        'execute',
+        DB_NAME,
+        REMOTE ? '--remote' : '--local',
+        ...TARGET.envArgs,
+        '--json',
+        '--command',
+        "SELECT email FROM users WHERE id = 'user-admin-seed'",
+      ],
+      { cwd: import.meta.dirname, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+    )
+    // wrangler は JSON の前に案内文を出すことがあるので、最初の配列から読む。
+    const json = out.slice(out.indexOf('['))
+    return JSON.parse(json)[0]?.results?.[0]?.email ?? null
+  } catch {
+    return null
+  }
+}
+
+const where = REMOTE ? `REMOTE(${DB_NAME})` : `local(${DB_NAME})`
+const actualEmail = seededAdminEmail()
 console.log(`\n✅ seeded admin D1 [${where}]`)
-console.log(`   管理者ログイン: ${ADMIN_EMAIL}${REMOTE ? '' : ` / ${ADMIN_PASSWORD}`}`)
+console.log(
+  `   管理者ログイン: ${actualEmail ?? ADMIN_EMAIL}${REMOTE ? '' : ` / ${ADMIN_PASSWORD}`}`,
+)
+if (actualEmail !== null && actualEmail !== ADMIN_EMAIL) {
+  console.log(
+    `   ⚠️ seed 行(user-admin-seed)は既にあり、ADMIN_EMAIL=${ADMIN_EMAIL} は反映されていない。` +
+      '\n      メール・パスワードを変えるなら admin の画面か UPDATE で直すこと。',
+  )
+}
 if (REMOTE) {
   console.log('   ※ 本番の初期パスワードは初回ログイン後に必ず変更すること。')
   console.log('   ※ サンプル org をドメイン側にも同期するには admin の日次照合 Cron を実行。')

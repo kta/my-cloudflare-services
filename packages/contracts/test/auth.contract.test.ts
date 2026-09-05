@@ -7,6 +7,7 @@ import {
   IssueTokenRequest,
   LoginRequest,
   Organization,
+  OrganizationSyncFailed,
 } from '../src/index'
 
 describe('Zod 4 migration semantics', () => {
@@ -89,5 +90,34 @@ describe('Organization(同期 upsert 契約)', () => {
     })
     expect(parsed.plan).toBe('free')
     expect(parsed.isDisabled).toBe(false)
+  })
+
+  it('admin正本とdomain同期で同じ組織名のtrim規則を使う', () => {
+    const parsed = Organization.parse({
+      id: 'o1',
+      name: '  EYE Organization  ',
+      createdAt: new Date().toISOString(),
+    })
+    expect(parsed.name).toBe('EYE Organization')
+  })
+})
+
+describe('OrganizationSyncFailed(復旧可能な同期失敗)', () => {
+  it('再同期対象を含む厳格な失敗応答だけを受け入れる', () => {
+    expect(
+      OrganizationSyncFailed.safeParse({
+        error: 'organization_sync_failed',
+        organizationId: 'org-1',
+        retryable: true,
+      }).success,
+    ).toBe(true)
+    expect(
+      OrganizationSyncFailed.safeParse({
+        error: 'organization_sync_failed',
+        organizationId: '',
+        retryable: true,
+        extra: 'untrusted',
+      }).success,
+    ).toBe(false)
   })
 })

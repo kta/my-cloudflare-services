@@ -10,7 +10,7 @@ import { Plan } from './auth'
  * `...input` を書いた瞬間に mass assignment になる。
  */
 export const CreateOrganization = z.strictObject({
-  name: z.string().min(1).max(200),
+  name: z.string().trim().min(1).max(200),
 })
 export type CreateOrganization = z.infer<typeof CreateOrganization>
 
@@ -19,9 +19,17 @@ export type CreateOrganization = z.infer<typeof CreateOrganization>
 // 呼び出し側は service binding + x-internal-key の内部限定なので strict 不要。
 export const Organization = z.looseObject({
   id: z.string().min(1),
-  name: z.string().min(1).max(200),
+  name: z.string().trim().min(1).max(200),
   plan: Plan.default('free'),
   isDisabled: z.boolean().default(false),
   createdAt: z.string().datetime(),
 })
 export type Organization = z.infer<typeof Organization>
+
+/** Canonical write succeeded but its domain snapshot needs an explicit retry. */
+export const OrganizationSyncFailed = z.strictObject({
+  error: z.literal('organization_sync_failed'),
+  organizationId: z.string().min(1),
+  retryable: z.boolean(),
+})
+export type OrganizationSyncFailed = z.infer<typeof OrganizationSyncFailed>

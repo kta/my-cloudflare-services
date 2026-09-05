@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EYE予約 — お知らせとアラート</title>
+<link rel="stylesheet" href="../assets/eye.css">
+<style>
+  /* サイドバーぶん本文が狭くなったので、種類の第2ペインを 340px → 252px に詰める。 */
+  .split { grid-template-columns: 252px 1fr; }
+  .pane { padding: 30px 14px; }
+  .kinds { display: grid; align-content: start; gap: 6px; }
+  .kinds button {
+    display: flex; align-items: center; gap: 10px; min-height: 52px; width: 100%;
+    padding: 0 12px; border: 0; border-radius: var(--r-s); background: transparent;
+    font: 600 15px var(--sans); color: var(--ink); text-align: left;
+  }
+  .kinds button.on { background: var(--surface); color: var(--brand); box-shadow: 0 0 0 1px var(--line); }
+  .kinds .n { margin-left: auto; font: 600 13px var(--mono); color: var(--ink-2); }
+  .feed { padding: 30px 24px; overflow: hidden; }
+  .item { display: flex; gap: 14px; padding: 20px 20px; background: var(--surface);
+    border: 1px solid var(--line); border-radius: var(--r-m); }
+  .item + .item { margin-top: 16px; }
+  .item.unread { border-left: 4px solid var(--alert); }
+  .item .when { flex: none; width: 52px; font: 600 13px var(--mono); color: var(--ink-2); padding-top: 3px; }
+  .item h3 { margin: 0; font-size: 17px; }
+  .item p { margin: 6px 0 0; font-size: 13px; color: var(--ink-2); }
+  .item .go { margin-left: auto; align-self: center; flex: none; }
+  .daylabel { margin: 0 0 14px; font-size: 13px; color: var(--ink-2); }
+</style>
+</head>
+<body>
+<div class="caption">
+  <h1>お知らせとアラート</h1>
+  <p>サイドバーの「お知らせ 3件」の中身。放っておくと予約に響くものを上に、次にやることを行ごとに置く。</p>
+</div>
+
+<main class="device" id="screen">
+  <div class="statusbar"><span>11:08</span><span>EYE 銀座店</span><span>Wi‑Fi　100%</span></div>
+
+  <header class="appbar">
+    <button class="homebtn" aria-label="トップへ">⌂</button>
+    <div class="storename">EYE 銀座店<small>お知らせとアラート</small></div>
+    <div class="barbtns">
+      <button class="barbtn"><b>すべて既読にする</b></button>
+    </div>
+  </header>
+
+  <div class="body">
+    <div class="shell">
+      <nav class="sidenav" aria-label="画面の切り替え">
+        <button class="navtoggle" aria-label="サイドバーをたたむ">たたむ</button>
+        <button class="new">＋ 予約を取る</button>
+        <button class="nav-item" data-icon="ledger">予約台帳</button>
+        <button class="nav-item" data-icon="reception">来店受付</button>
+        <button class="nav-item" data-icon="search">予約を検索</button>
+        <button class="nav-item" data-icon="history">受付履歴</button>
+        <button class="nav-item" data-icon="customer">顧客台帳</button>
+        <button class="nav-item on" data-icon="alerts">お知らせ<span class="n">3</span></button>
+        <div class="group">お店の運用</div>
+        <button class="nav-item" data-icon="analytics">分析</button>
+        <button class="nav-item" data-icon="settings">設定</button>
+        <div class="foot">銀座店 レジ横iPad<br>共有で使っています</div>
+      </nav>
+
+      <div class="content">
+        <div class="inner">
+          <div class="split">
+            <aside class="pane">
+              <div class="kinds">
+                <button class="on">すべて<span class="n">3</span></button>
+                <button>アラート（対応が必要）<span class="n">1</span></button>
+                <button>お知らせ<span class="n">2</span></button>
+                <button>対応済み<span class="n">12</span></button>
+              </div>
+            </aside>
+
+            <section class="feed pane plain last">
+              <div class="daylabel">本日 8月27日（木）</div>
+
+              <article class="item unread">
+                <div class="when">11:04</div>
+                <div>
+                  <h3>録音の保存に3回失敗しました　<span class="tag alert">対応が必要</span></h3>
+                  <p>EY-R-1482　田中 花子 様。ご予約は成立しています。</p>
+                </div>
+                <button class="btn go">もう一度送る</button>
+              </article>
+
+              <article class="item unread">
+                <div class="when">10:41</div>
+                <div>
+                  <h3>Web予約が2件、確認待ちです　<span class="tag web">Web予約</span></h3>
+                  <p>本日中に確認しないと自動で取り消されます。</p>
+                </div>
+                <button class="btn go">台帳で確認する</button>
+              </article>
+
+              <article class="item unread">
+                <div class="when">9:12</div>
+                <div>
+                  <h3>視力測定機 B の点検　8月30日 10:00–12:00</h3>
+                </div>
+                <button class="btn go">影響する予約を見る</button>
+              </article>
+            </section>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+</body>
+</html>

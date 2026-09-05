@@ -1,0 +1,2 @@
+ALTER TABLE `terminal_sessions` ADD `credential_hash` text;--> statement-breakpoint
+CREATE INDEX `terminal_sessions_org_terminal_credential_idx` ON `terminal_sessions` (`organization_id`,`terminal_id`,`credential_hash`);

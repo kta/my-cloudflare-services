@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>典拠 — クレームチャート（方向B: 製図の引出線）</title>
+<!--
+  題材: 特許明細書の「図面」。図面では符号（12, 14…）と引出線が本文と部品を一意に結ぶ。この画面は所見の一文一文に符号を振り、引出線で典拠札へ結ぶ。結べない文は引出線が途中で途切れる。
+  パレット:
+    図紙台      #E6E9EB   ページ地（トレース紙の下に敷く台）
+    図紙        #FFFFFF   欄・表・余白の紙面
+    製図インク  #1F2328   本文・線
+    薄墨        #5F6870   注記・補助
+    細線        #C9CFD3   罫・グリッド
+    太線        #1F2328   表題欄・欄の外枠（インクと同色、太さで区別）
+    検図の緑    #1E6B52   照合済み・引出線・選択中
+    仮線の琥珀  #A06E00   未照合・典拠なし
+    赤鉛筆      #B5301E   棄却（削除指示のハッチング）
+  書体の役割:
+    display = Zen Kaku Gothic New 700（表題欄・欄名・符号）
+    body    = Zen Kaku Gothic New 400/500（本文・表・所見）
+    data    = DM Mono（公報番号・日付・件数・検索式のみ）
+  シグネチャ要素: 右の「典拠の余白」における引出線。各文の丸符号から水平の引出線が伸びて典拠札に届く。届かない文は琥珀の破線が途中で終わり、開いた丸と「典拠なし」だけが残る。
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --board:#E6E9EB; --sheet:#FFFFFF; --ink:#1F2328; --ink-2:#5F6870;
+  --line:#C9CFD3; --green:#1E6B52; --amber:#A06E00; --red:#B5301E;
+  --sans:"Zen Kaku Gothic New",sans-serif;
+  --mono:"DM Mono",ui-monospace,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--board);color:var(--ink);font-family:var(--sans);font-size:13.5px;line-height:1.8}
+body{min-width:1200px;overflow-x:hidden;padding:0 0 18px}
+.mono{font-family:var(--mono)}
+
+/* 表題欄（製図の title block） */
+.titleblock{margin:16px 24px 0;background:var(--sheet);border:2px solid var(--ink);display:grid;grid-template-columns:auto 1fr auto auto auto auto auto;align-items:stretch}
+.titleblock > div{padding:8px 16px;border-right:1px solid var(--ink);display:flex;flex-direction:column;justify-content:center}
+.titleblock > div:last-child{border-right:0}
+.titleblock .lbl{font-size:10.5px;color:var(--ink-2);letter-spacing:.06em;line-height:1.4;margin-bottom:2px}
+.titleblock .brand{font-weight:700;font-size:20px;letter-spacing:.32em;justify-content:center;padding-right:8px}
+.titleblock .brand small{display:block;font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--ink-2);margin-top:-2px}
+.titleblock h1{margin:0;font-weight:700;font-size:20px;line-height:1.45;letter-spacing:.02em}
+.titleblock h1 .no{font-family:var(--mono);font-weight:400;font-size:12px;color:var(--ink-2);margin-left:10px;letter-spacing:.04em}
+.titleblock .val{font-size:13.5px;font-weight:500;white-space:nowrap}
+.titleblock .val.mono{font-weight:400}
+.status{display:inline-block;border:1.5px solid var(--ink);padding:0 10px;line-height:22px;font-weight:700;letter-spacing:.2em;font-size:12px}
+.ipc{display:inline-block;font-family:var(--mono);font-size:12px;border-bottom:1.5px solid var(--ink);margin-right:10px;padding-bottom:1px}
+
+/* 図面領域 */
+.sheet{margin:12px 24px 0;background:var(--sheet);border:1px solid var(--ink);display:grid;grid-template-columns:250px minmax(0,1fr) 336px}
+.pane{border-right:1px solid var(--ink);min-width:0;display:flex;flex-direction:column}
+.pane:last-child{border-right:0}
+.pane-head{display:flex;align-items:baseline;gap:10px;padding:9px 14px;border-bottom:1px solid var(--ink);font-weight:700;font-size:13px;letter-spacing:.08em}
+.pane-head .fig{font-family:var(--mono);font-weight:500;font-size:11px;color:var(--ink-2);letter-spacing:.04em}
+.pane-head .sub{margin-left:auto;font-weight:400;font-size:11.5px;color:var(--ink-2);letter-spacing:0}
+
+/* 符号（丸番号） */
+.sym{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border:1.5px solid var(--ink);border-radius:50%;font-weight:700;font-size:12px;line-height:1;flex:none;background:var(--sheet)}
+.sym.g{border-color:var(--green);color:var(--green)}
+.sym.hollow{border-style:dashed;border-color:var(--amber);color:var(--amber)}
+
+/* 左: 構成要件 */
+.claim{padding:10px 14px;border-bottom:1px solid var(--line);font-size:12px;color:var(--ink-2);line-height:1.7}
+.claim b{color:var(--ink);font-weight:700;margin-right:6px}
+.req{list-style:none;margin:0;padding:0}
+.req li{display:grid;grid-template-columns:22px 1fr;gap:4px 10px;padding:11px 14px;border-bottom:1px solid var(--line);position:relative}
+.req li .t{font-size:13px;line-height:1.7}
+.req li .c{grid-column:2;font-size:11.5px;color:var(--ink-2);display:flex;gap:10px;align-items:center}
+.req li .c .n{font-family:var(--mono);color:var(--ink)}
+.req li .bar{height:6px;flex:1;max-width:120px;border:1px solid var(--ink-2);position:relative;background:var(--sheet)}
+.req li .bar i{position:absolute;left:0;top:0;bottom:0;background:var(--green)}
+.req li.on{background:#F1F6F4;box-shadow:inset 3px 0 0 var(--green)}
+.req li.on .t{font-weight:500}
+.req li.win{background:repeating-linear-gradient(-45deg,transparent 0 6px,#EEF0F2 6px 7px)}
+.req li.win .t{font-weight:700}
+.req li.win .sym{border-width:2.5px;box-shadow:0 0 0 2px var(--sheet),0 0 0 3.5px var(--ink)}
+.req li.win .c{color:var(--ink);font-weight:500;display:block}
+.req li.win .win-note{grid-column:2;font-size:12px;font-weight:700;letter-spacing:.06em;margin-top:2px;border-top:1.5px solid var(--ink);padding-top:4px}
+.req li.win .win-note::before{content:"注 ";font-family:var(--mono);font-weight:500;color:var(--ink-2)}
+.legend{padding:10px 14px;font-size:11.5px;color:var(--ink-2);line-height:1.8;margin-top:auto;border-top:1px solid var(--line)}
+.legend .bar{display:inline-block;width:40px;height:6px;border:1px solid var(--ink-2);vertical-align:middle;position:relative;margin:0 4px}
+.legend .bar i{position:absolute;left:0;top:0;bottom:0;width:60%;background:var(--green)}
+
+/* 中央: クレームチャート */
+.center .pane-head .req-title{font-weight:500;letter-spacing:0}
+.chart-wrap{overflow-x:auto;flex:1}
+table.chart{border-collapse:collapse;width:100%;font-size:13px}
+table.chart th{font-weight:700;font-size:11.5px;text-align:left;padding:7px 12px;border-bottom:1.5px solid var(--ink);letter-spacing:.06em;white-space:nowrap;background:var(--sheet)}
+table.chart td{padding:11px 12px;border-bottom:1px solid var(--line);vertical-align:top;line-height:1.8}
+td.pub{font-family:var(--mono);font-size:12.5px;white-space:nowrap}
+td.pub .kind{display:block;font-family:var(--sans);font-size:11px;color:var(--ink-2)}
+td.app{font-size:12.5px;min-width:110px}
+td.date{font-family:var(--mono);font-size:12px;white-space:nowrap;color:var(--ink-2)}
+td.para{font-family:var(--mono);font-size:13px;white-space:nowrap;font-weight:500}
+td.quote{min-width:200px}
+td.quote .q{display:block;text-indent:-.5em;padding-left:.5em}
+td.rel{white-space:nowrap;font-size:12.5px}
+td.rel .m{display:inline-block;width:10px;height:10px;border:1.5px solid var(--ink);margin-right:7px;vertical-align:-1px}
+td.rel.disc .m{background:var(--ink)}
+td.rel.sugg .m{background:linear-gradient(135deg,var(--ink) 50%,transparent 50%)}
+td.rel.block .m{border-color:var(--red);background:linear-gradient(45deg,transparent 42%,var(--red) 42% 58%,transparent 58%),linear-gradient(-45deg,transparent 42%,var(--red) 42% 58%,transparent 58%)}
+td.state{font-size:12px;letter-spacing:.04em;padding-right:14px}
+.st{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.st::before{content:"";width:10px;height:10px;border-radius:50%;border:1.5px solid currentColor}
+.st.ok{color:var(--green)}.st.ok::before{background:var(--green)}
+.st.pending{color:var(--amber)}.st.pending::before{border-style:dashed}
+.st.rej{color:var(--red)}.st.rej::before{background:linear-gradient(45deg,transparent 42%,currentColor 42% 58%,transparent 58%),linear-gradient(-45deg,transparent 42%,currentColor 42% 58%,transparent 58%);border-radius:0}
+/* 棄却行: 削除指示のハッチングを被せる */
+tr.rejected td{background:repeating-linear-gradient(45deg,transparent 0 7px,rgba(181,48,30,.10) 7px 8px);color:var(--ink-2)}
+tr.rejected td.quote .q{color:var(--ink-2);text-decoration:line-through;text-decoration-color:var(--red)}
+tr.rejected td.quote .why{display:block;margin-top:8px;padding:6px 10px;border:1px solid var(--red);background:var(--sheet);color:var(--ink);font-size:12px;line-height:1.7;text-indent:0}
+tr.rejected td.quote .why b{color:var(--red);font-weight:700;margin-right:6px}
+tr.rejected td.rel{text-decoration:line-through;text-decoration-color:var(--red)}
+tr.pending td.quote .q{color:var(--ink-2)}
+tr.pending td.quote .note{display:block;font-size:11.5px;color:var(--amber);margin-top:2px}
+.chart-foot{padding:8px 14px;border-top:1px solid var(--ink);font-size:12px;color:var(--ink-2);display:flex;gap:22px}
+.chart-foot .n{font-family:var(--mono);color:var(--ink)}
+.chart-foot .rej{color:var(--red)}
+
+/* 右: 典拠の余白（引出線） */
+.gutter .pane-head{background:var(--sheet)}
+.obs{padding:8px 0 6px;flex:1}
+.sent{display:grid;grid-template-columns:22px minmax(0,1fr) 26px 118px;gap:0 8px;padding:10px 10px 10px 12px;border-bottom:1px solid var(--line);align-items:start}
+.sent p{margin:0;font-size:13px;line-height:1.85}
+.sent .lead{position:relative;height:100%;min-height:24px}
+.sent .lead::before{content:"";position:absolute;left:-4px;right:0;top:11px;border-top:1.5px solid var(--green)}
+.sent .lead::after{content:"";position:absolute;right:-1px;top:8.5px;width:6px;height:6px;border-radius:50%;background:var(--green)}
+.tags{display:flex;flex-direction:column;gap:5px}
+.tag{display:block;border:1.5px solid var(--green);color:var(--green);font-family:var(--mono);font-size:11px;line-height:1.35;padding:3px 7px;white-space:nowrap;position:relative;background:var(--sheet)}
+.tag b{display:block;font-weight:500;font-size:11.5px}
+.tag + .tag::before{content:"";position:absolute;left:-12px;top:14px;height:1.5px;width:11px;background:var(--green)}
+.tag + .tag::after{content:"";position:absolute;left:-12px;top:-20px;height:35px;border-left:1.5px solid var(--green)}
+.tag.pending{border-style:dashed;border-color:var(--amber);color:var(--amber)}
+.tag.pending i{display:block;font-style:normal;font-family:var(--sans);font-size:10.5px;letter-spacing:.08em}
+.sent.pend .lead::before{border-top-style:dashed;border-color:var(--amber)}
+.sent.pend .lead::after{background:transparent;border:1.5px solid var(--amber)}
+.sent.none p{text-decoration:underline;text-decoration-color:var(--amber);text-decoration-thickness:2px;text-underline-offset:5px}
+.sent.none .lead::before{border-top-style:dashed;border-color:var(--amber);right:12px}
+.sent.none .lead::after{background:transparent;border:1.5px solid var(--amber);right:3px}
+.sent.none .no-tag{font-size:12px;font-weight:700;color:var(--amber);letter-spacing:.1em;line-height:1.5;padding-top:2px}
+.sent.none .no-tag small{display:block;font-weight:400;font-size:10.5px;color:var(--ink-2);letter-spacing:0;line-height:1.5;margin-top:2px}
+.gutter-foot{padding:9px 14px 11px;border-top:1px solid var(--ink);font-size:11.5px;color:var(--ink-2);line-height:1.8}
+.gutter-foot .n{font-family:var(--mono);color:var(--ink)}
+.gutter-foot .n.am{color:var(--amber)}
+
+/* 下部: 検索式（注記欄） */
+.log{margin:12px 24px 0;background:var(--sheet);border:1px solid var(--ink);display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center}
+.log > *{padding:8px 14px;border-right:1px solid var(--ink)}
+.log > *:last-child{border-right:0}
+.log .lbl{font-weight:700;font-size:12.5px;letter-spacing:.08em;white-space:nowrap}
+.log .lbl .fig{display:block;font-family:var(--mono);font-weight:500;font-size:10.5px;color:var(--ink-2);letter-spacing:.04em}
+.log code{font-family:var(--mono);font-size:12.5px;white-space:nowrap;overflow-x:auto;display:block}
+.log .facts{font-family:var(--mono);font-size:12px;color:var(--ink-2);white-space:nowrap}
+.log .facts b{color:var(--ink);font-weight:500}
+</style>
+</head>
+<body>
+
+<header class="titleblock">
+  <div class="brand">典拠<small>TENKYO</small></div>
+  <div><span class="lbl">案件名</span><h1>視線追跡による眼鏡フィッティング支援<span class="no">2026-0417</span></h1></div>
+  <div><span class="lbl">状態</span><span class="val"><span class="status">調査中</span></span></div>
+  <div><span class="lbl">IPC</span><span class="val"><span class="ipc">G06F 3/01</span><span class="ipc">G02C 13/00</span></span></div>
+  <div><span class="lbl">最終更新</span><span class="val mono">2026-09-03 22:14</span></div>
+  <div><span class="lbl">担当</span><span class="val">榊原</span></div><div><span class="lbl">図</span><span class="val mono">3 / 8</span></div>
+</header>
+
+<main class="sheet">
+
+  <!-- 左: 構成要件の索引 -->
+  <aside class="pane">
+    <div class="pane-head"><span class="fig">図1</span>構成要件<span class="sub">請求項1の分説</span></div>
+    <div class="claim"><b>請求項1</b>次の A〜E を備える眼鏡フィッティング支援装置。</div>
+    <ol class="req">
+      <li><span class="sym">A</span><span class="t">撮像部が利用者の眼部を撮像する</span><span class="c">典拠 <span class="n">4</span> ／ 照合 <span class="n">3</span><span class="bar"><i style="width:75%"></i></span></span></li>
+      <li class="on"><span class="sym g">B</span><span class="t">前記画像から瞳孔中心を検出する</span><span class="c">典拠 <span class="n">6</span> ／ 照合 <span class="n">3</span><span class="bar"><i style="width:50%"></i></span></span></li>
+      <li><span class="sym">C</span><span class="t">検出された瞳孔中心から視線ベクトルを算出する</span><span class="c">典拠 <span class="n">2</span> ／ 照合 <span class="n">0</span><span class="bar"><i style="width:0"></i></span></span></li>
+      <li class="win"><span class="sym">D</span><span class="t">前記視線ベクトルに基づき累進屈折力レンズの加入度を決定する</span><span class="c">典拠 <span class="n">0</span> 件 ── 先行技術に符号なし</span><span class="win-note">新規性の勝ち筋</span></li>
+      <li><span class="sym">E</span><span class="t">決定された加入度を含む処方データを出力する</span><span class="c">典拠 <span class="n">3</span> ／ 照合 <span class="n">2</span><span class="bar"><i style="width:66%"></i></span></span></li>
+    </ol>
+    <div class="legend"><span class="bar"><i></i></span>は典拠のうち原文照合が済んだ割合。未照合・棄却は塗らない。</div>
+  </aside>
+
+  <!-- 中央: クレームチャート -->
+  <section class="pane center">
+    <div class="pane-head"><span class="fig">図3</span>クレームチャート<span class="req-title">符号 B ── 前記画像から瞳孔中心を検出する</span><span class="sub">典拠 <span class="mono">6</span> 行</span></div>
+    <div class="chart-wrap">
+    <table class="chart">
+      <thead><tr>
+        <th>公報番号</th><th>出願人</th><th>公開日</th><th>段落番号</th><th>引用原文</th><th>関係</th><th>照合状態</th>
+      </tr></thead>
+      <tbody>
+        <tr>
+          <td class="pub">特開2018-134274<span class="kind">公開特許公報</span></td>
+          <td class="app">株式会社ニコン・エシロール</td>
+          <td class="date">2018-08-30</td>
+          <td class="para">【0032】</td>
+          <td class="quote"><span class="q">「撮像部12により取得された眼部画像に対して、輝度勾配に基づく円形状検出を適用し、瞳孔の中心座標を算出する。」</span></td>
+          <td class="rel disc"><span class="m"></span>開示する</td>
+          <td class="state"><span class="st ok">照合済み</span></td>
+        </tr>
+        <tr>
+          <td class="pub">特開2016-057889<span class="kind">公開特許公報</span></td>
+          <td class="app">HOYA株式会社</td>
+          <td class="date">2016-04-21</td>
+          <td class="para">【0047】</td>
+          <td class="quote"><span class="q">「前記瞳孔検出部は、赤外光照射下で撮像された画像から、暗瞳孔法により瞳孔領域を抽出する。」</span></td>
+          <td class="rel disc"><span class="m"></span>開示する</td>
+          <td class="state"><span class="st ok">照合済み</span></td>
+        </tr>
+        <tr>
+          <td class="pub">特開2020-012345<span class="kind">公開特許公報</span></td>
+          <td class="app">東海光学株式会社</td>
+          <td class="date">2020-01-23</td>
+          <td class="para">【0058】</td>
+          <td class="quote"><span class="q">「抽出した瞳孔領域に対して楕円近似を行い、当該楕円の重心を瞳孔中心として決定する。これにより、まぶたによる部分的な遮蔽が生じた場合であっても中心位置を安定して求めることができる。」</span></td>
+          <td class="rel disc"><span class="m"></span>開示する</td>
+          <td class="state"><span class="st ok">照合済み</span></td>
+        </tr>
+        <tr class="rejected">
+          <td class="pub">特開2015-201456<span class="kind">公開特許公報</span></td>
+          <td class="app">株式会社トプコン</td>
+          <td class="date">2015-11-12</td>
+          <td class="para">【0032】</td>
+          <td class="quote"><span class="q">「眼部画像に対して円形状検出を適用し、瞳孔中心を求める。」</span><span class="why"><b>棄却</b>AIは【0032】に円形状検出の記載があると主張したが、実際の【0032】はレンズ研磨工程の説明である。引用文は原文に存在しない。</span></td>
+          <td class="rel disc"><span class="m"></span>開示する</td>
+          <td class="state"><span class="st rej">棄却</span></td>
+        </tr>
+        <tr class="pending">
+          <td class="pub">特表2021-507392<span class="kind">公表特許公報</span></td>
+          <td class="app">Carl Zeiss Vision International GmbH</td>
+          <td class="date">2021-02-22</td>
+          <td class="para">【0019】</td>
+          <td class="quote"><span class="q">「角膜反射像と瞳孔中心との相対位置関係から、眼球の注視方向を推定してもよい。」</span><span class="note">原文照合を待つ。支持の根拠に数えない。</span></td>
+          <td class="rel sugg"><span class="m"></span>示唆する</td>
+          <td class="state"><span class="st pending">未照合</span></td>
+        </tr>
+        <tr class="pending">
+          <td class="pub">特開2022-098765<span class="kind">公開特許公報</span></td>
+          <td class="app">三井化学株式会社</td>
+          <td class="date">2022-07-01</td>
+          <td class="para">【0071】</td>
+          <td class="quote"><span class="q">「瞳孔中心の検出に代えて、虹彩外縁の検出結果を用いることが望ましい。虹彩外縁は照明条件の変動に対して安定であるからである。」</span><span class="note">原文照合を待つ。支持の根拠に数えない。</span></td>
+          <td class="rel block"><span class="m"></span>阻害する</td>
+          <td class="state"><span class="st pending">未照合</span></td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+    <div class="chart-foot">
+      <span>支持の根拠 <span class="n">3</span> 行</span>
+      <span>未照合 <span class="n">2</span> 行</span>
+      <span class="rej">棄却 <span class="n">1</span> 行（ハッチングで残す。削除しない）</span>
+    </div>
+  </section>
+
+  <!-- 右: 典拠の余白（引出線） -->
+  <aside class="pane gutter">
+    <div class="pane-head"><span class="fig">図3a</span>所見<span class="sub">典拠の余白</span></div>
+    <div class="obs">
+      <div class="sent">
+        <span class="sym g">1</span>
+        <p>瞳孔中心の検出に輝度勾配に基づく円形状検出を用いる構成は、少なくとも二件の公報に開示されている。</p>
+        <span class="lead"></span>
+        <div class="tags">
+          <span class="tag">特開2018-134274<b>【0032】</b></span>
+          <span class="tag">特開2020-012345<b>【0058】</b></span>
+        </div>
+      </div>
+      <div class="sent">
+        <span class="sym g">2</span>
+        <p>赤外光照射と暗瞳孔法の組合せは、眼鏡フィッティングの分野において周知と評価される可能性が高い。</p>
+        <span class="lead"></span>
+        <div class="tags"><span class="tag">特開2016-057889<b>【0047】</b></span></div>
+      </div>
+      <div class="sent none">
+        <span class="sym hollow">3</span>
+        <p>したがって、要件Bのみでは新規性を主張できない。</p>
+        <span class="lead"></span>
+        <div class="tags"><span class="no-tag">典拠なし<small>推論のみ。公報に紐づかない。</small></span></div>
+      </div>
+      <div class="sent none">
+        <span class="sym hollow">4</span>
+        <p>一方、瞳孔中心から加入度を直接決定する構成は、調査した範囲では見当たらない。</p>
+        <span class="lead"></span>
+        <div class="tags"><span class="no-tag">典拠なし<small>不存在の主張は典拠を持てない。範囲は検索式欄。</small></span></div>
+      </div>
+      <div class="sent pend">
+        <span class="sym">5</span>
+        <p>虹彩外縁を優先する記載は、瞳孔中心検出への阻害要因として補正時に検討を要する。</p>
+        <span class="lead"></span>
+        <div class="tags"><span class="tag pending">特開2022-098765<b>【0071】</b><i>未照合</i></span></div>
+      </div>
+    </div>
+    <div class="gutter-foot">引出線が札に届いた文 <span class="n">3</span>（照合済み <span class="n">2</span>・未照合 <span class="n">1</span>）。途切れた文 <span class="n am">2</span>。<br>途切れた文は出願書類に引用されない。</div>
+  </aside>
+
+</main>
+
+<footer class="log">
+  <div class="lbl">検索式<span class="fig">注記 / batch #7</span></div>
+  <code>ngram MATCH '瞳孔 中心 検出' AND ipc LIKE 'G06F3/01%' AND pub_date &lt;= '2024-03-01'</code>
+  <div class="facts">ヒット <b>1,284</b> 件 ／ 実行 <b>2026-09-03 22:14</b> ／ コーパス <b>batch #7</b></div>
+</footer>
+
+</body>
+</html>

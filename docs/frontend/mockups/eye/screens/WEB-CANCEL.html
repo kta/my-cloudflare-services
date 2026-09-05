@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EYE予約 — Web予約 予約の確認と取り消し</title>
+<link rel="stylesheet" href="../assets/eye.css">
+<style>
+  .ask h2 { font-size: 20px; }
+  .ask p { font-size: 13px; }
+  .ask .bubble { width: 18px; height: 15px; margin-top: 6px; }
+  .wrap { padding: 32px 28px 152px; }
+  .detail { margin: 24px 0 0; }
+  .detail > div { display: flex; gap: 14px; align-items: baseline; }
+  .detail dt { flex: none; width: 78px; font-size: 13px; color: var(--ink-2); }
+  .detail dd { flex: 1; margin: 0; font-size: 16px; font-weight: 600; }
+  .detail .big { font-size: 20px; color: var(--brand-dark); }
+  .cau { margin: 24px 0 0; font-size: 13px; color: var(--ink-2); }
+  .sticky { left: 28px; right: 28px; bottom: 32px; }
+  .sticky .btn { width: 100%; }
+  .sticky .btn + .btn { margin-top: 10px; }
+</style>
+</head>
+<body>
+<div class="caption">
+  <h1>Web予約　予約の確認と取り消し</h1>
+  <p>本人確認のあとに開く画面。見つかった予約の内容と、変更・取り消しの2つの出口だけを並べる。</p>
+</div>
+
+<main class="phone" id="screen">
+  <div class="statusbar"><span>18:42</span><span></span><span>Wi‑Fi　74%</span></div>
+
+  <header class="appbar">
+    <button class="homebtn" aria-label="前の画面へ戻る">‹</button>
+    <div class="storename">EYE ご予約<small>ご予約の確認・変更・取り消し</small></div>
+  </header>
+
+  <div class="webprogress" role="img" aria-label="2つの手順のうち2つ目です">
+    <i class="on"></i><i class="on"></i>
+  </div>
+
+  <div class="body">
+    <div class="wrap">
+      <div class="ask">
+        <span class="bubble" aria-hidden="true"></span>
+        <div>
+          <h2>ご予約をお調べしました</h2>
+          <p>ご本人様の確認ができました。</p>
+        </div>
+      </div>
+
+      <dl class="lines detail">
+        <div><dt>ご来店</dt><dd class="big">8月29日（土）11:00</dd></div>
+        <div><dt>店舗</dt><dd>EYE 銀座店</dd></div>
+        <div><dt>ご用件</dt><dd>メガネを新しく作る（約60分）</dd></div>
+        <div><dt>お名前</dt><dd>山口 真央 様</dd></div>
+        <div><dt>ご予約番号</dt><dd class="mono">EY-W-2608-0031</dd></div>
+      </dl>
+
+      <p class="cau">変更・取り消しは前日までにお願いいたします。</p>
+    </div>
+
+    <div class="sticky">
+      <button class="btn primary big">日時を変更する</button>
+      <button class="btn danger">この予約を取り消す</button>
+    </div>
+  </div>
+</main>
+</body>
+</html>

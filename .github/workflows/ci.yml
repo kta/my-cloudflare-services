@@ -3,12 +3,18 @@ name: CI
 on:
   pull_request: {}
   push:
-    branches: [main]
+    branches: [main, develop]
   # PR / main-merge run verify: agent compatibility, lint, dependency audit,
   # typecheck, and unit tests with coverage gates. e2e is opt-in only because it needs
   # Playwright browsers + workerd; run it on demand via this trigger, or locally
   # with `pnpm --filter <pkg> e2e`.
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      deploy_eye_stack:
+        description: Deploy notifier → glasses_management → admin after Cloudflare IDs/secrets are configured
+        required: true
+        type: boolean
+        default: false
 
 # Least privilege: jobs authenticate to Cloudflare via the env secret, not the
 # GITHUB_TOKEN, so read is enough.
@@ -39,6 +45,26 @@ jobs:
         run: pnpm run deps:check
       - name: Typecheck
         run: pnpm -r --if-present typecheck
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+      - name: Terraform fmt / validate
+        run: |
+          terraform fmt -check -recursive infra/terraform
+          for env in production staging; do
+            terraform -chdir="infra/terraform/cloudflare/envs/$env" init -backend=false -input=false
+            terraform -chdir="infra/terraform/cloudflare/envs/$env" validate
+          done
+      # staging 構成が wrangler にとって妥当か。SPA は Vite プラグインが
+      # flattened deploy config を作るので、build が通ることが妥当性の証明になる。
+      - name: Validate staging wrangler config
+        env:
+          CLOUDFLARE_ENV: staging
+        run: |
+          pnpm --filter @app/notifier exec wrangler deploy --dry-run --env staging
+          pnpm --filter @app/admin run build
+          pnpm --filter @app/glasses_management run build
       - name: Combined test gate (coverage, web tests, traceability)
         run: pnpm run test
 
@@ -56,6 +82,7 @@ jobs:
         include:
           - { name: example_service, pkg: '@app/example_service', dir: services/example_service }
           - { name: admin, pkg: '@app/admin', dir: services/admin }
+          - { name: glasses_management, pkg: '@app/glasses_management', dir: services/glasses_management }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
@@ -76,33 +103,179 @@ jobs:
           path: ${{ matrix.dir }}/playwright-report/
           retention-days: 7
 
-  # Deploy admin on push to main. Set CLOUDFLARE_API_TOKEN (scoped:
-  # Workers Scripts/D1/KV Edit + Account Read) + CLOUDFLARE_ACCOUNT_ID as repo secrets.
-  # The service
-  # deploys its SPA and API together (one Worker), so no per-SPA API-origin
-  # variables are needed. Prerequisite: `terraform apply` (infra) before the
-  # first deploy.
+  # merge で発火する自動デプロイ。develop → staging、main → production。
+  # 環境の取り違えは preflight が止める。service binding の依存順があるので直列。
   deploy:
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    # e2e is not a gate here (manual-only). verify covers agent compatibility,
-    # lint, dependency audit, typecheck, and unit tests with coverage gates.
+    if: github.event_name == 'push'
+    needs: [verify]
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
+    concurrency:
+      group: deploy-${{ github.ref_name }}
+      cancel-in-progress: false
+    env:
+      CLOUDFLARE_ENV: ${{ github.ref_name == 'main' && '' || 'staging' }}
+      DEPLOY_ENVIRONMENT: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      R2_STATE_ACCESS_KEY_ID: ${{ secrets.R2_STATE_ACCESS_KEY_ID }}
+      R2_STATE_SECRET_ACCESS_KEY: ${{ secrets.R2_STATE_SECRET_ACCESS_KEY }}
+      WORKER_INTERNAL_KEY: ${{ secrets.WORKER_INTERNAL_KEY }}
+      WORKER_JWT_SECRET: ${{ secrets.WORKER_JWT_SECRET }}
+      WORKER_AUTH_PEPPER: ${{ secrets.WORKER_AUTH_PEPPER }}
+      WORKER_DOMAIN_AUTH_KEY: ${{ secrets.WORKER_DOMAIN_AUTH_KEY }}
+      WORKER_RESEND_API_KEY: ${{ secrets.WORKER_RESEND_API_KEY }}
+      WORKER_STAGING_ACCESS_TOKEN: ${{ secrets.WORKER_STAGING_ACCESS_TOKEN }}
+      WORKER_STAGING_ADMIN_PASSWORD: ${{ secrets.WORKER_STAGING_ADMIN_PASSWORD }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_STATE_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_STATE_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # 何かを触る前に、ブランチ / CLOUDFLARE_ENV / environment / secrets を確かめる。
+      # ここを通らない限り terraform も wrangler も走らせない。
+      - name: Preflight
+        run: pnpm run deploy:preflight
+
+      - run: pnpm -r --if-present cf-typegen
+
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+
+      # state バケット。既にあれば失敗を無視する(冪等化)。
+      - name: Ensure state bucket
+        run: pnpm --filter @app/notifier exec wrangler r2 bucket create tfstate || true
+
+      - name: Terraform init
+        working-directory: infra/terraform/cloudflare/envs/${{ env.DEPLOY_ENVIRONMENT }}
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=tfstate" \
+            -backend-config="endpoints={\"s3\":\"https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com\"}"
+
+      - name: Import pre-existing resources
+        run: bash infra/terraform/cloudflare/import-existing.sh "${DEPLOY_ENVIRONMENT}"
+
+      - name: Terraform apply
+        working-directory: infra/terraform/cloudflare/envs/${{ env.DEPLOY_ENVIRONMENT }}
+        env:
+          TF_VAR_cloudflare_account_id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          terraform apply -auto-approve -input=false
+          terraform output -json > "${GITHUB_WORKSPACE}/tf-output.json"
+
+      # 黙って別リソースへデプロイする事故を止める関所。
+      - name: Check binding IDs
+        run: pnpm run check:bindings admin glasses_management notifier --env "${CLOUDFLARE_ENV}" --tf-output tf-output.json
+
+      # admin ⇄ glasses_management は service binding が相互参照なので、依存順を
+      # どう並べても初回は「参照先の Worker が無い」で落ちる。閉路をここで一度だけ
+      # 空 Worker で切る。既にある Worker には触らないので 2 回目以降は no-op。
+      - name: Bootstrap cross-referenced workers
+        run: pnpm run bootstrap:workers admin glasses_management notifier --env "${CLOUDFLARE_ENV}"
+
+      - name: Deploy notifier
+        run: pnpm --filter @app/notifier run deploy
+      - name: Sync notifier secrets
+        run: |
+          node -e 'const s={INTERNAL_KEY:process.env.WORKER_INTERNAL_KEY};
+            if(process.env.WORKER_RESEND_API_KEY)s.RESEND_API_KEY=process.env.WORKER_RESEND_API_KEY;
+            process.stdout.write(JSON.stringify(s))' \
+            | pnpm --filter @app/notifier exec wrangler secret bulk ${CLOUDFLARE_ENV:+--env $CLOUDFLARE_ENV}
+
+      - name: Migrate glasses_management
+        run: pnpm run db:migrate:env glasses_management --env "${CLOUDFLARE_ENV}" --tf-output tf-output.json
+      - name: Deploy glasses_management
+        run: pnpm --filter @app/glasses_management run deploy
+      - name: Sync glasses_management secrets
+        run: |
+          node -e 'const s={INTERNAL_KEY:process.env.WORKER_INTERNAL_KEY,
+            JWT_SECRET:process.env.WORKER_JWT_SECRET,
+            AUTH_PEPPER:process.env.WORKER_AUTH_PEPPER,
+            ADMIN_DOMAIN_AUTH_KEY:process.env.WORKER_DOMAIN_AUTH_KEY};
+            if(process.env.WORKER_STAGING_ACCESS_TOKEN)s.STAGING_ACCESS_TOKEN=process.env.WORKER_STAGING_ACCESS_TOKEN;
+            // staging の業務開始は今も dev グラント(/api/auth/token)を通る。
+            // ゲートの裏なので許容するが、production には絶対に入れない。
+            // 恒久対応は admin 認証への差し替え(spec 待ち)。
+            if(process.env.DEPLOY_ENVIRONMENT==="staging")s.AUTH_DEV_GRANT="true";
+            process.stdout.write(JSON.stringify(s))' \
+            | pnpm --filter @app/glasses_management exec wrangler secret bulk ${CLOUDFLARE_ENV:+--env $CLOUDFLARE_ENV}
+
+      # admin は glasses-management への service binding があるので最後。
+      - name: Migrate admin
+        run: pnpm run db:migrate:env admin --env "${CLOUDFLARE_ENV}" --tf-output tf-output.json
+      - name: Deploy admin
+        run: pnpm --filter @app/admin run deploy
+      - name: Sync admin secrets
+        run: |
+          node -e 'const s={INTERNAL_KEY:process.env.WORKER_INTERNAL_KEY,
+            JWT_SECRET:process.env.WORKER_JWT_SECRET,
+            AUTH_PEPPER:process.env.WORKER_AUTH_PEPPER,
+            DOMAIN_AUTH_KEY:process.env.WORKER_DOMAIN_AUTH_KEY};
+            if(process.env.WORKER_STAGING_ACCESS_TOKEN)s.STAGING_ACCESS_TOKEN=process.env.WORKER_STAGING_ACCESS_TOKEN;
+            process.stdout.write(JSON.stringify(s))' \
+            | pnpm --filter @app/admin exec wrangler secret bulk ${CLOUDFLARE_ENV:+--env $CLOUDFLARE_ENV}
+
+      # `wrangler secret bulk` は加算で、渡さなかった secret を消さない。一度でも
+      # production へ AUTH_DEV_GRANT が入ると以後どのデプロイでも消えず、
+      # `/api/auth/token` の「'true' でなければ 404」を素通りし続ける。
+      # 「入れない」だけでは足りないので、残っていないことをここで確かめる。
+      # `secret list` は名前だけを返すので、値はログに出ない。
+      - name: Assert no dev grant on production
+        if: env.DEPLOY_ENVIRONMENT == 'production'
+        run: |
+          for pkg in @app/glasses_management @app/admin; do
+            # 一覧を取れないまま素通りさせない。取れない=確かめていない、である。
+            if ! names=$(pnpm --filter "$pkg" exec wrangler secret list 2>&1); then
+              echo "::error::$pkg の secret 一覧を取得できませんでした"
+              echo "$names"
+              exit 1
+            fi
+            if grep -q AUTH_DEV_GRANT <<<"$names"; then
+              echo "::error::$pkg の production に AUTH_DEV_GRANT が残っています"
+              exit 1
+            fi
+          done
+
+      # staging は dev グラント無しの fail close なので、ログインできる admin が要る。
+      # seed は INSERT OR IGNORE で冪等。production では回さない。
+      # 宛先の D1 は CLOUDFLARE_ENV から wrangler.jsonc 経由で解決される。
+      - name: Seed staging admin
+        if: env.DEPLOY_ENVIRONMENT == 'staging'
+        env:
+          AUTH_PEPPER: ${{ secrets.WORKER_AUTH_PEPPER }}
+          ADMIN_PASSWORD: ${{ secrets.WORKER_STAGING_ADMIN_PASSWORD }}
+          ADMIN_EMAIL: ${{ vars.STAGING_ADMIN_EMAIL || 'admin@example.com' }}
+        run: node services/admin/seed.mjs --remote
+
+      # 業務データが 0 件だと staging は「このコードのお店が見つかりませんでした」で
+      # 行き止まりになる。EYE(組織 eye / 3 店舗 / スタッフ / 端末)をここで入れる。
+      # 同じく INSERT OR IGNORE なので再デプロイで増えない。production では回さない。
+      - name: Seed staging glasses_management
+        if: env.DEPLOY_ENVIRONMENT == 'staging'
+        env:
+          AUTH_PEPPER: ${{ secrets.WORKER_AUTH_PEPPER }}
+        run: node services/glasses_management/seed.mjs --remote
+
+  # 手動で EYE スタックだけを production へ流す逃げ道。通常の main push は上の
+  # deploy が同じことをする。service binding の参照先が実在している必要があるので、
+  # ここでも先に踏み台を置いてから直列にデプロイする。
+  deploy-eye-stack:
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy_eye_stack == true
     needs: [verify]
     runs-on: ubuntu-latest
     environment: production
-    # Serialize deploys and never cancel one mid-migration/mid-upload.
     concurrency:
       group: deploy-production
       cancel-in-progress: false
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      # example_service is a template scaffold and is never deployed. Secrets
-      # are never committed: dev values live in each service's .dev.vars (local
-      # only); prod values are set once via `wrangler secret put` (deploy.md).
-      matrix:
-        include:
-          - { pkg: '@app/admin' }
-          - { pkg: '@app/glasses_reservation' }
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -114,7 +287,28 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # Apply remote D1 migrations before deploying code that expects the
-      # schema. No-op for Workers without a db:migrate:remote script.
-      - run: pnpm --filter ${{ matrix.pkg }} --if-present run db:migrate:remote
-      - run: pnpm --filter ${{ matrix.pkg }} run deploy
+      - name: Bootstrap cross-referenced workers
+        run: pnpm run bootstrap:workers admin glasses_management notifier --env ""
+      - name: Deploy notifier (no downstream bindings)
+        run: pnpm --filter @app/notifier run deploy
+      - name: Migrate and deploy glasses_management
+        run: pnpm --filter @app/glasses_management run db:migrate:remote && pnpm --filter @app/glasses_management run deploy
+      - name: Migrate and deploy admin (depends on glasses_management)
+        run: pnpm --filter @app/admin run db:migrate:remote && pnpm --filter @app/admin run deploy
+
+      # この job は production 専用で、Terraform も binding 突合も通らない。
+      # 関所が少ない経路ほど、残骸は静かに残る。
+      - name: Assert no dev grant on production
+        run: |
+          for pkg in @app/glasses_management @app/admin; do
+            # 一覧を取れないまま素通りさせない。取れない=確かめていない、である。
+            if ! names=$(pnpm --filter "$pkg" exec wrangler secret list 2>&1); then
+              echo "::error::$pkg の secret 一覧を取得できませんでした"
+              echo "$names"
+              exit 1
+            fi
+            if grep -q AUTH_DEV_GRANT <<<"$names"; then
+              echo "::error::$pkg の production に AUTH_DEV_GRANT が残っています"
+              exit 1
+            fi
+          done

@@ -33,7 +33,9 @@ test('未認証はログインへ誘導される', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'ログイン', exact: true })).toBeVisible()
 })
 
-// @e2e-covers AC-ADMIN-01 AC-ADMIN-02 AC-ADMIN-03
+// No @e2e-covers mapping: the AC-ADMIN identifiers lived in the Superseded
+// 001-admin-standalone spec and its successor defines no UC/AC. The flow
+// itself is still production behaviour, so the test stays.
 test('組織作成 → 手動招待リンク → プラン切替 → 無効化', async ({ page, request }) => {
   const operatorOrgId = unique('operator-e2e')
   const token = await mintAdminToken(request, operatorOrgId)

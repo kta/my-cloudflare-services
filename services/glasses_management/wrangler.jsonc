@@ -1,0 +1,71 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "glasses-management",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-06-25",
+  "observability": { "enabled": true },
+  // 1 つの Worker が業務 SPA（iPad）とお客様向け Web 予約（スマートフォン）と
+  // API を同一オリジンで配る。/api/* だけが Worker に届き、他は静的資産として
+  // 返る（SPA fallback）。`directory` は Cloudflare Vite プラグインが埋める。
+  "assets": {
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  // 1 ドメイン = 1 D1。database_id は Terraform(envs/production) の出力
+  // `glasses_management_d1_database_id` の実値。初回 apply で作られた ID をここに固定する。
+  // local dev / test はこの値を見ない。`migrations_dir` は drizzle の `out` と一致させる。
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "glasses_management",
+      "database_id": "cece3df4-e914-43d3-9e1a-e95b176cc6e8",
+      "migrations_dir": "migrations"
+    }
+  ],
+  // 短命な状態（冪等キー・受付中の下書き）だけを置く。正本は D1。
+  // id は Terraform(envs/production) の出力 `glasses_management_short_lived_kv_namespace_id` の実値。
+  "kv_namespaces": [{ "binding": "SHORT_LIVED", "id": "973f36831dc74df49774061080fb494e" }],
+  // 受付録音と手書きメモの本体。非公開のまま Worker が仲介し、ダウンロード URL は発行しない。
+  "r2_buckets": [{ "binding": "RECORDINGS", "bucket_name": "glasses-management-recordings" }],
+  // 予約確定メールと管理コード発行メールは notifier へ同期送信する
+  // （service binding + x-internal-key）。Queues は使わない。
+  "services": [
+    { "binding": "NOTIFIER", "service": "notifier" },
+    { "binding": "ADMIN", "service": "admin" }
+  ],
+  // 日次の保守。**UTC で書く**ので 15:00 = JST 00:00（業務日の境界）。
+  // アカウント全体の Cron 枠 5 本のうち、このサービスが 1 本目を使う
+  // （specs/glasses_management/design/04-api.md §3.2）。保持期限を過ぎた録音の掃除と、
+  // 24 時間動かない録音を failed に落とす処理をこの 1 本の中で順に呼ぶ。
+  "triggers": { "crons": ["0 15 * * *"] },
+  // staging。service binding は自動でサフィックスが付かないので明示的に -staging を指す。
+  // Cron はアカウント全体で 5 本しか無い共有枠なので staging では 0 本にする。
+  // 各 id は Terraform(envs/staging) の出力の実値。初回 apply で作られた ID をここに固定する。
+  "env": {
+    "staging": {
+      "assets": {
+        "not_found_handling": "single-page-application",
+        "run_worker_first": ["/api/*"]
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "glasses_management_staging",
+          "database_id": "763105b9-b88d-45ac-83a8-587c25a81a9f",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "kv_namespaces": [{ "binding": "SHORT_LIVED", "id": "037363090c1d40d9907d4389a20a7fd5" }],
+      "r2_buckets": [
+        { "binding": "RECORDINGS", "bucket_name": "glasses-management-recordings-staging" }
+      ],
+      "services": [
+        { "binding": "NOTIFIER", "service": "notifier-staging" },
+        { "binding": "ADMIN", "service": "admin-staging" }
+      ],
+      "triggers": { "crons": [] }
+    }
+  }
+  // secrets（INTERNAL_KEY / JWT_SECRET / AUTH_PEPPER / AUTH_DEV_GRANT）は vars に置かない。
+  // dev は .dev.vars、本番は `wrangler secret put`。docs/howto/deploy.md 参照。
+}

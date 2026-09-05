@@ -28,16 +28,40 @@ dev/example_service:
 dev/admin:
 	 pnpm --filter @app/admin dev
 
-## dev/glasses_reservation: run glasses reservation mock SPA (:5175)
-dev/glasses_reservation:
-	pnpm --filter @app/glasses_reservation dev
+## dev/glasses_management: run glasses_management — SPA + API in one dev server (:5175)
+dev/glasses_management:
+	pnpm --filter @app/glasses_management dev
 
-## dev/all: run admin (:5174) + example_service (:5173) together — service bindings resolve across dev servers
+## dev/patent_research: run 典拠 — SPA + API (:5177). Start `make corpus/serve` first.
+# コーパスはローカルの別プロセスなので、先に別のターミナルで `make corpus/serve` を起こす。
+dev/patent_research:
+	pnpm --filter @app/patent_research dev
+
+## corpus/serve: run the patent corpus sidecar (:8899). DB=... to point at another corpus.
+corpus/serve:
+	INTERNAL_KEY=$${INTERNAL_KEY:-dev-internal-key} node packages/patent-corpus/src/cli.ts serve --db $${DB:-packages/patent-corpus/.data/corpus.db}
+
+## corpus/synth: build a synthetic corpus so the app is usable before the real bulk data arrives
+corpus/synth:
+	mkdir -p packages/patent-corpus/.data
+	node packages/patent-corpus/src/cli.ts synth --db $${DB:-packages/patent-corpus/.data/corpus.db} --count $${COUNT:-500}
+
+## corpus/probe: ask the received media what shape it actually is (run this FIRST on real data)
+corpus/probe:
+	node packages/patent-corpus/src/cli.ts probe $${PATH_TO_MEDIA:?PATH_TO_MEDIA=... が要る} --sample 20
+
+## dev/notifier: run notifier internal notification Worker (:5176)
+dev/notifier:
+	pnpm --filter @app/notifier dev -- --port 5176
+
+## dev/all: run admin (:5174), example_service (:5173), glasses_management (:5175), and notifier (:5176) together
 dev/all:
-	@echo "starting admin (:5174) + example_service (:5173); Ctrl-C stops both"
+	@echo "starting admin (:5174) + example_service (:5173) + glasses_management (:5175) + notifier (:5176); Ctrl-C stops all"
 	@trap 'kill 0' EXIT; \
 		pnpm --filter @app/admin dev & \
 		pnpm --filter @app/example_service dev & \
+		pnpm --filter @app/glasses_management dev & \
+		pnpm --filter @app/notifier dev -- --port 5176 & \
 		wait
 
 ## db/generate: generate Drizzle migrations from schemas
@@ -51,6 +75,15 @@ db/migrate/local:
 ## db/migrate/remote: apply all migrations to remote D1
 db/migrate/remote:
 	pnpm -r --if-present db:migrate:remote
+
+## db/reset/local: throw away local D1 state, then migrate + seed from scratch
+##   マイグレーションがリネーム・再生成されると、d1_migrations に残った古い名前のせいで
+##   db/migrate/local が `table ... already exists` で落ち、その先の seed（旧組織 ID の
+##   移行を含む）が一度も走らなくなる。ローカルの開発データだけを捨てて作り直す。
+db/reset/local:
+	rm -rf services/*/.wrangler/state/v3/d1
+	$(MAKE) db/migrate/local
+	$(MAKE) db/seed/local
 
 ## build: build all packages
 build:
@@ -72,10 +105,13 @@ lint:
 check:
 	pnpm run check
 
-# NOTE: example_service は雛形なので本番 deploy ターゲットを持たない(CI matrix からも除外)。
-## deploy/admin: build + deploy the admin Worker (SPA + API)
-deploy/admin:
-	pnpm --filter @app/admin run deploy
+# NOTE: 手元からの deploy ターゲットは置かない。デプロイは GitHub Actions が
+# Environment secrets を使って行う唯一の経路であり、緊急時は workflow_dispatch を使う
+# (docs/howto/deploy.md)。手元に本番トークンを常設させないための意図的な欠落である。
+
+## bootstrap/ci: GitHub Environment と secrets を用意する(人の手は R2 トークン発行のみ)
+bootstrap/ci:
+	bash scripts/bootstrap-ci.sh
 
 ## worktree/new: isolated worktree for a parallel agent (name=<branch>)
 worktree/new:
@@ -90,6 +126,6 @@ worktree/rm:
 help:
 	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/## //' | awk -F': ' '{printf "  \033[36m%-26s\033[0m %s\n", $$1, $$2}'
 
-.PHONY: init dev/example_service dev/admin dev/glasses_reservation dev/all db/generate db/migrate/local db/migrate/remote db/seed/local \
-	build test typecheck lint check dev-vars deploy/admin \
+.PHONY: init dev/example_service dev/admin dev/glasses_management dev/patent_research dev/notifier dev/all corpus/serve corpus/synth corpus/probe db/generate db/migrate/local db/migrate/remote db/seed/local db/reset/local \
+	build test typecheck lint check dev-vars bootstrap/ci \
 	worktree/new worktree/rm help

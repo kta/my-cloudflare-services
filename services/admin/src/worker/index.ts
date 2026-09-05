@@ -1,33 +1,55 @@
 import {
   AcceptInviteRequest,
+  AdminUserQuery,
   CreateOrganization,
   InviteRequest,
   IssueTokenRequest,
   LoginRequest,
   Organization,
+  PinResetStartRequest,
+  PinVerificationRequest,
   Plan,
+  RefreshRequest,
+  SetOwnPinRequest,
+  Store,
+  UserAssignmentUpdate,
 } from '@app/contracts'
 import {
   type AuthVariables,
   generateRefreshToken,
   hashToken,
   internalAuth,
+  internalAuthFor,
   REFRESH_TTL_SECONDS,
   requireRole,
   signAccessToken,
+  stagingGate,
   tenantAuth,
 } from '@app/shared'
-import type { D1Database, KVNamespace } from '@cloudflare/workers-types'
+import type { D1Database, Fetcher, KVNamespace } from '@cloudflare/workers-types'
 import { zValidator } from '@hono/zod-validator'
-import { desc, eq } from 'drizzle-orm'
+import { desc, eq, type SQL, sql } from 'drizzle-orm'
 import { drizzle } from 'drizzle-orm/d1'
-import { Hono, type MiddlewareHandler } from 'hono'
+import { type Context, Hono, type MiddlewareHandler } from 'hono'
 import { except } from 'hono/combine'
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie'
 import { HTTPException } from 'hono/http-exception'
 import { z } from 'zod'
 import { type AuthDeps, acceptInvite, login, refresh, revokeOne } from './auth/service'
 import { invitations, organizations, users } from './db/schema'
+import { proxyLogin, proxyRefresh, proxyVerifyPin } from './domain-auth'
+import { syncOrganization, syncStoreMemberships } from './sync'
+import {
+  getUser,
+  hasPin,
+  listAudits,
+  listUsers,
+  membershipsFor,
+  setOwnPin,
+  startPinReset,
+  type UserAdminDeps,
+  updateAssignment,
+} from './users/service'
 
 // The admin SPA is served by this same Worker (same origin) — no CORS.
 export type Bindings = {
@@ -37,15 +59,28 @@ export type Bindings = {
   JWT_SECRET: string
   AUTH_PEPPER: string
   AUTH_DEV_GRANT?: string
+  // Domain service binding. The binding is the only route to the domain
+  // Worker; its internal API still requires the shared INTERNAL_KEY.
+  GLASSES_MANAGEMENT: Fetcher
   // 招待リンクの基底 URL の明示オーバーライド(プロキシ/カスタムドメイン用)。
   // 未設定ならリクエストの origin から導出する(/invite はこの SPA 自身が配信)。
   INVITE_BASE_URL?: string
+  // Secret used by all service-binding internal endpoints. Missing key is a
+  // fail-closed configuration error (see internalAuth()).
+  INTERNAL_KEY: string
+  DOMAIN_AUTH_KEY: string
+  // staging だけに設定される。未設定なら stagingGate は何もしない(production)。
+  STAGING_ACCESS_TOKEN?: string
 }
 
 const REFRESH_COOKIE = 'rt'
 const INVITE_TTL_SECONDS = 72 * 60 * 60
 
 const app = new Hono<{ Bindings: Bindings; Variables: AuthVariables }>()
+
+// staging(workers.dev 公開)を守る。production は secret 未設定なので素通りする。
+// 他のどのミドルウェアより先に置く。
+app.use('*', stagingGate())
 
 app.onError((err, c) => {
   if (err instanceof HTTPException) return err.getResponse()
@@ -60,6 +95,18 @@ function authDeps(c: { env: Bindings }): AuthDeps {
     pepper: c.env.AUTH_PEPPER,
     jwtSecret: c.env.JWT_SECRET,
   }
+}
+/**
+ * 利用者管理・PIN の依存。時刻はここで 1 度だけ注入し、ハンドラやサービス層で
+ * `new Date()` を呼ばない。組織 ID は必ず JWT 由来(引数で受け取る)。
+ */
+function userAdminDeps(c: AdminContext): UserAdminDeps {
+  return { db: drizzle(c.env.DB), pepper: c.env.AUTH_PEPPER, now: new Date() }
+}
+/** 操作主体(JWT の sub)。監査の actor はリクエスト入力から取らない。 */
+function actor(c: AdminContext): { organizationId: string; userId: string } {
+  const auth = c.get('auth')
+  return { organizationId: auth.org, userId: auth.sub }
 }
 function clientIp(c: { req: { header: (k: string) => string | undefined } }): string {
   return c.req.header('cf-connecting-ip') ?? c.req.header('x-forwarded-for') ?? 'unknown'
@@ -90,6 +137,35 @@ function toOrganization(r: {
   })
 }
 
+type AdminContext = Context<{ Bindings: Bindings; Variables: AuthVariables }>
+
+/**
+ * Propagate the canonical snapshot after the admin D1 write. The source of
+ * truth is intentionally retained when the domain is unavailable; callers get
+ * a retryable 502 instead of a false success or a rolled-back admin record.
+ */
+async function syncOrganizationOrError(
+  c: AdminContext,
+  organization: Organization,
+  revision: number,
+): Promise<Response | null> {
+  const outcome = await syncOrganization(
+    c.env.GLASSES_MANAGEMENT,
+    c.env.INTERNAL_KEY,
+    organization,
+    revision,
+  )
+  if (outcome.ok) return null
+  return c.json(
+    {
+      error: 'organization_sync_failed' as const,
+      organizationId: organization.id,
+      retryable: outcome.retryable,
+    },
+    502,
+  )
+}
+
 /**
  * 運営者(オペレーター)ゲート。この管理コンソールはプラットフォーム運営者の
  * ツールであり、招待で作られた**テナント**の admin には触らせない(触らせると
@@ -114,7 +190,19 @@ function requireOperator(): MiddlewareHandler<{
 }
 
 // Internal endpoints: shared-key guarded (other Workers → service binding).
-app.use('/api/internal/*', internalAuth())
+app.use('/api/internal/*', async (c, next) => {
+  if (c.req.path.startsWith('/api/internal/domain-auth/pin/')) return next()
+  return (
+    internalAuth() as unknown as MiddlewareHandler<{ Bindings: Bindings; Variables: AuthVariables }>
+  )(c, next)
+})
+app.use(
+  '/api/internal/domain-auth/pin/*',
+  internalAuthFor('DOMAIN_AUTH_KEY') as unknown as MiddlewareHandler<{
+    Bindings: Bindings
+    Variables: AuthVariables
+  }>,
+)
 
 // Default-deny: EVERY /api/* route requires an operator-org admin JWT unless
 // explicitly exempted (health / auth are public; internal has its own key
@@ -122,21 +210,76 @@ app.use('/api/internal/*', internalAuth())
 app.use(
   '/api/*',
   except(
-    ['/api/health', '/api/auth/*', '/api/internal/*'],
+    [
+      '/api/health',
+      '/api/auth/*',
+      '/api/internal/*',
+      // テナントの本部管理者が使う利用者管理と、本人の PIN。運営限定ゲートの
+      // 対象外だが、下の専用ミドルウェアで認証・ロールを必ず要求する。
+      '/api/users',
+      '/api/users/*',
+      '/api/me/*',
+      // 担当店舗の割り当てで使う。運営限定ではなく、**自社なら本部管理者も引ける**
+      // （下のハンドラが JWT の org と突き合わせる）。014-store-provisioning
+      '/api/organizations/:id/stores',
+    ],
     tenantAuth(),
     requireRole('admin'),
     requireOperator(),
   ),
 )
 
+/*
+ * 利用者管理(UC-EYE-149) は本部管理者だけの操作である。
+ *
+ * JWT の `role` では判定できない: `STANDARD_ROLE_BASE_ROLE` は店舗管理者にも
+ * `admin` を与えるので、ロールだけを門にすると店舗管理者がここを通過し、
+ * 自分の標準ロールを本部管理者へ書き換えられてしまう。標準ロールはサーバが
+ * D1 から引き直して判定する。
+ */
+function requireHeadOfficeAdmin(): MiddlewareHandler<{
+  Bindings: Bindings
+  Variables: AuthVariables
+}> {
+  return async (c, next) => {
+    const { organizationId, userId } = actor(c as AdminContext)
+    const self = await getUser(userAdminDeps(c as AdminContext), organizationId, userId)
+    if (self?.standardRole !== 'head_office_admin') return c.json({ error: 'forbidden' }, 403)
+    await next()
+  }
+}
+
+app.use('/api/users', tenantAuth(), requireRole('admin'), requireHeadOfficeAdmin())
+app.use('/api/users/*', tenantAuth(), requireRole('admin'), requireHeadOfficeAdmin())
+// 個人 PIN(UC-EYE-151): 本人であればロールを問わない。対象は常に JWT の sub。
+app.use('/api/me/*', tenantAuth())
+/*
+ * 会社のお店の一覧（014-store-provisioning）は、担当店舗の割り当てで使う。
+ * 運営限定ゲートの外に出してあるので、認証とロールはここで必ず要求する。
+ * 他社を見られるのは運営だけ — その突き合わせはハンドラが行う。
+ */
+app.use('/api/organizations/:id/stores', tenantAuth(), requireRole('admin'))
+
 const routes = app
   .get('/api/health', (c) => c.json({ status: 'ok' as const }))
 
+  // ---- Internal domain authentication proxy ----
+  // The internal-key middleware above is the sole guard. These handlers return
+  // the opaque refresh token to the calling domain Worker; no cookie is set on
+  // this Worker because the browser is connected to the domain origin.
+  .post('/api/internal/domain-auth/login', zValidator('json', LoginRequest), async (c) =>
+    proxyLogin(c, c.req.valid('json')),
+  )
+  .post('/api/internal/domain-auth/refresh', zValidator('json', RefreshRequest), async (c) =>
+    proxyRefresh(c, c.req.valid('json')),
+  )
+  .post(
+    '/api/internal/domain-auth/pin/verify',
+    zValidator('json', PinVerificationRequest),
+    async (c) => proxyVerifyPin(c, c.req.valid('json')),
+  )
+
   // ---- Public auth API (admin SPA, same origin) ----
-  // NOTE: このテンプレには「ドメイン Worker が admin へ認証をプロキシする」
-  // internal auth API は置いていない(呼び出し元が無いコードは腐る)。その構成に
-  // する fork は、この public ルート群と同じ auth/service.ts の関数を
-  // /api/internal/auth/* として薄く公開すればよい(cookie 化を境界側で行う)。
   .post('/api/auth/login', zValidator('json', LoginRequest), async (c) => {
     const out = await login(authDeps(c), { ...c.req.valid('json'), ip: clientIp(c) })
     if (!out.ok) {
@@ -191,6 +334,7 @@ const routes = app
         plan: 'free',
         isDisabled: '0',
         isOperator: '1',
+        syncRevision: 1,
         createdAt: new Date().toISOString(),
       })
       .onConflictDoNothing({ target: organizations.id })
@@ -219,10 +363,14 @@ const routes = app
         plan: input.plan ?? 'free',
         isDisabled: '0',
         isOperator: '0',
+        syncRevision: 1,
         createdAt: new Date().toISOString(),
       }
       await db.insert(organizations).values(org)
-      return c.json(toOrganization(org), 201)
+      const organization = toOrganization(org)
+      const syncFailure = await syncOrganizationOrError(c, organization, org.syncRevision)
+      if (syncFailure) return syncFailure
+      return c.json(organization, 201)
     },
   )
   .patch(
@@ -236,13 +384,14 @@ const routes = app
       const id = c.req.param('id')
       const patch = c.req.valid('json')
       // 1 クエリで更新 + 更新後行の取得(SELECT→UPDATE の 2 往復と読み書き競合を防ぐ)。
-      const set: Record<string, string> = {}
+      const set: Record<string, string | SQL> = {}
       if (patch.plan !== undefined) set.plan = patch.plan
       if (patch.isDisabled !== undefined) set.isDisabled = patch.isDisabled ? '1' : '0'
       if (Object.keys(set).length === 0) {
         const rows = await db.select().from(organizations).where(eq(organizations.id, id))
         return rows[0] ? c.json(toOrganization(rows[0])) : c.json({ error: 'not_found' }, 404)
       }
+      set.syncRevision = sql`${organizations.syncRevision} + 1`
       const updated = await db
         .update(organizations)
         .set(set)
@@ -250,7 +399,10 @@ const routes = app
         .returning()
       const row = updated[0]
       if (!row) return c.json({ error: 'not_found' }, 404)
-      return c.json(toOrganization(row))
+      const organization = toOrganization(row)
+      const syncFailure = await syncOrganizationOrError(c, organization, row.syncRevision)
+      if (syncFailure) return syncFailure
+      return c.json(organization)
     },
   )
   // Delete an organization: disable it while keeping the canonical row as an audit trail.
@@ -259,12 +411,82 @@ const routes = app
     const id = c.req.param('id')
     const updated = await db
       .update(organizations)
-      .set({ isDisabled: '1' })
+      .set({ isDisabled: '1', syncRevision: sql`${organizations.syncRevision} + 1` })
       .where(eq(organizations.id, id))
       .returning()
     const row = updated[0]
     if (!row) return c.json({ error: 'not_found' }, 404)
+    const organization = toOrganization(row)
+    const syncFailure = await syncOrganizationOrError(c, organization, row.syncRevision)
+    if (syncFailure) return syncFailure
     return c.json({ id, isDisabled: true as const })
+  })
+  // Explicit recovery path for a downstream sync outage. This only reads the
+  // canonical row and retries the exact same snapshot; it never creates a new
+  // revision or lets a tenant admin choose another organization's payload.
+  .post('/api/organizations/:id/sync', async (c) => {
+    const db = drizzle(c.env.DB)
+    const id = c.req.param('id')
+    const rows = await db.select().from(organizations).where(eq(organizations.id, id))
+    const row = rows[0]
+    if (!row) return c.json({ error: 'not_found' }, 404)
+    const organization = toOrganization(row)
+    const syncFailure = await syncOrganizationOrError(c, organization, row.syncRevision)
+    if (syncFailure) return syncFailure
+    return c.json({ ...organization, revision: row.syncRevision }, 200)
+  })
+  /**
+   * 会社のお店の一覧（`014-store-provisioning`）。
+   *
+   * admin は店舗を持たないので、ドメインへ service binding で尋ねて返す。担当店舗の
+   * 割り当てで店舗 id を手で打たせないためだけの読み取りであり、書き込みは持たない。
+   * ドメインが落ちている / 知らない形を返したときは 502 にし、**内部の様子は漏らさない**。
+   */
+  .get('/api/organizations/:id/stores', async (c) => {
+    const db = drizzle(c.env.DB)
+    const id = c.req.param('id')
+    const rows = await db.select().from(organizations).where(eq(organizations.id, id))
+    if (!rows[0]) return c.json({ error: 'not_found' }, 404)
+
+    /*
+     * 自社なら本部管理者が引ける。他社を見られるのは運営だけ。
+     * 運営限定ゲートの外に出したぶん、ここで必ず突き合わせる。
+     */
+    const callerOrg = c.get('auth').org
+    if (callerOrg !== id) {
+      const caller = await db
+        .select({ isOperator: organizations.isOperator })
+        .from(organizations)
+        .where(eq(organizations.id, callerOrg))
+      if (caller[0]?.isOperator !== '1') return c.json({ error: 'forbidden' }, 403)
+    }
+
+    const binding = c.env.GLASSES_MANAGEMENT
+    const internalKey = c.env.INTERNAL_KEY
+    if (!binding || !internalKey) {
+      console.error('store listing unavailable: binding or internal key is not configured')
+      return c.json({ error: 'domain_unavailable' }, 502)
+    }
+
+    try {
+      const response = await binding.fetch(
+        `https://glasses-management.internal/api/internal/stores?organizationId=${encodeURIComponent(id)}`,
+        { headers: { 'x-internal-key': internalKey } },
+      )
+      if (!response.ok) {
+        console.error('store listing rejected by domain', { status: response.status })
+        return c.json({ error: 'domain_unavailable' }, 502)
+      }
+      const parsed = Store.array().safeParse(await response.json())
+      if (!parsed.success) {
+        console.error('store listing returned an unexpected shape')
+        return c.json({ error: 'domain_unavailable' }, 502)
+      }
+      return c.json(parsed.data, 200)
+    } catch {
+      console.error('store listing unavailable: domain binding request failed')
+      return c.json({ error: 'domain_unavailable' }, 502)
+    }
   })
   // Invite a user (staff by default) to an org and return a manual-share link.
   .post(
@@ -319,6 +541,101 @@ const routes = app
       return c.json({ emailed: false as const, acceptUrl }, 201)
     },
   )
+
+  // ---- User / role / store assignment administration (UC-EYE-149) ----
+  .get('/api/users', zValidator('query', AdminUserQuery), async (c) => {
+    const { organizationId } = actor(c)
+    return c.json(await listUsers(userAdminDeps(c), organizationId, c.req.valid('query')))
+  })
+  .get('/api/users/:id', async (c) => {
+    const { organizationId } = actor(c)
+    const view = await getUser(userAdminDeps(c), organizationId, c.req.param('id'))
+    return view ? c.json(view) : c.json({ error: 'not_found' as const }, 404)
+  })
+  .patch('/api/users/:id', zValidator('json', UserAssignmentUpdate), async (c) => {
+    const { organizationId, userId } = actor(c)
+    const deps = userAdminDeps(c)
+    const changed = await updateAssignment(deps, {
+      organizationId,
+      actorUserId: userId,
+      userId: c.req.param('id'),
+      update: c.req.valid('json'),
+    })
+    if (!changed) return c.json({ error: 'not_found' as const }, 404)
+    const outcome = await syncStoreMemberships(
+      c.env.GLASSES_MANAGEMENT,
+      c.env.INTERNAL_KEY,
+      changed.memberships,
+    )
+    if (!outcome.ok) {
+      return c.json(
+        {
+          error: 'store_membership_sync_failed' as const,
+          userId: changed.view.id,
+          retryable: outcome.retryable,
+        },
+        502,
+      )
+    }
+    return c.json(changed.view)
+  })
+  // 同期障害からの明示的な回復。正本を読み直して同じ snapshot を再送するだけで、
+  // 新しい変更も他組織の payload も作らない。
+  .post('/api/users/:id/sync', async (c) => {
+    const { organizationId } = actor(c)
+    const memberships = await membershipsFor(userAdminDeps(c), organizationId, c.req.param('id'))
+    if (!memberships) return c.json({ error: 'not_found' as const }, 404)
+    const outcome = await syncStoreMemberships(
+      c.env.GLASSES_MANAGEMENT,
+      c.env.INTERNAL_KEY,
+      memberships,
+    )
+    if (!outcome.ok) {
+      return c.json(
+        {
+          error: 'store_membership_sync_failed' as const,
+          userId: c.req.param('id'),
+          retryable: outcome.retryable,
+        },
+        502,
+      )
+    }
+    return c.json({ userId: c.req.param('id'), synced: memberships.length })
+  })
+  .get('/api/users/:id/audits', async (c) => {
+    const { organizationId } = actor(c)
+    const audits = await listAudits(userAdminDeps(c), organizationId, c.req.param('id'))
+    return audits ? c.json(audits) : c.json({ error: 'not_found' as const }, 404)
+  })
+  // ---- Personal PIN (UC-EYE-151) ----
+  // 管理者は本人確認の記録つきで再設定を開始できるだけで、PIN は読めず設定もできない。
+  .post('/api/users/:id/pin-reset', zValidator('json', PinResetStartRequest), async (c) => {
+    const { organizationId, userId } = actor(c)
+    const outcome = await startPinReset(userAdminDeps(c), {
+      organizationId,
+      actorUserId: userId,
+      userId: c.req.param('id'),
+      input: c.req.valid('json'),
+    })
+    if (!outcome.ok) return c.json({ error: 'not_found' as const }, 404)
+    return c.json(outcome.ticket, 201)
+  })
+  .get('/api/me/pin', async (c) => {
+    const { organizationId, userId } = actor(c)
+    const present = await hasPin(userAdminDeps(c), organizationId, userId)
+    if (present === null) return c.json({ error: 'not_found' as const }, 404)
+    return c.json({ hasPin: present })
+  })
+  .post('/api/me/pin', zValidator('json', SetOwnPinRequest), async (c) => {
+    const { organizationId, userId } = actor(c)
+    const outcome = await setOwnPin(userAdminDeps(c), {
+      organizationId,
+      userId,
+      input: c.req.valid('json'),
+    })
+    if (!outcome.ok) return c.json({ error: outcome.error }, outcome.status)
+    return c.json({ ok: true as const, hasPin: true as const })
+  })
 
 export type AppType = typeof routes
 
