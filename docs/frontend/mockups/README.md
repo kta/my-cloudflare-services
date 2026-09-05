@@ -27,3 +27,30 @@
 - モックの生値（hex・px）を React にコピペしない。**`packages/ui/src/theme.css` のセマンティックトークンへ翻訳**してから実装する（`../DESIGN_RULE.md` ルール 5）。
 - モックは 1 状態しか描いていない。ローディング / 空 / エラー / レスポンシブ（375px〜）は DESIGN_RULE の品質フロアで補完する。
 - `/design-select` をやり直すのは**見た目の方向そのものを変えたいとき**だけ。
+
+## 突き合わせ（`--project=mock`）が手元で全部落ちるとき
+
+`reference/` の基準画像は `eye/reference.mjs` が**その端末で**モック HTML を描いて作った派生物である。
+和文の描画は端末で変わるので、**基準画像を作った端末以外では全面が不一致になる**。
+2026-09-05 に `develop` で 61 件全滅を確認した。実装の退行ではない。
+
+手元で意味のある突き合わせをするには、**同じ端末で基準を作り直してから比べ、終わったら戻す**。
+
+```sh
+node docs/frontend/mockups/eye/reference.mjs        # この端末の描画で作り直す
+pnpm --filter @app/glasses_management exec playwright test --project=mock
+git checkout -- docs/frontend/mockups/eye/reference/   # 必ず戻す（作り直した画像はコミットしない）
+git clean -f docs/frontend/mockups/eye/reference/      # 新しいモックぶんの未追跡画像も消す
+```
+
+**作り直した基準画像をコミットしてはならない。** 自分の端末の描画をリポジトリの正にしてしまう。
+
+ポートも見る。`playwright.config.ts` は `4175` を `--strictPort` で掴むので、**別の worktree で e2e が
+走っていると、そちらのアプリに対して比べてしまう**（同じ症状で「古い画面が返る」ことがある）。
+並行して回すときは設定を複製してポートだけ変える。
+
+```sh
+sed -e 's/4175/4185/g' services/glasses_management/playwright.config.ts \
+  > services/glasses_management/playwright.port4185.config.ts
+pnpm --filter @app/glasses_management exec playwright test --config=playwright.port4185.config.ts
+```
