@@ -1636,6 +1636,15 @@ const TABLE: Row[] = [
     expected: PUBLIC,
   },
   {
+    // 業務端末の入口。人が打つのは暗証番号だけなので、置き場所の一覧は
+    // 未認証で読める必要がある。出るのは店名と端末名までで、スタッフの
+    // 氏名・勤務・在席は含まない（public-site.integration.test.ts が押さえる）。
+    name: '業務端末の入口は未認証で通る',
+    method: 'GET',
+    path: () => `/api/public/sites/${fixture.webStoreSlug}`,
+    expected: PUBLIC,
+  },
+  {
     name: '公開のご用件は未認証で通る',
     method: 'GET',
     path: () => `/api/public/stores/${fixture.webStoreSlug}/purposes`,

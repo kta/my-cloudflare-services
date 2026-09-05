@@ -2706,6 +2706,37 @@ export const Terminal = z.strictObject({
 })
 export type Terminal = z.infer<typeof Terminal>
 
+/**
+ * 業務端末の入口（`/s/:storeSlug`、未認証）が読む、店舗 1 つぶんの姿。
+ *
+ * 出すのは店名と置き場所の名前まで。スタッフの氏名・勤務・在席は含めない
+ * —— URL を知っているだけの人に「誰が何時に出勤しているか」を渡さない。
+ * `hasPin` も出さない（入口に出る端末は必ず照合できるものだけである）。
+ */
+export const PublicTerminal = z.strictObject({
+  id: Uuid,
+  name: z.string(),
+  placeNote: z.string().nullable(),
+  kind: TerminalKind,
+})
+export type PublicTerminal = z.infer<typeof PublicTerminal>
+
+export const PublicSite = z.strictObject({
+  store: z.strictObject({ slug: z.string(), name: z.string() }),
+  terminals: z.array(PublicTerminal),
+})
+export type PublicSite = z.infer<typeof PublicSite>
+
+/**
+ * 公開の入口は暗証番号だけを受ける。
+ *
+ * `mode` と `staffId` は**受け取らない** —— サーバが `terminals.kind` と
+ * `terminals.staff_id` から引く。クライアントに名乗らせると、staffId を
+ * 差し替えて他人の暗証番号を試す経路になる。
+ */
+export const PublicTerminalSessionStart = z.strictObject({ pin: Pin })
+export type PublicTerminalSessionStart = z.infer<typeof PublicTerminalSessionStart>
+
 export const TerminalListQuery = z.strictObject({
   storeId: Uuid,
   includeInactive: QueryFlag,

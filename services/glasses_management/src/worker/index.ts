@@ -330,6 +330,7 @@ import {
   type WebWindow,
   webBookingCodeMonth,
 } from './domain/web-booking'
+import { readPublicSite } from './public-site'
 import { buildNewStore } from './store-provisioning'
 
 // 明示的に import している（ambient global を使わない）ので、export した AppType は
@@ -10105,6 +10106,22 @@ const routes = app
       return c.json(detail)
     },
   )
+
+  /* --- 業務端末の入口（未認証） -------------------------------------------- */
+
+  /**
+   * `/s/:storeSlug` が読む、店舗と置き場所。
+   *
+   * 人が打つのは暗証番号だけなので、「どの会社のどの端末か」は URL が運ぶ。
+   * `stores.slug` が全組織横断で一意なのは、まさに未認証で組織を引くためである。
+   *
+   * 出すのは店名と置き場所の名前まで。スタッフの氏名・勤務・在席は出さない。
+   */
+  .get('/api/public/sites/:storeSlug', async (c) => {
+    const site = await readPublicSite(c.env.DB, c.req.param('storeSlug'))
+    if (site === null) return c.json({ error: 'not_found' }, 404)
+    return c.json(site)
+  })
 
   /* --- 公開面（P8。未認証。10 本） ---------------------------------------- */
 
