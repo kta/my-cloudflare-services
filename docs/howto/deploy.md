@@ -21,7 +21,8 @@ merge すると `.github/workflows/ci.yml` の `verify` が走り、緑なら `d
    glasses_management（組織 `eye` と 3 店舗・スタッフ・端末）の 2 本。
    宛先の D1 は `CLOUDFLARE_ENV` から `wrangler.jsonc` 経由で解決する（seed に DB 名を直書きしない）。
 
-6. production だけ、`glasses_management` / `admin` の Worker に `AUTH_DEV_GRANT` が
+6. staging だけ、`glasses_management` の seed を流す（組織 `eye` と 3 店舗・スタッフ・端末）。
+7. production だけ、`glasses_management` / `admin` の Worker に `AUTH_DEV_GRANT` が
    **残っていないこと**を確かめる。`wrangler secret bulk` は加算で、渡さなかった
    secret を消さない。一度でも入ると以後どのデプロイでも消えず、`/api/auth/token` の
    「`'true'` でなければ 404」を素通りし続ける。「入れない」だけでは足りない。
@@ -252,6 +253,17 @@ production には `STAGING_ACCESS_TOKEN` を設定しないので、このゲー
    `WORKER_STAGING_ADMIN_PASSWORD` でログインする。
 
 seed の台帳は **2026-08-27** に入っているので、当日を開くと空に見える。日付を戻すこと。
+
+**このリリースの一度きりの後始末**: dev グラントを撤去した版を staging へ出したあと、
+staging の Worker に残っている `AUTH_DEV_GRANT` を手で消す。CI はもう同期しないが、
+`wrangler secret bulk` は**渡さなかった secret を消さない**ので、過去に入った値は残る。
+
+```sh
+pnpm --filter @app/glasses_management exec wrangler secret delete AUTH_DEV_GRANT --env staging
+```
+
+消し忘れても、ルート自体が無いので何も開かない。それでも消すのは、
+「設定を見て挙動を推し量る人」に嘘の手がかりを残さないためである。
 
 admin の seed 行は id 固定の `INSERT OR IGNORE` である。**既にある環境で
 `STAGING_ADMIN_EMAIL` を変えても反映されない**（seed がその旨を警告する）。
