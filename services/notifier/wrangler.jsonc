@@ -19,10 +19,10 @@
   },
   // staging(develop からの自動デプロイ先)。Worker 名は notifier-staging になる。
   // kv_namespaces は wrangler の非継承キーなので環境ごとに書き下ろす。
-  // id は Terraform(envs/staging) の notifier_dedupe_kv_namespace_id の実値に差し替える。
+  // id は Terraform(envs/staging) の notifier_dedupe_kv_namespace_id の実値。
   "env": {
     "staging": {
-      "kv_namespaces": [{ "binding": "DEDUPE", "id": "00000000000000000000000000000000" }],
+      "kv_namespaces": [{ "binding": "DEDUPE", "id": "4d46d278f7544950a7370628b92bffe0" }],
       // staging では RESEND_API_KEY を設定しないので、この空値のまま fail close する。
       "vars": { "MAIL_FROM": "" }
     }
