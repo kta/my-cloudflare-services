@@ -86,35 +86,46 @@ React web coverage は各 60% 以上です。新しい production behavior は f
 
 ## 2. Cloudflare につなぐ（公開する）
 
-インターネットに公開するときだけ必要です。**人間にしかできないのは次の 3 つだけ**で、あとはエージェントに任せられます。
+インターネットに公開するときだけ必要です。**デプロイは merge で自動に起きます** — `develop` へ merge したら staging、`main` へ merge したら production。手で `wrangler deploy` を叩く運用はありません。
+
+**人間にしかできないのは、Cloudflare のダッシュボードでトークンを 2 枚発行することだけ**です。あとは 1 コマンドで終わります。
+
+### 手順
 
 1. **Cloudflare のアカウントを作る** → https://dash.cloudflare.com/sign-up （**Free プランのままで全機能動きます**）
-2. **ログインを許可する**（ブラウザが開きます）:
+
+2. **API トークンを 2 枚発行する**（詳しい画面の手順は [`docs/howto/deploy.md`](./docs/howto/deploy.md#トークンを発行する)）
+
+   | 何を | どこで | 名前 | 権限 |
+   |---|---|---|---|
+   | デプロイ用 | Manage Account → API Tokens → Custom token | `my-cloudflare-services-deploy` | Account の Workers Scripts / D1 / Workers KV Storage / Workers R2 Storage を **Edit**、Account Settings を **Read** |
+   | state 用 | R2 → Manage R2 API Tokens → **Account API Token** | `my-cloudflare-services-tfstate` | **Object Read & Write**（全バケット） |
+
+   2 枚要るのは、Terraform の state を置く R2 が **S3 互換** で、Cloudflare の API トークンでは認証できないためです。R2 のトークンは **Access Key ID / Secret Access Key** の 2 値を控えます（一度しか表示されません）。
+
+3. **GitHub に登録する**
+
    ```sh
-   pnpm --filter @app/admin exec wrangler login
+   export CLOUDFLARE_API_TOKEN='1 枚目のトークン'
+   export CLOUDFLARE_ACCOUNT_ID='ダッシュボード URL の 32 桁'
+   export R2_STATE_ACCESS_KEY_ID='2 枚目の Access Key ID'
+   export R2_STATE_SECRET_ACCESS_KEY='2 枚目の Secret Access Key'
+
+   DRY_RUN=1 make bootstrap/ci   # 何が起きるか確認（GitHub には書き込まない）
+   make bootstrap/ci             # 本当に登録する
    ```
-   ※ Claude Code のセッション中なら、行頭に `!` を付けて `! pnpm --filter @app/admin exec wrangler login` と打てばその場で実行できます。
-3. **API トークンを 1 枚発行する**（自動デプロイを使う場合のみ。ダッシュボードの My Profile → API Tokens → Create Token）。必要な権限はエージェントに聞けば教えてくれます。
 
-そのうえで、エージェントに**このまま貼って**ください:
+   `INTERNAL_KEY` / `JWT_SECRET` / `AUTH_PEPPER` などの共有 secret は**自動生成**されるので、あなたが値を知る必要はありません。GitHub Environment (`staging` / `production`) もこのコマンドが作ります。
 
-```text
-このテンプレートを初めて Cloudflare にデプロイしたい。
-wrangler login は済ませてある。手順は docs/howto/cloudflare-setup.md と
-docs/howto/deploy.md に従って、順番に実行して。
+   staging に人が入るための 2 つ（ゲートトークンと admin 初期パスワード）だけは画面に出るので、**その場で保存してください**。GitHub からは二度と読めません。
 
-- 必要なリソース（D1 / KV / R2）の作成と、id の設定ファイルへの反映
-- secrets の生成と登録（値は私に見せず、必要なら実行時に聞いて）
-- notifier / admin / glasses_management / ops のデプロイ（example_service は雛形なのでデプロイしない）
+4. **`develop` に merge する** → staging へ自動デプロイ。**初回は必ず一度落ちます**（設定ファイルの id が placeholder のため）。Actions のログに出る Terraform の出力を `wrangler.jsonc` に反映してコミットすれば、次から通ります。
 
-各ステップで実行したコマンドと結果を報告して。本番に反映する前には必ず確認を取って。
-```
+終わると `https://admin-staging.<あなたのサブドメイン>.workers.dev` で管理コンソールが動きます（ゲートトークンが要ります）。
 
-終わると `https://admin.<あなたのサブドメイン>.workers.dev` で管理コンソールが動きます。
+運用時の手順書 → [`docs/howto/deploy.md`](./docs/howto/deploy.md)。初期設定の詳細 → [`docs/howto/cloudflare-setup.md`](./docs/howto/cloudflare-setup.md)。
 
-自分で手を動かしたい場合の手順書 → [`docs/howto/cloudflare-setup.md`](./docs/howto/cloudflare-setup.md)。運用時のデプロイ手順 → [`docs/howto/deploy.md`](./docs/howto/deploy.md)。
-
-> 💡 **お金の話**: このテンプレートは Cloudflare の無料枠で全部動くように作られています（有料プランが必要な機能は使っていません）。上限と、上限に近づいたときの対処は [`docs/howto/free-tier-limits.md`](./docs/howto/free-tier-limits.md)。
+> 💡 **お金の話**: このテンプレートは Cloudflare の無料枠で全部動くように作られています（有料プランが必要な機能は使っていません）。ただし **staging は本番と同じアカウントの枠を共有します** — D1 の日次読み書き枠を食い合うので、staging は動作確認に留めてください。上限と対処は [`docs/howto/free-tier-limits.md`](./docs/howto/free-tier-limits.md)。
 
 ## 3. 作りたいものを頼む
 
