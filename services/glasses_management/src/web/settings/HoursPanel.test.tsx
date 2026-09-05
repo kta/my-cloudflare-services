@@ -86,6 +86,12 @@ beforeEach(() => {
       if (url.endsWith('/slot-rules'))
         return json(method === 'PUT' ? { ...slotRules, version: 5 } : slotRules)
       if (url.endsWith('/staff')) return json([])
+      // ご用件はいちばん短い所要（20分）を出す。「最後にお受けできる時刻」を下書きから引き直すのに要る。
+      if (url.includes('/purposes'))
+        return json([
+          { id: 'p1', name: '今のメガネを調整したい', durationMinutes: 20, isActive: true },
+          { id: 'p2', name: 'メガネを新しく作る', durationMinutes: 60, isActive: true },
+        ])
       return json({ error: 'not_found' }, 404)
     }),
   )
@@ -230,5 +236,33 @@ describe('営業時間', () => {
     const puts = sent.filter((call) => call.method === 'PUT')
     expect(puts.map((call) => call.url.split('/').at(-1))).toEqual(['business-hours', 'slot-rules'])
     expect(puts.map((call) => (call.body as { version: number }).version)).toEqual([3, 4])
+  })
+})
+
+describe('最後にお受けできる時刻', () => {
+  /*
+   * 保存済みの値をそのまま出していたころ、閉店を直してもこの 1 行は動かず、
+   * 保存する前に何が起きるかを確かめる役に立たなかった
+   * （実装不足の洗い出し settings-02）。
+   */
+  it('閉店を早めると、その場で早まる（保存の前に確かめられる）', async () => {
+    await openHours()
+    expect(await screen.findByText('木曜日に最後にお受けできるのは 18:20 です。')).toBeVisible()
+
+    fireEvent.change(screen.getByLabelText('閉店'), { target: { value: '18:00' } })
+    // 18:00 − 片付け 10分 − いちばん短いご用件 20分 = 17:30。
+    expect(await screen.findByText('木曜日に最後にお受けできるのは 17:30 です。')).toBeVisible()
+  })
+
+  it('受付を止める帯を伸ばしても引き直す', async () => {
+    await openHours()
+    const ends = screen.getAllByLabelText('終了')
+    const last = ends[ends.length - 1]
+    expect(last).toBeDefined()
+    fireEvent.change(last as HTMLElement, { target: { value: '19:00' } })
+    // 閉店まで止めたので、その帯の前の窓から引き直す。
+    expect(
+      await screen.findByText(/木曜日に最後にお受けできるのは \d{1,2}:\d{2} です。/),
+    ).toBeVisible()
   })
 })

@@ -1,6 +1,7 @@
 import type { RecordingSummary, ReservationDetail as ReservationDetailShape } from '@app/contracts'
 import { focusRing, focusRingOnPine } from '@app/ui'
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { visitLabel } from '../../worker/domain/customers'
 import { SOURCE_LABELS } from '../../worker/domain/ledger'
 import { RecordingPlayer } from '../recording/RecordingPlayer'
 import { jstClock } from './metrics'
@@ -236,6 +237,24 @@ export function ReservationDetail({
                   ✕
                 </button>
               </div>
+              {/*
+                お客様のお名前と来店回数（AC-CUST-25）。承認済みモック LEDGER-DETAIL の
+                `<h2>田中 花子 様 <span class="visits many">4回目</span></h2>` と同じ場所。
+                描いていなかったころ、詳細を開いても**どなたのご予約か分からず**、
+                受け付ける前に台帳の帯へ目を戻す必要があった
+                （実装不足の洗い出し ledger-01。007 が入るまでの宿題として空けてあった）。
+                お名前が届いていないご予約（顧客未特定）では、その 1 行ごと出さない。
+              */}
+              {detail.customerName != null && detail.customerName !== '' && (
+                <p className="mt-2 flex items-center gap-2">
+                  <span className="text-lead font-bold text-ink">{`${detail.customerName} 様`}</span>
+                  {detail.visitCount != null && (
+                    <span className="rounded-full bg-surface-2 px-2 py-px text-note font-semibold text-ink-muted">
+                      {visitLabel(detail.visitCount, 'badge')}
+                    </span>
+                  )}
+                </p>
+              )}
               <p className="mt-2.5">
                 {/* 出どころは 4 語のまま出す（モックの「電話予約」は「お電話」に揃える）。 */}
                 <span className="inline-block rounded-ctl border border-line-strong bg-surface px-2 py-0.5 text-note font-semibold text-ink-muted">

@@ -1,6 +1,7 @@
 import type { BusinessHoursRow, BusinessHoursView } from '@app/contracts'
 import { cn, focusRing } from '@app/ui'
 import { useCallback, useEffect, useId, useMemo, useState } from 'react'
+import { acceptableWindows, lastAcceptableStart } from '../../worker/domain/store-settings'
 import { client } from '../client'
 import { LoadFailed } from '../shell/LoadFailed'
 import {
@@ -53,7 +54,12 @@ type Draft = {
   maxParallel: number
 }
 
-type Loaded = { hours: BusinessHoursView; rules: SlotRulesResponse }
+type Loaded = {
+  hours: BusinessHoursView
+  rules: SlotRulesResponse
+  /** いちばん短いご用件の所要。引けなかったときは null（そのときは保存済みの値を出す）。 */
+  shortestDurationMinutes: number | null
+}
 
 export function HoursPanel({ storeId, now, onDraftChange }: SettingsPanelProps) {
   const fieldId = useId()
@@ -71,12 +77,21 @@ export function HoursPanel({ storeId, now, onDraftChange }: SettingsPanelProps) 
     Promise.all([
       client.api.staff.stores[':storeId']['business-hours'].$get({ param: { storeId } }),
       client.api.staff.stores[':storeId']['slot-rules'].$get({ param: { storeId } }),
+      // いちばん短いご用件。「最後にお受けできる時刻」を下書きから引き直すのに要る。
+      client.api.staff.purposes.$get({ query: { storeId } }),
     ])
-      .then(async ([hoursRes, rulesRes]) => {
+      .then(async ([hoursRes, rulesRes, purposeRes]) => {
         if (!hoursRes.ok || !rulesRes.ok) throw new Error('load failed')
+        const purposes = purposeRes.ok
+          ? ((await purposeRes.json()) as { durationMinutes: number; isActive?: boolean }[])
+          : []
+        const durations = purposes
+          .filter((row) => row.isActive !== false)
+          .map((row) => row.durationMinutes)
         return {
           hours: (await hoursRes.json()) as BusinessHoursView,
           rules: (await rulesRes.json()) as SlotRulesResponse,
+          shortestDurationMinutes: durations.length === 0 ? null : Math.min(...durations),
         }
       })
       .then((next) => {
@@ -166,7 +181,12 @@ export function HoursPanel({ storeId, now, onDraftChange }: SettingsPanelProps) 
     if (rulesStatus === 409) return 'conflict'
     if (!rulesRes.ok) return 'failed'
 
-    const next = { hours, rules: (await rulesRes.json()) as SlotRulesResponse }
+    const next = {
+      hours,
+      rules: (await rulesRes.json()) as SlotRulesResponse,
+      // ご用件は保存で変わらないので、読み込んだときの値をそのまま持ち越す。
+      shortestDurationMinutes: loaded.shortestDurationMinutes,
+    }
     setLoaded(next)
     setDraft(toDraft(next))
     setAdding(null)
@@ -217,7 +237,31 @@ export function HoursPanel({ storeId, now, onDraftChange }: SettingsPanelProps) 
     )
 
   const weekday = jstWeekday(now ?? new Date().toISOString())
-  const lastAcceptable = loaded.rules.lastAcceptableAt?.[String(weekday)] ?? null
+  /*
+   * 「最後にお受けできる時刻」は**いま打ち込んでいる下書きから引き直す**。
+   * 保存済みの値をそのまま出していたころ、閉店を 19:00 → 18:00 に直しても
+   * この 1 行は動かず、保存する前に何が起きるかを確かめる役に立たなかった
+   * （実装不足の洗い出し settings-02）。
+   * いちばん短いご用件を引けなかったときだけ、保存済みの値へ落とす。
+   */
+  const savedLastAcceptable = loaded.rules.lastAcceptableAt?.[String(weekday)] ?? null
+  const lastAcceptable =
+    loaded.shortestDurationMinutes === null
+      ? savedLastAcceptable
+      : lastAcceptableStart({
+          windows: acceptableWindows(
+            draft.opensAt,
+            draft.closesAt,
+            draft.bands.map((band) => ({
+              weekday,
+              startsAt: band.startsAt,
+              endsAt: band.endsAt,
+            })),
+          ),
+          shortestDurationMinutes: loaded.shortestDurationMinutes,
+          cleanupMinutes: draft.cleanupMinutes,
+          closesAt: draft.closesAt,
+        })
 
   return (
     <div>
