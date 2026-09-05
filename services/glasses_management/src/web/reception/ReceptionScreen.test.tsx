@@ -428,7 +428,12 @@ describe('来店受付の器', () => {
     })
   })
 
-  it('「次にやること」を押すとその工程が始まる', async () => {
+  it('「次にやること」を押すと、誰が始めるのかを聞いてから工程が始まる', async () => {
+    /*
+     * 聞かずに積んでいたころ、`visit_events.staff_id` は常に NULL で、受付履歴にも
+     * 分析にも「誰が対応したか」が 1 件も残らなかった
+     * （実装不足の洗い出し reception-04。AC-RECEP-12）。
+     */
     const user = userEvent.setup()
     stub()
     show()
@@ -436,13 +441,32 @@ describe('来店受付の器', () => {
     await user.click(
       screen.getByRole('gridcell', { name: '田中 花子 様　視力測定　次にやること　視力測定機 A' }),
     )
+    // まだ積まない。先に担当を聞く。
+    expect(posted).toHaveLength(0)
+    const sheet = await screen.findByRole('dialog', { name: 'この工程を始める担当' })
+    await user.click(within(sheet).getByRole('button', { name: '佐藤 美咲' }))
     await waitFor(() =>
       expect(posted[0]).toMatchObject({
         stage: 'measuring',
         subjectType: 'reservation',
         subjectId: HANAKO_RESERVATION,
+        staffId: MISAKI,
       }),
     )
+  })
+
+  it('担当を決めずに始める道も残す（接客はもう始まっている）', async () => {
+    const user = userEvent.setup()
+    stub()
+    show()
+    await screen.findByRole('grid')
+    await user.click(
+      screen.getByRole('gridcell', { name: '田中 花子 様　視力測定　次にやること　視力測定機 A' }),
+    )
+    const sheet = await screen.findByRole('dialog', { name: 'この工程を始める担当' })
+    await user.click(within(sheet).getByRole('button', { name: '担当はあとで決める' }))
+    await waitFor(() => expect(posted).toHaveLength(1))
+    expect(posted[0]).not.toHaveProperty('staffId')
   })
 
   it('進めた直後に「元に戻す」が出て、押すと 1 つ前の工程を積み直す', async () => {
@@ -458,6 +482,9 @@ describe('来店受付の器', () => {
     await user.click(
       screen.getByRole('gridcell', { name: '田中 花子 様　視力測定　次にやること　視力測定機 A' }),
     )
+    // 誰が始めるのかを聞かれる（AC-RECEP-12）。選ぶと積まれる。
+    const sheet = await screen.findByRole('dialog', { name: 'この工程を始める担当' })
+    await user.click(within(sheet).getByRole('button', { name: '佐藤 美咲' }))
     const undo = await screen.findByRole('button', { name: '元に戻す' })
     expect(screen.getByText('田中 花子 様を「視力測定」へ進めました。')).toBeInTheDocument()
 
@@ -537,15 +564,28 @@ describe('来店受付の器', () => {
     expect(onOpenLedger).toHaveBeenCalledTimes(1)
   })
 
-  it('「ご来店がなかった」は行き先が無いので盤面に出さない', async () => {
+  it('「ご来店がなかった」を盤面から残せる（気づくのは受付の現場である）', async () => {
+    /*
+     * `008` の決め:「『ご来店がなかった』は来店受付ボードからも残せる（気づくのは
+     * 受付の現場であるため）。予約の取り消しの画面にも同じ操作を置く」。
+     * 渡していなかったころ、この操作は台帳へ回らないと届かなかった
+     * （実装不足の洗い出し reception-01。UC-RECEP-11 / AC-RECEP-16）。
+     */
     const user = userEvent.setup()
-    stub()
+    const sent: { url: string; body: unknown }[] = []
+    stub((url, init) => {
+      if (!url.pathname.endsWith('/cancel')) return null
+      sent.push({ url: url.pathname, body: JSON.parse(String(init?.body ?? '{}')) })
+      return json({ ...RESERVATION, status: 'no_show', version: RESERVATION.version + 1 })
+    })
     show()
     await screen.findByRole('grid')
     await user.click(
       screen.getByRole('rowheader', { name: '田中 花子 様　4回目　メガネを新しく作る' }),
     )
-    // 予約の取消のルートは 009-change-and-cancel が付ける。押して何も起きない操作を置かない。
-    expect(screen.queryByRole('button', { name: 'ご来店がなかった' })).toBeNull()
+    await user.click(screen.getByRole('button', { name: 'ご来店がなかった' }))
+    await waitFor(() => expect(sent).toHaveLength(1))
+    // 理由は `no_show`。取り消しと分けて数えるための語である。
+    expect(sent[0]?.body).toMatchObject({ reason: 'no_show', version: RESERVATION.version })
   })
 })
