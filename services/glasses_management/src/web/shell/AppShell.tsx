@@ -1,5 +1,5 @@
 import { cn, focusRing, focusRingOnPine } from '@app/ui'
-import type { ReactNode } from 'react'
+import { type ReactNode, useEffect, useState } from 'react'
 import { DESTINATIONS, type Destination, HOME_DESTINATION } from './destinations'
 import { Icon } from './icons'
 
@@ -50,6 +50,10 @@ const HEADER_ALERT_DESTINATIONS = new Set([
 
 export type AppShellProps = {
   storeName: string
+  /** ほかのお店。空なら店名は押せる形にしない（押して何も起きないボタンを置かない）。 */
+  stores?: readonly { id: string; name: string }[]
+  /** お店を切り替える。渡さなければ店名はただの文字のまま。 */
+  onSwitchStore?: (storeId: string) => void
   /** 店名の下の 1 行。営業状態や画面名を置く。 */
   storeSubline: string
   /** いま開いている行き先（DESTINATIONS の key）。 */
@@ -78,6 +82,8 @@ export type AppShellProps = {
 
 export function AppShell({
   storeName,
+  stores = [],
+  onSwitchStore,
   storeSubline,
   current,
   onNavigate,
@@ -91,6 +97,14 @@ export function AppShell({
   isLocked = false,
   children,
 }: AppShellProps) {
+  const [storeMenuOpen, setStoreMenuOpen] = useState(false)
+  const otherStores = onSwitchStore === undefined ? [] : stores
+  // 面が変わったら畳む（開いたまま別の面へ持ち越さない）。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 面が変わったときだけ畳む
+  useEffect(() => {
+    setStoreMenuOpen(false)
+  }, [current])
+
   return (
     <div className="relative flex h-dvh flex-col bg-paper text-ink">
       <header
@@ -108,10 +122,64 @@ export function AppShell({
         >
           <Icon name="home" />
         </button>
-        <div className="min-w-0">
-          <p className="truncate text-bar font-bold">{storeName}</p>
-          <p className="truncate text-note opacity-90">{storeSubline}</p>
-        </div>
+        {/*
+          店名は**お店を切り替える入口**でもある。以前はトップのチップからしか
+          切り替えられず、台帳や受付を開いている最中はいちどトップへ戻る必要があった
+          （実装不足の洗い出し foundation-09。US-FOUND-06）。
+          ほかのお店が 1 つも無い組織では、押しても何も起きないボタンを置かない。
+        */}
+        {otherStores.length === 0 ? (
+          <div className="min-w-0">
+            <p className="truncate text-bar font-bold">{storeName}</p>
+            <p className="truncate text-note opacity-90">{storeSubline}</p>
+          </div>
+        ) : (
+          <div className="relative min-w-0">
+            <button
+              type="button"
+              aria-haspopup="menu"
+              aria-expanded={storeMenuOpen}
+              aria-label={`${storeName}　お店を切り替える`}
+              onClick={() => setStoreMenuOpen((open) => !open)}
+              className={cn(
+                'flex min-h-12 min-w-0 items-center gap-1.5 rounded-card px-1 text-left',
+                focusRingOnPine,
+              )}
+            >
+              <span className="min-w-0">
+                <span className="block truncate text-bar font-bold">{storeName}</span>
+                <span className="block truncate text-note opacity-90">{storeSubline}</span>
+              </span>
+              <span aria-hidden="true" className="shrink-0 text-note opacity-90">
+                ▾
+              </span>
+            </button>
+            {storeMenuOpen && (
+              <ul
+                aria-label="ほかのお店"
+                className="absolute top-full left-0 z-30 mt-1 grid min-w-64 gap-1 rounded-panel border border-line bg-surface p-2 text-ink shadow-lg"
+              >
+                {otherStores.map((row) => (
+                  <li key={row.id}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setStoreMenuOpen(false)
+                        onSwitchStore?.(row.id)
+                      }}
+                      className={cn(
+                        'flex min-h-12 w-full items-center rounded-ctl px-3 text-left text-body font-semibold',
+                        focusRing,
+                      )}
+                    >
+                      {`${row.name}へ切り替える`}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
         {barCenter}
         <div className="ml-auto flex items-center gap-2">
           {HEADER_ALERT_DESTINATIONS.has(current) && alertCount > 0 && (

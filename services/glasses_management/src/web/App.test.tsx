@@ -255,20 +255,48 @@ describe('トップ', () => {
   })
 
   /*
-   * 「◯◯へ切り替える」のチップは、以前 `onClick` を持っていなかった。
-   * トップの 5 つの操作のうち 2 つが飾りになっていた（UX 監査 SHELL-07）。
+   * お店の切り替えは**上のバーの店名**が持つ。トップのチップからしか切り替えられず、
+   * 台帳や受付を開いている最中はいちどトップへ戻る必要があった
+   * （UX 監査 SHELL-07 → 実装不足の洗い出し foundation-09）。
+   * チップはモックに無い要素でもあり、そのぶん主操作 2 枚が上へ寄っていた。
    */
-  it('ほかのお店のチップを押すと、その店舗に切り替わる', async () => {
+  async function openStoreMenu() {
+    await userEvent.click(screen.getByRole('button', { name: /お店を切り替える$/ }))
+  }
+
+  it('上のバーの店名から、ほかのお店へ切り替えられる', async () => {
     await startWork()
     await waitFor(() => expect(screen.getByText('新しい予約を取る')).toBeInTheDocument())
-    // いまは銀座店。丸の内店のチップだけが出ている。
-    expect(screen.getByRole('button', { name: 'EYEX 丸の内店へ切り替える' })).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: 'EYEX 丸の内店へ切り替える' }))
-    // 切り替わると、上のバーの店名が変わり、チップは銀座店のほうに入れ替わる。
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'EYEX 銀座店へ切り替える' })).toBeInTheDocument(),
-    )
+    // いまは銀座店。畳んでいるあいだ、ほかのお店の名前は出ていない。
+    expect(
+      screen.getByRole('button', { name: 'EYEX 銀座店　お店を切り替える' }),
+    ).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'EYEX 丸の内店へ切り替える' })).toBeNull()
+
+    await openStoreMenu()
+    await userEvent.click(screen.getByRole('button', { name: 'EYEX 丸の内店へ切り替える' }))
+    // 切り替わると上のバーの店名が変わり、こんどは銀座店が切り替え先に並ぶ。
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'EYEX 丸の内店　お店を切り替える' }),
+      ).toBeInTheDocument(),
+    )
+    await openStoreMenu()
+    expect(screen.getByRole('button', { name: 'EYEX 銀座店へ切り替える' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'EYEX 丸の内店へ切り替える' })).toBeNull()
+  })
+
+  it('トップ以外の面からも切り替えられる（いちどトップへ戻らせない）', async () => {
+    await startWork()
+    const nav = await screen.findByRole('navigation', { name: '画面の切り替え' })
+    await userEvent.click(within(nav).getByRole('button', { name: '予約台帳' }))
+    await openStoreMenu()
+    await userEvent.click(screen.getByRole('button', { name: 'EYEX 丸の内店へ切り替える' }))
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'EYEX 丸の内店　お店を切り替える' }),
+      ).toBeInTheDocument(),
+    )
   })
 
   it('切り替えても業務画面に留まる（暗証番号からやり直させない）', async () => {
@@ -280,9 +308,12 @@ describe('トップ', () => {
      */
     await startWork()
     await waitFor(() => expect(screen.getByText('新しい予約を取る')).toBeInTheDocument())
+    await openStoreMenu()
     await userEvent.click(screen.getByRole('button', { name: 'EYEX 丸の内店へ切り替える' }))
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'EYEX 銀座店へ切り替える' })).toBeInTheDocument(),
+      expect(
+        screen.getByRole('button', { name: 'EYEX 丸の内店　お店を切り替える' }),
+      ).toBeInTheDocument(),
     )
     // 左の柱も主操作もそのまま。入口の見出しは 1 つも出ない。
     expect(screen.getByRole('navigation', { name: '画面の切り替え' })).toBeInTheDocument()

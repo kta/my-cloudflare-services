@@ -753,6 +753,9 @@ function Workspace({
       current={current}
       onNavigate={(key) => navigate(key)}
       rail={rail}
+      /* 上のバーの店名から、ほかのお店へ切り替える（UX 監査 foundation-09）。 */
+      stores={(stores ?? []).filter((row) => row.id !== store?.id)}
+      onSwitchStore={switchStore}
       onToggleRail={() => {
         setRailTouched(true)
         setRail((v) => !v)
@@ -1010,27 +1013,17 @@ function Home({
             glyph="✎"
             onPress={onOpenSearch}
           />
-          <section aria-label="ほかのお店" className="mt-2">
-            {stores === null ? (
-              <p className="text-grid text-ink-muted">読み込んでいます…</p>
-            ) : stores.length === 0 ? (
-              <p className="text-grid text-ink-muted">お店がまだ登録されていません。</p>
-            ) : others.length > 0 ? (
-              <ul className="flex flex-wrap gap-2">
-                {others.map((s) => (
-                  <li key={s.id}>
-                    <button
-                      type="button"
-                      onClick={() => onSwitchStore(s.id)}
-                      className={`min-h-11 rounded-full border border-line-strong bg-surface px-4 text-note font-semibold text-ink-muted ${focusRing}`}
-                    >
-                      {s.name}へ切り替える
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-          </section>
+          {/*
+            お店の切り替えは**上のバーの店名**が持つ（UX 監査 foundation-09）。
+            ここにチップを並べていたころ、切り替えはトップからしかできず、
+            しかもモックに無いその 2 つのぶん主操作 2 枚が 50px ほど上に寄っていた。
+            お店が 1 つも届いていないときだけ、その事実をここで言う。
+          */}
+          {stores === null ? (
+            <p className="mt-2 text-grid text-ink-muted">読み込んでいます…</p>
+          ) : stores.length === 0 ? (
+            <p className="mt-2 text-grid text-ink-muted">お店がまだ登録されていません。</p>
+          ) : null}
         </div>
         {currentStoreId !== undefined && (
           <MyReservations
