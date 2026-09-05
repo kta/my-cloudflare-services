@@ -98,6 +98,11 @@ export const StoreSlugTakenError = z.strictObject({
 見ない。店舗が無い会社では membership を持ちようがないため、ここだけ会社のロールで判断する。
 成功時、作成者に全 `StorePermission` を持つ membership を同じ `db.batch()` で作る。
 
+**既知の限界**: `STANDARD_ROLE_BASE_ROLE` は `head_office_admin` と `store_manager` の両方に
+JWT の `admin` を与えるため、**店舗管理者もお店を登録できる**。ドメインは標準ロールを持たない
+（正本は admin にある）ので、本部管理者だけに絞るには admin から標準ロールを配る仕組みが要る。
+増やせるのは自社のお店だけで、既存の他店舗への権限は増えないため、当面はこの広さで運用する。
+
 **データモデル差分**: なし（既存テーブルに行を足すだけ）。
 
 **既定値**（`store-provisioning.ts` に定数として置く）:
@@ -117,21 +122,21 @@ export const StoreSlugTakenError = z.strictObject({
 
 ## 3. TASKS
 
-- [ ] 契約に `StoreInput` / `StoreSlugTakenError` を足すテストを書く
-- [ ] 契約を実装する
-- [ ] 既定値の組み立て（`store-provisioning.ts`）の unit テストを書く
-- [ ] 既定値の組み立てを実装する
-- [ ] `POST /api/staff/stores` の integration テストを書く（成功・重複・不正な合い言葉・権限・テナント分離）
-- [ ] `POST /api/staff/stores` を実装する
-- [ ] `GET /api/internal/stores` のテストを書く
-- [ ] `GET /api/internal/stores` を実装する
-- [ ] admin の `GET /api/organizations/:id/stores` のテストを書く
-- [ ] admin の同エンドポイントを実装する
-- [ ] 登録フォーム（web）のテストを書く
-- [ ] 登録フォームを実装する
-- [ ] 0 件のときの導線のテストを書く
-- [ ] 0 件のときの導線を実装する
-- [ ] admin の担当店舗を一覧選択にするテストを書く
-- [ ] admin の担当店舗の一覧選択を実装する
-- [ ] E2E を UC/AC に 1 対 1 で書く
-- [ ] `pnpm check` を緑にし、ステータスを Approved に上げる
+- [x] 契約に `StoreInput` / `StoreSlugTakenError` を足すテストを書く
+- [x] 契約を実装する
+- [x] 既定値の組み立て（`store-provisioning.ts`）の unit テストを書く
+- [x] 既定値の組み立てを実装する
+- [x] `POST /api/staff/stores` の integration テストを書く（成功・重複・不正な合い言葉・権限・テナント分離）
+- [x] `POST /api/staff/stores` を実装する
+- [x] `GET /api/internal/stores` のテストを書く
+- [x] `GET /api/internal/stores` を実装する
+- [x] admin の `GET /api/organizations/:id/stores` のテストを書く
+- [x] admin の同エンドポイントを実装する
+- [x] 登録フォーム（web）のテストを書く
+- [x] 登録フォームを実装する
+- [x] 0 件のときの導線のテストを書く
+- [x] 0 件のときの導線を実装する
+- [x] admin の担当店舗を一覧選択にするテストを書く
+- [x] admin の担当店舗の一覧選択を実装する
+- [x] E2E を UC/AC に 1 対 1 で書く
+- [x] `pnpm check` を緑にし、ステータスを Approved に上げる

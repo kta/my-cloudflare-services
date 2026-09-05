@@ -938,7 +938,7 @@ function Workspace({
           role="dialog"
           aria-modal="true"
           aria-label="お店を登録する"
-          className="fixed inset-0 z-40 grid place-items-center bg-ink/40 p-6"
+          className="fixed inset-0 z-40 grid place-items-center bg-ink/30 p-6"
         >
           <div className="max-h-full w-full max-w-lg overflow-auto rounded-card bg-surface p-8">
             <h2 className="text-lead font-bold text-ink">お店を登録する</h2>
