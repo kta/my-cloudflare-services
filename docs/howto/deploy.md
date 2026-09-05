@@ -45,11 +45,144 @@ merge すると `.github/workflows/ci.yml` の `verify` が走り、緑なら `d
 
 `AUTH_PEPPER` は**変えると既存パスワードハッシュが全部無効**になる。一度決めたら固定する。`INTERNAL_KEY` は全サービス同一値なので、ローテーションは全サービス同時に行う。
 
+### トークンを発行する
+
+人の手が要るのはここだけである。**2 枚**発行する。1 枚で済まないのは、Terraform の state を置く R2 が **S3 互換**で、Cloudflare の API トークンでは認証できないため。
+
+#### 1 枚目 — デプロイ用（Cloudflare API トークン）
+
+1. ダッシュボード → **Manage Account** → **API Tokens** → **Create Token**
+2. 一覧の一番下 **Custom token** → **Get started**
+3. **Token name**: `my-cloudflare-services-deploy`
+4. **Permissions** に 5 行（すべて左のドロップダウンは **Account**）
+
+   | Type | Resource | Level |
+   |---|---|---|
+   | Account | Workers Scripts | Edit |
+   | Account | D1 | Edit |
+   | Account | Workers KV Storage | Edit |
+   | Account | Workers R2 Storage | Edit |
+   | Account | Account Settings | Read |
+
+   Queues は使わないので不要。
+5. **Account Resources**: `Include` → 対象アカウント
+6. **Client IP Address Filtering** / **TTL** は空でよい
+7. **Continue to summary** → **Create Token** → 表示された値をコピー（**この画面を離れると二度と表示されない**）
+
+`Manage Account → API Tokens`（Account API Token）で作る。`My Profile → API Tokens`（User API Token）でも動くが、**作成した個人に紐づく**ので、その人の権限が変わるとデプロイが静かに止まる。CI が使う値なので Account 側にする。
+
+#### 2 枚目 — state 用（R2 のアクセスキー）
+
+1. ダッシュボード左メニュー → **R2 Object Storage**
+   （初回はここで R2 の利用開始が要る。支払い方法の登録を求められることがあるが、無料枠内なら課金は発生しない）
+2. 右側の **Manage R2 API Tokens** → **Create API token**
+3. **Account API Token** を選ぶ（User API Token ではない。理由は 1 枚目と同じ）
+4. **Token name**: `my-cloudflare-services-tfstate`
+5. **Permissions**: `Object Read & Write`
+6. **Specify bucket(s)**: `Apply to all buckets in this account`
+   （`tfstate` バケットはこれから CI が作るので、特定バケットに絞ると作成時に権限が足りない）
+7. **TTL**: `Forever`
+8. **Create API Token**
+
+発行後に 3 つ表示される。使うのは下の 2 つ。
+
+| 表示 | 用途 |
+|---|---|
+| Token value | 使わない |
+| **Access Key ID** | `R2_STATE_ACCESS_KEY_ID` |
+| **Secret Access Key** | `R2_STATE_SECRET_ACCESS_KEY` |
+
+エンドポイントも表示されるが、CI が `CLOUDFLARE_ACCOUNT_ID` から組み立てるので控えなくてよい。
+
+#### アカウント ID
+
+ダッシュボードの URL に入っている。
+
+```
+https://dash.cloudflare.com/1a2b3c4d5e6f.../workers
+                            ^^^^^^^^^^^^^^^ これが Account ID（32 桁の 16 進）
+```
+
+**Workers & Pages** のページの右サイドバーにも `Account ID` として出る。
+
+#### 発行したトークンを確かめる
+
+```sh
+# Account API Token
+curl -s "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/tokens/verify" \
+  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" | jq '.success, .result.status'
+
+# User API Token（My Profile で作った場合）
+curl -s https://api.cloudflare.com/client/v4/user/tokens/verify \
+  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" | jq '.success, .result.status'
+```
+
+`true` / `"active"` が出れば有効。エンドポイントを取り違えると有効なトークンでも `false` が返るので、判断は次のコマンドでもよい。
+
+```sh
+CLOUDFLARE_API_TOKEN=$CLOUDFLARE_API_TOKEN pnpm --filter @app/admin exec wrangler whoami
+```
+
+Account ID と権限の一覧が表になって出れば、トークンは正しく機能している。
+
 ### 設定する
 
 ```sh
 make bootstrap/ci
 ```
+
+値は環境変数でも渡せる（設定済みなら対話で聞かれない）。
+
+```sh
+export CLOUDFLARE_API_TOKEN=...
+export CLOUDFLARE_ACCOUNT_ID=...
+export R2_STATE_ACCESS_KEY_ID=...
+export R2_STATE_SECRET_ACCESS_KEY=...
+export WORKER_RESEND_API_KEY=...        # 任意（production のみ）
+
+ENVS=staging make bootstrap/ci          # 対象を絞る
+DRY_RUN=1 ENVS=staging make bootstrap/ci  # 何も書かずに確認だけ
+```
+
+`WORKER_STAGING_ACCESS_TOKEN` と `WORKER_STAGING_ADMIN_PASSWORD` は、生成時に**画面に表示される**。GitHub からは二度と読めないので、その場で安全な場所に保存すること。他の `WORKER_*` は人が知る必要がないので表示しない。
+
+#### 手順まとめ（コピペ用）
+
+```sh
+# 1. 値を渡す
+export CLOUDFLARE_API_TOKEN='1 枚目のトークン'
+export CLOUDFLARE_ACCOUNT_ID='32 桁の 16 進'
+export R2_STATE_ACCESS_KEY_ID='2 枚目の Access Key ID'
+export R2_STATE_SECRET_ACCESS_KEY='2 枚目の Secret Access Key'
+
+# 2. トークンの確認
+curl -s "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/tokens/verify" \
+  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" | jq '.success, .result.status'
+
+# 3. 何が起きるか確認（GitHub には一切書き込まない）
+DRY_RUN=1 make bootstrap/ci
+
+# 4. 登録する（staging だけに絞るなら ENVS=staging）
+make bootstrap/ci
+
+# 5. 結果を確認
+gh secret list --env staging
+gh secret list --env production
+
+# 6. 使い終わったら環境変数を消す
+unset CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID R2_STATE_ACCESS_KEY_ID R2_STATE_SECRET_ACCESS_KEY
+```
+
+`export` した値はシェルの履歴に残る。避けたいなら zsh では次のようにする。
+
+```sh
+read -rs 'CLOUDFLARE_API_TOKEN?CLOUDFLARE_API_TOKEN: ' && export CLOUDFLARE_API_TOKEN
+read -r  'CLOUDFLARE_ACCOUNT_ID?CLOUDFLARE_ACCOUNT_ID: ' && export CLOUDFLARE_ACCOUNT_ID
+read -rs 'R2_STATE_ACCESS_KEY_ID?R2_STATE_ACCESS_KEY_ID: ' && export R2_STATE_ACCESS_KEY_ID
+read -rs 'R2_STATE_SECRET_ACCESS_KEY?R2_STATE_SECRET_ACCESS_KEY: ' && export R2_STATE_SECRET_ACCESS_KEY
+```
+
+環境変数を何も設定せずに `make bootstrap/ci` を実行すれば、同じ値を対話で聞かれる。
 
 `WORKER_*` は `openssl rand -hex 32` で生成され、**人は値を知らなくてよい**。既にある値は上書きしない。対話で聞かれるのは Cloudflare の API トークン / アカウント ID / R2 アクセスキー 2 値 / Resend キーだけ。
 
