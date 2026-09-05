@@ -11,6 +11,7 @@ import {
   DEFAULT_BUSINESS_HOURS,
   DEFAULT_PURPOSES,
   DEFAULT_SLOT_RULE,
+  FOUNDER_PERMISSIONS,
 } from '../src/worker/store-provisioning'
 
 const NOW = '2026-09-05T01:00:00.000Z'
@@ -116,8 +117,18 @@ describe('buildNewStore', () => {
     expect(membership.organizationId).toBe(ORG)
     expect(membership.storeId).toBe(STORE_ID)
     expect(membership.userId).toBe(USER)
+    expect(membership.permissions.split(' ')).toEqual([...FOUNDER_PERMISSIONS])
     expect(membership.permissions.split(' ')).toContain('settings.manage')
     expect(membership.permissions.split(' ')).toContain('store.manage')
+  })
+
+  it('渡す権限に、そのお店の外へ及ぶものを混ぜない', () => {
+    // すべて店舗の権限（StorePermission）である。会社を跨ぐ語をここに入れない。
+    for (const permission of FOUNDER_PERMISSIONS) {
+      expect(permission).toMatch(
+        /^(store|reservation|customer|attention|settings|recording|audit|terminal)\./,
+      )
+    }
   })
 
   it('id は渡された採番だけを使う(実行のたびに変わらない)', () => {
