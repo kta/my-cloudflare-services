@@ -2062,3 +2062,91 @@ describe('お客様向け Web 予約は組織をまたがない', () => {
     expect(row).toEqual({ isPublished: '1', version: 1 })
   })
 })
+
+/*
+ * お店の登録は担当店舗を見ずに会社のロールで判断する唯一の経路なので、
+ * その例外が他テナントへ届かないことをここでも確かめる。
+ */
+describe('お店の登録は自分の会社にしか作れない', () => {
+  const slug = () => `iso-${crypto.randomUUID().slice(0, 8)}`
+
+  async function create(token: string, body: Record<string, unknown>) {
+    const res = await SELF.fetch(`${BASE}/api/staff/stores`, {
+      method: 'POST',
+      headers: { ...JSON_HEADERS, ...authed(token) },
+      body: JSON.stringify(body),
+    })
+    return { status: res.status, body: (await res.json().catch(() => null)) as never }
+  }
+
+  it('本文に他テナントの organizationId を混ぜても、JWT の会社に作られる', async () => {
+    const mine = orgId()
+    const theirs = orgId()
+    await syncOrganization({ id: mine })
+    await syncOrganization({ id: theirs })
+
+    // strictObject なので、そもそも受け取らずに 400 で落ちる。
+    const spoofed = await create(await tokenFor(mine, 'admin'), {
+      name: '偽装する店',
+      slug: slug(),
+      organizationId: theirs,
+    })
+    expect(spoofed.status).toBe(400)
+
+    // 他社側に行が増えていないことを DB で直に確かめる。
+    const count = await env.DB.prepare('SELECT COUNT(*) AS n FROM stores WHERE organization_id = ?')
+      .bind(theirs)
+      .first<{ n: number }>()
+    expect(count?.n).toBe(0)
+  })
+
+  it('作った人の担当店舗は自分の会社にだけ生まれる', async () => {
+    const mine = orgId()
+    const theirs = orgId()
+    await syncOrganization({ id: mine })
+    await syncOrganization({ id: theirs })
+
+    const created = await create(await tokenFor(mine, 'admin'), { name: '自社の店', slug: slug() })
+    expect(created.status).toBe(201)
+
+    const rows = await env.DB.prepare(
+      'SELECT organization_id AS organizationId FROM store_memberships WHERE store_id = ?',
+    )
+      .bind(created.body.id)
+      .all<{ organizationId: string }>()
+    expect(rows.results.map((r) => r.organizationId)).toEqual([mine])
+  })
+
+  it('他社の合い言葉は取れないが、どの会社が使っているかは分からない', async () => {
+    const first = orgId()
+    const second = orgId()
+    await syncOrganization({ id: first })
+    await syncOrganization({ id: second })
+    const shared = slug()
+
+    expect(
+      (await create(await tokenFor(first, 'admin'), { name: '先客', slug: shared })).status,
+    ).toBe(201)
+    const blocked = await create(await tokenFor(second, 'admin'), { name: '後客', slug: shared })
+
+    expect(blocked.status).toBe(409)
+    expect(blocked.body).toEqual({ error: 'store_slug_taken', slug: shared })
+  })
+
+  it('内部の店舗一覧は指定した会社のぶんしか返さない', async () => {
+    const mine = orgId()
+    const theirs = orgId()
+    await syncOrganization({ id: mine })
+    await syncOrganization({ id: theirs })
+    const ours = await create(await tokenFor(mine, 'admin'), { name: '自社', slug: slug() })
+    await create(await tokenFor(theirs, 'admin'), { name: '他社', slug: slug() })
+
+    const res = await SELF.fetch(`${BASE}/api/internal/stores?organizationId=${theirs}`, {
+      headers: INTERNAL_HEADERS,
+    })
+    const ids = ((await res.json()) as Array<{ id: string }>).map((s) => s.id)
+
+    expect(res.status).toBe(200)
+    expect(ids).not.toContain(ours.body.id)
+  })
+})

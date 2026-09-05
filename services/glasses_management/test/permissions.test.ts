@@ -30,6 +30,7 @@ import {
   jstAt,
   LEDGER_DATE,
   orgId,
+  syncOrganization,
   tokenFor,
 } from './helpers'
 
@@ -885,6 +886,12 @@ const TABLE: Row[] = [
     method: 'GET',
     path: () => '/api/staff/stores',
     expected: { none: 401, staff: 200, admin: 200, expired: 401, 'wrong-secret': 401 },
+  },
+  {
+    name: '会社の店舗一覧を引く内部 API はテナント JWT では越えられない',
+    method: 'GET',
+    path: () => '/api/internal/stores',
+    expected: { none: 401, staff: 401, admin: 401, expired: 401, 'wrong-secret': 401 },
   },
   {
     name: '未知パスも default-deny の対象（ルートを足し忘れても漏れない）',
@@ -1927,5 +1934,53 @@ describe('録音の権限は 401 と 403 を取り違えない', () => {
       headers: headersFor('reader'),
     })
     expect(authenticated.status).toBe(404)
+  })
+})
+
+/*
+ * お店の登録（`POST /api/staff/stores`）は表に載せない。
+ *
+ * この 1 本は成功すると**作った人に担当店舗を渡す**ので、表が共有している org と
+ * 主体を汚してしまう（admin が settings.manage を持ってしまい、他の行の 403 が
+ * 崩れる）。例外の性質そのものなので、専用の会社を立てて別に確かめる。
+ */
+describe('お店の登録は会社のロールで判断する（担当店舗を見ない）', () => {
+  const slug = () => `perm-${crypto.randomUUID().slice(0, 8)}`
+
+  async function post(token: string | null): Promise<number> {
+    const org = orgId()
+    await syncOrganization({ id: org })
+    const res = await SELF.fetch(`${BASE}/api/staff/stores`, {
+      method: 'POST',
+      headers: token ? { ...JSON_HEADERS, authorization: `Bearer ${token}` } : { ...JSON_HEADERS },
+      body: JSON.stringify({ name: '権限表の店', slug: slug() }),
+    })
+    return res.status
+  }
+
+  it('未認証は 401', async () => {
+    expect(await post(null)).toBe(401)
+  })
+
+  it('会社の管理者は担当店舗が無くても 201', async () => {
+    const org = orgId()
+    await syncOrganization({ id: org })
+    const res = await SELF.fetch(`${BASE}/api/staff/stores`, {
+      method: 'POST',
+      headers: { ...JSON_HEADERS, authorization: `Bearer ${await tokenFor(org, 'admin')}` },
+      body: JSON.stringify({ name: '管理者が作る店', slug: slug() }),
+    })
+    expect(res.status).toBe(201)
+  })
+
+  it('店員は担当店舗の有無にかかわらず 403', async () => {
+    const org = orgId()
+    await syncOrganization({ id: org })
+    const res = await SELF.fetch(`${BASE}/api/staff/stores`, {
+      method: 'POST',
+      headers: { ...JSON_HEADERS, authorization: `Bearer ${await tokenFor(org, 'staff')}` },
+      body: JSON.stringify({ name: '店員が作る店', slug: slug() }),
+    })
+    expect(res.status).toBe(403)
   })
 })
