@@ -216,6 +216,17 @@ production では**回さない**（初回だけ人間が実行する現行方�
 存在している必要があるため、この順序は動かせない。各サービスは **deploy → secrets 同期**の順
 （未作成の Worker には `secret bulk` を打てない）。
 
+**ただし順序だけでは初回が通らない。** `glasses_management` は `/api/auth/login` を admin へ
+委譲するため `ADMIN` を、`admin` は org 同期のため `GLASSES_MANAGEMENT` を張っており、参照は
+**相互**である。閉路には始点が無いので、どちらを先に置いても初回は
+`Service binding 'ADMIN' references Worker 'admin-staging' which was not found.` で落ちる。
+
+そこでチェーンの前に `pnpm run bootstrap:workers`（`scripts/bootstrap-workers.mjs`）を挟む。
+参照先の Worker がアカウントに無いときだけ、**バインディングを持たない空の Worker**（503 を返す
+だけ）を先に置いて閉路を切る。直後に本物のデプロイが同じ名前を上書きするので、踏み台が残るのは
+数十秒である。**既に実在する Worker には触らない** — 触ると生きた Worker からバインディングを
+剥がしてしまい、後続が失敗した瞬間にサービスが止まる。したがって 2 回目以降は no-op になる。
+
 **ロールバックはしない。** D1 マイグレーションは戻せず、Worker だけ戻すと整合しない。前方修正が
 方針である。ただしこの順序を守る限り、途中で失敗しても「新しい Worker がまだ出ていない」だけで、
 既存の本番は動き続ける。

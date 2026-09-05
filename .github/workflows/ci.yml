@@ -176,6 +176,12 @@ jobs:
       - name: Check binding IDs
         run: pnpm run check:bindings admin glasses_management notifier --env "${CLOUDFLARE_ENV}" --tf-output tf-output.json
 
+      # admin ⇄ glasses_management は service binding が相互参照なので、依存順を
+      # どう並べても初回は「参照先の Worker が無い」で落ちる。閉路をここで一度だけ
+      # 空 Worker で切る。既にある Worker には触らないので 2 回目以降は no-op。
+      - name: Bootstrap cross-referenced workers
+        run: pnpm run bootstrap:workers admin glasses_management notifier --env "${CLOUDFLARE_ENV}"
+
       - name: Deploy notifier
         run: pnpm --filter @app/notifier run deploy
       - name: Sync notifier secrets
@@ -224,9 +230,9 @@ jobs:
           ADMIN_EMAIL: admin@example.com
         run: node services/admin/seed.mjs --remote
 
-  # Service bindings require the referenced Worker to exist before the caller
-  # can deploy. Keep this full EYE dependency chain manual and serialized so
-  # a main push never attempts admin before glasses-management exists.
+  # 手動で EYE スタックだけを production へ流す逃げ道。通常の main push は上の
+  # deploy が同じことをする。service binding の参照先が実在している必要があるので、
+  # ここでも先に踏み台を置いてから直列にデプロイする。
   deploy-eye-stack:
     if: github.event_name == 'workflow_dispatch' && inputs.deploy_eye_stack == true
     needs: [verify]
@@ -246,6 +252,8 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Bootstrap cross-referenced workers
+        run: pnpm run bootstrap:workers admin glasses_management notifier --env ""
       - name: Deploy notifier (no downstream bindings)
         run: pnpm --filter @app/notifier run deploy
       - name: Migrate and deploy glasses_management
