@@ -21,6 +21,12 @@ merge すると `.github/workflows/ci.yml` の `verify` が走り、緑なら `d
    glasses_management（組織 `eye` と 3 店舗・スタッフ・端末）の 2 本。
    宛先の D1 は `CLOUDFLARE_ENV` から `wrangler.jsonc` 経由で解決する（seed に DB 名を直書きしない）。
 
+6. production だけ、`glasses_management` / `admin` の Worker に `AUTH_DEV_GRANT` が
+   **残っていないこと**を確かめる。`wrangler secret bulk` は加算で、渡さなかった
+   secret を消さない。一度でも入ると以後どのデプロイでも消えず、`/api/auth/token` の
+   「`'true'` でなければ 404」を素通りし続ける。「入れない」だけでは足りない。
+   `deploy-eye-stack`（手動の逃げ道）にも同じ検査を無条件で置いてある。
+
 **ロールバックはしない。** D1 マイグレーションは戻せず、Worker だけ戻すと整合しない。前方修正が方針である。ただしこの順序を守る限り、途中で失敗しても「新しい Worker がまだ出ていない」だけで、既存の環境は動き続ける。
 
 ## secrets は GitHub Environment が唯一の源泉

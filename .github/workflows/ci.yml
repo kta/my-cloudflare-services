@@ -224,6 +224,27 @@ jobs:
             process.stdout.write(JSON.stringify(s))' \
             | pnpm --filter @app/admin exec wrangler secret bulk ${CLOUDFLARE_ENV:+--env $CLOUDFLARE_ENV}
 
+      # `wrangler secret bulk` は加算で、渡さなかった secret を消さない。一度でも
+      # production へ AUTH_DEV_GRANT が入ると以後どのデプロイでも消えず、
+      # `/api/auth/token` の「'true' でなければ 404」を素通りし続ける。
+      # 「入れない」だけでは足りないので、残っていないことをここで確かめる。
+      # `secret list` は名前だけを返すので、値はログに出ない。
+      - name: Assert no dev grant on production
+        if: env.DEPLOY_ENVIRONMENT == 'production'
+        run: |
+          for pkg in @app/glasses_management @app/admin; do
+            # 一覧を取れないまま素通りさせない。取れない=確かめていない、である。
+            if ! names=$(pnpm --filter "$pkg" exec wrangler secret list 2>&1); then
+              echo "::error::$pkg の secret 一覧を取得できませんでした"
+              echo "$names"
+              exit 1
+            fi
+            if grep -q AUTH_DEV_GRANT <<<"$names"; then
+              echo "::error::$pkg の production に AUTH_DEV_GRANT が残っています"
+              exit 1
+            fi
+          done
+
       # staging は dev グラント無しの fail close なので、ログインできる admin が要る。
       # seed は INSERT OR IGNORE で冪等。production では回さない。
       # 宛先の D1 は CLOUDFLARE_ENV から wrangler.jsonc 経由で解決される。
@@ -274,3 +295,20 @@ jobs:
         run: pnpm --filter @app/glasses_management run db:migrate:remote && pnpm --filter @app/glasses_management run deploy
       - name: Migrate and deploy admin (depends on glasses_management)
         run: pnpm --filter @app/admin run db:migrate:remote && pnpm --filter @app/admin run deploy
+
+      # この job は production 専用で、Terraform も binding 突合も通らない。
+      # 関所が少ない経路ほど、残骸は静かに残る。
+      - name: Assert no dev grant on production
+        run: |
+          for pkg in @app/glasses_management @app/admin; do
+            # 一覧を取れないまま素通りさせない。取れない=確かめていない、である。
+            if ! names=$(pnpm --filter "$pkg" exec wrangler secret list 2>&1); then
+              echo "::error::$pkg の secret 一覧を取得できませんでした"
+              echo "$names"
+              exit 1
+            fi
+            if grep -q AUTH_DEV_GRANT <<<"$names"; then
+              echo "::error::$pkg の production に AUTH_DEV_GRANT が残っています"
+              exit 1
+            fi
+          done
