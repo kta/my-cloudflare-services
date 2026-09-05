@@ -5,11 +5,12 @@
   "compatibility_date": "2026-06-25",
   "observability": { "enabled": true },
   // Notifications are synchronous and use one KV namespace for a 24-hour
-  // best-effort idempotency record. The real ID is supplied by Terraform.
+  // best-effort idempotency record. id は Terraform(envs/production) の出力
+  // `notifier_dedupe_kv_namespace_id` の実値。
   "kv_namespaces": [
     {
       "binding": "DEDUPE",
-      "id": "00000000000000000000000000000000"
+      "id": "0cd401c4a4fa4f1caaf8f8f99c6a5b87"
     }
   ],
   // MAIL_FROM is not a secret, but an empty default keeps the Worker
