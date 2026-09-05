@@ -1,5 +1,6 @@
 import type { APIRequestContext, Locator, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
+import { authHeadersFor, signedHeadersFor } from './support/auth'
 import { completeSeededTerminalStart } from './support/terminal'
 
 /**
@@ -109,12 +110,8 @@ const WALK_DAY = '9月4日（金）'
 type Headers = Record<string, string>
 
 async function bearer(request: APIRequestContext): Promise<Headers> {
-  const res = await request.post('/api/auth/token', {
-    data: { organizationId: ORG, role: 'staff' },
-  })
-  expect(res.status()).toBe(200)
-  const { token } = (await res.json()) as { token: string }
-  return { authorization: `Bearer ${token}` }
+  // 実際の入口と同じ道で取る（dev グラントは撤去した）。
+  return authHeadersFor(request)
 }
 
 /** admin からの担当店舗の配信を模す。権限を入れ替えるのに同じ id を配り直す。 */
@@ -777,12 +774,9 @@ test('店長でないと入口が出ず、直接叩いても拒まれる', async
 // @e2e-covers AC-CUST-17
 test('別の会社のお客様 ID は 404 として扱われる', async ({ request }) => {
   const other = 'org-eye-other'
-  const token = await request.post('/api/auth/token', {
-    data: { organizationId: other, role: 'staff' },
-  })
-  const { token: bearerToken } = (await token.json()) as { token: string }
+  // その会社には seed の端末が無いので、公開の入口からは取れない。e2e 自身で署名する。
   const res = await request.get(`/api/staff/customers/${HANAKO}`, {
-    headers: { authorization: `Bearer ${bearerToken}` },
+    headers: await signedHeadersFor(other),
   })
   // 403 にしない（存在の有無が漏れる）。お名前もお電話番号も返らない。
   expect(res.status()).toBe(404)

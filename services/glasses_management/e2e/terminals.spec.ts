@@ -1,4 +1,5 @@
 import { type APIRequestContext, expect, type Locator, type Page, test } from '@playwright/test'
+import { authHeadersFor } from './support/auth'
 import { completeSeededTerminalStart } from './support/terminal'
 
 const ORG = 'eye'
@@ -59,11 +60,8 @@ async function enterPin(page: Page, pin = '000000'): Promise<void> {
 }
 
 async function authHeaders(request: APIRequestContext): Promise<Record<string, string>> {
-  const response = await request.post('/api/auth/token', {
-    data: { organizationId: ORG, role: 'staff' },
-  })
-  const body = (await response.json()) as { token: string }
-  return { authorization: `Bearer ${body.token}` }
+  // 実際の入口と同じ道で取る（dev グラントは撤去した）。
+  return authHeadersFor(request)
 }
 
 /** seed が置く 3 件（対応が必要 1 / お知らせ 2）。AC-TERM-16 が数える母数である。 */

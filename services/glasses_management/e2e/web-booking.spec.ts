@@ -1,5 +1,6 @@
 import type { APIRequestContext, Locator, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
+import { authHeadersFor } from './support/auth'
 
 /**
  * お客様向け Web 予約（011-web-booking）の受け入れ基準を、実ブラウザと実 Worker で確かめる。
@@ -175,11 +176,8 @@ async function book(
 
 /** 業務側の JWT。台帳へ本当に移ったかを確かめるときだけ使う。 */
 async function authed(request: APIRequestContext): Promise<{ headers: Record<string, string> }> {
-  const res = await request.post('/api/auth/token', {
-    data: { organizationId: ORG, role: 'staff' },
-  })
-  expect(res.status()).toBe(200)
-  return { headers: { authorization: `Bearer ${((await res.json()) as { token: string }).token}` } }
+  // 実際の入口と同じ道で取る（dev グラントは撤去した）。
+  return { headers: await authHeadersFor(request) }
 }
 
 /** 公開の設定。`PUT` は `storeId` / `landingPath` / `updatedAt` を受け取らない。 */

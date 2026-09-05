@@ -1,5 +1,6 @@
 import type { APIRequestContext, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
+import { startSeededTerminal } from './support/auth'
 import { completeSeededTerminalStart } from './support/terminal'
 
 /**
@@ -46,11 +47,8 @@ const WEEKDAY_NAMES = ['日', '月', '火', '水', '木', '金', '土']
 /* --- 前提データ ---------------------------------------------------------- */
 
 async function tokenFor(request: APIRequestContext): Promise<string> {
-  const res = await request.post('/api/auth/token', {
-    data: { organizationId: ORG, role: 'staff' },
-  })
-  expect(res.status()).toBe(200)
-  return ((await res.json()) as { token: string }).token
+  // 実際の入口と同じ道で取る（dev グラントは撤去した）。
+  return (await startSeededTerminal(request)).token
 }
 
 /** JWT を載せた要求の頭。API を直に叩くのは前提づくりと突き合わせだけに使う。 */

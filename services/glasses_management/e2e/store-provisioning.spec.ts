@@ -7,6 +7,7 @@
  * 組織にもトークンを出し、`organizations` に行を作る）。
  */
 import { type APIRequestContext, expect, type Page, test } from '@playwright/test'
+import { signedTokenFor } from './support/auth'
 
 const INTERNAL_HEADERS = { 'x-internal-key': 'dev-internal-key' }
 
@@ -19,9 +20,9 @@ async function tokenFor(
   org: string,
   role: 'admin' | 'staff' = 'admin',
 ): Promise<string> {
-  const res = await request.post('/api/auth/token', { data: { organizationId: org, role } })
-  expect(res.ok()).toBeTruthy()
-  return ((await res.json()) as { token: string }).token
+  // 店舗をまだ 1 つも持たない会社を作るので、seed の端末からは取れない。
+  // e2e 自身で署名する（サーバに credential 無しの経路は残さない）。
+  return signedTokenFor(org, role)
 }
 
 function bearer(token: string): Record<string, string> {

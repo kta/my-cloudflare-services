@@ -1,5 +1,6 @@
 import type { APIRequestContext, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
+import { authHeadersFor, signedHeadersFor } from './support/auth'
 import type { SeededTerminalSession } from './support/terminal'
 import { completeSeededTerminalStart } from './support/terminal'
 
@@ -302,12 +303,9 @@ async function authed(
   request: APIRequestContext,
   organizationId: string = ORG,
 ): Promise<{ headers: Record<string, string> }> {
-  const res = await request.post('/api/auth/token', {
-    data: { organizationId, role: 'staff' },
-  })
-  expect(res.status()).toBe(200)
-  const { token } = (await res.json()) as { token: string }
-  return { headers: { authorization: `Bearer ${token}` } }
+  // seed の組織は実際の入口から、それ以外は e2e 自身の署名から取る。
+  if (organizationId === ORG) return { headers: await authHeadersFor(request) }
+  return { headers: await signedHeadersFor(organizationId) }
 }
 
 /** seed の端末とスタッフ（`seed.mjs` の `uid()` は決め打ちの UUID を配る）。 */

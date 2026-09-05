@@ -47,7 +47,6 @@ import {
   EquipmentPatch,
   Hold,
   HoldInput,
-  IssueTokenRequest,
   LedgerQuery,
   LedgerView,
   LoginRequest,
@@ -373,8 +372,6 @@ export type Bindings = {
    * `stores.slug` と繋いで組み立てるためだけに使う。**この値を表に持たない。**
    */
   PUBLIC_WEB_ORIGIN?: string
-  /** credential 無しの dev トークングラントを開ける。本番では設定しない。 */
-  AUTH_DEV_GRANT?: string
   /** integration test の基準時刻。本番では設定せず、実時刻を使う。 */
   TEST_NOW?: string
   /** staging だけに設定される。未設定なら stagingGate は何もしない(production)。 */
@@ -1254,9 +1251,6 @@ function toReport(input: {
  * ルート
  * ─────────────────────────────────────────────────────────────────────────── */
 
-// dev 専用のトークン発行（RPC のルートには載せない）。credential を検査せずに
-// 任意の organizationId のアクセス JWT を作る。AUTH_DEV_GRANT === 'true' の
-// ときだけ開く（fail close）。実運用では admin の認証へ差し替える。
 /* ───────────────────────────────────────────────────────────────────────────
  * 顧客台帳（P4）が共有する道具
  *
@@ -1839,29 +1833,14 @@ async function oneNote(
   return note ?? null
 }
 
-app.post('/api/auth/token', zValidator('json', IssueTokenRequest), async (c) => {
-  if (c.env.AUTH_DEV_GRANT !== 'true') return c.json({ error: 'not_found' }, 404)
-  const { organizationId, role, email } = c.req.valid('json')
-  // dev の便宜: 同期行を作っておかないと業務 API が 503 になる。
-  // 実際の経路では admin が service binding で押し込む。
-  const db = drizzle(c.env.DB)
-  await db
-    .insert(organizations)
-    .values({
-      id: organizationId,
-      name: organizationId,
-      plan: 'free',
-      isDisabled: '0',
-      createdAt: new Date().toISOString(),
-      revision: '0',
-    })
-    .onConflictDoNothing({ target: organizations.id })
-  const token = await signAccessToken(
-    { sub: `dev:${organizationId}`, org: organizationId, email, role },
-    c.env.JWT_SECRET,
-  )
-  return c.json({ token })
-})
+/*
+ * dev グラント（`POST /api/auth/token`）は撤去した。
+ *
+ * あれは「知らない組織にもトークンを出したうえで組織行を作る」経路で、本番では
+ * 決して有効にできなかった。つまり業務開始が本番に出せない抜け道の上に立っていた。
+ * いまは `/s/:storeSlug` で置き場所を選んで暗証番号を入れる経路が正本である
+ * （`docs/superpowers/specs/2026-09-05-terminal-pin-entry-design.md`）。
+ */
 
 const REFRESH_COOKIE = 'refresh_token'
 

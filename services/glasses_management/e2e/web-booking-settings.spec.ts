@@ -1,5 +1,6 @@
 import type { APIRequestContext, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
+import { authHeadersFor } from './support/auth'
 import { completeSeededTerminalStart } from './support/terminal'
 
 /**
@@ -42,11 +43,8 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000
 /* --- 前提 ------------------------------------------------------------------ */
 
 async function authed(request: APIRequestContext): Promise<{ headers: Record<string, string> }> {
-  const res = await request.post('/api/auth/token', {
-    data: { organizationId: ORG, role: 'staff' },
-  })
-  expect(res.status()).toBe(200)
-  return { headers: { authorization: `Bearer ${((await res.json()) as { token: string }).token}` } }
+  // 実際の入口と同じ道で取る（dev グラントは撤去した）。
+  return { headers: await authHeadersFor(request) }
 }
 
 async function grant(request: APIRequestContext, permissions: readonly string[]): Promise<void> {

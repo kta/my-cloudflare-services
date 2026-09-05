@@ -1886,14 +1886,34 @@ describe('内部 API の共有鍵', () => {
   })
 })
 
-describe('dev トークングラント', () => {
-  it('組織 id が空なら 400', async () => {
+/**
+ * dev グラントは**経路ごと撤去**した。
+ *
+ * あれは credential を検査せずに任意の organizationId のトークンを出す経路で、
+ * 本番では決して有効にできなかった。つまり業務開始が、本番に出せない抜け道の
+ * 上に立っていた。いまは `/s/:storeSlug` の暗証番号が正本である。
+ *
+ * `AUTH_DEV_GRANT` の有無に関わらず 404 であること —— 環境変数の設定漏れで
+ * 復活しないこと —— をここで固定する。
+ */
+describe('dev トークングラントの撤去', () => {
+  it('AUTH_DEV_GRANT が有効なこの環境でも 404', async () => {
+    expect(env.AUTH_DEV_GRANT).toBe('true')
+    const res = await SELF.fetch(`${BASE}/api/auth/token`, {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ organizationId: 'eye', role: 'staff' }),
+    })
+    expect(res.status).toBe(404)
+  })
+
+  it('組織 id が空でも 404（検証に届く前に経路が無い）', async () => {
     const res = await SELF.fetch(`${BASE}/api/auth/token`, {
       method: 'POST',
       headers: JSON_HEADERS,
       body: JSON.stringify({ organizationId: '', role: 'staff' }),
     })
-    expect(res.status).toBe(400)
+    expect(res.status).toBe(404)
   })
 })
 
