@@ -6,7 +6,7 @@ import { LoadFailed } from '../shell/LoadFailed'
 import { formatJstDate, ROLE_LABELS, type SaveOutcome, type SettingsPanelProps } from './sections'
 
 /*
- * 店舗の情報（承認済みモック docs/frontend/mockups/eyex/images/SETTINGS-STORE.png）。
+ * 店舗の情報（承認済みモック docs/frontend/mockups/eye/images/SETTINGS-STORE.png）。
  *
  * 実測: .cols = 1fr + 344px / gap 22px。群の見出しは margin 32px 2px 12px。
  * グループ表の行は min-height 56px。「行き方のご案内」は白い箱ではなく罫だけの行

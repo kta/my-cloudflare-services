@@ -6,13 +6,13 @@ import { describe, expect, it, vi } from 'vitest'
 import { CustomerList, type CustomerListPhase } from './CustomerList'
 
 /*
- * 顧客台帳の一覧と右の要約（承認済みモック docs/frontend/mockups/eyex/images/CUSTOMER-LIST.png）。
+ * 顧客台帳の一覧と右の要約（承認済みモック docs/frontend/mockups/eye/images/CUSTOMER-LIST.png）。
  *
  * この面の仕事は「お名前があいまいなままでも 1 名に手繰り、選んだ 1 名の要約を
  * 一覧を閉じずに右へ出し続ける」こと。見た目の寸法は e2e の突き合わせで見るので、
  * ここでは「何が読めて、何が押せるか」を見る。
  *
- * 実測（screens/CUSTOMER-LIST.html と assets/eyex.css）:
+ * 実測（screens/CUSTOMER-LIST.html と assets/eye.css）:
  *   本文 2 ペイン `1fr 360px`。検索欄の帯 padding 16px 20px・下に 1px の罫。
  *   見出し行 34px・地 --surface-2・下に 1px の --line-strong・12px。
  *   行は 4 列 `220px 72px 132px 1fr`・gap 12px・padding 0 20px・min-height 60px。

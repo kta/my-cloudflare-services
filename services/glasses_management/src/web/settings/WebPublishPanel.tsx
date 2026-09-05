@@ -1,12 +1,12 @@
 import { type VisitPurpose, WebBookingSettings, WebPreviewResult } from '@app/contracts'
-import { cn, focusRing, Notice } from '@app/ui'
+import { cn, focusRing } from '@app/ui'
 import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { client } from '../client'
 import { LoadFailed } from '../shell/LoadFailed'
 import type { PanelDraft, SaveOutcome, SettingsPanelProps } from './sections'
 
 /*
- * 設定 — Web予約の公開（承認済みモック docs/frontend/mockups/eyex/images/SETTINGS-WEB.png）。
+ * 設定 — Web予約の公開（承認済みモック docs/frontend/mockups/eye/images/SETTINGS-WEB.png）。
  *
  * この面の仕事は「お客様に何がどう見えるか」を保存の前に見せることである。
  * 左を触ると右のプレビューがその場で変わり、店内名・技能・設備が 1 つも出ていないことを

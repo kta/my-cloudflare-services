@@ -29,3 +29,4 @@ export {
   verifyAccessToken,
 } from './jwt'
 export { hashStretched, stretchPassword, stretchPin, verifyStretched } from './password'
+export { STAGING_GATE_COOKIE, stagingGate } from './staging-gate'

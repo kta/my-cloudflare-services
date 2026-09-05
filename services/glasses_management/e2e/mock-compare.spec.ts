@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test'
 import { completeSeededTerminalStart } from './support/terminal'
 
 /*
- * 実装した画面を、承認済みモックの基準画像（docs/frontend/mockups/eyex/reference/<画面ID>.png）と
+ * 実装した画面を、承認済みモックの基準画像（docs/frontend/mockups/eye/reference/<画面ID>.png）と
  * 1 枚ずつ重ねて、違う画素の割合を測る。
  *
  *   pnpm --filter @app/glasses_management exec playwright test --project=mock
@@ -12,19 +12,19 @@ import { completeSeededTerminalStart } from './support/terminal'
  * モックは Retina 相当（deviceScaleFactor 2）で撮ってあるので、`scale: 'device'` を必ず付ける
  * （既定の `'css'` だと CSS ピクセルまで縮められて寸法が合わない）。
  * 基準画像は端末のステータスバーを外した reference/ 側を使う
- * （`node docs/frontend/mockups/eyex/reference.mjs` で作り直せる）。
+ * （`node docs/frontend/mockups/eye/reference.mjs` で作り直せる）。
  * `maxDiffPixelRatio` はその画面の「いま許している差」であり、
  * **フェーズが進むたびに下げる**。上げてはいけない。
  *
  * この突き合わせは合否の主役ではない。文言・並び・押せるかは各画面の e2e で見る。
  * ここが見るのは「承認された見た目からどれだけ離れているか」だけである。
  *
- * 盤面は `seed.mjs` が入れる EYEX 銀座店。この project は業務の e2e より先に走る
+ * 盤面は `seed.mjs` が入れる EYE 銀座店。この project は業務の e2e より先に走る
  * （playwright.config.ts の project の並び）ので、撮るのは必ず seed のままの姿である。
  */
 
-const ORG = 'eyex'
-/** seed.mjs が固定 id で入れる EYEX 銀座店と、その 1 人目の担当（佐藤 美咲）。 */
+const ORG = 'eye'
+/** seed.mjs が固定 id で入れる EYE 銀座店と、その 1 人目の担当（佐藤 美咲）。 */
 const GINZA = '11111111-1111-4111-8111-111111111111'
 const SATO = 'c0010000-0000-4000-8000-000000000000'
 /** ご来店の目的の 1 件目（メガネを新しく作る・60 分）。 */
@@ -526,14 +526,14 @@ async function elevenOClockReservation(request: APIRequestContext): Promise<stri
 test.describe('承認済みモックとの突き合わせ', () => {
   test('HOME — トップ（共有端末）', async ({ page }) => {
     await startWork(page)
-    await expect(page.locator('header').first()).toContainText('EYEX 銀座店')
+    await expect(page.locator('header').first()).toContainText('EYE 銀座店')
     /*
      * いま残っている差（2026-09-04）:
      *   - 上のバーの「お知らせ 3」… P10 で足す（いまは「業務を終える」を置いている）
      *   - サイドバーの 3 行目が「予約を探す」（モックは「予約を検索」）… P6 の決めで
      *     行き先の名前を面の名前と分けた（`009-change-and-cancel/spec.md`「決めたこと」／
      *     `design/05-screen-flow.md` §2.2）。モックの画像は直さない既知差分である。
-     * 店名は seed が入ったので「EYEX 銀座店」に揃い、実測は 3.1512%
+     * 店名は seed が入ったので「EYE 銀座店」に揃い、実測は 3.1512%
      * （121,909 / 3,868,560。2026-08-31 の再測。P6 前は 3.1389% で、行き先の名前を
      * 1 字入れ替えたぶんだけ 436 画素増えた）。器（上のバー・サイドバー・主操作の 2 枚）は
      * それ以外の画素まで合っている。
@@ -728,7 +728,7 @@ test.describe('承認済みモックとの突き合わせ', () => {
 
   test('SETTINGS-STORE — 設定・店舗の情報', async ({ page }) => {
     await openSection(page, '店舗の情報')
-    await expect(page.getByLabel('店名', { exact: true })).toHaveValue('EYEX 銀座店')
+    await expect(page.getByLabel('店名', { exact: true })).toHaveValue('EYE 銀座店')
     /*
      * いま許している差:
      *   - 第2サイドバー: モックの 14 項目に対して 7 項目しか出さない（P1 の決め #1。P8 が
@@ -856,7 +856,7 @@ test.describe('承認済みモックとの突き合わせ', () => {
      *     行き先の `›` を描いているが、その行き先の面はまだ無い（押せて何も起きない行を置かない）。
      *   - 切り替えは `role="switch"` の押せる行で、モックの見た目だけの `<span class="toggle">`
      *     とはつまみの寸法がわずかに違う。
-     *   - 店名が `stores.name_public` の「EYEX 銀座店（銀座4丁目）」（モックは「EYEX 銀座店」）。
+     *   - 店名が `stores.name_public` の「EYE 銀座店（銀座4丁目）」（モックは「EYE 銀座店」）。
      *   - 残りは和文の字形（承認済みモックは端末の実機、こちらは Chromium）。
      */
     // 実測 262,168 / 3,868,560 ＝ 6.7770%（2026-08-31）。**この値は下げるだけ。上げてはいけない。**
@@ -1393,7 +1393,7 @@ test.describe('承認済みモックとの突き合わせ', () => {
      *     重なりが解けたぶんが、この回の下がり幅のほとんどである。
      *   - ご来店の列は平文の等幅に直した（1 巡目は数字入りの丸い印だった）。来店回数の
      *     色つきの印はお名前の右に添えるもので、回数の列をすでに持つこの面には入れない
-     *     —— `docs/frontend/mockups/eyex/README.md` の決め。
+     *     —— `docs/frontend/mockups/eye/README.md` の決め。
      *   - 右の要約の「次のご予約」が「ご予約はありません」（モックは 8月27日（木）11:00）。
      *     次のご予約は**サーバの実時刻**で選ぶので、seed の 2026年8月27日 を過ぎた日に
      *     走らせるとここは空になる。台帳の e2e が見る盤面を動かさないための代償で、

@@ -51,7 +51,7 @@ import {
 /* --- 盤面 ---------------------------------------------------------------- */
 
 /** 公開ドメイン（`wrangler.jsonc` の `vars`）。表には持たない。 */
-const PUBLIC_ORIGIN = 'eyex.jp'
+const PUBLIC_ORIGIN = 'eye.jp'
 
 /** 銀座店の公開設定 1 行（SETTINGS-WEB の「受け付ける内容」5 行そのまま）。 */
 const GINZA: WebBookingSettingsRow = {
@@ -155,8 +155,8 @@ describe('公開設定の解決', () => {
   })
 
   it('ご案内のページは公開ドメインと stores.slug から組み立てる', () => {
-    expect(publication().landingPath).toBe('eyex.jp/ginza')
-    expect(publication({ publicOrigin: 'https://eyex.jp/' }).landingPath).toBe('eyex.jp/ginza')
+    expect(publication().landingPath).toBe('eye.jp/ginza')
+    expect(publication({ publicOrigin: 'https://eye.jp/' }).landingPath).toBe('eye.jp/ginza')
   })
 
   it('公開する目的は is_web_published と is_active の両方が立つ行だけ', () => {

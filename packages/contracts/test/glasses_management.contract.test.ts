@@ -151,9 +151,11 @@ import {
   StaffSkillsInput,
   Store,
   StoreDetail,
+  StoreInput,
   StoreMembership,
   StorePatch,
   StorePermission,
+  StoreSlugTakenError,
   Terminal,
   TerminalInput,
   TerminalKind,
@@ -185,7 +187,7 @@ import {
 } from '@app/contracts'
 import { describe, expect, it } from 'vitest'
 
-const ORG = 'org-eyex'
+const ORG = 'org-eye'
 const UUID = '11111111-2222-4333-8444-555555555555'
 const UUID2 = '99999999-8888-4777-8666-555555555555'
 const NOW = '2026-08-27T02:08:00.000Z'
@@ -194,7 +196,7 @@ describe('OrganizationSync', () => {
   it('accepts a canonical snapshot from admin', () => {
     const parsed = OrganizationSync.parse({
       id: ORG,
-      name: 'EYEX',
+      name: 'EYE',
       plan: 'contracted',
       isDisabled: false,
       createdAt: NOW,
@@ -207,7 +209,7 @@ describe('OrganizationSync', () => {
     expect(
       OrganizationSync.parse({
         id: ORG,
-        name: 'EYEX',
+        name: 'EYE',
         plan: 'free',
         isDisabled: false,
         createdAt: NOW,
@@ -220,7 +222,7 @@ describe('OrganizationSync', () => {
       expect(() =>
         OrganizationSync.parse({
           id: ORG,
-          name: 'EYEX',
+          name: 'EYE',
           plan: 'free',
           isDisabled: false,
           createdAt: NOW,
@@ -234,7 +236,7 @@ describe('OrganizationSync', () => {
     expect(() =>
       OrganizationSync.parse({
         id: ORG,
-        name: 'EYEX',
+        name: 'EYE',
         plan: 'free',
         isDisabled: false,
         createdAt: NOW,
@@ -248,7 +250,7 @@ describe('OrganizationSync', () => {
     expect(() =>
       OrganizationSync.parse({
         id: '  ',
-        name: 'EYEX',
+        name: 'EYE',
         plan: 'free',
         isDisabled: false,
         createdAt: NOW,
@@ -257,7 +259,7 @@ describe('OrganizationSync', () => {
     expect(() =>
       OrganizationSync.parse({
         id: ORG,
-        name: 'EYEX',
+        name: 'EYE',
         plan: 'free',
         isDisabled: false,
         createdAt: '2026-08-27',
@@ -314,7 +316,7 @@ describe('Store', () => {
   const base = {
     id: UUID,
     organizationId: ORG,
-    name: 'EYEX 銀座店',
+    name: 'EYE 銀座店',
     slug: 'ginza',
     isActive: true,
     createdAt: NOW,
@@ -333,7 +335,7 @@ describe('Store', () => {
   })
 
   it('trims and bounds the display name', () => {
-    expect(Store.parse({ ...base, name: '  EYEX 銀座店  ' }).name).toBe('EYEX 銀座店')
+    expect(Store.parse({ ...base, name: '  EYE 銀座店  ' }).name).toBe('EYE 銀座店')
     expect(() => Store.parse({ ...base, name: 'あ'.repeat(201) })).toThrow()
   })
 })
@@ -389,7 +391,7 @@ const sevenWeeklyRows = [0, 1, 2, 3, 4, 5, 6].map((weekday) => weeklyRow(weekday
 const storeDetail = {
   id: UUID,
   organizationId: ORG,
-  name: 'EYEX 銀座店',
+  name: 'EYE 銀座店',
   slug: 'ginza',
   isActive: true,
   createdAt: NOW,
@@ -506,13 +508,13 @@ describe('StorePatch', () => {
   })
 
   it('version を欠いた本文を落とす（楽観ロックを外させない）', () => {
-    expect(StorePatch.parse({ name: 'EYEX 銀座店', version: Version.parse(0) }).version).toBe(0)
-    expect(() => StorePatch.parse({ name: 'EYEX 銀座店' })).toThrow()
+    expect(StorePatch.parse({ name: 'EYE 銀座店', version: Version.parse(0) }).version).toBe(0)
+    expect(() => StorePatch.parse({ name: 'EYE 銀座店' })).toThrow()
   })
 
   it('知らないキーが混ざった本文を落とす', () => {
     // `publicName` / `intro` のような短縮した別名を作らせない。
-    expect(() => StorePatch.parse({ publicName: 'EYEX 銀座', version: 3 })).toThrow()
+    expect(() => StorePatch.parse({ publicName: 'EYE 銀座', version: 3 })).toThrow()
     expect(() => StorePatch.parse({ intro: 'ようこそ', version: 3 })).toThrow()
   })
 })
@@ -3472,7 +3474,7 @@ const webBookingSettingsInput = {
 const webBookingSettings = {
   ...webBookingSettingsInput,
   storeId: UUID,
-  landingPath: 'eyex.jp/ginza',
+  landingPath: 'eye.jp/ginza',
   updatedAt: NOW,
 }
 
@@ -3490,7 +3492,7 @@ const publicBookingResult = {
   status: 'pending',
   startsAt: START,
   endsAt: END,
-  storeName: 'EYEX 銀座店',
+  storeName: 'EYE 銀座店',
   purposeName: '新しいメガネを作る',
   contactName: '山口 真央',
   managementCode: 'K7M4PXQ2',
@@ -3502,7 +3504,7 @@ const publicReservationStatus = {
   status: 'confirmed',
   startsAt: START,
   endsAt: END,
-  storeName: 'EYEX 銀座店',
+  storeName: 'EYE 銀座店',
   purposeName: '新しいメガネを作る',
   durationMinutes: 60,
   contactName: '山口 真央',
@@ -3619,7 +3621,7 @@ describe('WebBookingSettingsInput', () => {
     ).toThrow()
     // ご案内のページは `stores.slug` から組み立てるので、保存で受け取らない。
     expect(() =>
-      WebBookingSettingsInput.parse({ ...webBookingSettingsInput, landingPath: 'eyex.jp/ginza' }),
+      WebBookingSettingsInput.parse({ ...webBookingSettingsInput, landingPath: 'eye.jp/ginza' }),
     ).toThrow()
     expect(() =>
       WebBookingSettingsInput.parse({ ...webBookingSettingsInput, storeId: UUID }),
@@ -3631,7 +3633,7 @@ describe('WebBookingSettings', () => {
   it('keeps requiresApproval true by default because there is no auto-confirm option', () => {
     const { requiresApproval: _dropped, ...omitted } = webBookingSettings
     expect(WebBookingSettings.parse(omitted).requiresApproval).toBe(true)
-    expect(WebBookingSettings.parse(webBookingSettings).landingPath).toBe('eyex.jp/ginza')
+    expect(WebBookingSettings.parse(webBookingSettings).landingPath).toBe('eye.jp/ginza')
     // 「自動で確定する」を選ばせる UI は作らないが、列としては `false` も持てる。
     expect(
       WebBookingSettings.parse({ ...webBookingSettings, requiresApproval: false }).requiresApproval,
@@ -4114,7 +4116,7 @@ describe('P10 terminal and audit contracts', () => {
     name: '銀座店 レジ横iPad',
     kind: 'shared',
     placeNote: 'レジの右側',
-    deviceLabel: 'EYEX-iPad-07',
+    deviceLabel: 'EYE-iPad-07',
     autoLockSeconds: 120,
     isActive: true,
     hasPin: true,
@@ -4233,5 +4235,71 @@ describe('P10 terminal and audit contracts', () => {
     expect(
       PinSetResult.parse({ staffId: UUID, updatedAt: '2026-08-27T02:08:00.000Z' }),
     ).not.toHaveProperty('pin')
+  })
+})
+
+/* ------------------------------------------------------------------------- *
+ * 014 店舗の登録（会社を作ってから使い始めるまで）
+ * ------------------------------------------------------------------------- */
+
+describe('StoreInput', () => {
+  it('店名と合い言葉だけで通り、任意の項目は空文字になる', () => {
+    const parsed = StoreInput.parse({ name: '銀座店', slug: 'ginza' })
+    expect(parsed).toEqual({
+      name: '銀座店',
+      slug: 'ginza',
+      phone: '',
+      address: '',
+      accessNote: '',
+    })
+  })
+
+  it('会社 id は受け取らない(JWT の org を使うため偽装させない)', () => {
+    expect(
+      StoreInput.safeParse({ name: '銀座店', slug: 'ginza', organizationId: 'other' }).success,
+    ).toBe(false)
+  })
+
+  it('合い言葉は小文字英数とハイフンだけ', () => {
+    expect(StoreInput.safeParse({ name: '銀座店', slug: 'Ginza' }).success).toBe(false)
+    expect(StoreInput.safeParse({ name: '銀座店', slug: 'ginza_main' }).success).toBe(false)
+    expect(StoreInput.safeParse({ name: '銀座店', slug: '銀座' }).success).toBe(false)
+    expect(StoreInput.safeParse({ name: '銀座店', slug: 'ginza-main' }).success).toBe(true)
+  })
+
+  it('合い言葉はハイフンで始まったり終わったりできない', () => {
+    expect(StoreInput.safeParse({ name: '銀座店', slug: '-ginza' }).success).toBe(false)
+    expect(StoreInput.safeParse({ name: '銀座店', slug: 'ginza-' }).success).toBe(false)
+    expect(StoreInput.safeParse({ name: '銀座店', slug: 'ginza--main' }).success).toBe(false)
+  })
+
+  it('合い言葉は 2 文字以上 40 文字以下', () => {
+    expect(StoreInput.safeParse({ name: '銀座店', slug: 'g' }).success).toBe(false)
+    expect(StoreInput.safeParse({ name: '銀座店', slug: 'g'.repeat(41) }).success).toBe(false)
+    expect(StoreInput.safeParse({ name: '銀座店', slug: 'g'.repeat(40) }).success).toBe(true)
+  })
+
+  it('店名は前後の空白を落とし、空にはできない', () => {
+    expect(StoreInput.parse({ name: '  銀座店  ', slug: 'ginza' }).name).toBe('銀座店')
+    expect(StoreInput.safeParse({ name: '   ', slug: 'ginza' }).success).toBe(false)
+  })
+
+  it('店名は 60 文字まで', () => {
+    expect(StoreInput.safeParse({ name: 'あ'.repeat(61), slug: 'ginza' }).success).toBe(false)
+    expect(StoreInput.safeParse({ name: 'あ'.repeat(60), slug: 'ginza' }).success).toBe(true)
+  })
+})
+
+describe('StoreSlugTakenError', () => {
+  it('どの会社が使っているかは持たない', () => {
+    const parsed = StoreSlugTakenError.parse({ error: 'store_slug_taken', slug: 'ginza' })
+    expect(parsed.slug).toBe('ginza')
+    expect(
+      StoreSlugTakenError.safeParse({
+        error: 'store_slug_taken',
+        slug: 'ginza',
+        organizationId: 'other',
+      }).success,
+    ).toBe(false)
   })
 })

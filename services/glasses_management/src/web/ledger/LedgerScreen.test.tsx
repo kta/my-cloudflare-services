@@ -5,7 +5,7 @@ import { closedView, RESERVATION_IDS, resourceView, STORE_ID, staffView } from '
 import { LedgerScreen } from './LedgerScreen'
 
 /*
- * 予約台帳の器（承認済みモック docs/frontend/mockups/eyex/images/LEDGER-STAFF.png）。
+ * 予約台帳の器（承認済みモック docs/frontend/mockups/eye/images/LEDGER-STAFF.png）。
  * 日付の帯（‹ ／ 2026年8月27日（木） ／ › ／ 本日）と、並べ方・表示のかたちの
  * 2 つのセグメント、現在時刻の札を持つ。
  *
@@ -26,7 +26,7 @@ function json(body: unknown, status = 200): Response {
 
 beforeEach(() => {
   asked = []
-  sessionStorage.setItem('app.auth.token', devToken('dev:eyex'))
+  sessionStorage.setItem('app.auth.token', devToken('dev:eye'))
   serve = async (input: RequestInfo | URL) => {
     const url = new URL(String(input), 'https://example.test')
     asked.push(url)
@@ -60,7 +60,7 @@ afterEach(() => {
 
 /** dev グラントが載せる `sub` だけを持つ、署名を確かめない見せかけの JWT。 */
 function devToken(sub: string): string {
-  return `header.${btoa(JSON.stringify({ sub, org: 'eyex' }))}.signature`
+  return `header.${btoa(JSON.stringify({ sub, org: 'eye' }))}.signature`
 }
 
 /** 詳細とリストの操作。既定は何もしない関数（型で必須なので省略できない）。 */

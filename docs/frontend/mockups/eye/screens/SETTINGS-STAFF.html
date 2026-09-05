@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EYE予約 — 設定・スタッフと技能</title>
+<link rel="stylesheet" href="../assets/eye.css">
+<style>
+  /* 行き先は左のサイドバーが持つ。設定の項目は薄い第2の一覧にして、緑は1本に保つ。 */
+  .set { height: 100%; display: grid; grid-template-columns: 236px 1fr; }
+  .sidebar {
+    padding: 4px 10px 0; background: var(--surface-2); color: var(--ink);
+    border-right: 1px solid var(--line);
+  }
+  .sidebar .sgroup { padding: 3px 12px 0; font-size: 11px; line-height: 13px; color: var(--ink-2); opacity: 1; }
+  .sidebar .sitem {
+    min-height: 44px; padding: 0 12px; border-radius: 8px;
+    font-size: 14px; color: var(--ink); text-decoration: none;
+  }
+  .sidebar .sitem.on { background: var(--brand); color: var(--on-brand); font-weight: 700; }
+  .setmain { min-width: 0; display: flex; flex-direction: column; }
+  .setbar {
+    height: 56px; flex: none; display: grid; grid-template-columns: 1fr auto 1fr;
+    align-items: center; padding: 0 20px;
+    background: var(--surface); border-bottom: 1px solid var(--line);
+  }
+  .setbar h2 { margin: 0; font-size: 17px; text-align: center; }
+  .setbar .l { justify-self: start; }
+  .setbar .r { justify-self: end; display: flex; align-items: center; gap: 10px; }
+  .setbar .btn { min-height: 44px; padding: 0 16px; font-size: 15px; }
+  .setbody { flex: 1; min-height: 0; overflow: hidden; padding: 32px 40px; }
+  .groupname { margin: 26px 2px 12px; }
+  .grouped .gr { min-height: 52px; font-size: 15px; }
+  .grouped .gr .val { text-align: right; }
+  .staff { display: grid; grid-template-columns: 250px 1fr; gap: 30px; align-items: start; }
+  .staff > div > :first-child { margin-top: 0; }
+  .li { display: flex; align-items: center; gap: 14px; }
+  .li .nm { font-size: 16px; font-weight: 600; }
+  .li .sk { display: block; font-size: 13px; color: var(--ink-2); font-weight: 400; margin-top: 2px; }
+  .li.on { box-shadow: inset 4px 0 0 var(--brand); padding-left: 14px; }
+  .li .off { margin-left: auto; font-size: 13px; color: var(--ink-2); }
+  .li .add { color: var(--brand); font-weight: 600; }
+  .chips { display: flex; flex-wrap: wrap; gap: 10px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 16px;
+    border: 1px solid var(--line-strong); border-radius: var(--r-pill);
+    background: var(--surface); font: 600 14px var(--sans); color: var(--ink-2);
+  }
+  .chip.on { border: 2px solid var(--brand); background: var(--brand-tint); color: var(--brand-dark); }
+  .wk { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+  .wk div {
+    display: flex; flex-direction: column; justify-content: center; min-height: 62px;
+    padding: 6px 2px; text-align: center;
+  }
+  .wk div.off { color: var(--ink-3); }
+  .wk b { display: block; font-size: 13px; }
+  .wk span { display: block; font-size: 12px; line-height: 1.45; color: var(--ink-2); }
+</style>
+</head>
+<body>
+<div class="caption">
+  <h1>設定 — スタッフと技能</h1>
+  <p>誰がどの目的を受け持てるかを技能で決める。左で選び、右で技能・勤務時間・PINをまとめて直す。ここの並びがそのまま予約台帳の行になる。</p>
+</div>
+
+<main class="device" id="screen">
+  <div class="statusbar"><span>11:08</span><span>EYE 銀座店</span><span>Wi‑Fi　100%</span></div>
+
+  <header class="appbar">
+    <button class="homebtn" aria-label="トップへ">⌂</button>
+    <div class="storename">EYE 銀座店<small>設定</small></div>
+    <div class="barbtns"><button class="barbtn"><b>お知らせ</b><span class="badge">3</span></button></div>
+  </header>
+
+  <div class="body">
+    <div class="shell rail">
+      <nav class="sidenav rail" aria-label="画面の切り替え">
+        <button class="navtoggle" aria-label="サイドバーをたたむ">たたむ</button>
+        <button class="new">＋ 予約を取る</button>
+        <button class="nav-item" data-icon="ledger">予約台帳</button>
+        <button class="nav-item" data-icon="reception">来店受付</button>
+        <button class="nav-item" data-icon="search">予約を検索</button>
+        <button class="nav-item" data-icon="history">受付履歴</button>
+        <button class="nav-item" data-icon="customer">顧客台帳</button>
+        <div class="group">お店の運用</div>
+        <button class="nav-item" data-icon="analytics">分析</button>
+        <button class="nav-item on" data-icon="settings">設定</button>
+        <div class="foot">銀座店 レジ横iPad<br>共有で使っています</div>
+      </nav>
+
+      <div class="content">
+        <div class="inner">
+          <div class="set">
+            <nav class="sidebar" aria-label="設定の項目">
+              <div class="sgroup">店舗の設定</div>
+              <a class="sitem" href="#">店舗の情報</a>
+              <a class="sitem" href="#">営業日</a>
+              <a class="sitem" href="#">営業時間</a>
+              <a class="sitem" href="#">ご来店の目的</a>
+              <a class="sitem on" href="#" aria-current="page">スタッフと技能</a>
+              <a class="sitem" href="#">設備と点検</a>
+              <a class="sitem" href="#">予約のきまり</a>
+              <div class="sgroup">Web予約</div>
+              <a class="sitem" href="#">公開</a>
+              <a class="sitem" href="#">受付できる時間</a>
+              <a class="sitem" href="#">お知らせ文</a>
+              <div class="sgroup">顧客台帳</div>
+              <a class="sitem" href="#">項目</a>
+              <a class="sitem" href="#">注意ごと</a>
+              <div class="sgroup">端末とスタッフ</div>
+              <a class="sitem" href="#">端末の登録</a>
+              <a class="sitem" href="#">PINと自動ロック</a>
+              <div class="sgroup">全般</div>
+              <a class="sitem" href="#">通知・印刷</a>
+            </nav>
+
+            <section class="setmain">
+              <div class="setbar">
+                <button class="btn quiet l">キャンセル</button>
+                <h2>スタッフと技能</h2>
+                <div class="r">
+                  <span class="tag">未保存の変更 1件</span>
+                  <button class="btn primary">保存</button>
+                </div>
+              </div>
+
+              <div class="setbody">
+                <div class="staff">
+                  <div>
+                    <div class="groupname">スタッフ　6名</div>
+                    <div class="lines">
+                      <div class="li on"><span class="nm">佐藤 美咲<span class="sk">視力測定・加工・販売</span></span></div>
+                      <div class="li"><span class="nm">高橋 健<span class="sk">フィッティング・販売</span></span></div>
+                      <div class="li"><span class="nm">中村 彩<span class="sk">販売・受付</span></span></div>
+                      <div class="li"><span class="nm">小林 学<span class="sk">視力測定</span></span></div>
+                      <div class="li"><span class="nm">渡辺 由紀<span class="sk">販売</span></span></div>
+                      <div class="li"><span class="nm">山田 大輔<span class="sk">店長・販売・受付</span></span><span class="off">本日はお休み</span></div>
+                      <div class="li"><span class="add">＋ スタッフを足す</span></div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div class="groupname">佐藤 美咲 の設定</div>
+                    <div class="grouped">
+                      <div class="gr"><span>できる役割</span><span class="val">スタッフ（設定は見るだけ）</span><span class="chev" aria-hidden="true">›</span></div>
+                      <div class="gr"><span>同時に受け持てるご予約</span><span class="val">1件まで</span><span class="chev" aria-hidden="true">›</span></div>
+                      <div class="gr"><span>PIN</span><span class="val">設定してあります</span><button class="btn" style="min-height:44px;padding:0 16px;font-size:14px">作り直す</button></div>
+                    </div>
+
+                    <div class="groupname">できること（技能）</div>
+                    <div class="chips">
+                      <span class="chip on">✓ 視力測定</span>
+                      <span class="chip on">✓ 加工</span>
+                      <span class="chip on">✓ 販売・受付</span>
+                      <span class="chip">フィッティング</span>
+                      <span class="chip">コンタクトの相談</span>
+                      <span class="chip">修理・部品交換</span>
+                    </div>
+                    <p class="small muted" style="margin:14px 2px 0">✓ の技能が要る目的だけご案内します。</p>
+
+                    <div class="groupname">勤務時間</div>
+                    <div class="wk">
+                      <div><b>月</b><span>10:00–19:00</span></div>
+                      <div class="off"><b>火</b><span>定休日</span></div>
+                      <div><b>水</b><span>10:00–19:00</span></div>
+                      <div><b>木</b><span>10:00–19:00</span></div>
+                      <div class="off"><b>金</b><span>お休み</span></div>
+                      <div><b>土</b><span>10:00–19:00</span></div>
+                      <div><b>日</b><span>12:00–19:00</span></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+</body>
+</html>

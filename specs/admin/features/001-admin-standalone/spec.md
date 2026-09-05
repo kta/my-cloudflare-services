@@ -2,7 +2,7 @@
 
 - ステータス: Superseded（`002-glasses-management-domain-integration` により置換）
 
-> 履歴保存用。EYEX予約の新サービス追加とメール送信の採用により、admin単独運用という
+> 履歴保存用。EYE予約の新サービス追加とメール送信の採用により、admin単独運用という
 > 前提は失効した。以降の実装・運用の正本は後継仕様を参照する。
 
 ## 1. WHAT / WHY

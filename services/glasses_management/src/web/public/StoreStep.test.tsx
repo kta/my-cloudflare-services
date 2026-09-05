@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { StoreStep } from './StoreStep'
 
 /*
- * 工程 1「店舗を選ぶ」（承認済みモック docs/frontend/mockups/eyex/images/WEB-01-STORE.png）。
+ * 工程 1「店舗を選ぶ」（承認済みモック docs/frontend/mockups/eye/images/WEB-01-STORE.png）。
  *
  * 実測（screens/WEB-01-STORE.html の <style>）:
  *   店舗の並び 間 12px・上 28px、1 件は最小高 76px・padding 16px・角 12px・縁 1px --line-strong
@@ -17,9 +17,9 @@ import { StoreStep } from './StoreStep'
  */
 
 const STORES: PublicStoreSummary[] = [
-  { slug: 'ginza', name: 'EYEX 銀座店', accessNote: '銀座駅 A2出口から徒歩3分' },
-  { slug: 'marunouchi', name: 'EYEX 丸の内店', accessNote: '東京駅 丸の内南口から徒歩5分' },
-  { slug: 'shinjuku', name: 'EYEX 新宿店', accessNote: '新宿駅 東口から徒歩4分' },
+  { slug: 'ginza', name: 'EYE 銀座店', accessNote: '銀座駅 A2出口から徒歩3分' },
+  { slug: 'marunouchi', name: 'EYE 丸の内店', accessNote: '東京駅 丸の内南口から徒歩5分' },
+  { slug: 'shinjuku', name: 'EYE 新宿店', accessNote: '新宿駅 東口から徒歩4分' },
 ]
 
 describe('店舗を選ぶ', () => {
@@ -47,22 +47,22 @@ describe('店舗を選ぶ', () => {
     ])
     expect(screen.queryByText('選択中')).toBeNull()
 
-    await userEvent.click(screen.getByRole('radio', { name: /EYEX 丸の内店/ }))
+    await userEvent.click(screen.getByRole('radio', { name: /EYE 丸の内店/ }))
     expect(onSelect).toHaveBeenCalledWith(STORES[1])
 
     rerender(
       <StoreStep stores={STORES} selectedSlug="marunouchi" onSelect={onSelect} onNext={vi.fn()} />,
     )
     expect(screen.getAllByText('選択中')).toHaveLength(1)
-    expect(screen.getByRole('radio', { name: /EYEX 丸の内店/ })).toBeChecked()
+    expect(screen.getByRole('radio', { name: /EYE 丸の内店/ })).toBeChecked()
   })
 
   it('slug 付きの URL で開くとその店舗が選ばれている', () => {
     // 器（PublicBookingApp）は `/w/ginza` の slug をそのまま `selectedSlug` に渡す。
     render(<StoreStep stores={STORES} selectedSlug="ginza" onSelect={vi.fn()} onNext={vi.fn()} />)
 
-    expect(screen.getByRole('radio', { name: /EYEX 銀座店/ })).toBeChecked()
-    expect(screen.getByRole('radio', { name: /EYEX 新宿店/ })).not.toBeChecked()
+    expect(screen.getByRole('radio', { name: /EYE 銀座店/ })).toBeChecked()
+    expect(screen.getByRole('radio', { name: /EYE 新宿店/ })).not.toBeChecked()
   })
 
   it('主操作は「銀座店で予約を進める」で、選ばれた店名がそのまま入る', async () => {

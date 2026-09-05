@@ -14,7 +14,7 @@ import {
 } from './sections'
 
 /*
- * スタッフと技能（承認済みモック docs/frontend/mockups/eyex/images/SETTINGS-STAFF.png）。
+ * スタッフと技能（承認済みモック docs/frontend/mockups/eye/images/SETTINGS-STAFF.png）。
  *
  * 実測: .staff = 250px + 1fr / gap 30px。一覧の行は名前 16px 600 ＋ 技能 13px
  * （margin-top 2px）、選択中は左端に 4px の緑（inset 4px 0 0）＋ padding-left 14px。

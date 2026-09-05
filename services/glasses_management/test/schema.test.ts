@@ -1086,7 +1086,7 @@ describe('web_booking_settings', () => {
         'created_at',
       ]),
     )
-    // 「ご案内のページ eyex.jp/ginza」はこの表に持たない（stores.slug から組み立てる）。
+    // 「ご案内のページ eye.jp/ginza」はこの表に持たない（stores.slug から組み立てる）。
     expect(names).not.toContain('landing_path')
     // 真偽値は text の '0' | '1'。受け付ける時間は 'HH:MM' の text。
     for (const name of ['is_published', 'requires_approval', 'opens_at', 'closes_at']) {

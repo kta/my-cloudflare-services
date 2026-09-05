@@ -26,7 +26,7 @@ const terminal = (id: string, name: string, online = true): Terminal => ({
   name,
   kind: 'shared',
   placeNote: 'レジの右側',
-  deviceLabel: 'EYEX-iPad-07',
+  deviceLabel: 'EYE-iPad-07',
   autoLockSeconds: 120,
   isActive: true,
   hasPin: true,

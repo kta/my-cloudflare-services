@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { UploadFailedPanel } from './UploadFailedPanel'
 
 /*
- * 録音の保存に失敗した面（承認済みモック docs/frontend/mockups/eyex/images/EX-UPLOAD-FAILED.png）。
+ * 録音の保存に失敗した面（承認済みモック docs/frontend/mockups/eye/images/EX-UPLOAD-FAILED.png）。
  *
  * この面の仕事は「失われていないものを先に言う」こと。成功が上、失敗が下、次の一手が最後。
  *

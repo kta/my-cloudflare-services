@@ -21,7 +21,7 @@ import { LoadFailed } from '../shell/LoadFailed'
 
 /*
  * 受付履歴の一覧・詳細・0 件（承認済みモック
- * docs/frontend/mockups/eyex/images/HISTORY-LIST.png と HISTORY-EMPTY.png）。
+ * docs/frontend/mockups/eye/images/HISTORY-LIST.png と HISTORY-EMPTY.png）。
  *
  * 題材: 店長がお客様からのお問い合わせに、その場で「いつ誰が受け、そのあと何が変わったか」を
  *   答える面と、絞りすぎて 0 件になった店長を条件 1 つで元の道へ戻す面。
@@ -30,7 +30,7 @@ import { LoadFailed } from '../shell/LoadFailed'
  * シグネチャ: **左 288px の細い一覧と、右の「そのあとの変更」の時系列**／
  *   **候補の右に件数が先に出ていて、押す前に何件見つかるか分かること。**
  *
- * 実測（screens/HISTORY-LIST.html / HISTORY-EMPTY.html の <style> と assets/eyex.css）:
+ * 実測（screens/HISTORY-LIST.html / HISTORY-EMPTY.html の <style> と assets/eye.css）:
  *   `.toolbar` 56px。`.fbtn` min-height 40px / padding 0 12px / 角 8px（rounded-ctl）/
  *   13px・600（値は 400 の --ink-2。選択中は枠 2px --brand ＋ 地 --brand-tint）。
  *   「お客様名で探す」 min-height 40px / padding 0 14px。**触れるものは 44pt へ上げる。**

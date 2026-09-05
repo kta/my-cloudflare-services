@@ -32,6 +32,8 @@ import { PersonalMode } from './mode/PersonalMode'
 import { type HistoryFilters, ReceptionHistory } from './reception/ReceptionHistory'
 import { ReceptionScreen } from './reception/ReceptionScreen'
 import { SettingsScreen } from './settings/SettingsScreen'
+import { type SetupCounts, SetupProgress } from './setup/SetupProgress'
+import { SetupScreen } from './setup/SetupScreen'
 import { AppShell } from './shell/AppShell'
 import { DESTINATIONS, RAIL_BY_DEFAULT } from './shell/destinations'
 import { openStateLabel } from './shell/hours'
@@ -41,11 +43,11 @@ import { useIdle } from './shell/useIdle'
 import { DeviceMode } from './start/DeviceMode'
 
 /*
- * P0（基盤）の画面。承認済みモック docs/frontend/mockups/eyex/images/HOME.png の
+ * P0（基盤）の画面。承認済みモック docs/frontend/mockups/eye/images/HOME.png の
  * 骨格 —— 上のバー・左サイドバー・主操作 2 つ・下辺の日付の帯 —— をここで確立し、
  * 以降のフェーズがこの器の中に画面を足していく。
  *
- * 引き算の決め（mockups/eyex/README.md）: 主役は 1 画面に 1 つ、白い箱は 3 枚まで、
+ * 引き算の決め（mockups/eye/README.md）: 主役は 1 画面に 1 つ、白い箱は 3 枚まで、
  * 説明文は 2 つまで。空いた場所を埋めるために要素を足さない。
  */
 
@@ -77,8 +79,8 @@ function StartWork({ onStarted }: { onStarted: (org: string) => void }) {
     /*
      * **入口でコードを畳んでから送る。**
      * dev グラントは知らない組織にもトークンを出したうえで `organizations` に行を作るので、
-     * `EYEX` のまま送ると「EYEX」という空の組織が生まれ、店舗 0 件で
-     * 「このコードのお店が見つかりませんでした。」が出る —— seed 済みの `eyex` は無事なのに。
+     * `EYE` のまま送ると「EYE」という空の組織が生まれ、店舗 0 件で
+     * 「このコードのお店が見つかりませんでした。」が出る —— seed 済みの `eye` は無事なのに。
      * 打ち間違いが組織として永続化するのも同じ経路なので、送る前にここで揃える。
      */
     const code = orgId.trim().toLowerCase()
@@ -98,23 +100,13 @@ function StartWork({ onStarted }: { onStarted: (org: string) => void }) {
        * 同期がまだ届いていない（503）のは「コードが違う」とは別なので、そのまま通す
        * —— その先の面が「お店の情報がまだ届いていません」を出す。
        */
-      const res = await auth.authFetch('/api/staff/stores')
-      if (res.ok) {
-        const rows: Store[] = await res.json()
-        if (rows.length === 0) {
-          /*
-           * **持たせたトークンをここで捨てる。**残したまま断ると、その場では
-           * 入口に留まるのに、次に読み込み直したときは「もう業務が始まっている」
-           * と見なされて業務画面へ入れてしまう（実装不足の洗い出し foundation-04）。
-           * 断った以上、この端末はまだ何も始めていない状態へ戻す。
-           */
-          auth.logout()
-          setError(
-            'このコードのお店が見つかりませんでした。お店のコードをお確かめのうえ、もう一度お試しください。',
-          )
-          return
-        }
-      }
+      /*
+       * 0 件は「コードが違う」と「まだ 1 店舗も登録していない新しい会社」の両方でありうる。
+       * ここで止めると新しい会社は永久に入れないので、通したうえでトップに
+       * 「最初のお店を登録する」を出す（014-store-provisioning / AC-PROV-01）。
+       * 登録できるのは会社の管理者だけで、その判定はサーバが持つ。
+       */
+      await auth.authFetch('/api/staff/stores')
       onStarted(code)
     } catch {
       setError('業務を始められませんでした。コードを確かめて、もう一度お試しください。')
@@ -127,7 +119,7 @@ function StartWork({ onStarted }: { onStarted: (org: string) => void }) {
     <main className="grid min-h-dvh place-items-center bg-paper px-6">
       <form onSubmit={onSubmit} className="flex w-full max-w-md flex-col gap-6">
         <div>
-          <h1 className="text-title font-bold text-ink">EYEX予約</h1>
+          <h1 className="text-title font-bold text-ink">EYE予約</h1>
           <p className="mt-1 text-grid text-ink-muted">業務を始めます。</p>
         </div>
         <Field label="お店のコード" htmlFor="org" error={error}>
@@ -135,7 +127,7 @@ function StartWork({ onStarted }: { onStarted: (org: string) => void }) {
             id="org"
             value={orgId}
             onChange={(e) => setOrgId(e.target.value)}
-            placeholder="例: eyex"
+            placeholder="例: eye"
             autoFocus
           />
         </Field>
@@ -163,6 +155,14 @@ function Workspace({
   // 個人トップの 1 行から来たとき、台帳のその帯の詳細を開いた状態で出す。
   const [openReservation, setOpenReservation] = useState<string | null>(null)
   const [stores, setStores] = useState<Store[] | null>(null)
+  /** お店を登録する面を開いているか。0 件の会社はここが唯一の出口になる。 */
+  const [addingStore, setAddingStore] = useState(false)
+  /**
+   * はじめの設定の進み具合。**業務の読み込みに相乗りしない** —— そちらは端末が
+   * 0 件のときに早期 return するので、店員がいるお店でも「店員 0」という嘘になる。
+   * 分かるまでは null のままにし、分からない数を 0 と言わない。
+   */
+  const [setupCounts, setSetupCounts] = useState<SetupCounts | null>(null)
   /**
    * いま見ているお店。トップの「◯◯へ切り替える」で変える。
    * `null` の間は既定（`isActive` の 1 店目）を見る。
@@ -346,8 +346,8 @@ function Workspace({
       const detail = (event as CustomEvent<{ subject?: unknown }>).detail
       if (typeof detail?.subject === 'string') setPersonalModeSubject(detail.subject)
     }
-    window.addEventListener('eyex:personal-mode-required', required)
-    return () => window.removeEventListener('eyex:personal-mode-required', required)
+    window.addEventListener('eye:personal-mode-required', required)
+    return () => window.removeEventListener('eye:personal-mode-required', required)
   }, [])
 
   // 共有端末では、前のお客様の入力をブラウザ候補へ残さない。後から開いた面も監視する。
@@ -370,8 +370,8 @@ function Workspace({
       storeTerminalSession(session.terminalId, session.sessionToken)
       setTerminalSession(session)
     }
-    window.addEventListener('eyex:terminal-session', elevated)
-    return () => window.removeEventListener('eyex:terminal-session', elevated)
+    window.addEventListener('eye:terminal-session', elevated)
+    return () => window.removeEventListener('eye:terminal-session', elevated)
   }, [])
 
   useEffect(() => {
@@ -382,10 +382,10 @@ function Workspace({
       if (sessionStorage.getItem(TERMINAL_ID_KEY) !== terminal.id) return
       setSelectedTerminal(terminal)
       setTerminalMode(terminal.kind)
-      localStorage.setItem(`eyex.terminal-mode.${org}`, terminal.kind)
+      localStorage.setItem(`eye.terminal-mode.${org}`, terminal.kind)
     }
-    window.addEventListener('eyex:terminal-updated', updated)
-    return () => window.removeEventListener('eyex:terminal-updated', updated)
+    window.addEventListener('eye:terminal-updated', updated)
+    return () => window.removeEventListener('eye:terminal-updated', updated)
   }, [org])
 
   function navigate(key: string, reservationId: string | null = null, walkin = false) {
@@ -441,6 +441,51 @@ function Workspace({
 
   const store =
     stores?.find((s) => s.id === selectedStoreId) ?? stores?.find((s) => s.isActive) ?? stores?.[0]
+
+  /*
+   * はじめの設定の数を、選んでいるお店ごとに読む。足りないものがある間しか使わない
+   * ので、揃った会社では 1 度読んで消えるだけである。読めなければ案内は出さない
+   * （数が分からないことを 0 と言わない）。
+   */
+  const storeIdForCounts = store?.id ?? null
+  useEffect(() => {
+    if (storeIdForCounts === null || stores === null) {
+      setSetupCounts(null)
+      return
+    }
+    let cancelled = false
+    void (async () => {
+      try {
+        const [staffRes, terminalRes, purposeRes] = await Promise.all([
+          auth.authFetch(`/api/staff/stores/${storeIdForCounts}/staff`),
+          auth.authFetch(`/api/staff/terminals?storeId=${storeIdForCounts}`),
+          auth.authFetch(`/api/staff/purposes?storeId=${storeIdForCounts}`),
+        ])
+        if (cancelled) return
+        if (!staffRes.ok || !terminalRes.ok || !purposeRes.ok) {
+          setSetupCounts(null)
+          return
+        }
+        const [staffRows, terminalRows, purposeRows] = (await Promise.all([
+          staffRes.json(),
+          terminalRes.json(),
+          purposeRes.json(),
+        ])) as [unknown[], unknown[], unknown[]]
+        if (cancelled) return
+        setSetupCounts({
+          stores: stores.length,
+          staff: staffRows.length,
+          terminals: terminalRows.length,
+          purposes: purposeRows.length,
+        })
+      } catch {
+        if (!cancelled) setSetupCounts(null)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [storeIdForCounts, stores])
 
   useEffect(() => {
     if (!store) return
@@ -502,7 +547,7 @@ function Workspace({
             setStartPhase('ready')
             return
           }
-          const saved = localStorage.getItem(`eyex.terminal-mode.${org}`)
+          const saved = localStorage.getItem(`eye.terminal-mode.${org}`)
           if (saved === 'personal' || saved === 'shared') {
             setTerminalMode(saved)
             setStartPhase(saved === 'personal' ? 'staff' : 'place')
@@ -585,12 +630,12 @@ function Workspace({
       <DeviceMode
         deviceLabel={terminals[0]?.deviceLabel || 'この iPad'}
         onPersonal={() => {
-          localStorage.setItem(`eyex.terminal-mode.${org}`, 'personal')
+          localStorage.setItem(`eye.terminal-mode.${org}`, 'personal')
           setTerminalMode('personal')
           setStartPhase('staff')
         }}
         onShared={() => {
-          localStorage.setItem(`eyex.terminal-mode.${org}`, 'shared')
+          localStorage.setItem(`eye.terminal-mode.${org}`, 'shared')
           setTerminalMode('shared')
           setStartPhase('place')
         }}
@@ -610,7 +655,7 @@ function Workspace({
           setStartPhase('pin')
         }}
         onShared={() => {
-          localStorage.setItem(`eyex.terminal-mode.${org}`, 'shared')
+          localStorage.setItem(`eye.terminal-mode.${org}`, 'shared')
           setTerminalMode('shared')
           setStartPhase('place')
         }}
@@ -735,6 +780,33 @@ function Workspace({
     )
   }
 
+  /*
+   * お店が 1 つも無い会社は、業務の器の手前に「はじめの設定」を立てる。
+   * 行き先（台帳・受付・分析）はどれもお店が無いと開けないので、押しても何も
+   * 起きない柱を並べない（014-store-provisioning）。読み込み中は立てない。
+   */
+  if (addingStore || (stores !== null && stores.length === 0)) {
+    return (
+      <SetupScreen
+        organizationId={org}
+        existingCount={stores?.length ?? 0}
+        send={(input) =>
+          auth.authFetch('/api/staff/stores', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(input),
+          })
+        }
+        onCreated={(created) => {
+          setAddingStore(false)
+          setSelectedStoreId(created.id)
+          void load()
+        }}
+        onCancel={stores !== null && stores.length > 0 ? () => setAddingStore(false) : undefined}
+      />
+    )
+  }
+
   return (
     <AppShell
       // 店舗が分からないときに屋号を作らない。利用者が入れたコードをそのまま出す。
@@ -828,6 +900,9 @@ function Workspace({
               }}
               onStartBooking={() => startBooking()}
               onOpenSearch={() => navigate('search')}
+              onAddStore={() => setAddingStore(true)}
+              setupCounts={setupCounts}
+              onOpenSettings={() => navigate('settings')}
             />
           ) : current === 'ledger' ? (
             store ? (
@@ -970,6 +1045,9 @@ function Home({
   onPickDate,
   onStartBooking,
   onOpenSearch,
+  onAddStore,
+  setupCounts,
+  onOpenSettings,
 }: {
   stores: Store[] | null
   /** ほかのお店へ切り替える。**押して何も起きないチップを置かない。** */
@@ -993,12 +1071,23 @@ function Home({
   onStartBooking: () => void
   /** 予約を探す・直す面（CHANGE-SEARCH）へ移る。 */
   onOpenSearch: () => void
+  /** お店を登録する面を開く。 */
+  onAddStore: () => void
+  /** はじめの設定の進み具合。分かるまでは null。 */
+  setupCounts: SetupCounts | null
+  /** 設定の面へ移る（店員・端末の登録はそこにある）。 */
+  onOpenSettings: () => void
 }) {
   const others = stores?.filter((s) => s.id !== currentStoreId) ?? []
   return (
     <div className="relative h-full">
       <div className="grid h-full grid-flow-col content-center justify-start gap-12 pb-31 pl-11">
         <div className="grid content-center gap-6">
+          <SetupProgress
+            counts={setupCounts}
+            onOpenSettings={onOpenSettings}
+            onOpenTerminals={onOpenSettings}
+          />
           <PrimaryAction
             title="新しい予約を取る"
             note="お電話・ご来店のお客様"
@@ -1014,16 +1103,29 @@ function Home({
             onPress={onOpenSearch}
           />
           {/*
-            お店の切り替えは**上のバーの店名**が持つ（UX 監査 foundation-09）。
-            ここにチップを並べていたころ、切り替えはトップからしかできず、
-            しかもモックに無いその 2 つのぶん主操作 2 枚が 50px ほど上に寄っていた。
-            お店が 1 つも届いていないときだけ、その事実をここで言う。
+            お店の**切り替え**は上のバーの店名が持つ（UX 監査 foundation-09）。
+            ここにチップを並べていたころ、切り替えはトップからしかできず、台帳を
+            見ている最中はいちど戻る必要があった。しかもモックに無いその 2 つのぶん、
+            主操作 2 枚が 50px ほど上に寄っていた。
+            **「お店を追加する」はここに残す** —— 切り替えとは別の操作で、
+            毎日押すものではないから主操作 2 つと同じ強さにしない（014-store-provisioning）。
           */}
-          {stores === null ? (
-            <p className="mt-2 text-grid text-ink-muted">読み込んでいます…</p>
-          ) : stores.length === 0 ? (
-            <p className="mt-2 text-grid text-ink-muted">お店がまだ登録されていません。</p>
-          ) : null}
+          <section aria-label="ほかのお店" className="mt-2">
+            {stores === null ? (
+              <p className="text-grid text-ink-muted">読み込んでいます…</p>
+            ) : stores.length === 0 ? (
+              // 0 件の会社はそもそもこの面に来ない（SetupScreen が先に立つ）。
+              <p className="text-grid text-ink-muted">お店がまだ登録されていません。</p>
+            ) : (
+              <button
+                type="button"
+                onClick={onAddStore}
+                className={`min-h-11 rounded-full border border-line-strong bg-surface px-4 text-note font-semibold text-ink-muted ${focusRing}`}
+              >
+                お店を追加する
+              </button>
+            )}
+          </section>
         </div>
         {currentStoreId !== undefined && (
           <MyReservations

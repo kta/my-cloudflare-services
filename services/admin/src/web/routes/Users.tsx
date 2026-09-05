@@ -2,17 +2,19 @@ import {
   type AdminUserView,
   STANDARD_ROLE_PERMISSIONS,
   type StandardRole,
+  type Store,
   StoreMembershipSyncFailed,
 } from '@app/contracts'
 import { Button, Chip, Dialog, Field, Select, Textarea, TextInput } from '@app/ui'
 import { useEffect, useState } from 'react'
+import { currentClaims } from '../auth/session'
 import { ApiError, client, unwrap } from '../client'
 import { EmptyState, PageHeader, Section, Spinner } from '../components/ui'
 import { messageForError } from '../lib/errorMessages'
 import { toast } from '../store/toast'
 
 /**
- * 利用者・標準ロール・担当店舗の管理(UC-EYEX-149)。
+ * 利用者・標準ロール・担当店舗の管理(UC-EYE-149)。
  *
  * 一覧・検索・権限差分の提示と、標準ロール/担当店舗の変更、PIN 再設定の開始。
  * 組織はサーバが JWT から決めるので、画面から組織 ID を送ることはない。
@@ -244,11 +246,47 @@ function AssignmentDialog({
   onSave: (update: { standardRole: StandardRole; storeIds: string[] }) => Promise<void>
 }) {
   const [role, setRole] = useState<StandardRole>(user.standardRole)
-  const [stores, setStores] = useState(user.assignments.map((a) => a.storeId).join('\n'))
-  const storeIds = stores
-    .split('\n')
-    .map((s) => s.trim())
-    .filter(Boolean)
+  /*
+   * 担当店舗は会社のお店の一覧から選ぶ（014-store-provisioning）。
+   * 以前は店舗 id を手で打たせていて、打ち間違いに誰も気づけなかった。
+   * 一覧を引けなくても権限の変更まで止めない — いまの担当をそのまま送る。
+   */
+  const [storeIds, setStoreIds] = useState<string[]>(user.assignments.map((a) => a.storeId))
+  const [stores, setStores] = useState<Store[] | null>(null)
+  const [storesError, setStoresError] = useState(false)
+
+  useEffect(() => {
+    const organizationId = currentClaims()?.org
+    if (!organizationId) {
+      setStoresError(true)
+      return
+    }
+    let cancelled = false
+    void (async () => {
+      try {
+        const response = await client.api.organizations[':id'].stores.$get({
+          param: { id: organizationId },
+        })
+        if (cancelled) return
+        if (!response.ok) {
+          setStoresError(true)
+          return
+        }
+        setStores((await response.json()) as Store[])
+      } catch {
+        if (!cancelled) setStoresError(true)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  function toggleStore(id: string): void {
+    setStoreIds((current) =>
+      current.includes(id) ? current.filter((value) => value !== id) : [...current, id],
+    )
+  }
 
   return (
     <Dialog open onClose={onClose} labelledBy="assign-title">
@@ -275,14 +313,35 @@ function AssignmentDialog({
         <p className="font-sans text-xs text-ink-muted">
           標準権限: {STANDARD_ROLE_PERMISSIONS[role].join(' ')}
         </p>
-        <Field label="担当店舗 ID(改行区切り)" htmlFor="assign-stores">
-          <Textarea
-            id="assign-stores"
-            rows={4}
-            value={stores}
-            onChange={(e) => setStores(e.target.value)}
-          />
-        </Field>
+        <fieldset className="flex flex-col gap-2">
+          <legend className="font-sans text-sm font-medium text-ink">担当店舗</legend>
+          {storesError ? (
+            <p className="font-sans text-sm text-ink-muted">
+              お店の一覧を読み込めませんでした。担当店舗はそのままにします。
+            </p>
+          ) : stores === null ? (
+            <p className="font-sans text-sm text-ink-muted">読み込んでいます…</p>
+          ) : stores.length === 0 ? (
+            <p className="font-sans text-sm text-ink-muted">
+              この会社にはまだお店がありません。先にお店を登録してください。
+            </p>
+          ) : (
+            <ul className="flex flex-col gap-1">
+              {stores.map((store) => (
+                <li key={store.id}>
+                  <label className="flex items-center gap-2 font-sans text-sm text-ink">
+                    <input
+                      type="checkbox"
+                      checked={storeIds.includes(store.id)}
+                      onChange={() => toggleStore(store.id)}
+                    />
+                    {store.name}
+                  </label>
+                </li>
+              ))}
+            </ul>
+          )}
+        </fieldset>
       </div>
       <div className="mt-6 flex justify-end gap-2">
         <Button variant="ghost" onClick={onClose}>

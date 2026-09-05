@@ -39,7 +39,7 @@ async function terminalTenant() {
       '銀座店 レジ横iPad',
       'shared',
       'レジの右側',
-      'EYEX-iPad-07',
+      'EYE-iPad-07',
       pinHash,
       120,
       FIXED_NOW,

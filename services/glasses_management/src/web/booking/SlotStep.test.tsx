@@ -14,10 +14,10 @@ import { type SlotChoice, SlotStep, type SlotStepProps } from './SlotStep'
 import { nextButtonLabel, type StepGuard } from './steps'
 
 /*
- * 工程 3「担当と場所」（承認済みモック docs/frontend/mockups/eyex/images/BOOK-03-SLOT-STAFF.png /
+ * 工程 3「担当と場所」（承認済みモック docs/frontend/mockups/eye/images/BOOK-03-SLOT-STAFF.png /
  * BOOK-03b-SLOT-RESOURCE.png / BOOK-03c-DRAG.png）。
  *
- * 実測（screens/BOOK-03*.html の <style> と assets/eyex.css）:
+ * 実測（screens/BOOK-03*.html の <style> と assets/eye.css）:
  *   .split  = 1fr / 330px（相談欄）。.side = padding 28px 24px・左に 1px の罫
  *   .tt-grid = 名前列 170px ＋ 30分刻み 1fr。.tt-head 34px / .tt-name 64px / .tt-cell 64px
  *   .appt   = min-height 54px・角 8px。.clash は 3px の --alert 罫、.placing は 3px の --brand 罫

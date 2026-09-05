@@ -1,10 +1,10 @@
 import { cn } from '@app/ui'
 
 /*
- * 受付中の録音の印（承認済みモック docs/frontend/mockups/eyex）。**録音の状態を出す
+ * 受付中の録音の印（承認済みモック docs/frontend/mockups/eye）。**録音の状態を出す
  * 唯一の部品**で、帯の中（工程 1〜4）と面の右下（工程 5・受付・変更）の 2 形を持つ。
  *
- * 実測（assets/eyex.css と screens/*.html）:
+ * 実測（assets/eye.css と screens/*.html）:
  *   `.rec`（BOOK-01-DATETIME）      = 最小高 48px・左右 14px・間 10px・角 pill・
  *                                    1px `--alert` の罫・地 `--alert-tint`・600 14px・
  *                                    点 12px・棒 6 本（幅 3px / 枠の高さ 20px）・

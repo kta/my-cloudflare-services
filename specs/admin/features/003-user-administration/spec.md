@@ -3,8 +3,8 @@
 - サービス: `admin`
 - ステータス: Approved
 
-<!-- EYEX ドメインを 0 から作り直すにあたり、旧 spec
-     `specs/glasses_management/features/002-eyex-reservation-product` を削除した。
+<!-- EYE ドメインを 0 から作り直すにあたり、旧 spec
+     `specs/glasses_management/features/002-eye-reservation-product` を削除した。
      そこで定義していた 2 件は admin が所有する業務なので、ここへ移した。
      E2E は `services/admin/e2e/user-administration.spec.ts` にある。 -->
 

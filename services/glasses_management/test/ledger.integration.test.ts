@@ -416,7 +416,7 @@ describe('GET /api/staff/ledger', () => {
   })
 
   it('同じ組織の別店舗の予約は 1 件も混ざらない', async () => {
-    const other = await insertStore(fx.org, 'EYEX 丸の内店')
+    const other = await insertStore(fx.org, 'EYE 丸の内店')
     await insertBusinessHours(fx.org, other)
     await insertSlotRules(fx.org, other)
     await insertReservation(fx.org, {
@@ -687,7 +687,7 @@ describe('GET /api/staff/availability', () => {
   })
 
   it('予約の間隔がまだ決まっていない店舗は 404 で落ちる（暗黙の既定値を作らない）', async () => {
-    const bare = await insertStore(fx.org, 'EYEX 新宿店')
+    const bare = await insertStore(fx.org, 'EYE 新宿店')
     await insertBusinessHours(fx.org, bare)
     const { status } = await availability(`storeId=${bare}&date=${LEDGER_DATE}`)
     expect(status).toBe(404)

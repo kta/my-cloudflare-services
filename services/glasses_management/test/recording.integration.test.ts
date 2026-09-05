@@ -1174,7 +1174,7 @@ describe('保全と削除', () => {
         tenant.storeId,
         '銀座店 レジ横iPad',
         'レジの右側',
-        'EYEX-iPad-07',
+        'EYE-iPad-07',
         'hmac$test',
         FIXED_NOW,
         FIXED_NOW,

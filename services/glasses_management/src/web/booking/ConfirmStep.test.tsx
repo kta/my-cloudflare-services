@@ -6,11 +6,11 @@ import { ConfirmAction, ConfirmStep } from './ConfirmStep'
 import { DoneStep } from './DoneStep'
 
 /*
- * 工程 5 ご確認（承認済みモック docs/frontend/mockups/eyex/images/BOOK-05-CONFIRM.png）。
+ * 工程 5 ご確認（承認済みモック docs/frontend/mockups/eye/images/BOOK-05-CONFIRM.png）。
  *
  * この面の仕事は「声に出す文をそのまま大きく置き、言い直しがあった箇所だけへ戻す」こと。
  *
- * 実測値（screens/BOOK-05-CONFIRM.html と assets/eyex.css）:
+ * 実測値（screens/BOOK-05-CONFIRM.html と assets/eye.css）:
  *   本文 1fr ／ 右の柱 372px。復唱の箱は内側 30px 32px・上に 24px、文 24px / 行間 2。
  *   戻り口は 4 列・間 12px・文字 15px。確定は `.btn.primary.big`（最小高 56px）。
  *   録音は右下 20/20 の白カード（2px の `--color-danger` 罫）に移る。
@@ -35,7 +35,7 @@ function open(
   return render(
     <>
       <ConfirmStep
-        storeName="EYEX 銀座店"
+        storeName="EYE 銀座店"
         startsAt={STARTS_AT}
         endsAt={ENDS_AT}
         durationMinutes={60}
@@ -67,7 +67,7 @@ describe('復唱', () => {
     open()
     const said = recitation().textContent ?? ''
     expect(said).toContain('8月27日、木曜日の午前11時')
-    expect(said).toContain('EYEX 銀座店')
+    expect(said).toContain('EYE 銀座店')
     expect(said).toContain('所要時間は約60分です。')
     expect(said).toContain('田中 花子様')
     expect(said).toContain('お電話番号は090-1234-5678で')
@@ -113,7 +113,7 @@ describe('復唱', () => {
     function at(now: string) {
       return (
         <ConfirmStep
-          storeName="EYEX 銀座店"
+          storeName="EYE 銀座店"
           startsAt={STARTS_AT}
           endsAt={ENDS_AT}
           durationMinutes={60}
@@ -186,7 +186,7 @@ function Booking({ onCall = () => {} }: { onCall?: (key: string) => void }) {
   return (
     <>
       <ConfirmStep
-        storeName="EYEX 銀座店"
+        storeName="EYE 銀座店"
         startsAt={STARTS_AT}
         endsAt={ENDS_AT}
         durationMinutes={60}
@@ -261,7 +261,7 @@ describe('工程 5 の状態', () => {
     rerender(
       <>
         <ConfirmStep
-          storeName="EYEX 銀座店"
+          storeName="EYE 銀座店"
           startsAt={STARTS_AT}
           endsAt={ENDS_AT}
           durationMinutes={60}

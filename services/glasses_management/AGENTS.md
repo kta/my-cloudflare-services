@@ -1,10 +1,10 @@
-# services/glasses_management — EYEX予約
+# services/glasses_management — EYE予約
 
 ルート [`AGENTS.md`](../../AGENTS.md) の規約に加えて、このサービスで作業するときはこれを守る。
 
 ## このサービスが持っているもの
 
-眼鏡店チェーン **EYEX** の予約・来店受付・顧客・録音・設定・分析と、お客様向け Web 予約。
+眼鏡店チェーン **EYE** の予約・来店受付・顧客・録音・設定・分析と、お客様向け Web 予約。
 1 Worker が **業務 SPA（iPad 横向き）+ お客様向け Web 予約（スマートフォン）+ API** を同一オリジンで配る。
 
 | 種別 | binding | 実体 |
@@ -22,7 +22,7 @@ admin からは service binding で `POST /api/internal/organizations/sync` と
 
 | 何を決めるとき | 読むもの |
 |---|---|
-| 見た目 | `docs/frontend/mockups/eyex/`（68画面の HTML と PNG）。**PNG を実際に見てから書く** |
+| 見た目 | `docs/frontend/mockups/eye/`（68画面の HTML と PNG）。**PNG を実際に見てから書く** |
 | 色・寸法 | `packages/ui/src/theme.css` のセマンティックトークンだけ。モックの生 hex を貼らない |
 | 業務要件 | `specs/glasses_management/design/01-requirements.md` |
 | 状態遷移 | `design/02-domain-model.md` |

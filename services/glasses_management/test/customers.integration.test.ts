@@ -388,8 +388,8 @@ describe('詳細', () => {
 
   beforeAll(async () => {
     token = await tokenFor(org)
-    ginza = await insertStore(org, 'EYEX 銀座店')
-    marunouchi = await insertStore(org, 'EYEX 丸の内店')
+    ginza = await insertStore(org, 'EYE 銀座店')
+    marunouchi = await insertStore(org, 'EYE 丸の内店')
     hanako = await insertCustomer(org, {
       name: '田中 花子',
       kana: 'たなか はなこ',
@@ -1260,8 +1260,8 @@ describe('手書き 1 枚に添うもの', () => {
 
   beforeAll(async () => {
     token = await tokenFor(org)
-    ginza = await insertStore(org, 'EYEX 銀座店')
-    marunouchi = await insertStore(org, 'EYEX 丸の内店')
+    ginza = await insertStore(org, 'EYE 銀座店')
+    marunouchi = await insertStore(org, 'EYE 丸の内店')
     customerId = await insertCustomer(org, { name: '手書き 添子', kana: 'てがき そえこ' })
     // 記入者は「この端末に入っている人」に結び付いた staff 行から引く。
     await env.DB.prepare(

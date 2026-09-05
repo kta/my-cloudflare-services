@@ -6,7 +6,7 @@ import { SettingsScreen } from './SettingsScreen'
 
 /*
  * 営業日（SETTINGS-CALENDAR）。承認済みモック
- * docs/frontend/mockups/eyex/images/SETTINGS-CALENDAR.png と同じ盤面
+ * docs/frontend/mockups/eye/images/SETTINGS-CALENDAR.png と同じ盤面
  * —— 2026年8月・9月の 2 か月、毎週火曜の定休、9月30日の臨時のお休み、
  * 8月27日の本日 —— を出せることを固定する。
  *
@@ -21,15 +21,15 @@ const NOW = '2026-08-27T02:00:00.000Z'
 
 const store = {
   id: STORE_ID,
-  organizationId: 'eyex',
-  name: 'EYEX 銀座店',
+  organizationId: 'eye',
+  name: 'EYE 銀座店',
   slug: 'ginza',
   phone: '03-1234-5678',
   address: '東京都中央区銀座1-1-1',
   accessNote: '',
   isActive: true,
   createdAt: '2026-08-01T00:00:00.000Z',
-  namePublic: 'EYEX 銀座店',
+  namePublic: 'EYE 銀座店',
   nearestStation: '銀座駅',
   parkingNote: null,
   introText: null,

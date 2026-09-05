@@ -238,7 +238,7 @@ describe('Orgs', () => {
     await user.click(screen.getByRole('button', { name: '作成する' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      '組織は作成済みです。EYEXへの同期を再試行してください。',
+      '組織は作成済みです。EYEへの同期を再試行してください。',
     )
     expect(screen.getByLabelText('組織名')).toHaveValue('')
     expect(await screen.findByText('Northwind')).toBeVisible()
@@ -247,7 +247,7 @@ describe('Orgs', () => {
 
     expect(api.syncOrganization).toHaveBeenCalledWith({ param: { id: 'org-1' } })
     expect(toast.list()).toContainEqual(
-      expect.objectContaining({ tone: 'success', message: 'EYEXへの同期を完了しました。' }),
+      expect.objectContaining({ tone: 'success', message: 'EYEへの同期を完了しました。' }),
     )
     expect(screen.queryByRole('button', { name: '同期を再試行' })).not.toBeInTheDocument()
   })

@@ -15,13 +15,13 @@ import { EmptyState, LoadingState } from '../shell/EmptyState'
 
 /*
  * 予約を探す・1 件を確かめる（承認済みモック
- * docs/frontend/mockups/eyex/images/CHANGE-SEARCH.png ／ EX-EMPTY-SEARCH.png）。
+ * docs/frontend/mockups/eye/images/CHANGE-SEARCH.png ／ EX-EMPTY-SEARCH.png）。
  *
  * 題材: お客様と電話でつながったまま、お名前かお電話番号だけで目当ての 1 件を当て、
  * 中身を読み上げて確かめてから変更か取り消しへ進む面。
  * シグネチャ: **選んだ 1 件が右に出続け、左の一覧が閉じないこと。**
  *
- * 実測（screens/CHANGE-SEARCH.html ／ EX-EMPTY-SEARCH.html と assets/eyex.css）:
+ * 実測（screens/CHANGE-SEARCH.html ／ EX-EMPTY-SEARCH.html と assets/eye.css）:
  *   2 段組みは 340px 1fr（`w-85`）。0 件の面だけ 300px 1fr（`w-75`）で、左を白地にし
  *   右に 1px の --line-strong の罫を引く（サイドバーと同じ地色が続くと境目が消える）。
  *   左ペイン padding 32px 24px・見出し 17px（0 件は 16px）・欄の間 16px（0 件は 14px）。

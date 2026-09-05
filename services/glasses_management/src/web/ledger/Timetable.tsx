@@ -14,7 +14,6 @@ import {
   gridMinWidth,
   gridTemplateColumns,
   gridTemplateRows,
-  jstClock,
   LABEL_WIDTH_PX,
   type LaneSegment,
   laneSegments,
@@ -23,7 +22,7 @@ import {
 } from './metrics'
 
 /*
- * 予約台帳のタイムテーブル（承認済みモック docs/frontend/mockups/eyex/images/LEDGER-STAFF.png
+ * 予約台帳のタイムテーブル（承認済みモック docs/frontend/mockups/eye/images/LEDGER-STAFF.png
  * と LEDGER-RESOURCE.png）。
  *
  * 題材: 受付スタッフが電話を取りながら「いまお店がどこまで埋まっているか」を一目で読む面。
@@ -36,7 +35,7 @@ import {
  *
  * お名前と来店回数（`007-customer-records`。AC-CUST-24）: 60分以上（2 列）の帯は
  * お名前フルネーム＋来店回数の印を出し、30分（1 列）の帯は印を持たずお名前を
- * **姓だけ**に落とす（`docs/frontend/mockups/eyex/images/LEDGER-STAFF.png` の
+ * **姓だけ**に落とす（`docs/frontend/mockups/eye/images/LEDGER-STAFF.png` の
  * 「田中 花子 様／4回目」「松本 様」）。読み上げ名は省略しない（`metrics.ts` の `bandName`）。
  *
  * この面が描かないもの: お待ちのお客様の人数（`walk_ins` は 008。いまは 0名 の器）。
@@ -457,7 +456,7 @@ function surnameOf(name: string): string {
  * 来店回数の印。**数字の文字を必ず出す**（色だけで区別しない）。
  * はじめての方は薄い橙、3 回目以上は薄い緑、1〜2 回目は罫だけ。
  * **この印はお名前の右に添えるものだけ**にしてある —— 回数の列をすでに持つ面
- * （顧客台帳の一覧）には入れない（`docs/frontend/mockups/eyex/README.md` の決め）ので、
+ * （顧客台帳の一覧）には入れない（`docs/frontend/mockups/eye/README.md` の決め）ので、
  * 印の綴りはこの 1 か所しか無い（来店受付ボード・受け付ける面・受付履歴もこれを呼ぶ）。
  */
 export function VisitBadge({ count }: { count: number }) {

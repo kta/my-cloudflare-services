@@ -6,7 +6,7 @@ import type { SettingsPanelProps } from './sections'
 import { WebPublishPanel } from './WebPublishPanel'
 
 /*
- * 承認済みモック docs/frontend/mockups/eyex/images/SETTINGS-WEB.png の面。
+ * 承認済みモック docs/frontend/mockups/eye/images/SETTINGS-WEB.png の面。
  * 店長が「出す・出さない／何を出すか／いつまで受けるか」を 1 画面で見直し、
  * 右のプレビューで社内の言葉が漏れていないかをその場で確かめられることを見る。
  *
@@ -97,7 +97,7 @@ function seedSettings(purposes: Purpose[]): Settings {
   return {
     storeId: STORE_ID,
     isPublished: true,
-    landingPath: 'eyex.jp/ginza',
+    landingPath: 'eye.jp/ginza',
     opensAt: '10:30',
     closesAt: '18:00',
     acceptFromHours: 2,
@@ -128,7 +128,7 @@ function route(url: string, method: string, body: unknown): Response {
   calls.push({ method, path: url, body })
   if (path === `/api/staff/web-booking-settings/${STORE_ID}/preview`) {
     return json({
-      storeName: 'EYEX 銀座店',
+      storeName: 'EYE 銀座店',
       purposes: purposes
         .filter((row) => settings.publishedPurposeIds.includes(row.id))
         .map((row) => ({
@@ -247,7 +247,7 @@ describe('Web予約の公開', () => {
 
   it('ご案内のページは stores.slug から組み立てた文字を出す', async () => {
     await open()
-    expect(screen.getByText('eyex.jp/ginza')).toBeInTheDocument()
+    expect(screen.getByText('eye.jp/ginza')).toBeInTheDocument()
   })
 })
 
@@ -298,7 +298,7 @@ describe('お客様の画面の見え方', () => {
   it('公開する目的をすべて出す（5 件のときは 5 件）', async () => {
     await open()
     await waitFor(() => expect(previewRows()).toHaveLength(5))
-    expect(preview()).toHaveTextContent('EYEX 銀座店')
+    expect(preview()).toHaveTextContent('EYE 銀座店')
     expect(preview()).toHaveTextContent('ご来店の目的をお選びください')
     expect(previewRows()[0]).toHaveTextContent('新しいメガネを作る')
     expect(previewRows()[0]).toHaveTextContent('約60分')

@@ -7,7 +7,7 @@ import { recordingLength } from './RecordingPlayer'
 
 /*
  * 録音の保存に失敗した面（承認済みモック
- * docs/frontend/mockups/eyex/images/EX-UPLOAD-FAILED.png）。
+ * docs/frontend/mockups/eye/images/EX-UPLOAD-FAILED.png）。
  *
  * 題材: お客様を待たせたまま読む知らせ。読む時間は 3 秒しかない。
  * トークン計画: 赤いカード 1 枚だけを `--color-danger`（左 6px の帯 + 見出し + 地

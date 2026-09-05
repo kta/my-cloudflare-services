@@ -6,12 +6,12 @@ import { CustomerDetail } from './CustomerDetail'
 import { currentPowerLabel } from './CustomerList'
 
 /*
- * お客様の詳細（承認済みモック docs/frontend/mockups/eyex/images/CUSTOMER-DETAIL.png）。
+ * お客様の詳細（承認済みモック docs/frontend/mockups/eye/images/CUSTOMER-DETAIL.png）。
  *
  * この面の仕事は「前回どう見えていたか」から接客を始めさせること。主役は左の
  * 「度数の移り変わり」1 枚で、いま有効な 1 行に「いま使っています」の札が**文字で**付く。
  *
- * 実測（screens/CUSTOMER-DETAIL.html と assets/eyex.css）:
+ * 実測（screens/CUSTOMER-DETAIL.html と assets/eye.css）:
  *   本文 padding 32px 40px・行 `auto minmax(0,1fr)`・gap 28px、中は 2 列 `1fr 300px`・gap 28px。
  *   お名前 26px/700、ふりがな＋お客様番号 13px、`dt` 13px・`dd` 16px/600・各項目 padding 0 16px。
  *   度数の表: セル padding 12px 6px・下 1px の罫・右寄せ（1 列目だけ左）、見出し行 13px/600、

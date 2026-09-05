@@ -12,7 +12,7 @@ const manager = {
   isActive: true,
   sortOrder: 1,
   skills: [],
-  adminUserId: 'dev:eyex-manager',
+  adminUserId: 'dev:eye-manager',
   hasPin: true,
   maxParallelReservations: 1,
   pinUpdatedAt: null,

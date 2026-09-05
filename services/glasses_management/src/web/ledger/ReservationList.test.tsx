@@ -13,12 +13,12 @@ import { describe, expect, it, vi } from 'vitest'
 import { ReservationList } from './ReservationList'
 
 /*
- * 予約リスト（承認済みモック docs/frontend/mockups/eyex/images/LEDGER-LIST.png）。
+ * 予約リスト（承認済みモック docs/frontend/mockups/eye/images/LEDGER-LIST.png）。
  *
  * この面の仕事は「同じ日を時間順に読み、次に何をすべきかを左端の 1 列だけで進める」こと。
  * 押せるのは左端の 1 列と絞り込みの札だけで、ほかは読むだけである。
  *
- * 実測値（screens/LEDGER-LIST.html と assets/eyex.css）:
+ * 実測値（screens/LEDGER-LIST.html と assets/eye.css）:
  *   絞り込みの帯 = 高さ 60px・padding 0 32px・地 --surface-2、札 = min-height 44px・padding 0 16px・ピル。
  *   列幅 = 120px / 96px / 224px / 1fr / 140px・gap 16px。行 = min-height 62px・下罫 1px。
  *   時刻 18px 等幅 700、お名前 17px 700、ほか 15px。左端のボタン = min-height 46px・角 8px。

@@ -5,7 +5,7 @@ import { jstClock } from '../ledger/metrics'
 import type { BoardCell } from './slot-drag'
 
 /*
- * 工程 3 の盤（承認済みモック docs/frontend/mockups/eyex/images/BOOK-03-SLOT-STAFF.png /
+ * 工程 3 の盤（承認済みモック docs/frontend/mockups/eye/images/BOOK-03-SLOT-STAFF.png /
  * BOOK-03b-SLOT-RESOURCE.png / BOOK-03c-DRAG.png）。
  *
  * 題材: 希望時刻に帯を置いてみて、先約とぶつかるかどうかを目で見る面。
@@ -22,7 +22,7 @@ import type { BoardCell } from './slot-drag'
  * 押せるのは帯のつまみだけで、枠そのものは選べない。APG の grid を名乗ると矢印キーでの
  * 焦点移動を約束することになるので名乗らない（キーボードの道は右の候補ボタン）。
  *
- * 実測（screens/BOOK-03-SLOT-STAFF.html の <style> と assets/eyex.css）:
+ * 実測（screens/BOOK-03-SLOT-STAFF.html の <style> と assets/eye.css）:
  *   .tt-grid = 170px ＋ 30分刻み 1fr。.tt-head 34px / .tt-name 64px / .tt-cell 64px
  *   .appt    = min-height 54px・角 8px・padding 6px 8px・左に 4px の色帯
  *   .appt.clash = 3px の --alert 罫。.appt.placing = 3px の --brand 罫 ＋ 影
@@ -214,9 +214,8 @@ export function SlotBoard({
    * scrollWidth 1732 / clientWidth 864 / scrollLeft 0、映るのは 13:30 まで）。
    *
    * すでに見えているときは動かさない。運んでいる最中に盤が勝手に滑ると、
-   * 指と帯がずれる。
+   * 指と帯がずれる。**列の数と幅が変わったときも測り直す**ので、依存にその 2 つを置く。
    */
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 列の数と幅が変わったときも測り直す
   useEffect(() => {
     const box = scrollerRef.current
     if (box === null) return

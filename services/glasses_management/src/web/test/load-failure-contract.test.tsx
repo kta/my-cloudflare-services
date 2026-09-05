@@ -30,7 +30,7 @@ beforeEach(() => {
   failing = true
   sessionStorage.setItem(
     'app.auth.token',
-    `header.${btoa(JSON.stringify({ sub: 'dev:eyex', org: 'eyex' }))}.signature`,
+    `header.${btoa(JSON.stringify({ sub: 'dev:eye', org: 'eye' }))}.signature`,
   )
   vi.stubGlobal(
     'fetch',
@@ -75,7 +75,7 @@ const SCREENS: Array<[string, () => ReactElement]> = [
   ],
 ]
 
-describe.each(SCREENS)('%s が読み込みに失敗したとき', (name, mount) => {
+describe.each(SCREENS)('%s が読み込みに失敗したとき', (_name, mount) => {
   it('何が読めなかったかを名指しする', async () => {
     render(mount())
     const alert = await screen.findByRole('alert', {}, { timeout: 3000 })

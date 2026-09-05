@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SettingsScreen } from './SettingsScreen'
 
 /*
- * 営業時間（承認済みモック docs/frontend/mockups/eyex/images/SETTINGS-HOURS.png）。
+ * 営業時間（承認済みモック docs/frontend/mockups/eye/images/SETTINGS-HOURS.png）。
  * お昼の帯はモックの「13:00–14:00」ではなく 12:00–13:00 が正しい（P1 の決め #6）。
  */
 

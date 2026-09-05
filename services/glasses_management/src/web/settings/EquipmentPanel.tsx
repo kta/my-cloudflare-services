@@ -7,7 +7,7 @@ import {
   StoreDetail,
 } from '@app/contracts'
 import { auth } from '@app/shared'
-import { Button, focusRing, Notice, Select, TextInput } from '@app/ui'
+import { Button, focusRing, Select, TextInput } from '@app/ui'
 import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { client } from '../client'
 import { LoadFailed } from '../shell/LoadFailed'
@@ -16,7 +16,7 @@ import type { PanelDraft, SaveOutcome, SettingsPanelProps } from './sections'
 import { toJstDay } from './sections'
 
 /*
- * 設定 — 設備と点検（承認済みモック docs/frontend/mockups/eyex/images/SETTINGS-EQUIPMENT.png）。
+ * 設定 — 設備と点検（承認済みモック docs/frontend/mockups/eye/images/SETTINGS-EQUIPMENT.png）。
  *
  * この面の仕事は「1 台を止める前に、止めると困るご予約を数えて見せる」こと。
  * 試算（POST /api/staff/settings/impact）は何も保存しない。保存しても担当・設備の

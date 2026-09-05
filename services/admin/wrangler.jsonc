@@ -32,5 +32,26 @@
     // INVITE_BASE_URL(任意): 招待リンクの基底 URL の明示オーバーライド。
     // 既定はリクエスト origin から導出されるので通常は不要。
     "INVITE_BASE_URL": ""
+  },
+  // staging。GLASSES_MANAGEMENT は staging の Worker を指す(binding にサフィックスは付かない)。
+  // 各 id は Terraform(envs/staging) の出力の実値。初回 apply で作られた ID をここに固定する。
+  "env": {
+    "staging": {
+      "assets": {
+        "not_found_handling": "single-page-application",
+        "run_worker_first": ["/api/*"]
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "admin_staging",
+          "database_id": "cb0b1661-d7c9-45ff-8ebe-316609a0421a",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "kv_namespaces": [{ "binding": "AUTH_RL", "id": "f7e74c8f2208475bae2c64d1ef7893a7" }],
+      "services": [{ "binding": "GLASSES_MANAGEMENT", "service": "glasses-management-staging" }],
+      "vars": { "INVITE_BASE_URL": "" }
+    }
   }
 }

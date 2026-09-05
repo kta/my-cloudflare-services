@@ -1,7 +1,7 @@
 import type { IconName } from './icons'
 
 /**
- * 左サイドバーが持つ行き先。承認済みモック（docs/frontend/mockups/eyex）の
+ * 左サイドバーが持つ行き先。承認済みモック（docs/frontend/mockups/eye）の
  * サイドバーと同じ並びで、上が日常業務、下が「お店の運用」。
  */
 export type Destination = {

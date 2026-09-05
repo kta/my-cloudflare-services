@@ -4,12 +4,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ConflictPanel } from './ConflictPanel'
 
 /*
- * 同じご予約を 2 台が直した（承認済みモック docs/frontend/mockups/eyex/images/EX-CONFLICT.png）。
+ * 同じご予約を 2 台が直した（承認済みモック docs/frontend/mockups/eye/images/EX-CONFLICT.png）。
  *
  * この面の仕事は「選ぶまで、どちらの内容も書き換わりません」を**形で**示すこと。
  * だからこの面は書き込みを持たない。出口はどれも親へ選択を報せるだけである。
  *
- * 実測（screens/EX-CONFLICT.html の <style> と assets/eyex.css）:
+ * 実測（screens/EX-CONFLICT.html の <style> と assets/eye.css）:
  *   .wrap = padding 32px 36px 28px
  *   .lead = --alert-tint のカード・左に 6px の --alert。h2 22px（--alert）＋ 本文 16px/1.6（上に 10px）
  *   .two  = 2 列・gap 24px（上に 28px）。.side = 1px --line-strong・角 12px、自分の面だけ 2px --brand

@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EYE予約 — 新規予約 4/5 お客様の情報</title>
+<link rel="stylesheet" href="../assets/eye.css">
+<style>
+  .flow { display: grid; grid-template-columns: 1fr 372px; height: 100%; }
+  .main { padding: 36px 44px; overflow: hidden; }
+  .side { border-left: 1px solid var(--line); background: var(--surface); padding: 36px 28px; }
+  .qs { display: grid; gap: 32px; align-content: start; }
+  .field.big { min-height: 96px; width: 420px; font: 600 34px/1 var(--mono); letter-spacing: .04em; }
+  .caret { display: inline-block; width: 3px; height: 38px; background: var(--brand); margin-left: 8px; }
+  .namerow { display: grid; grid-template-columns: 1fr 1fr; gap: 26px; max-width: 700px; }
+  .namerow .field { min-height: 60px; }
+  .memobox {
+    min-height: 168px; max-width: 700px; display: flex; flex-direction: column; justify-content: space-between;
+    padding: 16px 18px; border: 1px solid var(--line-strong); border-radius: var(--r-m); background: var(--surface);
+  }
+  .sum dt { font-size: 12px; color: var(--ink-2); margin-top: 24px; }
+  .sum dd { margin: 2px 0 0; font-size: 17px; font-weight: 600; }
+  .sum dd small { font-size: 13px; font-weight: 400; color: var(--ink-2); }
+</style>
+</head>
+<body>
+<div class="caption">
+  <h1>新規予約 4/5　お客様の情報</h1>
+  <p>お電話番号から伺う。番号を入れ終えると過去のご来店を探しにいく。見つからないお客様は、この画面から初めての方として登録する。</p>
+</div>
+
+<main class="device" id="screen">
+  <div class="statusbar"><span>11:08</span><span>EYE 銀座店</span><span>Wi‑Fi　100%</span></div>
+
+  <header class="appbar">
+    <button class="homebtn" aria-label="トップへ">⌂</button>
+    <div class="storename">EYE 銀座店<small>新しい予約を取る</small></div>
+    <div class="barbtns"><button class="barbtn"><b>やめる</b></button></div>
+  </header>
+
+  <div class="body">
+    <div class="flow">
+      <section class="main">
+        <div class="ask">
+          <span class="bubble" aria-hidden="true"></span>
+          <div>
+            <h2>お電話番号を伺えますか？</h2>
+            <p>お伝えいただけないときは、お名前だけでも承ります。</p>
+          </div>
+        </div>
+
+        <div class="qs">
+          <div>
+            <span class="label" id="lbl-tel">お電話番号</span>
+            <div class="field on big" role="textbox" aria-labelledby="lbl-tel">090-1234<span class="caret" aria-hidden="true"></span></div>
+          </div>
+
+          <div class="namerow">
+            <div><span class="label" id="lbl-name">お名前</span><div class="field empty" role="textbox" aria-labelledby="lbl-name">例：田中 花子</div></div>
+            <div><span class="label" id="lbl-kana">ふりがな</span><div class="field empty" role="textbox" aria-labelledby="lbl-kana">たなか はなこ</div></div>
+          </div>
+
+          <div>
+            <span class="label" id="lbl-memo">ご要望・伝言（任意）</span>
+            <div class="memobox" role="textbox" aria-labelledby="lbl-memo">
+              <span class="muted">伺ったことばのまま書き留められます。</span>
+              <div class="actions">
+                <button class="btn">手書きで書く</button>
+                <button class="btn quiet">キーボードで入力</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <aside class="side">
+        <h3 style="margin:0 0 4px;font-size:15px">ここまでのご予約</h3>
+        <dl class="sum" style="margin:0">
+          <dt>ご来店日時</dt><dd>2026年8月27日（木）11:00</dd>
+          <dt>ご来店の目的</dt><dd>メガネを新しく作る<small>　約60分</small></dd>
+          <dt>担当と場所</dt><dd>佐藤 美咲<small>　視力測定機 A</small></dd>
+          <dt>お客様</dt><dd class="muted" style="font-weight:400">いま伺っています</dd>
+        </dl>
+        <button class="btn" style="width:100%;margin-top:40px">初めてのお客様として登録する</button>
+      </aside>
+    </div>
+  </div>
+
+  <footer class="stepbar">
+    <button class="back" aria-label="前へ戻る">‹</button>
+    <div class="steps">
+      <span class="step done">1　日時 ✓</span><span class="step-sep">›</span>
+      <span class="step done">2　ご来店の目的 ✓</span><span class="step-sep">›</span>
+      <span class="step done">3　担当と場所 ✓</span><span class="step-sep">›</span>
+      <span class="step on">4　お客様</span><span class="step-sep">›</span>
+      <span class="step">5　ご確認</span>
+    </div>
+    <div class="rec">
+      <span class="dot" aria-hidden="true"></span>
+      録音中
+      <span class="meter" aria-hidden="true">
+        <i style="height:7px"></i><i style="height:13px"></i><i style="height:19px"></i>
+        <i style="height:8px"></i><i style="height:15px"></i><i style="height:6px"></i>
+      </span>
+      <span class="time">02:14</span>
+    </div>
+    <button class="fab" aria-label="次へ進む　お客様が決まると進めます" disabled>›</button>
+  </footer>
+</main>
+</body>
+</html>

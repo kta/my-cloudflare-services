@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { authed, BASE, createTenantOrganization, inviteMember, storeId } from './helpers/actors'
 
 /**
- * UC-EYEX-149: 本部管理者が利用者・標準ロール・担当店舗を一覧/検索し、権限差分を
+ * UC-EYE-149: 本部管理者が利用者・標準ロール・担当店舗を一覧/検索し、権限差分を
  * 確認して変更する。変更は glasses_management へ membership として配られ、
  * 変更前後が監査に残る。
  */

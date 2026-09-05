@@ -24,7 +24,7 @@ import {
 import { StoreStep } from './StoreStep'
 
 /*
- * お客様向けの器（承認済みモック docs/frontend/mockups/eyex/images/WEB-01-STORE.png 〜
+ * お客様向けの器（承認済みモック docs/frontend/mockups/eye/images/WEB-01-STORE.png 〜
  * WEB-06-DONE.png と WEB-CANCEL.png の共通部分）。
  *
  * 題材: 電車の中で片手で持ったお客様が、1 問だけ読んで 1 回だけ押す面。
@@ -32,7 +32,7 @@ import { StoreStep } from './StoreStep'
  *   面は下地（`--color-paper`）と白（`--color-surface`）の 2 段だけ。角は 8/12/16px。書体は 1 書体。
  * シグネチャ: 下端に固定した全幅 56px の緑 1 枚と、その上に 6 本の細い進捗の帯。
  *
- * 実測（screens/WEB-0*.html の <style> と assets/eyex.css）:
+ * 実測（screens/WEB-0*.html の <style> と assets/eye.css）:
  *   上のバー 56px・地 --brand・左に ‹ 48×48px、店名 19px/700・副題 12px（opacity .9）
  *   進捗 白地・下 1px 罫・padding 10px 16px、帯は 4px 高・間 4px・角 2px（→ rounded-full）
  *   本文 padding 32px 28px 120px、下端の固定は左右 28px・下 32px・主操作は全幅 56px/18px
@@ -521,7 +521,7 @@ export function PublicBookingApp({
           </button>
         )}
         <div className="min-w-0">
-          <p className="truncate text-bar font-bold">{store?.name ?? 'EYEX ご予約'}</p>
+          <p className="truncate text-bar font-bold">{store?.name ?? 'EYE ご予約'}</p>
           <p className="text-note opacity-90">{caption}</p>
         </div>
       </header>

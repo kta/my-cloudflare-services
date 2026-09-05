@@ -4,7 +4,7 @@ import { completeSeededTerminalStart } from './support/terminal'
 
 /**
  * 顧客台帳（007-customer-records）の受け入れ基準を、実ブラウザと実 Worker で確かめる。
- * `vite preview` が実 workerd を動かし、D1 は `seed.mjs` が入れた EYEX 銀座店
+ * `vite preview` が実 workerd を動かし、D1 は `seed.mjs` が入れた EYE 銀座店
  * —— お客様 46 名（ご来店 2〜4回 が 42 名）と、田中 花子 様の度数 3 件・
  * いまお使いのメガネ 2 本・接客のメモ 7 件・過去のご予約 5 件、および
  * おまとめの見本になる 渡会 昭 様／渡会 章 様 —— である。
@@ -42,8 +42,8 @@ import { completeSeededTerminalStart } from './support/terminal'
 /** この e2e の tsconfig は Worker 向けで DOM の型を持たない。使う分だけをここで宣言する。 */
 declare function getComputedStyle(node: unknown): { touchAction: string }
 
-const ORG = 'eyex'
-/** seed.mjs が固定 id で入れる EYEX 銀座店と EYEX 丸の内店。 */
+const ORG = 'eye'
+/** seed.mjs が固定 id で入れる EYE 銀座店と EYE 丸の内店。 */
 const GINZA = '11111111-1111-4111-8111-111111111111'
 const MARUNOUCHI = '22222222-2222-4222-8222-222222222222'
 /** dev グラントが載せる `sub`。担当店舗の `userId` はこれに合わせる。 */
@@ -255,7 +255,7 @@ async function startWork(page: Page): Promise<void> {
     await page.getByRole('button', { name: '業務を始める' }).click()
   }
   await completeSeededTerminalStart(page)
-  await expect(page.locator('header').first()).toContainText('EYEX 銀座店')
+  await expect(page.locator('header').first()).toContainText('EYE 銀座店')
 }
 
 /** 左のサイドバーから顧客台帳を開き、一覧が届くまで待つ。 */
@@ -776,7 +776,7 @@ test('店長でないと入口が出ず、直接叩いても拒まれる', async
 
 // @e2e-covers AC-CUST-17
 test('別の会社のお客様 ID は 404 として扱われる', async ({ request }) => {
-  const other = 'org-eyex-other'
+  const other = 'org-eye-other'
   const token = await request.post('/api/auth/token', {
     data: { organizationId: other, role: 'staff' },
   })

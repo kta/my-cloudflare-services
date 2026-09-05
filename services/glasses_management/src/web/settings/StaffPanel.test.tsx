@@ -6,7 +6,7 @@ import { StaffPanel } from './StaffPanel'
 
 /*
  * スタッフと技能（SETTINGS-STAFF）。承認済みモック
- * docs/frontend/mockups/eyex/images/SETTINGS-STAFF.png と同じ盤面
+ * docs/frontend/mockups/eye/images/SETTINGS-STAFF.png と同じ盤面
  * —— スタッフ 6名・佐藤 美咲の技能 3 つ・勤務の 7 列（日曜 12:00–19:00）——
  * を出せることと、技能と勤務を直して保存できることを固定する。
  *

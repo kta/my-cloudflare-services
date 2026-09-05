@@ -5,8 +5,8 @@ import { formatJstDate } from './sections'
  * 「保存の前に、直すと困る件数を見せる」1 枚。設備と点検・ご来店の目的・営業時間の
  * 3 面が同じ位置（右の列）・同じ言い方で使う。
  *
- * 承認済みモックの実測値（docs/frontend/mockups/eyex/screens/SETTINGS-EQUIPMENT.html
- * と SETTINGS-PURPOSE.html、assets/eyex.css）:
+ * 承認済みモックの実測値（docs/frontend/mockups/eye/screens/SETTINGS-EQUIPMENT.html
+ * と SETTINGS-PURPOSE.html、assets/eye.css）:
  *   カード = 角 16px / 1px の縁 / padding 20px 22px、行 = padding 8px 0。
  *   赤（止める操作）= 地 --alert-tint・縁 #d9a9a4、茶（延ばす操作）= 地 --walkin-tint・縁 #d9bb92。
  * 縁の 2 色は theme.css にトークンが無いので、対になる文字色から作る

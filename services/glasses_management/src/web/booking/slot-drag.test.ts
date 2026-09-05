@@ -8,8 +8,8 @@ import { type BoardGeometry, blockedText, columnSpan, snapToCell } from './slot-
  * ここは純関数だけで、DOM も `Date.now()` も触らない。盤の実寸は呼ぶ側が
  * `getBoundingClientRect()` で測って渡す（実機でもテストでも同じ式を通すため）。
  *
- * 実測（docs/frontend/mockups/eyex/screens/BOOK-03c-DRAG.html の <style> と
- * assets/eyex.css）: 名前列 170px、見出し行 34px、時間は 30分刻みで 8 列 1fr。
+ * 実測（docs/frontend/mockups/eye/screens/BOOK-03c-DRAG.html の <style> と
+ * assets/eye.css）: 名前列 170px、見出し行 34px、時間は 30分刻みで 8 列 1fr。
  */
 
 /** 名前列 170px・見出し 34px・10 列・5 行の盤。1 列 83px / 1 行 93.2px になる。 */

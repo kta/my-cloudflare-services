@@ -133,8 +133,8 @@ function open() {
         [
           {
             id: GINZA,
-            organizationId: 'org-eyex',
-            name: 'EYEX 銀座店',
+            organizationId: 'org-eye',
+            name: 'EYE 銀座店',
             slug: 'ginza',
             isActive: true,
           },
@@ -325,7 +325,7 @@ describe('手書きメモ（CUSTOMER-HANDWRITE）', () => {
       expect(screen.getByRole('heading', { name: '手書きメモ　1枚' })).toBeVisible(),
     )
     // 記入した店舗は `stores` から解決する。
-    expect(screen.getAllByText(/EYEX 銀座店/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/EYE 銀座店/).length).toBeGreaterThan(0)
     await userEvent.click(screen.getByRole('button', { name: /お客様の詳細へ戻る/ }))
     expect(screen.getByRole('table', { name: '度数の移り変わり' })).toBeInTheDocument()
   })

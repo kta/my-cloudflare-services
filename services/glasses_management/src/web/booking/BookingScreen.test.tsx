@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BookingScreen } from './BookingScreen'
 
 /*
- * 受付の器（承認済みモック docs/frontend/mockups/eyex/images/BOOK-01-DATETIME.png ほか 12 面）。
+ * 受付の器（承認済みモック docs/frontend/mockups/eye/images/BOOK-01-DATETIME.png ほか 12 面）。
  *
  * 5 工程が同じ器の上で動き、いまどの工程にいるか・録音がどこにあるかが工程を移っても
  * 変わらないことを固定する。上のバー 64px は P0 と同じ形で、**予約フローはサイドバーを出さない**。
@@ -27,7 +27,7 @@ const SESSION_ID = 'd0000000-0000-4000-8000-000000000001'
 const PURPOSE_ID = 'e0000000-0000-4000-8000-000000000001'
 const NOW = '2026-08-27T02:08:00.000Z'
 const DATE: LocalDate = '2026-08-27'
-const SESSION_KEY = 'eyex.booking.session'
+const SESSION_KEY = 'eye.booking.session'
 const RESERVATION_ID = 'b0000000-0000-4000-8000-000000000001'
 const RECORDING_ID = 'a0000000-0000-4000-8000-000000000009'
 
@@ -267,7 +267,7 @@ function open(initialStep?: 'datetime' | 'purpose' | 'slot' | 'customer' | 'conf
   return render(
     <BookingScreen
       storeId={STORE_ID}
-      storeName="EYEX 銀座店"
+      storeName="EYE 銀座店"
       now={NOW}
       initialStep={initialStep}
       onExit={exit}
@@ -595,7 +595,7 @@ describe('上のバー', () => {
   it('店名と「新しい予約を取る」を出し、サイドバーは出さない', async () => {
     open()
     await started()
-    expect(screen.getByText('EYEX 銀座店')).toBeInTheDocument()
+    expect(screen.getByText('EYE 銀座店')).toBeInTheDocument()
     expect(screen.getByText('新しい予約を取る')).toBeInTheDocument()
     expect(screen.queryByRole('navigation')).toBeNull()
   })

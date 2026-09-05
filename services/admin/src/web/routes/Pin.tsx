@@ -7,7 +7,7 @@ import { PageHeader, Section } from '../components/ui'
 import { toast } from '../store/toast'
 
 /**
- * 個人 PIN の設定・変更(UC-EYEX-151)。
+ * 個人 PIN の設定・変更(UC-EYE-151)。
  *
  * 平文 PIN はこの画面から出ない — `stretchPin()` の出力だけを送る。サーバは
  * pepper 込みの証明しか保持せず、PIN は誰にも(管理者にも)表示されない。

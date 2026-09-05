@@ -22,9 +22,9 @@ import { ReservationList } from './ReservationList'
 import { Timetable } from './Timetable'
 
 /*
- * 予約台帳の器（承認済みモック docs/frontend/mockups/eyex/images/LEDGER-STAFF.png）。
+ * 予約台帳の器（承認済みモック docs/frontend/mockups/eye/images/LEDGER-STAFF.png）。
  *
- * 実測（LEDGER-STAFF.html と assets/eyex.css）:
+ * 実測（LEDGER-STAFF.html と assets/eye.css）:
  *   日付の帯   = ‹ ／ 2026年8月27日（木） ／ 本日 ／ ›（上のバーの中央のピル）
  *   ツールバー = セグメント 2 つ（`.segmented` padding 3px・ボタン padding 0 16px）
  *   現在の札   = `.nowchip` min-height 32px・padding 0 12px・ピル・--alert の枠と文字

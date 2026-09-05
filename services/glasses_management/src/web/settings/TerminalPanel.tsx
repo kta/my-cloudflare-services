@@ -114,7 +114,7 @@ export function TerminalPanel({ storeId, onDraftChange }: SettingsPanelProps) {
     if (response.status === 409) return 'conflict'
     if (!response.ok) return 'failed'
     const saved = TerminalSchema.parse(await response.json())
-    window.dispatchEvent(new CustomEvent('eyex:terminal-updated', { detail: saved }))
+    window.dispatchEvent(new CustomEvent('eye:terminal-updated', { detail: saved }))
     setTerminals((rows) =>
       creating ? [...rows, saved] : rows.map((row) => (row.id === saved.id ? saved : row)),
     )

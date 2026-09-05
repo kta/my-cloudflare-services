@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EYE予約 — 新規予約 4/5 お客様の推定</title>
+<link rel="stylesheet" href="../assets/eye.css">
+<style>
+  .flow { display: grid; grid-template-columns: 1fr 320px; height: 100%; }
+  .main { padding: 36px 44px; overflow: hidden; }
+  .side { border-left: 1px solid var(--line); background: var(--surface); padding: 36px 26px; }
+  .entry { width: 340px; }
+  .field.big { min-height: 88px; font: 600 28px/1 var(--mono); letter-spacing: .03em; }
+  .entry .field { min-height: 56px; }
+  .entry .label { margin-top: 22px; }
+  .entry .label:first-of-type { margin-top: 0; }
+
+  /* 番号欄のすぐ横から開く吹き出し */
+  .popover { top: 68px; left: 436px; width: 420px; overflow: visible; }
+  .popover .pf { border-radius: 0 0 var(--r-l) var(--r-l); }
+  .popover .arrow {
+    top: 84px; left: -9px; width: 18px; height: 18px; border-top: 0; border-bottom: 1px solid var(--line-strong);
+    border-left: 1px solid var(--line-strong); transform: rotate(45deg);
+  }
+  .popover .ph { padding: 18px 20px; }
+  .popover .ph h3 { margin: 0; font-size: 20px; }
+  .popover .pb { padding: 18px 20px; }
+  .popover .pf { padding: 14px 20px; }
+  .cand { border: 1px solid var(--line); border-radius: var(--r-m); padding: 16px 18px; background: var(--surface); }
+  .cand.on { border: 2px solid var(--brand); background: var(--brand-tint); padding: 15px 17px; }
+  .cand + .cand { margin-top: 16px; }
+  .ctop { display: flex; align-items: center; gap: 10px; }
+  .ctop b { font-size: 19px; }
+  .kv { display: grid; grid-template-columns: 82px 1fr; gap: 6px 12px; margin: 12px 0 0; font-size: 14px; }
+  .kv dt { color: var(--ink-2); }
+  .kv dd { margin: 0; font-weight: 600; }
+  .cand .actions { margin-top: 16px; }
+
+  .sum dt { font-size: 12px; color: var(--ink-2); margin-top: 24px; }
+  .sum dd { margin: 2px 0 0; font-size: 16px; font-weight: 600; }
+  .sum dd.mono { font-size: 15px; }
+</style>
+</head>
+<body>
+<div class="caption">
+  <h1>新規予約 4/5　お電話番号からお客様を推定する</h1>
+  <p>番号を入れ終えた瞬間に、過去のご来店から候補を出す。選ぶだけで度数・前回の担当・注意ごとが引き継がれ、聞き直しが要らなくなる。</p>
+</div>
+
+<main class="device" id="screen">
+  <div class="statusbar"><span>11:08</span><span>EYE 銀座店</span><span>Wi‑Fi　100%</span></div>
+
+  <header class="appbar">
+    <button class="homebtn" aria-label="トップへ">⌂</button>
+    <div class="storename">EYE 銀座店<small>新しい予約を取る</small></div>
+    <div class="barbtns"><button class="barbtn"><b>やめる</b></button></div>
+  </header>
+
+  <div class="body">
+    <div class="flow">
+      <section class="main">
+        <div class="entry">
+          <div class="ask">
+            <span class="bubble" aria-hidden="true"></span>
+            <div>
+              <h2>お電話番号を伺えますか？</h2>
+              <p>同じ番号のご来店が2件見つかりました。</p>
+            </div>
+          </div>
+          <span class="label" id="lbl-tel">お電話番号</span>
+          <div class="field on big" role="textbox" aria-labelledby="lbl-tel">090-1234-5678</div>
+          <span class="label" id="lbl-name">お名前</span>
+          <div class="field empty" role="textbox" aria-labelledby="lbl-name">お選びになると入ります</div>
+          <span class="label" id="lbl-kana">ふりがな</span>
+          <div class="field empty" role="textbox" aria-labelledby="lbl-kana">お選びになると入ります</div>
+        </div>
+      </section>
+
+      <aside class="side">
+        <h3 style="margin:0 0 4px;font-size:15px">お選びになると引き継がれること</h3>
+        <dl class="sum" style="margin:0">
+          <dt>現在の度数</dt><dd class="mono">R -2.25　L -2.00　PD 62.0</dd>
+          <dt>前回の担当</dt><dd>佐藤 美咲</dd>
+          <dt>注意ごと</dt><dd>PC作業用。鼻パッドは低め</dd>
+          <dt>ご連絡先</dt><dd class="mono">090-1234-5678</dd>
+        </dl>
+      </aside>
+    </div>
+
+    <div class="popover" role="dialog" aria-label="お客様の候補">
+      <span class="arrow" aria-hidden="true"></span>
+      <div class="ph">
+        <h3>このお客様でしょうか？</h3>
+        <p class="small muted" style="margin:4px 0 0">お名前を声に出してお確かめください。</p>
+      </div>
+      <div class="pb">
+        <div class="cand on">
+          <div class="ctop"><b>田中 花子 様</b><span class="visits many">4回目</span><span class="tag brand">よく一致しています</span></div>
+          <dl class="kv">
+            <dt>ふりがな</dt><dd>たなか はなこ</dd>
+            <dt>前回</dt><dd>2026年5月18日</dd>
+          </dl>
+          <div class="actions">
+            <button class="btn primary">このお客様で進む</button>
+          </div>
+        </div>
+
+        <div class="cand">
+          <div class="ctop"><b>田中 一郎 様</b><span class="tag">確かめが必要です</span></div>
+          <dl class="kv">
+            <dt>ご連絡先</dt><dd class="mono">090-1234-9912</dd>
+          </dl>
+          <div class="actions"><button class="btn">このお客様で進む</button></div>
+        </div>
+      </div>
+      <div class="pf">
+        <button class="btn">どちらでもありません</button>
+        <button class="btn quiet">番号を入れ直す</button>
+      </div>
+    </div>
+  </div>
+
+  <footer class="stepbar">
+    <button class="back" aria-label="前へ戻る">‹</button>
+    <div class="steps">
+      <span class="step done">1　日時 ✓</span><span class="step-sep">›</span>
+      <span class="step done">2　ご来店の目的 ✓</span><span class="step-sep">›</span>
+      <span class="step done">3　担当と場所 ✓</span><span class="step-sep">›</span>
+      <span class="step on">4　お客様</span><span class="step-sep">›</span>
+      <span class="step">5　ご確認</span>
+    </div>
+    <div class="rec">
+      <span class="dot" aria-hidden="true"></span>
+      録音中
+      <span class="meter" aria-hidden="true">
+        <i style="height:7px"></i><i style="height:13px"></i><i style="height:19px"></i>
+        <i style="height:8px"></i><i style="height:15px"></i><i style="height:6px"></i>
+      </span>
+      <span class="time">02:14</span>
+    </div>
+    <button class="fab" aria-label="次へ進む　お客様をお選びになると進めます" disabled>›</button>
+  </footer>
+</main>
+</body>
+</html>

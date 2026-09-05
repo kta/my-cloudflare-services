@@ -5,13 +5,13 @@ import { lastVisitLabel, visitLabel } from '../../worker/domain/customers'
 import { formatPhoneDigits } from '../booking/CustomerStep'
 
 /*
- * お客様の候補（承認済みモック docs/frontend/mockups/eyex/images/BOOK-04b-CUSTOMER-MATCH.png）。
+ * お客様の候補（承認済みモック docs/frontend/mockups/eye/images/BOOK-04b-CUSTOMER-MATCH.png）。
  *
  * この面の仕事は「番号を打ち終えた瞬間に候補を出し、お名前を声に出して確かめてもらう」こと。
  * **モーダルにしない** —— 候補が開いている間もお電話番号の欄は打てるままで、右下の「録音中」も
  * 読み上げから外れない（AC-CUST-21）。`aria-modal` を付けず、フォーカスも奪わない。
  *
- * 実測値（screens/BOOK-04b-CUSTOMER-MATCH.html と assets/eyex.css の `.popover`）:
+ * 実測値（screens/BOOK-04b-CUSTOMER-MATCH.html と assets/eye.css の `.popover`）:
  *   吹き出しは 幅 420px（w-105）・角 16px（rounded-panel）・縁 1px --line-strong・影 0 12px 32px。
  *   番号欄の右（上 68px = top-17 / 左 436px = left-109）から出て、左辺 84px（top-21）に 18px の三角。
  *   頭 18px 20px / 胴 18px 20px / 足 14px 20px（足の地は --surface-2）。

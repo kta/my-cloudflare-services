@@ -42,3 +42,5 @@ CLAUDE.local.md
 
 # TypeScript incremental build info
 *.tsbuildinfo
+packages/patent-corpus/.data/
+services/patent_research/.wrangler/e2e-corpus.db*

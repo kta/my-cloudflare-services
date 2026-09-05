@@ -118,6 +118,9 @@ const MANAGEMENT_ROUTES = [
   },
   // default-deny の証明: 存在しない /api/* もゲートを通らないと 404 にすら到達しない
   { name: 'GET /api/not-a-route(未知パス)', method: 'GET', path: '/api/not-a-route' },
+  // NOTE: GET /api/organizations/:id/stores はこの表に載せない。担当店舗の割り当てで
+  // 使うため運営限定ゲートの外に出してあり、**自社なら本部管理者も引ける**。
+  // 自社 200 / 他社 403 / 未認証 401 / 未知の会社 404 は organization-stores.test.ts が見る。
 ] as const
 
 async function call(
@@ -171,7 +174,7 @@ describe('管理 API の権限マトリクス', () => {
 })
 
 /**
- * 利用者管理(UC-EYEX-149)と個人 PIN(UC-EYEX-151)は**テナントの本部管理者**の
+ * 利用者管理(UC-EYE-149)と個人 PIN(UC-EYE-151)は**テナントの本部管理者**の
  * 業務であり、運営限定ゲート(requireOperator)の対象ではない。テナント admin が
  * 通ること、staff が通らないこと、未認証・期限切れ・別 secret が 401 になることを
  * 運営ルートと同じ表で固定する。
@@ -309,5 +312,20 @@ describe('dev トークングラントの fail close', () => {
       createExecutionContext(),
     )
     expect(res.status).toBe(404)
+  })
+})
+
+/**
+ * staging ゲート(`app.use('*', stagingGate())`)は STAGING_ACCESS_TOKEN が
+ * 設定された環境でだけ働く。この環境には設定が無いので、全リクエストが素通り
+ * しなければならない — 誤って有効化されると本番まで 401 で塞がる。
+ */
+describe('staging ゲート', () => {
+  it('STAGING_ACCESS_TOKEN 未設定のこの環境では素通りする', async () => {
+    const token = await devToken('admin', 'operator-org')
+    const res = await SELF.fetch(`${BASE}/api/organizations`, {
+      headers: { authorization: `Bearer ${token}` },
+    })
+    expect(res.status).toBe(200)
   })
 })

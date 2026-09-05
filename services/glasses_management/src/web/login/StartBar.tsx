@@ -13,15 +13,22 @@ export function StartBar({
   mode,
   action,
   showWorkPrefix = true,
+  title = 'EYE 銀座店',
 }: {
   mode: string
   action?: { label: string; onPress: () => void }
   showWorkPrefix?: boolean
+  /**
+   * 左上に出す名前。既定はモック由来の店名で、承認済みの 3 面はこの値を使う。
+   * **お店がまだ無い会社では実在しない店名を出してはならない**ので、最初のお店を
+   * 登録する面は会社のコードを渡す（014-store-provisioning）。
+   */
+  title?: string
 }) {
   return (
     <header className="flex h-16 shrink-0 items-center bg-pine px-6 text-on-pine">
       <div>
-        <p className="text-bar font-bold">EYEX 銀座店</p>
+        <p className="text-bar font-bold">{title}</p>
         <p className="text-note opacity-90">{showWorkPrefix ? `業務を始める　${mode}` : mode}</p>
       </div>
       {action !== undefined && (

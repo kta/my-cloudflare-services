@@ -5,10 +5,10 @@ import { describe, expect, it, vi } from 'vitest'
 import { VisitBoard } from './VisitBoard'
 
 /*
- * 来店受付ボード（承認済みモック docs/frontend/mockups/eyex/images/RECEPTION-JOURNEY.png
+ * 来店受付ボード（承認済みモック docs/frontend/mockups/eye/images/RECEPTION-JOURNEY.png
  * と screens/RECEPTION-JOURNEY.html）。
  *
- * 実測（RECEPTION-JOURNEY.html の <style> と assets/eyex.css）:
+ * 実測（RECEPTION-JOURNEY.html の <style> と assets/eye.css）:
  *   .board  = padding 28px 36px
  *   .jgrid  = 220px + 6 列 1fr / 行 40px + 4 × 1fr / 枠 1px --line / 角 16px
  *   .jhead  = padding 0 14px・13px/600・下罫 1px --line-strong

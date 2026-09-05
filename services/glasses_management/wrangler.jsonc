@@ -37,7 +37,35 @@
   // アカウント全体の Cron 枠 5 本のうち、このサービスが 1 本目を使う
   // （specs/glasses_management/design/04-api.md §3.2）。保持期限を過ぎた録音の掃除と、
   // 24 時間動かない録音を failed に落とす処理をこの 1 本の中で順に呼ぶ。
-  "triggers": { "crons": ["0 15 * * *"] }
+  "triggers": { "crons": ["0 15 * * *"] },
+  // staging。service binding は自動でサフィックスが付かないので明示的に -staging を指す。
+  // Cron はアカウント全体で 5 本しか無い共有枠なので staging では 0 本にする。
+  // 各 id は Terraform(envs/staging) の出力の実値。初回 apply で作られた ID をここに固定する。
+  "env": {
+    "staging": {
+      "assets": {
+        "not_found_handling": "single-page-application",
+        "run_worker_first": ["/api/*"]
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "glasses_management_staging",
+          "database_id": "763105b9-b88d-45ac-83a8-587c25a81a9f",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "kv_namespaces": [{ "binding": "SHORT_LIVED", "id": "037363090c1d40d9907d4389a20a7fd5" }],
+      "r2_buckets": [
+        { "binding": "RECORDINGS", "bucket_name": "glasses-management-recordings-staging" }
+      ],
+      "services": [
+        { "binding": "NOTIFIER", "service": "notifier-staging" },
+        { "binding": "ADMIN", "service": "admin-staging" }
+      ],
+      "triggers": { "crons": [] }
+    }
+  }
   // secrets（INTERNAL_KEY / JWT_SECRET / AUTH_PEPPER / AUTH_DEV_GRANT）は vars に置かない。
   // dev は .dev.vars、本番は `wrangler secret put`。docs/howto/deploy.md 参照。
 }

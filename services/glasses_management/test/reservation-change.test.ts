@@ -82,7 +82,7 @@ function changeBatch(): Recorded[] {
   const { db, statements } = recorder()
   buildChangeBatch({
     db,
-    organizationId: 'org-eyex',
+    organizationId: 'org-eye',
     storeId: 'store-ginza',
     reservationId: 'res-0142',
     version: 3,
@@ -286,7 +286,7 @@ describe('バッチのガード', () => {
     const { db, statements } = recorder()
     buildCancelBatch({
       db,
-      organizationId: 'org-eyex',
+      organizationId: 'org-eye',
       storeId: 'store-ginza',
       reservationId: 'res-0142',
       version: 3,

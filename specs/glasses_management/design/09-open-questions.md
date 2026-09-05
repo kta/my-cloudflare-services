@@ -1,7 +1,7 @@
 # 09 — 発注元に確かめること（glasses_management）
 
 - サービス: `glasses_management`（`services/glasses_management` / `@app/glasses_management`）
-- 位置づけ: **発注元（EYEX）に確かめるまで決まらないこと**を 1 か所に集めた台帳。
+- 位置づけ: **発注元（EYE）に確かめるまで決まらないこと**を 1 か所に集めた台帳。
 - 参照先: 決定は `design/01-requirements.md`（何を作るか）/ `design/02-domain-model.md`（状態）/
   `design/03-data-model.md`（列）/ `design/04-api.md`（経路）/ `design/05-screen-flow.md`（画面）/
   `design/06-use-cases.md`（挙動）/ `design/07-nfr.md`（数値）にある。本書は**問いだけ**を持つ。
@@ -10,7 +10,7 @@
 
 ## 0. この文書の意味
 
-モック（`docs/frontend/mockups/eyex/` の 68 画面）・決定ブリーフ・設計判断で決められる論点は、
+モック（`docs/frontend/mockups/eye/` の 68 画面）・決定ブリーフ・設計判断で決められる論点は、
 第2巡ですべて各文書の本文に**断定で**書き下した。ここに残るのは、
 **店の運用・法務・機材の実情を知らないと決められないもの**だけである。
 
@@ -111,8 +111,8 @@
 
 - **決まらないと作れないもの**: 画面の有効高（Safari のバーで 40〜90pt 減る）、台帳に入る枠数、
   `viewport-fit=cover` と安全領域のトークン、マイク許可の寿命、
-  EX-MIC-DENIED の直し方 3 手順の文言（②では iPadOS の「設定」に「EYEX予約」の項目が無く、
-  「設定を開く → EYEX予約 を選ぶ → マイクをオンにする」が成り立たない）。
+  EX-MIC-DENIED の直し方 3 手順の文言（②では iPadOS の「設定」に「EYE予約」の項目が無く、
+  「設定を開く → EYE予約 を選ぶ → マイクをオンにする」が成り立たない）。
 - **いまの前提（暫定）**: ①（ホーム画面に追加した Web アプリとして配る）。
   `manifest.json` と `apple-mobile-web-app-capable` を足し、モックの 3 手順の文言をそのまま使う。
 - **答えが来たら直す場所**:

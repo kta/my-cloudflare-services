@@ -125,6 +125,7 @@ import {
   Store,
   StoreDetail,
   StoreIdQuery,
+  StoreInput,
   StoreMembership,
   StorePatch,
   type StorePermission,
@@ -161,6 +162,7 @@ import {
   type OrgResolver,
   requireActiveOrg,
   signAccessToken,
+  stagingGate,
   stretchPin,
   tenantAuth,
   toJstDateString,
@@ -188,6 +190,7 @@ import {
   readReservationDetail,
 } from './db/queries/ledger'
 import {
+  auditEvents,
   equipment,
   equipmentMaintenance,
   organizations,
@@ -327,6 +330,7 @@ import {
   type WebWindow,
   webBookingCodeMonth,
 } from './domain/web-booking'
+import { buildNewStore } from './store-provisioning'
 
 // 明示的に import している（ambient global を使わない）ので、export した AppType は
 // それ自体で完結し、web 側が Workers の型なしに読める。SPA も同じ Worker が静的資産
@@ -348,7 +352,7 @@ export type Bindings = {
   /** PINハッシュ用のpepper。本番はwrangler secret、devだけ.dev.vars。 */
   AUTH_PEPPER: string
   /**
-   * お客様のご予約ページの公開ドメイン（`eyex.jp`）。SETTINGS-WEB の「ご案内のページ」を
+   * お客様のご予約ページの公開ドメイン（`eye.jp`）。SETTINGS-WEB の「ご案内のページ」を
    * `stores.slug` と繋いで組み立てるためだけに使う。**この値を表に持たない。**
    */
   PUBLIC_WEB_ORIGIN?: string
@@ -356,6 +360,8 @@ export type Bindings = {
   AUTH_DEV_GRANT?: string
   /** integration test の基準時刻。本番では設定せず、実時刻を使う。 */
   TEST_NOW?: string
+  /** staging だけに設定される。未設定なら stagingGate は何もしない(production)。 */
+  STAGING_ACCESS_TOKEN?: string
 }
 
 type Env = { Bindings: Bindings; Variables: AuthVariables }
@@ -370,6 +376,10 @@ type Db = DrizzleD1Database
 type Statement = D1PreparedStatement
 
 const app = new Hono<Env>()
+
+// staging(workers.dev 公開)を守る。production は secret 未設定なので素通りする。
+// 他のどのミドルウェアより先に置く。
+app.use('*', stagingGate())
 
 // 予期しない throw だけを 500 に畳む。投げられた HTTPException は自分の応答を保つ。
 app.onError((err, c) => {
@@ -3047,8 +3057,8 @@ async function purgeRecordings(
  * 「無い slug」と「非公開の slug」は status も body も同じにする（`04-api.md` §3.12）。
  * ─────────────────────────────────────────────────────────────────────────── */
 
-/** ご案内のページの前置き（`eyex.jp/ginza`）。表には持たず、slug から組み立てる。 */
-const PUBLIC_ORIGIN_FALLBACK = 'eyex.jp'
+/** ご案内のページの前置き（`eye.jp/ginza`）。表には持たず、slug から組み立てる。 */
+const PUBLIC_ORIGIN_FALLBACK = 'eye.jp'
 
 /**
  * 公開面の 404。**存在しない slug と非公開の店舗で body まで同じにする。**
@@ -3899,6 +3909,37 @@ const routes = app
     return c.json(OrganizationSync.array().parse(rows.map(toOrgFields)))
   })
 
+  /**
+   * admin が担当店舗を割り当てるときに引く店舗の一覧。
+   * **会社の指定を必須**にする — 省略を「全社」と読むと、1 本の取り違えで
+   * 全テナントの店舗が漏れる。
+   */
+  .get('/api/internal/stores', async (c) => {
+    const organizationId = c.req.query('organizationId')
+    if (!organizationId) return c.json({ error: 'organization_id_required' }, 400)
+    const db = drizzle(c.env.DB)
+    const rows = await db
+      .select()
+      .from(stores)
+      .where(eq(stores.organizationId, organizationId))
+      .orderBy(asc(stores.createdAt))
+    return c.json(
+      Store.array().parse(
+        rows.map((r) => ({
+          id: r.id,
+          organizationId: r.organizationId,
+          name: r.name,
+          slug: r.slug,
+          phone: r.phone,
+          address: r.address,
+          accessNote: r.accessNote,
+          isActive: r.isActive === '1',
+          createdAt: r.createdAt,
+        })),
+      ),
+    )
+  })
+
   // admin からの担当店舗。担当解除は permissions が空の配信として届くので、
   // 削除の経路を持たずに収束する。
   .post('/api/internal/store-memberships/sync', zValidator('json', StoreMembership), async (c) => {
@@ -3949,6 +3990,95 @@ const routes = app
           createdAt: r.createdAt,
         })),
       ),
+    )
+  })
+
+  /**
+   * お店を登録する（P0 の入口 — `014-store-provisioning`）。
+   *
+   * **この 1 本だけは `store_memberships` を見ない。** 店舗の設定は担当店舗の権限で
+   * 守られ、その権限は店舗が無いと持てない。会社の最初の 1 人はその輪から出られない
+   * ので、ここだけ会社のロール（JWT の `role`）で判断する。作った本人にはそのお店の
+   * 全権限を同じ `db.batch()` で渡し、鶏と卵が一段ずれるだけの結果にしない。
+   *
+   * `role === 'admin'` には店舗管理者も含まれる（admin の `STANDARD_ROLE_BASE_ROLE` が
+   * `head_office_admin` と `store_manager` の両方へ `admin` を与える）。ドメインは標準ロールを
+   * 持たないのでここでは分けられない。増やせるのは自社のお店だけで、既存の他店舗への権限は
+   * 増えないため、当面はこの広さで運用する（014-store-provisioning の「既知の限界」）。
+   *
+   * 会社 id は本文から受け取らない（`StoreInput` は strict なので送れば 400）。
+   * 合い言葉は全組織横断で一意なので、衝突は 409 で返し、**どの会社が使っているかは
+   * 明かさない**（他社の店舗の存在が漏れる）。
+   */
+  .post('/api/staff/stores', zValidator('json', StoreInput), async (c) => {
+    const { org, sub, role } = c.get('auth')
+    if (role !== 'admin') return c.json({ error: 'forbidden' }, 403)
+
+    const input = c.req.valid('json')
+    const db = drizzle(c.env.DB)
+
+    // 先に読んで分かる衝突はここで返す。同時に走った 2 本は UNIQUE 制約が受け止める。
+    const taken = await db.select({ id: stores.id }).from(stores).where(eq(stores.slug, input.slug))
+    if (taken.length > 0) {
+      return c.json({ error: 'store_slug_taken' as const, slug: input.slug }, 409)
+    }
+
+    const storeId = crypto.randomUUID()
+    const now = new Date().toISOString()
+    const rows = buildNewStore({
+      storeId,
+      organizationId: org,
+      userId: sub,
+      input,
+      now,
+      nextId: () => crypto.randomUUID(),
+    })
+
+    try {
+      await db.batch([
+        db.insert(stores).values(rows.store),
+        db.insert(storeBusinessHours).values(rows.businessHours),
+        db.insert(storeSlotRules).values(rows.slotRule),
+        db.insert(visitPurposes).values(rows.purposes),
+        db.insert(storeSettingsRevision).values(rows.settingsRevision),
+        db.insert(storeMemberships).values(rows.membership),
+        db.insert(auditEvents).values({
+          id: crypto.randomUUID(),
+          organizationId: org,
+          storeId,
+          actorType: 'staff',
+          actorId: sub,
+          terminalId: null,
+          action: 'store.created',
+          targetType: 'stores',
+          targetId: storeId,
+          beforeJson: null,
+          afterJson: JSON.stringify({ name: rows.store.name, slug: rows.store.slug }),
+          correlationId: null,
+          occurredAt: now,
+        }),
+      ])
+    } catch (error) {
+      // 合い言葉の UNIQUE 制約に同時に当たった側。読みの結果と同じ 409 に写像する。
+      if (String(error).includes('UNIQUE') && String(error).includes('slug')) {
+        return c.json({ error: 'store_slug_taken' as const, slug: input.slug }, 409)
+      }
+      throw error
+    }
+
+    return c.json(
+      Store.parse({
+        id: rows.store.id,
+        organizationId: rows.store.organizationId,
+        name: rows.store.name,
+        slug: rows.store.slug,
+        phone: rows.store.phone,
+        address: rows.store.address,
+        accessNote: rows.store.accessNote,
+        isActive: true,
+        createdAt: rows.store.createdAt,
+      }),
+      201,
     )
   })
 

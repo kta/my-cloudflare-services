@@ -5,7 +5,7 @@ import { PurposePanel } from './PurposePanel'
 import type { SettingsPanelProps } from './sections'
 
 /*
- * 承認済みモック docs/frontend/mockups/eyex/images/SETTINGS-PURPOSE.png の面。
+ * 承認済みモック docs/frontend/mockups/eye/images/SETTINGS-PURPOSE.png の面。
  * 「何が読めて、何が押せるか」と、所要時間を延ばしたときに落ちる Web 枠が
  * 保存の前に出ることを見る。いまの時刻は prop で注ぎ、実行日に依存させない。
  */

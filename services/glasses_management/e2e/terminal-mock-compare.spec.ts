@@ -1,7 +1,7 @@
 import { expect, type Page, test } from '@playwright/test'
 import { completeSeededTerminalStart } from './support/terminal'
 
-const ORG = 'eyex'
+const ORG = 'eye'
 const NOW = new Date('2026-08-27T02:08:00.000Z')
 
 /*
@@ -130,7 +130,7 @@ test.describe('端末 mock との突き合わせ', () => {
         CustomEvent: new (type: string, init: { detail: { subject: string } }) => Event
       }
       runtime.dispatchEvent(
-        new runtime.CustomEvent('eyex:personal-mode-required', {
+        new runtime.CustomEvent('eye:personal-mode-required', {
           detail: { subject: '録音の保全' },
         }),
       )

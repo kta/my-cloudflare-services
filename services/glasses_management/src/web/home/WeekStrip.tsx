@@ -3,7 +3,7 @@ import { cn, focusRing } from '@app/ui'
 import { shiftDate } from '../ledger/metrics'
 
 /*
- * トップの下辺に置く 1 週間の帯（承認済みモック docs/frontend/mockups/eyex/images/HOME.png）。
+ * トップの下辺に置く 1 週間の帯（承認済みモック docs/frontend/mockups/eye/images/HOME.png）。
  *
  * この帯が無いあいだ、共有端末のトップは「新しい予約を取る」と「予約を変更する」の
  * 2 枚だけで、本文の下 265px が空いていた。レジ横の iPad を見ても、今日の台帳へ入るには

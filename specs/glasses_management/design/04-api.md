@@ -7,7 +7,7 @@
 
 この文書は「誰が実装しても同じ URL・同じ入出力・同じエラーになる」ことを目的にする。
 画面が要求しない項目は足さない。モックに描かれていない値のうち、モックとブリーフから読み取れるもの・設計判断で決まるものは
-**この文書で決める**。**発注元（EYEX）の運用・法務・機材の実情を知らないと決められないものだけ** `[要確認: ...]` を残す（§8）。
+**この文書で決める**。**発注元（EYE）の運用・法務・機材の実情を知らないと決められないものだけ** `[要確認: ...]` を残す（§8）。
 
 ---
 
@@ -651,7 +651,7 @@ RPC チェーンに載るのは `POST /api/auth/token` を除く 99 本。
 | `Walkin.waitedMinutes` | `serverNow - walk_ins.arrived_at` を分へ切り捨て（LEDGER-STAFF「お待ち 6分」） |
 | `LedgerView.estimatedWaitMinutes` | **空き枠エンジンの結果から出す** —「選んだご用件を受けられる担当が次に空く時刻 − `serverNow`」を分に切り上げ（LEDGER-WALKIN「目安 15分」）。待ち人数だけで決めない（空いている担当が 3 人いても待ちが 2 名なら同じ数字を出してしまい、モックの「いまお待ち 2名／目安 15分」も再現できない。最短のご用件でも 20 分なので、件数 × 平均接客分数では 15 分にならない）。数えるウォークインは `visit_date = 本日（JST）` かつ `status='waiting'` に限る |
 | `LedgerView.nextTicketNo` | その店舗・その日の `ticket_no` の最大値 + 1（LEDGER-WALKIN「ウォークイン 005」） |
-| `WebBookingSettings.landingPath` | 公開ドメイン（`wrangler.jsonc` の `vars`）+ `stores.slug`（SETTINGS-WEB「eyex.jp/ginza」） |
+| `WebBookingSettings.landingPath` | 公開ドメイン（`wrangler.jsonc` の `vars`）+ `stores.slug`（SETTINGS-WEB「eye.jp/ginza」） |
 | `WebBookingSettings.publishedPurposeIds` | `visit_purposes.is_web_published='1'` かつ `is_active='1'` の行（銀座店は 5 件） |
 | `SlotRulesView.lastAcceptableAt` | **空き枠エンジンがその曜日に返す枠のうち、最後の枠の開始時刻**（SETTINGS-HOURS「木曜日に最後にお受けできるのは 18:20 です。」）。式で算出しない — 式で出すと 30 分の格子に載らない時刻を案内して「押せる枠が無い時刻」を読ませてしまう |
 | `StaffMember.skills` | `staff_skills` の行を `skill_code` の配列にしたもの |
@@ -664,7 +664,7 @@ RPC チェーンに載るのは `POST /api/auth/token` を除く 99 本。
 
 | スキーマ.フィールド | 必要な列 | モックの根拠 |
 |---|---|---|
-| `StoreDetail.namePublic` | `stores.name_public` | SETTINGS-STORE「お客様に見せる店名　EYEX 銀座店（銀座4丁目）」 |
+| `StoreDetail.namePublic` | `stores.name_public` | SETTINGS-STORE「お客様に見せる店名　EYE 銀座店（銀座4丁目）」 |
 | `StoreDetail.introText` | `stores.intro_text` | SETTINGS-STORE「お客様に見せる紹介文　78文字／200文字まで」 |
 | `StoreDetail.accessNote` の 3 分割 | `stores.access_note` 1 列では足りない | SETTINGS-STORE の「最寄り駅」「出口と所要時間」「駐車場」の 3 行 |
 | 楽観ロックの `version` | `stores` / `store_business_hours` / `staff` / `staff_shifts` / `equipment` / `walk_ins` / `terminals` に `version` | 各設定画面の「保存」と EX-CONFLICT。決定ブリーフ §3 で `version` を持つのは `store_slot_rules` / `visit_purposes` / `reservations` / `customers` / `web_booking_settings` だけ |
@@ -902,10 +902,10 @@ RPC チェーンに載るのは `POST /api/auth/token` を除く 99 本。
 
 | スキーマ名 | 用途 | 主なフィールドと制約 |
 |---|---|---|
-| `WebBookingSettings` | 公開設定 | `storeId` / `isPublished: boolean` / `landingPath: 1..60`（`eyex.jp/ginza`） / `opensAt`・`closesAt: LocalTime`（10:30–18:00） / `acceptFromHours: int 0..168 (**既定 2**)` / `acceptUntilDays: int 1..180`（30） / `requiresApproval: boolean (既定 true。**`false` を選ばせる UI は作らない**)` / `message: 0..120`（「27文字／120文字まで」） / `publishedPurposeIds: Uuid[]`（**0 件のまま `isPublished=true` にはできない**） / `version` / `updatedAt` |
+| `WebBookingSettings` | 公開設定 | `storeId` / `isPublished: boolean` / `landingPath: 1..60`（`eye.jp/ginza`） / `opensAt`・`closesAt: LocalTime`（10:30–18:00） / `acceptFromHours: int 0..168 (**既定 2**)` / `acceptUntilDays: int 1..180`（30） / `requiresApproval: boolean (既定 true。**`false` を選ばせる UI は作らない**)` / `message: 0..120`（「27文字／120文字まで」） / `publishedPurposeIds: Uuid[]`（**0 件のまま `isPublished=true` にはできない**） / `version` / `updatedAt` |
 | `WebBookingSettingsInput` | 更新 | 上の可変項目 + `version` |
 | `WebPreviewQuery` | プレビュー | `purposeIds?: string`（カンマ区切り。未保存の値） / `message?: 0..120` |
-| `WebPreviewResult` | プレビュー | `purposes: PublicStorePurpose[]` / `message: 0..120` / `storeName: 1..40`（SETTINGS-WEB 右「EYEX 銀座店　ご予約」） |
+| `WebPreviewResult` | プレビュー | `purposes: PublicStorePurpose[]` / `message: 0..120` / `storeName: 1..40`（SETTINGS-WEB 右「EYE 銀座店　ご予約」） |
 | `WebBookingReviewInput` | 承認・却下 | `decision: 'approve'\|'reject'` / `reason?: 0..120`（`decision='reject'` のとき必須を refine） |
 | `PublicStoreSearchQuery` | 店舗一覧 | `limit: int 1..10 (既定 3)`（WEB-01-STORE「近い順に3店舗」） / `lat?`・`lng?: number` |
 | `PublicStoreSummary` | 店舗 1 件 | `slug` / `name: 1..40` / `accessNote: 0..60`（「銀座駅 A2出口から徒歩3分」） |
@@ -1159,25 +1159,25 @@ payload に置けるキーも `z.strictObject` で固定されている（`reser
 
 | `type` | 件名 |
 |---|---|
-| `reservation.confirmed` | `EYEX {店名}　ご予約を承りました` |
-| `reservation.management_code_issued` | `EYEX {店名}　ご予約の確認番号` |
-| `reservation.management_code_reissued` | `EYEX {店名}　ご予約の確認番号をお送りし直しました` |
+| `reservation.confirmed` | `EYE {店名}　ご予約を承りました` |
+| `reservation.management_code_issued` | `EYE {店名}　ご予約の確認番号` |
+| `reservation.management_code_reissued` | `EYE {店名}　ご予約の確認番号をお送りし直しました` |
 
 本文（`reservation.confirmed`）:
 
 ```
 {お名前} 様
 
-EYEX {店名}のご予約を承りました。
+EYE {店名}のご予約を承りました。
 
 ご来店　2026年8月29日（土）11:00
-店舗　EYEX 銀座店（銀座4丁目）
+店舗　EYE 銀座店（銀座4丁目）
 ご用件　新しいメガネを作る（約60分）
 ご予約番号　EY-W-2608-0031
 確認番号　****
 
 ご変更・お取り消しは、ご予約番号と確認番号をお使いください。
-https://eyex.jp/w/reservations/EY-W-2608-0031
+https://eye.jp/w/reservations/EY-W-2608-0031
 ```
 
 書くときの決め:
@@ -1241,7 +1241,7 @@ return c.json(PublicBookingResult.parse({ ...result, emailed }))
 | 決定ブリーフ §1（binding・secrets）と矛盾しないか | `NOTIFIER` / `SHORT_LIVED` / `RECORDINGS` / `INTERNAL_KEY` / `JWT_SECRET` / `AUTH_DEV_GRANT` を使う。**`ADMIN` binding と `AUTH_PEPPER`（PIN のハッシュに要る）は §2.1 の `[要確認]` が解けたら §1 に足す** |
 | 決定ブリーフ §3（テーブル名・カラム）を勝手に変えていないか | この文書からは変えていない。§4.0 (b) で挙げた列は `03-data-model.md` が足し、**表を 5 本（`store_memberships` / `store_blackout_windows` / `store_settings_revision` / `staff_weekly_shifts` / `reservation_slot_locks`）足した**（`store_memberships` はブリーフ §12.4 で確定済み。残る 4 本が新規）。表の追加は規約 10 の人間の追認事項として `03-data-model.md` §16 に載せてある |
 | 決定ブリーフ §4（空き枠の 8 条件）を全部使っているか | `AvailabilityReason` の 11 値が 8 条件をすべて覆う |
-| 決定ブリーフ §5（画面）を賄えるか | §3 の「使う画面」列で 68 画面のうち API を要する画面をすべて指した。画面 ID は `docs/frontend/mockups/eyex/screens/<ID>.html` の**ファイル名と同じ表記**にした |
+| 決定ブリーフ §5（画面）を賄えるか | §3 の「使う画面」列で 68 画面のうち API を要する画面をすべて指した。画面 ID は `docs/frontend/mockups/eye/screens/<ID>.html` の**ファイル名と同じ表記**にした |
 | 決定ブリーフ §6（API 面）と矛盾しないか | 一致。`/api/staff/**` / `/api/public/**` / `/api/internal/**` / health / dev token |
 | モックに無いことを断定していないか | 断定していない箇所のうち、モックとブリーフから決まるもの・設計判断で決まるものは本文で決めた。**発注元に聞かないと決められない 5 件だけを `[要確認]` として残した**（下表。すべて `design/09-open-questions.md` の問いを指す。新しい問いを足していない） |
 | 規約（`docs/api/API_RULE.md`）に反していないか | チェーン／`zValidator` インライン／CORS 無し／`hc<AppType>`／401・403・503 の使い分け／エラー形状を満たす。**`requireRole('admin')` を店長判定に使わない**理由を §2 に明記した |

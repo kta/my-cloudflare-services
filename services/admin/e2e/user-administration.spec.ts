@@ -1,7 +1,7 @@
 import { type APIRequestContext, expect, type Page, test } from '@playwright/test'
 
 /**
- * 利用者管理(UC-EYEX-149)と個人 PIN(UC-EYEX-151)の e2e。
+ * 利用者管理(UC-EYE-149)と個人 PIN(UC-EYE-151)の e2e。
  *
  * dev グラントで運営 admin のセッションを起動し、招待 → 受諾で実在利用者を作る。
  * 受諾後のブラウザは招待された本人としてログイン済みになるため、同じ context で
@@ -57,11 +57,36 @@ test('本部管理者が利用者を検索し、権限差分を見て標準ロ�
   page,
   request,
 }) => {
-  const orgId = unique('eyex-admin-e2e')
+  const orgId = unique('eye-admin-e2e')
   const token = await mintAdminToken(request, orgId)
   await signIn(page, token)
   const email = `${unique('staff')}@example.test`
   await invite(request, token, orgId, email, 'staff')
+
+  /*
+   * 担当店舗は会社のお店の一覧から選ぶ（014-store-provisioning）。この e2e は
+   * admin だけを起動するのでドメインが応えられない。一覧そのものは admin の
+   * 責務ではないため、ここでは応答を差し込んで**選ぶ操作**を確かめる。
+   */
+  await page.route('**/api/organizations/*/stores', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([
+        {
+          id: STORE_ID,
+          organizationId: orgId,
+          name: '銀座店',
+          slug: 'ginza-e2e',
+          phone: '',
+          address: '',
+          accessNote: '',
+          isActive: true,
+          createdAt: '2026-09-05T00:00:00.000Z',
+        },
+      ]),
+    })
+  })
 
   await page.goto('/users')
   await expect(page.getByRole('heading', { name: '利用者', exact: true })).toBeVisible()
@@ -83,7 +108,7 @@ test('本部管理者が利用者を検索し、権限差分を見て標準ロ�
   await row.getByRole('button', { name: '権限を変更' }).click()
   const dialog = page.getByRole('dialog').filter({ hasText: '権限と担当店舗' })
   await dialog.getByLabel('標準ロール').selectOption('store_manager')
-  await dialog.getByLabel('担当店舗 ID(改行区切り)').fill(STORE_ID)
+  await dialog.getByRole('checkbox', { name: '銀座店' }).check()
   await dialog.getByRole('button', { name: '変更を保存' }).click()
   // preview には glasses-management の実体が居ないため、membership 同期は成功
   // (200)にも retryable な失敗(502)にもなり得る。どちらでも **admin 正本は
@@ -125,7 +150,7 @@ test('本人が個人PINを設定・変更し、管理者は本人確認後に�
   page,
   request,
 }) => {
-  const orgId = unique('eyex-pin-e2e')
+  const orgId = unique('eye-pin-e2e')
   const token = await mintAdminToken(request, orgId)
   await signIn(page, token)
   const email = `${unique('manager')}@example.test`

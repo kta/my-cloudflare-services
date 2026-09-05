@@ -4,7 +4,7 @@ import { completeSeededTerminalStart } from './support/terminal'
 
 /**
  * 店舗の受付条件（004-store-settings）の受け入れ基準を、実ブラウザと実 Worker で確かめる。
- * `vite preview` が実 workerd を動かし、D1 は `seed.mjs` が入れた EYEX 銀座店の盤面である。
+ * `vite preview` が実 workerd を動かし、D1 は `seed.mjs` が入れた EYE 銀座店の盤面である。
  *
  * 1 本の test の直前の行に `// @e2e-covers <ID> ...` を置く。UC は対になる AC の test に
  * 相乗りさせ、36 件（UC-SET-01..14 / AC-SET-01..22）をちょうど 1 回ずつ並べる。
@@ -14,8 +14,8 @@ import { completeSeededTerminalStart } from './support/terminal'
  * この面より先に走る（playwright.config.ts の project の並び）。
  */
 
-const ORG = 'eyex'
-/** seed.mjs が固定 id で入れる EYEX 銀座店。 */
+const ORG = 'eye'
+/** seed.mjs が固定 id で入れる EYE 銀座店。 */
 const GINZA = '11111111-1111-4111-8111-111111111111'
 /** dev グラントが載せる `sub`。担当店舗の `userId` はこれに合わせる。 */
 const VIEWER = `dev:${ORG}`
@@ -86,7 +86,7 @@ async function startWork(page: Page): Promise<void> {
   await page.getByLabel('お店のコード').fill(ORG)
   await page.getByRole('button', { name: '業務を始める' }).click()
   await completeSeededTerminalStart(page)
-  await expect(page.locator('header').first()).toContainText('EYEX 銀座店')
+  await expect(page.locator('header').first()).toContainText('EYE 銀座店')
 }
 
 function sectionNav(page: Page) {
@@ -148,8 +148,8 @@ test('設定を開くと店舗の情報が出て、お店の基本と行き方�
   )
   await expect(page.getByText('お店の基本')).toBeVisible()
   await expect(page.getByText('行き方のご案内')).toBeVisible()
-  await expect(page.getByLabel('店名', { exact: true })).toHaveValue('EYEX 銀座店')
-  await expect(page.getByLabel('お客様に見せる店名')).toHaveValue('EYEX 銀座店（銀座4丁目）')
+  await expect(page.getByLabel('店名', { exact: true })).toHaveValue('EYE 銀座店')
+  await expect(page.getByLabel('お客様に見せる店名')).toHaveValue('EYE 銀座店（銀座4丁目）')
   await expect(page.getByLabel('電話番号')).toHaveValue('03-3571-0001')
   await expect(page.getByLabel('最寄り駅')).toHaveValue('東京メトロ 銀座駅')
   await expect(page.getByLabel('出口と所要時間')).toHaveValue('A1出口から徒歩3分')
@@ -169,7 +169,7 @@ test('店名と住所を直すと未保存の変更 2件になり、保存する
   const before = { name: await name.inputValue(), address: await address.inputValue() }
 
   await expect(saveButton(page)).toBeDisabled()
-  await name.fill('EYEX 銀座本店')
+  await name.fill('EYE 銀座本店')
   await address.fill('東京都中央区銀座4-1-2')
 
   await expect(unsavedBadge(page)).toHaveText('未保存の変更 2件')
@@ -178,7 +178,7 @@ test('店名と住所を直すと未保存の変更 2件になり、保存する
   await expect(page.getByText('保存しました')).toHaveCount(1)
 
   await reopenSection(page, '店舗の情報', '営業日')
-  await expect(page.getByLabel('店名', { exact: true })).toHaveValue('EYEX 銀座本店')
+  await expect(page.getByLabel('店名', { exact: true })).toHaveValue('EYE 銀座本店')
 
   // 盤面を seed のままへ戻す。
   await page.getByLabel('店名', { exact: true }).fill(before.name)
@@ -611,7 +611,7 @@ test('スタッフの権限で保存すると、店長だけができると断�
     await expect(page.getByRole('button', { name: /店長に依頼/ })).toHaveCount(0)
   } finally {
     await grant(request, MANAGER_PERMISSIONS)
-    await patch('user-eyex-nakamura')
+    await patch('user-eye-nakamura')
   }
 })
 
@@ -642,7 +642,7 @@ test('いま使えるの切り替えは入切を持つ操作で、状態が字�
 // @e2e-covers AC-SET-19
 test('件数の変化は割り込まない知らせとして伝わり、警告にはしない', async ({ page }) => {
   await openSettings(page, '店舗の情報')
-  await page.getByLabel('店名', { exact: true }).fill('EYEX 銀座店（下書き）')
+  await page.getByLabel('店名', { exact: true }).fill('EYE 銀座店（下書き）')
 
   await expect(page.getByRole('status').filter({ hasText: '未保存の変更 1件' })).toBeVisible()
   // 接客中の読み上げを断ち切る警告（role="alert"）にはしない。

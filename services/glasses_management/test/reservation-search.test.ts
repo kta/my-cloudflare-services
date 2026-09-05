@@ -25,7 +25,7 @@ import {
   resolveSearch,
 } from '../src/worker/domain/reservation-search'
 
-const ORG = 'org-eyex'
+const ORG = 'org-eye'
 const GINZA = 'store-ginza'
 
 /** 選択中店舗だけを見る、いちばん素の条件。 */

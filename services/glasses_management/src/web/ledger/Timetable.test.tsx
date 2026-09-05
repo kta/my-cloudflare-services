@@ -6,10 +6,10 @@ import { at, closedView, resourceView, staffView } from './fixtures'
 import { Timetable } from './Timetable'
 
 /*
- * 予約台帳のタイムテーブル（承認済みモック docs/frontend/mockups/eyex/images/LEDGER-STAFF.png
+ * 予約台帳のタイムテーブル（承認済みモック docs/frontend/mockups/eye/images/LEDGER-STAFF.png
  * と LEDGER-RESOURCE.png）。
  *
- * 実測（LEDGER-STAFF.html の <style> と assets/eyex.css）:
+ * 実測（LEDGER-STAFF.html の <style> と assets/eye.css）:
  *   .tt-grid   = 170px + 14 列 1fr。行は 34px / 1fr ×4 / 88px
  *   .tt-head   = min-height 34px / padding 0 8px / 地 --surface-2
  *   .tt-name   = min-height 64px / padding 6px 10px / 補足 11px

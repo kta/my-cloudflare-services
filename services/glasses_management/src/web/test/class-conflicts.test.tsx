@@ -53,7 +53,7 @@ const PLACES = [
     name: '銀座店 レジ横iPad',
     kind: 'shared' as const,
     placeNote: 'レジの右側',
-    deviceLabel: 'EYEX-iPad-07',
+    deviceLabel: 'EYE-iPad-07',
     autoLockSeconds: 120,
     lastSeenAt: null,
     isOnline: false,
@@ -68,7 +68,7 @@ describe('打ち消しに頼ったクラスを置かない', () => {
   it('端末の使い方を決める面', () => {
     expect(
       conflictsIn(
-        <DeviceMode deviceLabel="EYEX-iPad-07" onPersonal={() => {}} onShared={() => {}} />,
+        <DeviceMode deviceLabel="EYE-iPad-07" onPersonal={() => {}} onShared={() => {}} />,
       ),
     ).toEqual([])
   })

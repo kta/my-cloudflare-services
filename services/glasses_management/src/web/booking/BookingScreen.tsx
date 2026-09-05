@@ -38,7 +38,7 @@ import {
 } from './steps'
 
 /*
- * 受付の器（承認済みモック docs/frontend/mockups/eyex/images/BOOK-01-DATETIME.png ほか 12 面）。
+ * 受付の器（承認済みモック docs/frontend/mockups/eye/images/BOOK-01-DATETIME.png ほか 12 面）。
  *
  * 5 工程が同じ器の上で動き、いまどの工程にいるか・録音がどこにあるかが工程を移っても
  * 変わらない状態にする。
@@ -83,7 +83,7 @@ export type BookingScreenProps = {
 }
 
 /** 端末に置くのはこの 1 つだけ。お名前・お電話番号は置かない（§6.6）。 */
-const SESSION_KEY = 'eyex.booking.session'
+const SESSION_KEY = 'eye.booking.session'
 const MS_PER_MINUTE = 60_000
 /** 仮の押さえの残り時間を数え直す間隔。端末の時計は読まず、器の時刻を 1 秒ずつ進める。 */
 const TICK_MS = 1_000

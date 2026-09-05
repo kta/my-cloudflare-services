@@ -1,8 +1,8 @@
 /*
  * デザイントークン — この製品の見た目が住む唯一の場所。
  *
- * 値は承認済みモック `docs/frontend/mockups/eyex/`（0ベース版・68画面）の
- * `assets/eyex.css` の `:root` から採った。アプリのコードはこのセマンティック
+ * 値は承認済みモック `docs/frontend/mockups/eye/`（0ベース版・68画面）の
+ * `assets/eye.css` の `:root` から採った。アプリのコードはこのセマンティック
  * トークンだけを参照する。生の hex、Tailwind 既定パレット（bg-blue-500 等）、
  * 任意値（p-[13px]）は使わない。
  *
@@ -11,7 +11,7 @@
  *   --font-sans → font-sans
  *   --radius-ctl → rounded-ctl
  *
- * 旧モック（`eyex-reservation`）専用だった方言トークン（terminal-* / viz-* /
+ * 旧モック（`eye-reservation`）専用だった方言トークン（terminal-* / viz-* /
  * sp-* / compact-*）は、対応する画面ごと作り直したので削除した。
  */
 @theme {
@@ -108,4 +108,79 @@
   --radius-full: 9999px;
   --radius-circle: 50%;
   --radius-none: 0;
+
+  /* ===================================================================
+   * 典拠（Tenkyo）— 特許調査・出願支援サービスのトークン。
+   *
+   * EYE（眼鏡店）とは題材がまったく違うので、面相を共有しない。値は承認済みモック
+   * `docs/frontend/mockups/patent_research/direction-c.html`（検証台帳）から採り、
+   * 名前を `tk-` で始めて EYE のトークンと混ざらないようにしてある。
+   *
+   * 題材は「特許事務所の出願台帳と検印」。1 行 = 1 つの典拠で、行頭に必ず検印
+   * （済・未・却）が押される。**支持の根拠になるのは「済」の行だけ**であり、
+   * 「却」の行は台帳から降ろされて、AI の主張と実際の原文が左右に並べて残る。
+   * 製品の主張（照合できなかった主張は削除されないが根拠にもならない）を、
+   * 検印という日本の実務者に通じる語彙で表す。
+   *
+   * モックの実測値のうち 2 つは、台帳台の上で WCAG AA（4.5:1）に届かなかったので、
+   * 色相を保ったまま明度だけ下げた:
+   *   鼠   #6A7076 → #5E646A（台帳台の上 4.16 → 4.97）
+   *   琥珀 #946200 → #8B5C00（台帳台の上 4.35 → 4.80）
+   * =================================================================== */
+
+  /* --- 面。台帳台の上に台帳紙が乗る。カードではなく「欄」を罫で囲む。 --- */
+  --color-tk-board: #e8eaed; /* ページの地（台帳台） */
+  --color-tk-sheet: #ffffff; /* 表・欄（台帳紙） */
+  --color-tk-band: #22262b; /* 最上部の帯だけに使う濃い面 */
+  --color-on-tk-band: #ffffff; /* 帯の上 15.22:1 */
+
+  /* --- 罫。薄罫は装飾、濃罫は表頭と区切り（非テキスト 3:1 を満たす）。 --- */
+  --color-tk-line: #d0d4d9;
+  --color-tk-line-strong: #7c838b; /* 台帳紙 3.83:1 / 台帳台 3.18:1 */
+
+  /* --- 文字 --- */
+  --color-tk-ink: #16181c; /* 本文 17.77:1 */
+  --color-tk-ink-muted: #5e646a; /* 注記・補助 5.99:1 / 台帳台 4.97:1 */
+
+  /* --- 検印の三色。**色だけに意味を持たせず、必ず一字（済・未・却）を添える。** --- */
+  --color-tk-verified: #0f5f6e; /* 済＝機械照合を通った。公報番号のリンクもこの色 */
+  --color-tk-verified-soft: #e6f0f2;
+  --color-tk-pending: #8b5c00; /* 未＝まだ照合していない／照合できない */
+  --color-tk-pending-soft: #f7f0dd;
+  --color-tk-rejected: #b02a22; /* 却＝原文と食い違った。支持の根拠にならない */
+  --color-tk-rejected-soft: #f8eae8;
+
+  /* --- 書体。公文書向けの UD 書体を一家族で通し、等幅は公報番号・日付・件数・
+     検索式だけに使う（和文には使わない）。自己ホストは packages/ui/src/index.ts。 --- */
+  --font-tk-sans: "BIZ UDPGothic", -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif;
+  --font-tk-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace;
+
+  /* --- 字寸。台帳の密度計画そのもの。**モックの生値をコピペせず、役割で名前を付ける。**
+     和文の行間は 1.7〜1.85 に置く（12〜13px の和文は行間が詰まると読めない）。
+     等幅は公報番号・段落番号・日付・件数・検索式にだけ使い、和文には使わない。 --- */
+  --text-tk-display: 1.75rem; /* 28px 入口の製品名 */
+  --text-tk-display--line-height: 1.2;
+  --text-tk-figure: 1.5rem; /* 24px コーパスの件数のような、目で掴む数 */
+  --text-tk-figure--line-height: 1.2;
+  --text-tk-masthead: 1.0625rem; /* 17px 上のバーの製品名 */
+  --text-tk-masthead--line-height: 1.3;
+  --text-tk-matter: 0.9375rem; /* 15px 案件名 */
+  --text-tk-matter--line-height: 1.4;
+  --text-tk-heading: 0.8125rem; /* 13px 欄の見出し・一覧の主要な行 */
+  --text-tk-heading--line-height: 1.5;
+  --text-tk-body: 0.78125rem; /* 12.5px 台帳の本文。この製品の基準の大きさ */
+  --text-tk-body--line-height: 1.75;
+  --text-tk-data: 0.75rem; /* 12px 等幅の値・補助の行 */
+  --text-tk-data--line-height: 1.5;
+  --text-tk-note: 0.71875rem; /* 11.5px 注記・欄外 */
+  --text-tk-note--line-height: 1.7;
+  --text-tk-fine: 0.6875rem; /* 11px 最小の札 */
+  --text-tk-fine--line-height: 1.6;
+
+  /* --- 字間。和文の見出しを台帳らしく立てる 2 箇所だけ。 --- */
+  --tracking-tk-display: 0.08em;
+  --tracking-tk-masthead: 0.14em;
+
+  /* --- 形。台帳は罫で囲まれた矩形であり、丸めない。 --- */
+  --radius-tk-doc: 0.125rem; /* 2px */
 }

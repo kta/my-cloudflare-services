@@ -4,13 +4,13 @@ import { filterLedgerRows, type LedgerListRow, SOURCE_LABELS } from '../../worke
 import { jstClock } from './metrics'
 
 /*
- * 予約リスト（承認済みモック docs/frontend/mockups/eyex/images/LEDGER-LIST.png）。
+ * 予約リスト（承認済みモック docs/frontend/mockups/eye/images/LEDGER-LIST.png）。
  *
  * 同じ日を時間順に読み、次に何をすべきかを左端の 1 列だけで進める面。
  * **押せるのは左端の 1 列と絞り込みの札だけで、ほかは読むだけである。**
  * 白い箱を並べず、罫線だけで区切る。
  *
- * 実測値（screens/LEDGER-LIST.html と assets/eyex.css）:
+ * 実測値（screens/LEDGER-LIST.html と assets/eye.css）:
  *   絞り込みの帯 = 高さ 60px・padding 0 32px・地 --surface-2、札 = min-height 44px・
  *   padding 0 16px・ピル（選択中は 2px の --brand ＋ 地 --brand-tint）。
  *   列幅 = 120px / 96px / 224px / 1fr / 140px・gap 16px。行 = min-height 62px・下罫 1px。

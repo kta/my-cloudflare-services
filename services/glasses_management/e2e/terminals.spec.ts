@@ -1,7 +1,7 @@
 import { type APIRequestContext, expect, type Locator, type Page, test } from '@playwright/test'
 import { completeSeededTerminalStart } from './support/terminal'
 
-const ORG = 'eyex'
+const ORG = 'eye'
 const NOW = new Date('2026-08-27T02:08:00.000Z')
 const GINZA = '11111111-1111-4111-8111-111111111111'
 const FAILED_RECORDING_ID = 'f0021000-0000-4000-8000-000000000000'
@@ -317,7 +317,7 @@ test('共有端末で録音保全を始めると本人確認画面を開く', as
       CustomEvent: new (type: string, init: { detail: { subject: string } }) => Event
     }
     runtime.dispatchEvent(
-      new runtime.CustomEvent('eyex:personal-mode-required', { detail: { subject: '録音の保全' } }),
+      new runtime.CustomEvent('eye:personal-mode-required', { detail: { subject: '録音の保全' } }),
     )
   })
   await expect(
@@ -336,7 +336,7 @@ test('本人確認で正しいPINを入れると元の業務画面へ戻り、�
       CustomEvent: new (type: string, init: { detail: { subject: string } }) => Event
     }
     runtime.dispatchEvent(
-      new runtime.CustomEvent('eyex:personal-mode-required', { detail: { subject: '録音の保全' } }),
+      new runtime.CustomEvent('eye:personal-mode-required', { detail: { subject: '録音の保全' } }),
     )
   })
   await page.getByRole('button', { name: /佐藤 美咲/ }).click()
@@ -522,13 +522,13 @@ test('共有端末の置き場所選択から使い方を決め直せる', async
 // @e2e-covers UC-TERM-16
 test('端末設定で保存した使い方は、業務終了後の次の開始画面に反映される', async ({ page }) => {
   await startShared(page)
-  const terminalId = await page.evaluate(() => sessionStorage.getItem('eyex.active-terminal-id'))
+  const terminalId = await page.evaluate(() => sessionStorage.getItem('eye.active-terminal-id'))
   await page.evaluate((id) => {
     const browserWindow = globalThis as unknown as {
       dispatchEvent: (event: CustomEvent) => boolean
     }
     browserWindow.dispatchEvent(
-      new CustomEvent('eyex:terminal-updated', { detail: { id, kind: 'personal' } }),
+      new CustomEvent('eye:terminal-updated', { detail: { id, kind: 'personal' } }),
     )
   }, terminalId)
 

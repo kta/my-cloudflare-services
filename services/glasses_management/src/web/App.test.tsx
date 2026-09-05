@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from './App'
 
 /*
- * 承認済みモック（docs/frontend/mockups/eyex/images/HOME.png）の骨格が
+ * 承認済みモック（docs/frontend/mockups/eye/images/HOME.png）の骨格が
  * 実際に描かれていることを固定する。見た目の寸法は e2e の突き合わせで見るので、
  * ここでは「何が読めて、何が押せるか」を見る。
  */
@@ -12,8 +12,8 @@ import { App } from './App'
 const stores = [
   {
     id: '11111111-2222-4333-8444-555555555555',
-    organizationId: 'eyex',
-    name: 'EYEX 銀座店',
+    organizationId: 'eye',
+    name: 'EYE 銀座店',
     slug: 'ginza',
     phone: '',
     address: '',
@@ -23,8 +23,8 @@ const stores = [
   },
   {
     id: '22222222-2222-4333-8444-555555555555',
-    organizationId: 'eyex',
-    name: 'EYEX 丸の内店',
+    organizationId: 'eye',
+    name: 'EYE 丸の内店',
     slug: 'marunouchi',
     phone: '',
     address: '',
@@ -91,7 +91,7 @@ afterEach(() => {
 
 async function startWork() {
   render(<App />)
-  await userEvent.type(screen.getByLabelText('お店のコード'), 'eyex')
+  await userEvent.type(screen.getByLabelText('お店のコード'), 'eye')
   await userEvent.click(screen.getByRole('button', { name: '業務を始める' }))
 }
 
@@ -104,7 +104,7 @@ describe('業務開始', () => {
 
   it('始めると店舗名が上のバーに出る', async () => {
     await startWork()
-    await waitFor(() => expect(screen.getByText('EYEX 銀座店')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('EYE 銀座店')).toBeInTheDocument())
   })
 
   /*
@@ -115,7 +115,7 @@ describe('業務開始', () => {
    */
   it('上のバーの営業状態は、保存された営業時間から出す', async () => {
     await startWork()
-    await waitFor(() => expect(screen.getByText('EYEX 銀座店')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('EYE 銀座店')).toBeInTheDocument())
     await waitFor(() =>
       expect(screen.getByText(/(営業中|営業時間外|本日は定休日)/)).toBeInTheDocument(),
     )
@@ -268,22 +268,20 @@ describe('トップ', () => {
     await startWork()
     await waitFor(() => expect(screen.getByText('新しい予約を取る')).toBeInTheDocument())
     // いまは銀座店。畳んでいるあいだ、ほかのお店の名前は出ていない。
-    expect(
-      screen.getByRole('button', { name: 'EYEX 銀座店　お店を切り替える' }),
-    ).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'EYEX 丸の内店へ切り替える' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'EYE 銀座店　お店を切り替える' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'EYE 丸の内店へ切り替える' })).toBeNull()
 
     await openStoreMenu()
-    await userEvent.click(screen.getByRole('button', { name: 'EYEX 丸の内店へ切り替える' }))
+    await userEvent.click(screen.getByRole('button', { name: 'EYE 丸の内店へ切り替える' }))
     // 切り替わると上のバーの店名が変わり、こんどは銀座店が切り替え先に並ぶ。
     await waitFor(() =>
       expect(
-        screen.getByRole('button', { name: 'EYEX 丸の内店　お店を切り替える' }),
+        screen.getByRole('button', { name: 'EYE 丸の内店　お店を切り替える' }),
       ).toBeInTheDocument(),
     )
     await openStoreMenu()
-    expect(screen.getByRole('button', { name: 'EYEX 銀座店へ切り替える' })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'EYEX 丸の内店へ切り替える' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'EYE 銀座店へ切り替える' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'EYE 丸の内店へ切り替える' })).toBeNull()
   })
 
   it('トップ以外の面からも切り替えられる（いちどトップへ戻らせない）', async () => {
@@ -291,10 +289,10 @@ describe('トップ', () => {
     const nav = await screen.findByRole('navigation', { name: '画面の切り替え' })
     await userEvent.click(within(nav).getByRole('button', { name: '予約台帳' }))
     await openStoreMenu()
-    await userEvent.click(screen.getByRole('button', { name: 'EYEX 丸の内店へ切り替える' }))
+    await userEvent.click(screen.getByRole('button', { name: 'EYE 丸の内店へ切り替える' }))
     await waitFor(() =>
       expect(
-        screen.getByRole('button', { name: 'EYEX 丸の内店　お店を切り替える' }),
+        screen.getByRole('button', { name: 'EYE 丸の内店　お店を切り替える' }),
       ).toBeInTheDocument(),
     )
   })
@@ -309,10 +307,10 @@ describe('トップ', () => {
     await startWork()
     await waitFor(() => expect(screen.getByText('新しい予約を取る')).toBeInTheDocument())
     await openStoreMenu()
-    await userEvent.click(screen.getByRole('button', { name: 'EYEX 丸の内店へ切り替える' }))
+    await userEvent.click(screen.getByRole('button', { name: 'EYE 丸の内店へ切り替える' }))
     await waitFor(() =>
       expect(
-        screen.getByRole('button', { name: 'EYEX 丸の内店　お店を切り替える' }),
+        screen.getByRole('button', { name: 'EYE 丸の内店　お店を切り替える' }),
       ).toBeInTheDocument(),
     )
     // 左の柱も主操作もそのまま。入口の見出しは 1 つも出ない。
@@ -351,7 +349,13 @@ describe('トップ', () => {
  * 「営業中 10:00–19:00」まで出ていた（UX 監査 SHELL-03）。
  * **入口で止めて、コードを直す道を示す。**
  */
-describe('知らないお店のコード', () => {
+/*
+ * お店が 0 件のコードは「打ち間違い」と「まだ 1 店舗も登録していない新しい会社」の
+ * 両方でありうる。入口で止めると後者は永久に入れないので、通したうえでトップに
+ * 「最初のお店を登録する」を出す（014-store-provisioning）。打ち間違いの人も、
+ * 空のトップと登録の面を見れば自分が別の会社に入ったと分かる。
+ */
+describe('お店が 0 件のコード', () => {
   function noStores() {
     mockFetch((url) =>
       url.includes('/api/auth/token')
@@ -366,37 +370,59 @@ describe('知らないお店のコード', () => {
     )
   }
 
-  it('お店が 1 つも見つからないコードでは、入口で止めて理由を言う', async () => {
+  async function enter(code = 'nonexistent'): Promise<void> {
     noStores()
     render(<App />)
-    await userEvent.type(screen.getByLabelText('お店のコード'), 'nonexistent')
+    await userEvent.type(screen.getByLabelText('お店のコード'), code)
     await userEvent.click(screen.getByRole('button', { name: '業務を始める' }))
-    await waitFor(() =>
-      expect(
-        screen.getByText(
-          'このコードのお店が見つかりませんでした。お店のコードをお確かめのうえ、もう一度お試しください。',
-        ),
-      ).toBeInTheDocument(),
-    )
+  }
+
+  it('入口では止めず、最初のお店を登録する面を立てる', async () => {
+    await enter()
+
+    expect(
+      await screen.findByRole('heading', { name: '最初のお店を登録します', level: 1 }),
+    ).toBeInTheDocument()
   })
 
-  it('止めたあとも入口に留まり、アプリ本体には入らない', async () => {
-    noStores()
-    render(<App />)
-    await userEvent.type(screen.getByLabelText('お店のコード'), 'nonexistent')
-    await userEvent.click(screen.getByRole('button', { name: '業務を始める' }))
-    await waitFor(() => expect(screen.getByLabelText('お店のコード')).toBeInTheDocument())
-    // 左サイドバーも、偽の営業時間も出さない。
+  it('別の面を開かせず、その場で店名を聞く', async () => {
+    await enter()
+
+    expect(await screen.findByLabelText('お店の名前')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'このお店で始める' })).toBeInTheDocument()
+  })
+
+  it('押しても何も起きない行き先の柱を並べない', async () => {
+    await enter()
+
+    await screen.findByLabelText('お店の名前')
     expect(screen.queryByRole('navigation', { name: '画面の切り替え' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '新しい予約を取る' })).toBeNull()
+  })
+
+  it('お店が無い間は、実在しない店名も営業状態も出さない', async () => {
+    await enter()
+
+    await screen.findByLabelText('お店の名前')
+    expect(screen.queryByText('EYE 銀座店')).toBeNull()
     expect(screen.queryByText(/営業中/)).toBeNull()
+  })
+
+  it('入れたコードを、いまいる場所と合い言葉の既定に使う', async () => {
+    await enter('eyex')
+
+    await screen.findByLabelText('お店の名前')
+    expect(screen.getByText('/w/eyex')).toBeInTheDocument()
+    // どの会社にいるかは上の帯が言う。
+    expect(screen.getByText('eyex')).toBeInTheDocument()
   })
 })
 
 /*
  * お店のコードは大文字で入れても同じ店に入れる。
  * dev グラントは知らない組織にもトークンを出したうえで `organizations` に行を作るので、
- * `EYEX` のまま送ると「EYEX」という空の組織が生まれ、店舗 0 件で
- * 「このコードのお店が見つかりませんでした。」が出る（seed 済みの `eyex` は無事なのに）。
+ * `EYE` のまま送ると「EYE」という空の組織が生まれ、店舗 0 件で
+ * 「このコードのお店が見つかりませんでした。」が出る（seed 済みの `eye` は無事なのに）。
  * **入口で畳んでから送る。**
  */
 describe('お店のコードの正規化', () => {
@@ -440,29 +466,29 @@ describe('お店のコードの正規化', () => {
   it('大文字で入れても小文字にして送る', async () => {
     const calls = captureFetch()
     render(<App />)
-    await userEvent.type(screen.getByLabelText('お店のコード'), 'EYEX')
+    await userEvent.type(screen.getByLabelText('お店のコード'), 'EYE')
     await userEvent.click(screen.getByRole('button', { name: '業務を始める' }))
     await waitFor(() => expect(calls.some((c) => c.url.includes('/api/auth/token'))).toBe(true))
     const token = calls.find((c) => c.url.includes('/api/auth/token'))
-    expect(JSON.parse(token?.body ?? '{}')).toEqual({ organizationId: 'eyex' })
+    expect(JSON.parse(token?.body ?? '{}')).toEqual({ organizationId: 'eye' })
   })
 
   it('前後に空白があっても大文字でも、そのまま業務に入れる', async () => {
     captureFetch()
     render(<App />)
-    await userEvent.type(screen.getByLabelText('お店のコード'), '  EyeX  ')
+    await userEvent.type(screen.getByLabelText('お店のコード'), '  Eye  ')
     await userEvent.click(screen.getByRole('button', { name: '業務を始める' }))
     await waitFor(() => expect(screen.queryByLabelText('お店のコード')).toBeNull())
     // 入口を抜けた先で、そのコードの店舗名が読める。
-    await waitFor(() => expect(screen.getByText('EYEX 銀座店')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('EYE 銀座店')).toBeInTheDocument())
   })
 
   it('畳んだコードを覚えるので、再読み込みしても同じ店に戻る', async () => {
     captureFetch()
     render(<App />)
-    await userEvent.type(screen.getByLabelText('お店のコード'), 'EYEX')
+    await userEvent.type(screen.getByLabelText('お店のコード'), 'EYE')
     await userEvent.click(screen.getByRole('button', { name: '業務を始める' }))
-    await waitFor(() => expect(sessionStorage.getItem('app.auth.org')).toBe('eyex'))
+    await waitFor(() => expect(sessionStorage.getItem('app.auth.org')).toBe('eye'))
   })
 })
 

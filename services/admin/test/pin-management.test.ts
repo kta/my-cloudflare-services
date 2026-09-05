@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { authed, BASE, createTenantOrganization, inviteMember } from './helpers/actors'
 
 /**
- * UC-EYEX-151: スタッフは自分の PIN を設定・変更でき、管理者は本人確認後に
+ * UC-EYE-151: スタッフは自分の PIN を設定・変更でき、管理者は本人確認後に
  * 再設定を開始できるが PIN そのものは閲覧できない。平文 PIN はサーバへ届かず、
  * 復元可能な形で保存されず、レスポンスにもログにも現れない。
  */

@@ -5,7 +5,7 @@ import { EquipmentPanel } from './EquipmentPanel'
 import type { SettingsPanelProps } from './sections'
 
 /*
- * 承認済みモック docs/frontend/mockups/eyex/images/SETTINGS-EQUIPMENT.png の面。
+ * 承認済みモック docs/frontend/mockups/eye/images/SETTINGS-EQUIPMENT.png の面。
  * 見た目の寸法は e2e の突き合わせで見るので、ここでは「何が読めて、何が押せるか」を見る。
  * いまの時刻は prop で注ぎ、実行日に依存させない。
  *
@@ -111,8 +111,8 @@ function route(path: string, method: string, body: unknown): Response {
   if (path === `/api/staff/stores/${STORE_ID}`) {
     return json({
       id: STORE_ID,
-      organizationId: 'eyex',
-      name: 'EYEX 銀座店',
+      organizationId: 'eye',
+      name: 'EYE 銀座店',
       slug: 'ginza',
       phone: '',
       address: '',

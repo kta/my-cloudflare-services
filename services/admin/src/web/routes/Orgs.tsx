@@ -70,8 +70,8 @@ export function Orgs() {
         setName('')
         setPlan('free')
         await load()
-        setError('組織は作成済みです。EYEXへの同期を再試行してください。')
-        toast.error('組織は作成済みです。EYEXへの同期を再試行してください。')
+        setError('組織は作成済みです。EYEへの同期を再試行してください。')
+        toast.error('組織は作成済みです。EYEへの同期を再試行してください。')
         return
       }
       setError('組織の作成に失敗しました。')
@@ -92,10 +92,10 @@ export function Orgs() {
       )
       setPendingSync(null)
       setError(null)
-      toast.success('EYEXへの同期を完了しました。')
+      toast.success('EYEへの同期を完了しました。')
       await load()
     } catch (err) {
-      setError('EYEXへの同期を完了できませんでした。時間をおいて再試行してください。')
+      setError('EYEへの同期を完了できませんでした。時間をおいて再試行してください。')
       toast.error(messageForError(err))
     } finally {
       setBusyId(null)

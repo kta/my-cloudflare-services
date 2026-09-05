@@ -6,11 +6,11 @@ import { ConfirmStep, type ConfirmTarget, type PublicBookingDraft } from './Conf
 import { FormStep } from './FormStep'
 
 /*
- * 工程 5 ご確認（承認済みモック docs/frontend/mockups/eyex/images/WEB-05-CONFIRM.png）。
+ * 工程 5 ご確認（承認済みモック docs/frontend/mockups/eye/images/WEB-05-CONFIRM.png）。
  *
  * この面の仕事は「送る前に 5 行で読み返させ、直したい行からその工程へ戻す」こと。
  *
- * 実測値（screens/WEB-05-CONFIRM.html と assets/eyex.css）:
+ * 実測値（screens/WEB-05-CONFIRM.html と assets/eye.css）:
  *   表は上に 28px・角 12px・縁 1px `--color-line`、行の間に 1px の罫（最後の行は無し）。
  *   行は最小高 56px / 内側 12px 16px / 間 12px。見出し列 66px・13px、値 16px 太さ 600、
  *   補足 13px 標準、「変更」は 13px 太さ 600 `--color-pine`。1 行目だけ地が `--color-pine-soft`。
@@ -19,7 +19,7 @@ import { FormStep } from './FormStep'
 const STARTS_AT = '2026-08-29T02:00:00.000Z' // JST 8月29日（土）11:00
 
 const DRAFT: PublicBookingDraft = {
-  storeName: 'EYEX 銀座店',
+  storeName: 'EYE 銀座店',
   purposeName: '新しいメガネを作る',
   durationMinutes: 60,
   startsAt: STARTS_AT,
@@ -63,7 +63,7 @@ describe('ご確認', () => {
   it('5 行（ご来店・店舗・ご用件・お名前・ご連絡先）が入力と一致する', () => {
     open()
     expect(within(row('ご来店')).getByText('8月29日（土）11:00')).toBeVisible()
-    expect(within(row('店舗')).getByText('EYEX 銀座店')).toBeVisible()
+    expect(within(row('店舗')).getByText('EYE 銀座店')).toBeVisible()
     expect(within(row('ご用件')).getByText('新しいメガネを作る')).toBeVisible()
     expect(within(row('ご用件')).getByText('約60分')).toBeVisible()
     expect(within(row('お名前')).getByText('山口 真央 様')).toBeVisible()

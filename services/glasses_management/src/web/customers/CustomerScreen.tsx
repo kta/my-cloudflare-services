@@ -29,7 +29,7 @@ import {
 import { CustomerNew } from './CustomerNew'
 
 /*
- * 顧客台帳の器（承認済みモック docs/frontend/mockups/eyex/images/CUSTOMER-LIST.png ／
+ * 顧客台帳の器（承認済みモック docs/frontend/mockups/eye/images/CUSTOMER-LIST.png ／
  * CUSTOMER-DETAIL.png ／ CUSTOMER-NEW.png ／ CUSTOMER-MERGE.png ／ CUSTOMER-HANDWRITE.png）。
  *
  * **URL による画面の切り替えを持ち込まない**（この製品に router は無い）。行き先は

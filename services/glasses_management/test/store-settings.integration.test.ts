@@ -20,7 +20,7 @@ const THURSDAY = 4
 
 /* --- 器を作る ------------------------------------------------------------ */
 
-async function seedStore(org: string, name = 'EYEX 銀座店'): Promise<string> {
+async function seedStore(org: string, name = 'EYE 銀座店'): Promise<string> {
   const id = crypto.randomUUID()
   await env.DB.prepare(
     'INSERT INTO stores (id, organization_id, name, slug, phone, address, access_note, is_active, created_at) VALUES (?,?,?,?,?,?,?,?,?)',
@@ -154,8 +154,8 @@ describe('店舗の情報', () => {
     expect(before.status).toBe(200)
 
     const saved = await call('PATCH', `/api/staff/stores/${storeId}`, {
-      name: 'EYEX 銀座店',
-      namePublic: 'EYEX 銀座',
+      name: 'EYE 銀座店',
+      namePublic: 'EYE 銀座',
       phone: '03-1234-5678',
       address: '東京都中央区銀座1-2-3',
       nearestStation: '銀座駅',
@@ -168,7 +168,7 @@ describe('店舗の情報', () => {
 
     const after = await call('GET', `/api/staff/stores/${storeId}`)
     expect(after.body).toMatchObject({
-      namePublic: 'EYEX 銀座',
+      namePublic: 'EYE 銀座',
       nearestStation: '銀座駅',
       parkingNote: '提携駐車場あり',
       introText: 'まぶしさの少ないレンズをご案内します。',
@@ -186,7 +186,7 @@ describe('店舗の情報', () => {
       .bind(staffId, org, storeId, `dev:${org}`, '山田 大輔', 'manager', 1, '1', 0, NOW, NOW)
       .run()
 
-    await call('PATCH', `/api/staff/stores/${storeId}`, { name: 'EYEX 銀座店', version: 1 })
+    await call('PATCH', `/api/staff/stores/${storeId}`, { name: 'EYE 銀座店', version: 1 })
 
     const after = await call('GET', `/api/staff/stores/${storeId}`)
     const body = after.body as { updatedAt: string | null; updatedBy: string | null }

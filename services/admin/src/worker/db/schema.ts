@@ -40,7 +40,7 @@ export const users = sqliteTable('users', {
 })
 
 /**
- * 利用者の担当店舗(UC-EYEX-149)。admin が源泉で、結果は glasses_management へ
+ * 利用者の担当店舗(UC-EYE-149)。admin が源泉で、結果は glasses_management へ
  * store membership として配られる。担当解除は行を消さず permissions を空にした
  * tombstone として残し、同じ membership id で「権限ゼロ」を配れるようにする。
  */
@@ -86,7 +86,7 @@ export const userAdminAudits = sqliteTable(
 )
 
 /**
- * PIN 再設定チケット(UC-EYEX-151)。管理者は本人確認の記録つきで発行できるが、
+ * PIN 再設定チケット(UC-EYE-151)。管理者は本人確認の記録つきで発行できるが、
  * PIN 素材は一切保持しない — 実際の設定は本人だけが行う。
  */
 export const pinResetTickets = sqliteTable(

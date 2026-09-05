@@ -13,7 +13,7 @@ import {
 } from './sections'
 
 /*
- * 営業時間（承認済みモック docs/frontend/mockups/eyex/images/SETTINGS-HOURS.png）。
+ * 営業時間（承認済みモック docs/frontend/mockups/eye/images/SETTINGS-HOURS.png）。
  *
  * 実測: .cols = 1fr + 1fr / gap 24px。群の見出しは margin 28px 2px 12px。
  * グループ表の行は min-height 56px。「＋ 止める時間帯を足す」は表の最後の行で

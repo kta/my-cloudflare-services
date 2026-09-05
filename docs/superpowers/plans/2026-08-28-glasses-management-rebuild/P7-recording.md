@@ -487,7 +487,7 @@
     60 分でも約 14MB に収まり、1 ファイル上限 100MB（約 7 時間）に届かないので**分割送信を作らない**。
   - 経過時間: 開始時刻を保持し、注入した `now()` との差から `mm:ss` を作る。30 秒ごとに再計算する。
     **実時刻を読まない。**
-  - 端末の控え（`outbox.ts`）: IndexedDB `eyex-recording-outbox` / object store `blobs` / key は `recordingId`。
+  - 端末の控え（`outbox.ts`）: IndexedDB `eye-recording-outbox` / object store `blobs` / key は `recordingId`。
     置くのは `{ recordingId, blob, contentType, durationSeconds, startedAt, attempts, nextAttemptAt }` **だけ**。
     氏名・電話番号・メール・度数を書かない。
   - 消す条件は 2 つだけ: ①送信に成功した ②サーバが `state='failed'`（24 時間経過）を返した。
@@ -559,7 +559,7 @@
     端末には受付セッション id だけを持ち越す。まだ使えないときは同じ面に留まって理由が読める。
   - 「受付をやめる」の確認は 2 択（「入力をやめる」／「続ける」）。**既定は「続ける」**。
     やめても `reception_sessions`（`outcome='discarded'`）と録音は残す。
-  - 直し方 3 手順の文言（「ホーム画面の「設定」を開く」→「一覧から「EYEX予約」を選ぶ」→「「マイク」をオンにする」）は
+  - 直し方 3 手順の文言（「ホーム画面の「設定」を開く」→「一覧から「EYE予約」を選ぶ」→「「マイク」をオンにする」）は
     **1 か所の定数に置き、端末の配り方が変わったら差し替えられるようにする**
     （`design/09-open-questions.md` Q-05。いまの前提は「ホーム画面に追加した Web アプリ」）。
   - 読み込み中 / 375px / 200% 文字拡大 / VoiceOver は DESIGN_RULE の品質フロアで補う。
@@ -655,7 +655,7 @@
   - `mock` project（1194×810 / `deviceScaleFactor: 2`）で
     `toHaveScreenshot('EX-MIC-DENIED.png', { scale: 'device' })` /
     `toHaveScreenshot('EX-UPLOAD-FAILED.png', { scale: 'device' })` を撮る。
-    基準画像は `docs/frontend/mockups/eyex/reference/` に既にある（ステータスバーを外した派生物）。
+    基準画像は `docs/frontend/mockups/eye/reference/` に既にある（ステータスバーを外した派生物）。
   - 経過時間（`03:24` など）と時刻は動くので、撮る前に固定値へ差し替える。
   - `maxDiffPixelRatio` は「いま許している差」。**下げるだけで、上げてはいけない。**
     残っている差が何かを 1 行ずつコメントに書く。P7 の時点で残ることが分かっているのは 2 つ:

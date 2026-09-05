@@ -8,7 +8,7 @@ import { maskCustomerIdentity } from '../shell/mask'
 
 /*
  * 個人端末のトップに出る「本日わたしが担当するご予約」
- * （承認済みモック docs/frontend/mockups/eyex/images/HOME-PERSONAL.png の右の一覧）。
+ * （承認済みモック docs/frontend/mockups/eye/images/HOME-PERSONAL.png の右の一覧）。
  *
  * 題材: 朝いちばんに自分の持ち場を確かめる 1 枚。読むだけで、押すと台帳のその帯が開く。
  * シグネチャ: **白い箱を並べず、1px の罫線だけで行を分けること。**

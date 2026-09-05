@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 /**
- * UC-EYEX-149 の画面。一覧・検索・権限差分の提示と、標準ロール/担当店舗の変更、
+ * UC-EYE-149 の画面。一覧・検索・権限差分の提示と、標準ロール/担当店舗の変更、
  * PIN 再設定の開始(PIN 自体は決して表示しない)。
  */
 
@@ -12,7 +12,16 @@ const api = vi.hoisted(() => ({
   patchUser: vi.fn<(request: unknown) => Promise<Response>>(),
   getAudits: vi.fn<(request: unknown) => Promise<Response>>(),
   startPinReset: vi.fn<(request: unknown) => Promise<Response>>(),
+  getStores: vi.fn<(request: unknown) => Promise<Response>>(),
 }))
+
+/** 担当店舗の一覧は JWT の会社で引く。画面はこの会社しか知らない。 */
+const session = vi.hoisted(() => ({ currentClaims: vi.fn() }))
+
+vi.mock('../auth/session', async () => {
+  const actual = await vi.importActual<typeof import('../auth/session')>('../auth/session')
+  return { ...actual, currentClaims: session.currentClaims }
+})
 
 vi.mock('../client', async () => {
   const actual = await vi.importActual<typeof import('../client')>('../client')
@@ -20,6 +29,7 @@ vi.mock('../client', async () => {
     ...actual,
     client: {
       api: {
+        organizations: { ':id': { stores: { $get: api.getStores } } },
         users: {
           $get: api.getUsers,
           ':id': {
@@ -63,6 +73,15 @@ function restoreDialogShim(): void {
 }
 
 const STORE = '11111111-1111-4111-8111-111111111111'
+const OTHER_STORE = '22222222-2222-4222-8222-222222222222'
+const STORE_ROW = {
+  organizationId: 'eyex',
+  phone: '',
+  address: '',
+  accessNote: '',
+  isActive: true,
+  createdAt: '2026-09-05T00:00:00.000Z',
+}
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -93,6 +112,13 @@ beforeEach(() => {
   api.startPinReset.mockImplementation(async () =>
     json({ id: 't-1', userId: 'u-staff', status: 'pending', expiresAt: 'x', createdAt: 'y' }, 201),
   )
+  api.getStores.mockImplementation(async () =>
+    json([
+      { ...STORE_ROW, id: STORE, name: '銀座店', slug: 'ginza' },
+      { ...STORE_ROW, id: OTHER_STORE, name: '丸の内店', slug: 'marunouchi' },
+    ]),
+  )
+  session.currentClaims.mockReturnValue({ sub: 'op-1', org: 'eyex' })
 })
 
 afterEach(() => {
@@ -131,15 +157,65 @@ describe('Users', () => {
     await user.click(within(row).getByRole('button', { name: '権限を変更' }))
     const dialog = await screen.findByRole('dialog', { name: /権限と担当店舗/ })
     await user.selectOptions(within(dialog).getByLabelText('標準ロール'), 'store_manager')
-    const stores = within(dialog).getByLabelText('担当店舗 ID(改行区切り)')
-    await user.clear(stores)
-    await user.type(stores, STORE)
+    // 店舗 id は手で打たない。会社のお店を一覧から選ぶ（014-store-provisioning）。
+    // 銀座店は既に担当なので、丸の内店を足して 2 店になる。
+    await user.click(within(dialog).getByRole('checkbox', { name: '丸の内店' }))
     await user.click(within(dialog).getByRole('button', { name: '変更を保存' }))
 
     expect(api.patchUser).toHaveBeenCalledWith({
       param: { id: 'u-staff' },
-      json: { standardRole: 'store_manager', storeIds: [STORE] },
+      json: { standardRole: 'store_manager', storeIds: [STORE, OTHER_STORE] },
     })
+  })
+
+  it('担当店舗は会社のお店の一覧から選ぶ', async () => {
+    const user = userEvent.setup()
+    render(<Users />)
+    const row = await screen.findByRole('listitem')
+    await user.click(within(row).getByRole('button', { name: '権限を変更' }))
+    const dialog = await screen.findByRole('dialog', { name: /権限と担当店舗/ })
+
+    expect(api.getStores).toHaveBeenCalledWith({ param: { id: 'eyex' } })
+    expect(within(dialog).getByRole('checkbox', { name: '銀座店' })).toBeInTheDocument()
+    expect(within(dialog).getByRole('checkbox', { name: '丸の内店' })).toBeInTheDocument()
+  })
+
+  it('いま担当しているお店には最初から印が付く', async () => {
+    const user = userEvent.setup()
+    render(<Users />)
+    const row = await screen.findByRole('listitem')
+    await user.click(within(row).getByRole('button', { name: '権限を変更' }))
+    const dialog = await screen.findByRole('dialog', { name: /権限と担当店舗/ })
+
+    expect(within(dialog).getByRole('checkbox', { name: '銀座店' })).toBeChecked()
+    expect(within(dialog).getByRole('checkbox', { name: '丸の内店' })).not.toBeChecked()
+  })
+
+  it('お店が 1 つも無ければ、先に登録が要ると伝える', async () => {
+    api.getStores.mockImplementation(async () => json([]))
+    const user = userEvent.setup()
+    render(<Users />)
+    const row = await screen.findByRole('listitem')
+    await user.click(within(row).getByRole('button', { name: '権限を変更' }))
+    const dialog = await screen.findByRole('dialog', { name: /権限と担当店舗/ })
+
+    expect(
+      within(dialog).getByText('この会社にはまだお店がありません。先にお店を登録してください。'),
+    ).toBeInTheDocument()
+  })
+
+  it('お店の一覧を引けなくても、権限の変更まで止めない', async () => {
+    api.getStores.mockImplementation(async () => json({ error: 'domain_unavailable' }, 502))
+    const user = userEvent.setup()
+    render(<Users />)
+    const row = await screen.findByRole('listitem')
+    await user.click(within(row).getByRole('button', { name: '権限を変更' }))
+    const dialog = await screen.findByRole('dialog', { name: /権限と担当店舗/ })
+
+    expect(
+      within(dialog).getByText('お店の一覧を読み込めませんでした。担当店舗はそのままにします。'),
+    ).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: '変更を保存' })).toBeEnabled()
   })
 
   it('同期失敗は再送できる案内として示し、変更自体は保持されたと伝える', async () => {

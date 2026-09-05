@@ -13,12 +13,12 @@ import { Keypad } from './Keypad'
 import type { StepGuard } from './steps'
 
 /*
- * 工程 4 お客様（承認済みモック docs/frontend/mockups/eyex/images/BOOK-04-CUSTOMER.png と
+ * 工程 4 お客様（承認済みモック docs/frontend/mockups/eye/images/BOOK-04-CUSTOMER.png と
  * BOOK-04c-KEYPAD.png）。
  *
  * この面の仕事は「受話器を持ったまま片手で番号を打ち切り、伺えないときはお名前だけで進む」こと。
  *
- * 実測値（screens/BOOK-04-CUSTOMER.html / BOOK-04c-KEYPAD.html と assets/eyex.css）:
+ * 実測値（screens/BOOK-04-CUSTOMER.html / BOOK-04c-KEYPAD.html と assets/eye.css）:
  *   本文 1fr ／ 右の柱 372px（`w-93`）、本文の余白 36px 44px・柱 36px 28px。
  *   番号の欄は 幅 420px・最小高 96px・34px のモノスペース・字間 .04em。
  *   テンキーを開くと 幅 520px・最小高 104px になり、右の柱が「番号を打つ」に替わる。

@@ -5,7 +5,7 @@ import { jstClock, shiftDate } from '../ledger/metrics'
 import { PublicNotice, publicQuietButtonClass, StickyAction } from './PublicBookingApp'
 
 /*
- * 工程 3「日にちと時間」（承認済みモック docs/frontend/mockups/eyex/images/WEB-03-DATETIME.png）。
+ * 工程 3「日にちと時間」（承認済みモック docs/frontend/mockups/eye/images/WEB-03-DATETIME.png）。
  *
  * 実測（screens/WEB-03-DATETIME.html の <style>）:
  *   週の送り margin 28px 0 10px・gap 8px、‹ › は 44×44px・角 12px、中央の週は 16px

@@ -193,7 +193,7 @@ async function webTenant(
       '銀座駅 A2出口から徒歩3分',
       '1',
       now,
-      input.namePublic ?? 'EYEX 銀座店',
+      input.namePublic ?? 'EYE 銀座店',
       input.sortOrder ?? 0,
       now,
     )
@@ -495,12 +495,12 @@ describe('公開設定の取得', () => {
 
   it('ご案内のページは stores.slug から組み立てる', async () => {
     const t = await webTenant()
-    expect(await readSettings(t)).toMatchObject({ landingPath: `eyex.jp/${t.slug}` })
+    expect(await readSettings(t)).toMatchObject({ landingPath: `eye.jp/${t.slug}` })
 
     // slug を変えれば案内のページも変わる。表に持っていたら追随しない。
     const renamed = `ginza-${crypto.randomUUID().slice(0, 12)}`
     await env.DB.prepare('UPDATE stores SET slug = ? WHERE id = ?').bind(renamed, t.storeId).run()
-    expect(await readSettings(t)).toMatchObject({ landingPath: `eyex.jp/${renamed}` })
+    expect(await readSettings(t)).toMatchObject({ landingPath: `eye.jp/${renamed}` })
   })
 
   it('公開する目的は is_web_published と is_active の両方が立つ行だけ', async () => {
@@ -631,7 +631,7 @@ describe('お客様の画面の見え方', () => {
     )
     expect(res.status).toBe(200)
     expect(res.body).toMatchObject({
-      storeName: 'EYEX 銀座店',
+      storeName: 'EYE 銀座店',
       message: '棚卸しのため9月1日は休みます。',
     })
     expect((res.body.purposes as Json[]).map((p) => p.id)).toEqual(two.map((p) => p.id))
@@ -674,9 +674,9 @@ describe('店舗一覧', () => {
   it('公開している店舗だけを登録順（sort_order）で返す', async () => {
     // 一覧は全組織横断で `limit` が 10 までなので、先に立った店舗（`sort_order` 0）の
     // 前へ置く。並びを見たいのであって、混ざる件数を見たいのではない。
-    const third = await webTenant({ sortOrder: -30, namePublic: 'EYEX 渋谷店' })
-    const first = await webTenant({ sortOrder: -50, namePublic: 'EYEX 銀座店' })
-    const second = await webTenant({ sortOrder: -40, namePublic: 'EYEX 丸の内店' })
+    const third = await webTenant({ sortOrder: -30, namePublic: 'EYE 渋谷店' })
+    const first = await webTenant({ sortOrder: -50, namePublic: 'EYE 銀座店' })
+    const second = await webTenant({ sortOrder: -40, namePublic: 'EYE 丸の内店' })
     const closed = await webTenant({ publish: false, sortOrder: -45 })
 
     const res = await callList('/api/public/stores?limit=10')
@@ -684,7 +684,7 @@ describe('店舗一覧', () => {
     const mine = res.body.filter((store) =>
       [first.slug, second.slug, third.slug, closed.slug].includes(String(store.slug)),
     )
-    expect(mine.map((store) => store.name)).toEqual(['EYEX 銀座店', 'EYEX 丸の内店', 'EYEX 渋谷店'])
+    expect(mine.map((store) => store.name)).toEqual(['EYE 銀座店', 'EYE 丸の内店', 'EYE 渋谷店'])
   })
 
   it('公開している店舗が 0 件なら空配列を返す', async () => {
@@ -715,7 +715,7 @@ describe('店舗の詳細', () => {
     expect(res.status).toBe(200)
     expect(res.body).toMatchObject({
       slug: t.slug,
-      name: 'EYEX 銀座店',
+      name: 'EYE 銀座店',
       accessNote: '銀座駅 A2出口から徒歩3分',
       isPublished: true,
     })
@@ -1154,7 +1154,7 @@ describe('照会', () => {
     expect(res.body).toMatchObject({
       code,
       startsAt: at(VISIT, '11:00'),
-      storeName: 'EYEX 銀座店',
+      storeName: 'EYE 銀座店',
       purposeName: '新しいメガネを作る',
       contactName: '山口 真央',
     })
@@ -1555,7 +1555,7 @@ describe('確認メール', () => {
     const call0 = notify.mock.calls[0]
     const init = call0?.[1] as RequestInit | undefined
     const job = JSON.parse(String(init?.body)) as { payload: { storeName: string } }
-    expect(job.payload.storeName).toBe('EYEX 銀座店')
+    expect(job.payload.storeName).toBe('EYE 銀座店')
     expect(String(init?.body)).not.toContain('銀座本店（本部管理）')
   })
 

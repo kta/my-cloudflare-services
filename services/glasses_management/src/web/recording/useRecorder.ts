@@ -141,7 +141,7 @@ export type Recorder = {
 /**
  * **断られた**ときだけ、理由と直し方の面（EX-MIC-DENIED）へ差し替える。
  * `NotAllowedError` は利用者か OS が「使わせない」と答えた印で、そのときだけ
- * 「設定 →「EYEX予約」→「マイク」をオンにする」の 3 手順が効く。
+ * 「設定 →「EYE予約」→「マイク」をオンにする」の 3 手順が効く。
  *
  * ほかの断り方（`NotFoundError` = マイクが刺さっていない、`NotReadableError` =
  * ほかが掴んでいる、`navigator.mediaDevices` そのものが無い古いブラウザ）は、
@@ -194,7 +194,7 @@ function defaultCreateRecorder(
   return { recorder: handle, contentType }
 }
 
-const OUTBOX_DB = 'eyex-recording-outbox'
+const OUTBOX_DB = 'eye-recording-outbox'
 const OUTBOX_STORE = 'blobs'
 
 /** IndexedDB を 1 回だけ開く。使えない端末では控えを持たない（送れたら送るだけ）。 */

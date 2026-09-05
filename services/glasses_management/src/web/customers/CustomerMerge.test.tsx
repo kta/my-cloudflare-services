@@ -4,11 +4,11 @@ import { describe, expect, it, vi } from 'vitest'
 import { CustomerMerge, canOpenMerge, type MergeSide } from './CustomerMerge'
 
 /*
- * 同じお客様のおまとめ（承認済みモック docs/frontend/mockups/eyex/images/CUSTOMER-MERGE.png）。
+ * 同じお客様のおまとめ（承認済みモック docs/frontend/mockups/eye/images/CUSTOMER-MERGE.png）。
  *
  * この面の仕事は「取り消せない操作の前に、まとめたあとの姿と失うものを同じ画面で読ませる」こと。
  *
- * 実測値（screens/CUSTOMER-MERGE.html の <style> と assets/eyex.css）:
+ * 実測値（screens/CUSTOMER-MERGE.html の <style> と assets/eye.css）:
  *   本文 padding 28px 32px・2 列 1fr / 300px・gap 28px
  *   見比べ表 3 列 108px / 1fr / 1fr、見出し行は下に padding 14px ＋ 1px の line-strong
  *   各行 min-height 96px・下に 1px の罫、項目名 15px ＋ 補足 13px

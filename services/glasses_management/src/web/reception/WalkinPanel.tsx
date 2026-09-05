@@ -9,14 +9,14 @@ import { client } from '../client'
 
 /*
  * 台帳に重なる受付パネル（承認済みモック
- * docs/frontend/mockups/eyex/images/LEDGER-WALKIN.png）。
+ * docs/frontend/mockups/eye/images/LEDGER-WALKIN.png）。
  *
  * 題材: 台帳を見たまま、店頭のお客様のご用件を 3 タップで伺って受け付ける面。
  * トークン計画: 台帳を隠しきらない右 400px のパネル 1 枚。茶（`--color-walkin` /
  *   `--color-walkin-soft`）は待ち状況の帯と整理番号の札だけ、緑は選んだご用件と主操作だけ。
  * シグネチャ: **お客様を後回しにできること**（「あとで登録する」のまま主操作が押せる）。
  *
- * 実測（screens/LEDGER-WALKIN.html の <style> と assets/eyex.css）:
+ * 実測（screens/LEDGER-WALKIN.html の <style> と assets/eye.css）:
  *   `.panel` は `position:absolute` の top/right/bottom 0・幅 400px（w-100）・
  *   左罫 1px --line-strong・地は白。
  *   `.wh` padding 12px 22px（px-5.5 py-3）・下罫 1px、`h2` 18px、

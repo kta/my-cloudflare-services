@@ -1,14 +1,14 @@
-# 002-glasses-management-domain-integration: EYEXドメイン連携
+# 002-glasses-management-domain-integration: EYEドメイン連携
 
 - ステータス: Approved
 
 ## 1. WHAT / WHY
 
-**概要**: `admin` を認証・組織の正として維持し、EYEXの `glasses_management` へ安全に組織状態を同期する。
+**概要**: `admin` を認証・組織の正として維持し、EYEの `glasses_management` へ安全に組織状態を同期する。
 
 **ユーザーストーリー**:
 
-- US-ADMIN-INTEGRATION-01: 運営者として、組織の作成・変更・無効化がEYEXドメインへ安全に反映されてほしい。
+- US-ADMIN-INTEGRATION-01: 運営者として、組織の作成・変更・無効化がEYEドメインへ安全に反映されてほしい。
 - US-ADMIN-INTEGRATION-02: 運営者として、同期失敗後も正本を失わず、同じ組織を再同期したい。
 - US-ADMIN-INTEGRATION-03: ドメインWorkerとして、認証情報を複製せずadminへ内部的にログイン・更新を委譲したい。
 
@@ -18,7 +18,7 @@
 - Given 組織同期が失敗する, When 運営adminが再同期を実行する, Then adminの正本を保持したまま同じスナップショットを再送する。
 - Given domain Workerの内部リクエスト, When 正しい内部鍵でログインまたは更新を委譲する, Then refresh tokenは内部レスポンスだけに返りadminのcookieを変更しない。
 
-**スコープ外**: notifierのメール配送本体、EYEX予約・店舗データの所有、Cloudflare実リソースのプロビジョニング。
+**スコープ外**: notifierのメール配送本体、EYE予約・店舗データの所有、Cloudflare実リソースのプロビジョニング。
 
 ## 2. HOW
 

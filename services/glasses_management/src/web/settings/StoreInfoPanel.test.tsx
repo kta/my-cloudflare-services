@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SettingsScreen } from './SettingsScreen'
 
 /*
- * 店舗の情報（承認済みモック docs/frontend/mockups/eyex/images/SETTINGS-STORE.png）。
+ * 店舗の情報（承認済みモック docs/frontend/mockups/eye/images/SETTINGS-STORE.png）。
  * お客様に見せる名前・道順・紹介文を 1 か所で直す面。200 文字の境界を画面で見せる。
  */
 
@@ -12,15 +12,15 @@ const STORE_ID = '11111111-2222-4333-8444-555555555555'
 
 const storeDetail = {
   id: STORE_ID,
-  organizationId: 'eyex',
-  name: 'EYEX 銀座店',
+  organizationId: 'eye',
+  name: 'EYE 銀座店',
   slug: 'ginza',
   phone: '03-3571-0001',
-  address: '東京都中央区銀座4-5-6　EYEXビル 2階',
+  address: '東京都中央区銀座4-5-6　EYEビル 2階',
   accessNote: 'A1出口から徒歩3分',
   isActive: true,
   createdAt: '2026-08-01T00:00:00.000Z',
-  namePublic: 'EYEX 銀座店（銀座4丁目）',
+  namePublic: 'EYE 銀座店（銀座4丁目）',
   nearestStation: '東京メトロ 銀座駅',
   parkingNote: '提携駐車場はありません',
   introText: '銀座4丁目の交差点からすぐ。',
@@ -40,7 +40,7 @@ const staff = [
     isActive: true,
     sortOrder: 5,
     skills: [],
-    adminUserId: 'dev:eyex-manager',
+    adminUserId: 'dev:eye-manager',
     hasPin: true,
     maxParallelReservations: 1,
     pinUpdatedAt: null,
@@ -91,10 +91,10 @@ describe('店舗の情報', () => {
 
   it('お店の基本は 店名・お客様に見せる店名・電話番号・住所 の 4 行を持つ', async () => {
     await openStoreInfo()
-    expect(screen.getByLabelText('店名')).toHaveValue('EYEX 銀座店')
-    expect(screen.getByLabelText('お客様に見せる店名')).toHaveValue('EYEX 銀座店（銀座4丁目）')
+    expect(screen.getByLabelText('店名')).toHaveValue('EYE 銀座店')
+    expect(screen.getByLabelText('お客様に見せる店名')).toHaveValue('EYE 銀座店（銀座4丁目）')
     expect(screen.getByLabelText('電話番号')).toHaveValue('03-3571-0001')
-    expect(screen.getByLabelText('住所')).toHaveValue('東京都中央区銀座4-5-6　EYEXビル 2階')
+    expect(screen.getByLabelText('住所')).toHaveValue('東京都中央区銀座4-5-6　EYEビル 2階')
   })
 
   it('2 群目の見出しは上のカードから離す（余白は器のほうに置く）', async () => {
@@ -121,7 +121,7 @@ describe('店舗の情報', () => {
   it('店名と住所を直すと札が「未保存の変更 2件」になる', async () => {
     await openStoreInfo()
     await userEvent.clear(screen.getByLabelText('店名'))
-    await userEvent.type(screen.getByLabelText('店名'), 'EYEX 銀座本店')
+    await userEvent.type(screen.getByLabelText('店名'), 'EYE 銀座本店')
     expect(screen.getByText('未保存の変更 1件')).toBeInTheDocument()
     await userEvent.clear(screen.getByLabelText('住所'))
     await userEvent.type(screen.getByLabelText('住所'), '東京都中央区銀座4-5-7')
