@@ -100,10 +100,15 @@ writeFileSync(
   "export default { fetch: () => new Response('bootstrap placeholder', { status: 503 }) }\n",
 )
 
+// entry point を引数で渡すと wrangler は設定ファイルを使わないので、環境の概念が無い。
+// CLOUDFLARE_ENV が残っていると `--env staging` 相当と解釈され、
+// 「No environment found in configuration」と警告する。踏み台に環境は要らないので落とす。
+const wranglerEnv = { ...process.env }
+delete wranglerEnv.CLOUDFLARE_ENV
+
 for (const worker of create) {
   console.log(`▶ ${worker.workerName}: 未作成なので踏み台を置きます`)
-  // entry point を引数で渡すと wrangler は設定ファイルのバインディングを載せない。
-  // 参照先がまだ無い状態でも上げられる、バインディング無しの Worker になる。
+  // 設定ファイルを使わない = バインディングを載せない。参照先がまだ無い状態でも上げられる。
   execFileSync(
     'pnpm',
     [
@@ -117,7 +122,7 @@ for (const worker of create) {
       worker.compatibilityDate,
       '--no-bundle',
     ],
-    { cwd: `services/${worker.service}`, stdio: 'inherit' },
+    { cwd: `services/${worker.service}`, stdio: 'inherit', env: wranglerEnv },
   )
 }
 console.log(`✅ 踏み台を ${create.length} 個置きました。本物のデプロイが上書きします`)
