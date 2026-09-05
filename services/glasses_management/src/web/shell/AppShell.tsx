@@ -1,5 +1,5 @@
 import { cn, focusRing, focusRingOnPine } from '@app/ui'
-import type { ReactNode } from 'react'
+import { type ReactNode, useEffect, useState } from 'react'
 import { DESTINATIONS, type Destination, HOME_DESTINATION } from './destinations'
 import { Icon } from './icons'
 
@@ -50,6 +50,16 @@ const HEADER_ALERT_DESTINATIONS = new Set([
 
 export type AppShellProps = {
   storeName: string
+  /** ほかのお店。空なら店名は押せる形にしない（押して何も起きないボタンを置かない）。 */
+  stores?: readonly { id: string; name: string }[]
+  /** お店を切り替える。渡さなければ店名はただの文字のまま。 */
+  onSwitchStore?: (storeId: string) => void
+  /**
+   * お店を増やす面を開く（014-store-provisioning / AC-PROV-03）。
+   * トップの主操作の下に置かない —— 承認済みモック `HOME.png` にその行は無く、
+   * 毎日押すものでもない。**店名のメニューが、切り替えと追加の両方を持つ。**
+   */
+  onAddStore?: () => void
   /** 店名の下の 1 行。営業状態や画面名を置く。 */
   storeSubline: string
   /** いま開いている行き先（DESTINATIONS の key）。 */
@@ -78,6 +88,9 @@ export type AppShellProps = {
 
 export function AppShell({
   storeName,
+  stores = [],
+  onSwitchStore,
+  onAddStore,
   storeSubline,
   current,
   onNavigate,
@@ -91,6 +104,15 @@ export function AppShell({
   isLocked = false,
   children,
 }: AppShellProps) {
+  const [storeMenuOpen, setStoreMenuOpen] = useState(false)
+  const otherStores = onSwitchStore === undefined ? [] : stores
+  // 店名を押せる形にするのは、押した先に行き先があるときだけ。
+  const hasStoreMenu = otherStores.length > 0 || onAddStore !== undefined
+  // 面が変わったら畳む（開いたまま別の面へ持ち越さない）。
+  useEffect(() => {
+    setStoreMenuOpen(false)
+  }, [current])
+
   return (
     <div className="relative flex h-dvh flex-col bg-paper text-ink">
       <header
@@ -108,10 +130,85 @@ export function AppShell({
         >
           <Icon name="home" />
         </button>
-        <div className="min-w-0">
-          <p className="truncate text-bar font-bold">{storeName}</p>
-          <p className="truncate text-note opacity-90">{storeSubline}</p>
-        </div>
+        {/*
+          店名は**お店を切り替える入口**でもある。以前はトップのチップからしか
+          切り替えられず、台帳や受付を開いている最中はいちどトップへ戻る必要があった
+          （実装不足の洗い出し foundation-09。US-FOUND-06）。
+          切り替え先が 1 つも無く、追加もできない立場では、押しても何も起きない
+          ボタンを置かない。お店を増やす道もここに置く（トップの主操作の下に
+          行を足すと、承認済みモック `HOME.png` と違う姿になる）。
+        */}
+        {!hasStoreMenu ? (
+          <div className="min-w-0">
+            <p className="truncate text-bar font-bold">{storeName}</p>
+            <p className="truncate text-note opacity-90">{storeSubline}</p>
+          </div>
+        ) : (
+          <div className="relative min-w-0">
+            <button
+              type="button"
+              aria-haspopup="menu"
+              aria-expanded={storeMenuOpen}
+              aria-label={`${storeName}　お店を切り替える`}
+              onClick={() => setStoreMenuOpen((open) => !open)}
+              className={cn(
+                'flex min-h-12 min-w-0 items-center gap-1.5 rounded-card px-1 text-left',
+                focusRingOnPine,
+              )}
+            >
+              <span className="min-w-0">
+                <span className="block truncate text-bar font-bold">{storeName}</span>
+                <span className="block truncate text-note opacity-90">{storeSubline}</span>
+              </span>
+              <span aria-hidden="true" className="shrink-0 text-note opacity-90">
+                ▾
+              </span>
+            </button>
+            {storeMenuOpen && (
+              <ul
+                aria-label="ほかのお店"
+                className="absolute top-full left-0 z-30 mt-1 grid min-w-64 gap-1 rounded-panel border border-line bg-surface p-2 text-ink shadow-lg"
+              >
+                {otherStores.map((row) => (
+                  <li key={row.id}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setStoreMenuOpen(false)
+                        onSwitchStore?.(row.id)
+                      }}
+                      className={cn(
+                        'flex min-h-12 w-full items-center rounded-ctl px-3 text-left text-body font-semibold',
+                        focusRing,
+                      )}
+                    >
+                      {`${row.name}へ切り替える`}
+                    </button>
+                  </li>
+                ))}
+                {onAddStore !== undefined && (
+                  <li
+                    className={otherStores.length === 0 ? undefined : 'border-line border-t pt-1'}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setStoreMenuOpen(false)
+                        onAddStore()
+                      }}
+                      className={cn(
+                        'flex min-h-12 w-full items-center rounded-ctl px-3 text-left text-body font-semibold text-ink-muted',
+                        focusRing,
+                      )}
+                    >
+                      お店を追加する
+                    </button>
+                  </li>
+                )}
+              </ul>
+            )}
+          </div>
+        )}
         {barCenter}
         <div className="ml-auto flex items-center gap-2">
           {HEADER_ALERT_DESTINATIONS.has(current) && alertCount > 0 && (
@@ -156,13 +253,23 @@ export function AppShell({
             <span className={rail ? 'sr-only' : undefined}>たたむ</span>
           </button>
 
-          <NavItem
-            destination={HOME_DESTINATION}
-            rail={rail}
-            current={current}
-            onNavigate={onNavigate}
-            alertCount={alertCount}
-          />
+          {/*
+            「トップ」の行はトップにいるときだけ置く。承認済みモックの柱は
+            `HOME.png` にしか この行を持たず、ほかの面（`LEDGER-STAFF.html` ほか）は
+            「＋ 予約を取る」から始まる。ほかの面からトップへ戻る道は上のバーの
+            ⌂（`aria-label="トップへ"`）である。全画面に置いていたころ、行き先が
+            1 つ多く、押しても「いまいる場所」に見えない行が柱の頭に居座っていた
+            （実装不足の洗い出し foundation-03）。
+          */}
+          {current === 'home' && (
+            <NavItem
+              destination={HOME_DESTINATION}
+              rail={rail}
+              current={current}
+              onNavigate={onNavigate}
+              alertCount={alertCount}
+            />
+          )}
 
           <button
             type="button"

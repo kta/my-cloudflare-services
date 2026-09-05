@@ -102,7 +102,13 @@ export function AlertScreen({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-paper lg:flex-row">
+    /*
+      画面の器は `<main>` で、名前を持つ。持たなかったころ、この面には読み上げの
+      ランドマークが 1 つも無く、画面を切り替えても「いまどこにいるか」を耳で
+      確かめる手がかりが無かった（実装不足の洗い出し foundation-01 / T-011）。
+      名前は左の柱の行き先と同じ語にする（2 通りの呼び方を覚えさせない）。
+    */
+    <main aria-label="お知らせ" className="flex h-full min-h-0 flex-col bg-paper lg:flex-row">
       <aside className="w-full shrink-0 border-b border-line bg-surface-2 px-3.5 py-4 lg:w-63 lg:border-r lg:border-b-0 lg:py-7.5">
         <nav aria-label="お知らせの種類" className="grid content-start gap-1.5">
           {KINDS.map((entry) => (
@@ -200,7 +206,7 @@ export function AlertScreen({
           </div>
         )}
       </section>
-    </div>
+    </main>
   )
 }
 

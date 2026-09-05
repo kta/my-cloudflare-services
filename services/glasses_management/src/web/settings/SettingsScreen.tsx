@@ -162,7 +162,13 @@ export function SettingsScreen({ storeId, now, initialSection, panels }: Setting
   }
 
   return (
-    <div className="flex h-full min-h-0">
+    /*
+      画面の器は `<main>` で、名前を持つ。持たなかったころ、この面には読み上げの
+      ランドマークが 1 つも無く、画面を切り替えても「いまどこにいるか」を耳で
+      確かめる手がかりが無かった（実装不足の洗い出し foundation-01 / T-011）。
+      名前は左の柱の行き先と同じ語にする（2 通りの呼び方を覚えさせない）。
+    */
+    <main aria-label="設定" className="flex h-full min-h-0">
       <nav
         aria-label="設定の項目"
         className={cn(
@@ -253,7 +259,7 @@ export function SettingsScreen({ storeId, now, initialSection, panels }: Setting
           )}
         </div>
       </section>
-    </div>
+    </main>
   )
 }
 

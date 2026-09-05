@@ -14,6 +14,7 @@ import type { ReservationSnapshot } from '../../worker/domain/reservation-change
 import type { SlotChoice } from '../booking/SlotStep'
 import { client } from '../client'
 import { dateLabel, jstClock } from '../ledger/metrics'
+import { useReservationRecording } from '../recording/useReservationRecording'
 import { type CancelReason, ChangeCancel } from './ChangeCancel'
 import { ChangeDateTime } from './ChangeDateTime'
 import { ChangeDiff, type SlotTaken } from './ChangeDiff'
@@ -377,6 +378,13 @@ export function ChangeScreen({
     let live = true
     setDetail(null)
     setCustomerPhone(null)
+    /*
+     * 別のご予約を開いたら、前のご予約向けに選んだ日時と担当・場所は捨てる。
+     * 台帳から直に別の 1 件へ飛べるので、検索へ戻る道だけでは足りない
+     * （実装不足の洗い出し change-cancel-05）。
+     */
+    setChosenStartsAt(null)
+    setChosenSlot(null)
     setDetailPhase('loading')
     client.api.staff.reservations[':reservationId']
       .$get({ param: { reservationId: selectedId } })
@@ -436,10 +444,25 @@ export function ChangeScreen({
       .catch(() => undefined)
   }, [storeId])
 
+  /*
+   * 変更先を仮に押さえる。**担当と設備も一緒に載せる。**
+   * 載せていなかったころ、復唱している 7 分のあいだに別の端末が同じ担当の同じ時刻へ
+   * 別のご予約を移せてしまい、確定して初めて衝突した。AC-CHANGE-12 の
+   * 「その端末では 14:00 が満席になって押せない」が成立しない
+   * （実装不足の洗い出し change-cancel-04）。
+   * 担当・場所を選び直していなければ、いまのご予約のものをそのまま押さえる。
+   */
   const takeHold = useCallback(
-    (startsAt: string, durationMinutes: number) => {
+    (
+      startsAt: string,
+      durationMinutes: number,
+      staffId: string | null,
+      equipmentIds: readonly string[],
+    ) => {
       client.api.staff.holds
-        .$post({ json: { storeId, startsAt, durationMinutes } })
+        .$post({
+          json: { storeId, startsAt, durationMinutes, staffId, equipmentIds: [...equipmentIds] },
+        })
         .then(async (res) => (res.ok ? await res.json() : null))
         .then((taken) => {
           if (taken === null) return
@@ -452,11 +475,26 @@ export function ChangeScreen({
   )
 
   const duration = detail?.durationMinutes ?? 0
+  const holdStaffId =
+    chosenSlot?.staffId ?? detail?.assignments.find((row) => row.kind === 'staff')?.targetId ?? null
+  // 依存の比較に使うので、配列ではなく 1 本の文字列にして持つ。
+  const holdEquipmentIds = (
+    chosenSlot?.equipmentIds ??
+    detail?.assignments
+      .filter((row) => row.kind === 'equipment' && row.targetId !== null)
+      .map((row) => row.targetId ?? '') ??
+    []
+  ).join(',')
   useEffect(() => {
     if (step !== 'datetime' || chosenStartsAt === null || duration === 0) return
-    takeHold(chosenStartsAt, duration)
+    takeHold(
+      chosenStartsAt,
+      duration,
+      holdStaffId,
+      holdEquipmentIds === '' ? [] : holdEquipmentIds.split(','),
+    )
     return releaseHold
-  }, [step, chosenStartsAt, duration, takeHold, releaseHold])
+  }, [step, chosenStartsAt, duration, holdStaffId, holdEquipmentIds, takeHold, releaseHold])
 
   /*
    * 仮の押さえの残り時間。**端末の時計を読まず**、器が持っている時刻を 1 秒ずつ進める
@@ -489,12 +527,22 @@ export function ChangeScreen({
   function backToSearch() {
     releaseHold()
     setChosenStartsAt(null)
+    /*
+     * 担当・場所の選択もここで捨てる。**残すと別のご予約に混ざる。**
+     * 担当を選びかけて検索へ戻り、別のお客様のご予約を開いて日時を変えると、
+     * 前のお客様向けに選んだ担当・設備がそのまま差分と保存内容に載っていた
+     * （実装不足の洗い出し change-cancel-05）。
+     */
+    setChosenSlot(null)
     setSlotTaken(null)
     setConflict(null)
     setConfirmError(null)
     setDone(null)
     setStep('search')
   }
+
+  // 選んだご予約にぶら下がる録音。引く手段が無かったころ、この面に一度も出なかった。
+  const searchRecording = useReservationRecording(selectedId)
 
   const before = detail === null ? null : snapshotOf(detail, staffNames, placeNames)
   /*
@@ -585,12 +633,24 @@ export function ChangeScreen({
    * 「欄が無い＝そのまま」なので、触っていない欄を送ると差分表に無い行が
    * 監査に残ってしまう。
    */
-  async function patchTo(startsAt: string, version: number, previousRange: string) {
+  /**
+   * 変更を送る。`keepSlot` は 1 項目ずつ選ぶ画面から渡る「この項目はこちらを残す」で、
+   * 渡さなければどちらも残す（ふだんの変更の道）。**false の項目は送らない** ——
+   * 送らなければ相手が保存した値がそのまま残る。
+   */
+  async function patchTo(
+    startsAt: string,
+    version: number,
+    previousRange: string,
+    keepSlot: { staff: boolean; equipment: boolean } = { staff: true, equipment: true },
+  ) {
     if (detail === null || isOffline) return
     const slotFields: { staffId?: string | null; equipmentIds?: string[] } = {}
     if (chosenSlot !== null && before !== null) {
-      if (chosenSlot.staffId !== before.staffId) slotFields.staffId = chosenSlot.staffId
-      if (!sameIds(chosenSlot.equipmentIds, before.equipmentIds)) {
+      if (keepSlot.staff && chosenSlot.staffId !== before.staffId) {
+        slotFields.staffId = chosenSlot.staffId
+      }
+      if (keepSlot.equipment && !sameIds(chosenSlot.equipmentIds, before.equipmentIds)) {
         slotFields.equipmentIds = chosenSlot.equipmentIds
       }
     }
@@ -692,12 +752,28 @@ export function ChangeScreen({
       return
     }
     const keepMine = choice.kind === 'mine' ? true : (choice.picks.datetime ?? 'theirs') === 'mine'
-    if (!keepMine) {
-      // 日時は相手のまま。送るものが無いので、相手を残したのと同じ道へ落とす。
+    /*
+     * 1 項目ずつ選ぶとき、**担当と場所の選択も送る側へ渡す。**
+     * 以前は `picks.datetime` しか読んでおらず、「相手の日時＋自分の担当」と押しても
+     * 担当・場所はこちらの選択がそのまま送られていた（あるいは相手を選んだのに
+     * こちらの担当で上書きしていた）。押した内容と保存される内容が食い違い、
+     * 口頭で案内した担当と台帳がずれる（実装不足の洗い出し change-cancel-01）。
+     * 「相手のまま」を選んだ項目は**送らない** —— 送らなければ相手の値が残る。
+     */
+    const keepSlot =
+      choice.kind === 'mine'
+        ? { staff: true, equipment: true }
+        : {
+            staff: (choice.picks.staff ?? 'theirs') === 'mine',
+            equipment: (choice.picks.equipment ?? 'theirs') === 'mine',
+          }
+    if (!keepMine && !keepSlot.staff && !keepSlot.equipment) {
+      // どの項目も相手のまま。送るものが無いので、相手を残したのと同じ道へ落とす。
       await resolveConflict({ kind: 'theirs' })
       return
     }
-    const startsAt = after?.startsAt ?? before.startsAt
+    // 日時は相手のまま。相手が保存した時刻を土台にして、選んだ項目だけを載せる。
+    const startsAt = keepMine ? (after?.startsAt ?? before.startsAt) : conflict.startsAt
     setResolving(true)
     try {
       const free = await client.api.staff.availability.$get({
@@ -723,6 +799,7 @@ export function ChangeScreen({
         startsAt,
         conflict.version,
         `${jstClock(before.startsAt)}–${jstClock(before.endsAt)}`,
+        keepSlot,
       )
     } finally {
       setResolving(false)
@@ -733,7 +810,13 @@ export function ChangeScreen({
   const equipmentNames = before?.equipmentNames.filter((name) => name !== '') ?? []
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    /*
+      画面の器は `<main>` で、名前を持つ。持たなかったころ、この面には読み上げの
+      ランドマークが 1 つも無く、画面を切り替えても「いまどこにいるか」を耳で
+      確かめる手がかりが無かった（実装不足の洗い出し foundation-01 / T-011）。
+      名前は左の柱の行き先と同じ語にする（2 通りの呼び方を覚えさせない）。
+    */
+    <main aria-label="予約を探す" className="flex h-full min-h-0 flex-col">
       {notice !== null && (
         <p
           role="status"
@@ -823,6 +906,8 @@ export function ChangeScreen({
           />
         ) : step === 'search' ? (
           <ReservationSearch
+            /* 保存済みの録音があれば「● 録音を聞く」を出す（UX 監査 recording-02）。 */
+            recording={searchRecording}
             conditions={conditions}
             onConditions={(next) => {
               setNotice(null)
@@ -892,7 +977,14 @@ export function ChangeScreen({
               // 延長の API は作らない。返して打ち直す 2 本で取り直す。
               setRenewals((count) => count + 1)
               releaseHold()
-              if (chosenStartsAt !== null) takeHold(chosenStartsAt, detail.durationMinutes)
+              if (chosenStartsAt !== null) {
+                takeHold(
+                  chosenStartsAt,
+                  detail.durationMinutes,
+                  holdStaffId,
+                  holdEquipmentIds === '' ? [] : holdEquipmentIds.split(','),
+                )
+              }
             }}
             onBack={backToSearch}
             onNext={() => setStep('diff')}
@@ -946,6 +1038,6 @@ export function ChangeScreen({
           <p className="px-11 py-9 text-body text-ink-muted">読み込んでいます…</p>
         )}
       </div>
-    </div>
+    </main>
   )
 }

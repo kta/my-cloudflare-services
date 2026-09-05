@@ -573,3 +573,34 @@ describe('読み込みと失敗', () => {
     )
   })
 })
+
+describe('ほかの端末が先に保存していたとき', () => {
+  /*
+   * 版は**この面が読み込んだときのもの**を送る。以前は書く直前に版を取り直して
+   * いたので、ほかの端末が先に保存していてもその版をそのまま拾い、楽観ロックが
+   * 一度も効かなかった。2 台の iPad で同時に設定を直すと、後から押した側が相手の
+   * 変更を黙って上書きし、店長は取り消されたことに気づけない
+   * （実装不足の洗い出し settings-05。`004` の HOW）。
+   */
+  it('保存の直前に版を読み直さない（読み込んだときの版をそのまま送る）', async () => {
+    const { handler } = mockApi()
+    await openPanel()
+    fireEvent.change(screen.getByLabelText('日曜日の勤務の開始'), { target: { value: '10:00' } })
+    const before = handler.mock.calls.length
+    await userEvent.click(screen.getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(screen.getByText('保存しました')).toBeInTheDocument())
+
+    const during = handler.mock.calls.slice(before)
+    const put = during.find(
+      (call) => String(call[0]).includes('/staff-shifts') && call[1]?.method === 'PUT',
+    )
+    expect(put).toBeDefined()
+    expect(JSON.parse(String(put?.[1]?.body))).toMatchObject({ version: 3 })
+    // 送る前に版を読み直していない（`business-hours` の GET が保存の途中に無い）。
+    const readBack = during.filter(
+      (call) => String(call[0]).includes('/business-hours') && (call[1]?.method ?? 'GET') === 'GET',
+    )
+    const putAt = during.indexOf(put as (typeof during)[number])
+    expect(readBack.every((call) => during.indexOf(call) > putAt)).toBe(true)
+  })
+})

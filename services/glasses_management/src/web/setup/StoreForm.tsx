@@ -132,7 +132,9 @@ export function StoreForm({
           value={name}
           onChange={(e) => setName(e.target.value)}
           autoComplete="off"
-          // biome-ignore lint/a11y/noAutofocus: この面で最初に触る場所が 1 つしかない
+          /* この面で最初に触る場所が 1 つしかないので、開いたら here に置く。
+             `TextInput` は自前の部品なので `lint/a11y/noAutofocus` は当たらない
+             （biome-ignore を書くと「効かない抑制」として弾かれる）。 */
           autoFocus
         />
       </Field>

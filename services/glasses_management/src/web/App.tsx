@@ -413,6 +413,21 @@ function Workspace({
     navigate('search', reservationId)
   }
 
+  /*
+   * お店を切り替える。**その店で見ていた条件は持ち越さない。**
+   * 台帳の日付・受付履歴の絞り込み・開いていたご予約は、いまの店の中でしか
+   * 意味を持たない。持ち越すと、切り替えた先で「先週の絞り込みのまま 0 件」や
+   * 「他店のご予約 id を開こうとして見つかりません」になる
+   * （実装不足の洗い出し foundation-08）。
+   */
+  function switchStore(storeId: string) {
+    setSelectedStoreId(storeId)
+    setLedgerDate(null)
+    setHistoryQuery(undefined)
+    setOpenReservation(null)
+    setCustomerQuery('')
+  }
+
   /** 顧客台帳から「ご予約を取る」（AC-CUST-26）。渡さなければ、いつもの白紙の受付になる。 */
   function startBooking(customer?: {
     id?: string
@@ -810,6 +825,10 @@ function Workspace({
       current={current}
       onNavigate={(key) => navigate(key)}
       rail={rail}
+      /* 上のバーの店名から、ほかのお店へ切り替える（UX 監査 foundation-09）。 */
+      stores={(stores ?? []).filter((row) => row.id !== store?.id)}
+      onSwitchStore={switchStore}
+      onAddStore={() => setAddingStore(true)}
       onToggleRail={() => {
         setRailTouched(true)
         setRail((v) => !v)
@@ -866,7 +885,6 @@ function Workspace({
             <Home
               stores={stores}
               currentStoreId={store?.id}
-              onSwitchStore={setSelectedStoreId}
               showSharedReservations={idle.isMasked}
               sharedTerminal={terminalSession?.mode === 'shared'}
               onSharedSnapshot={setLockSnapshot}
@@ -882,7 +900,6 @@ function Workspace({
               }}
               onStartBooking={() => startBooking()}
               onOpenSearch={() => navigate('search')}
-              onAddStore={() => setAddingStore(true)}
               setupCounts={setupCounts}
               onOpenSettings={() => navigate('settings')}
             />
@@ -1017,7 +1034,6 @@ function Workspace({
 function Home({
   stores,
   currentStoreId,
-  onSwitchStore,
   showSharedReservations,
   sharedTerminal,
   onSharedSnapshot,
@@ -1027,13 +1043,11 @@ function Home({
   onPickDate,
   onStartBooking,
   onOpenSearch,
-  onAddStore,
   setupCounts,
   onOpenSettings,
 }: {
+  /** 読み込みの途中だけ null。切り替えと追加は上のバーが持つ。 */
   stores: Store[] | null
-  /** ほかのお店へ切り替える。**押して何も起きないチップを置かない。** */
-  onSwitchStore: (storeId: string) => void
   currentStoreId?: string
   showSharedReservations: boolean
   sharedTerminal: boolean
@@ -1053,14 +1067,11 @@ function Home({
   onStartBooking: () => void
   /** 予約を探す・直す面（CHANGE-SEARCH）へ移る。 */
   onOpenSearch: () => void
-  /** お店を登録する面を開く。 */
-  onAddStore: () => void
   /** はじめの設定の進み具合。分かるまでは null。 */
   setupCounts: SetupCounts | null
   /** 設定の面へ移る（店員・端末の登録はそこにある）。 */
   onOpenSettings: () => void
 }) {
-  const others = stores?.filter((s) => s.id !== currentStoreId) ?? []
   return (
     <div className="relative h-full">
       <div className="grid h-full grid-flow-col content-center justify-start gap-12 pb-31 pl-11">
@@ -1084,42 +1095,17 @@ function Home({
             glyph="✎"
             onPress={onOpenSearch}
           />
-          <section aria-label="ほかのお店" className="mt-2">
-            {stores === null ? (
-              <p className="text-grid text-ink-muted">読み込んでいます…</p>
-            ) : stores.length === 0 ? (
-              // 0 件の会社はそもそもこの面に来ない（SetupScreen が先に立つ）。
-              <p className="text-grid text-ink-muted">お店がまだ登録されていません。</p>
-            ) : others.length > 0 ? (
-              <ul className="flex flex-wrap gap-2">
-                {others.map((s) => (
-                  <li key={s.id}>
-                    <button
-                      type="button"
-                      onClick={() => onSwitchStore(s.id)}
-                      className={`min-h-11 rounded-full border border-line-strong bg-surface px-4 text-note font-semibold text-ink-muted ${focusRing}`}
-                    >
-                      {s.name}へ切り替える
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              /*
-                ほかのお店がある会社では、この行は切り替えのためだけに使う
-                （承認済みモック HOME.png の姿）。**行を増やさない。**
-                お店が 1 つだけの会社にはここが 2 店舗目への入口になる。
-                毎日押すものではないので、主操作 2 つと同じ強さにしない。
-              */
-              <button
-                type="button"
-                onClick={onAddStore}
-                className={`min-h-11 rounded-full border border-line-strong bg-surface px-4 text-note font-semibold text-ink-muted ${focusRing}`}
-              >
-                お店を追加する
-              </button>
-            )}
-          </section>
+          {/*
+            お店の**切り替え**も**追加**も、上のバーの店名が持つ
+            （UX 監査 foundation-09 / 014-store-provisioning）。
+            ここにチップを並べていたころ、切り替えはトップからしかできず、台帳を
+            見ている最中はいちど戻る必要があった。しかも承認済みモック `HOME.png`
+            にその行は無く、そのぶん主操作 2 枚が 50px ほど上に寄っていた。
+            読み込み中と 0 件の断りだけはここに残す —— 0 件の会社はそもそも
+            この面に来ない（`SetupScreen` が先に立つ）が、読み込みの途中で
+            主操作だけが出て、どのお店のものか分からない瞬間を作らない。
+          */}
+          {stores === null && <p className="mt-2 text-grid text-ink-muted">読み込んでいます…</p>}
         </div>
         {currentStoreId !== undefined && (
           <MyReservations

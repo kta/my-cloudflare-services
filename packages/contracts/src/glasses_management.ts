@@ -1610,6 +1610,14 @@ export const CustomerNoteInput = z
     kind: CustomerNoteKind,
     body: z.string().refine(codePointsAtMost(2000)).default(''),
     handwritingSvg: HandwritingSvg.nullable().default(null),
+    /*
+     * 6 枚目を置き換えるとき、どの 1 枚と入れ替えるか。
+     * 無かったころ、画面は「どれと置き換えますか」と尋ねて選ばせておきながら、
+     * その答えを送る先が無く、**押しても何も起きなかった**
+     * （実装不足の洗い出し customers-02）。**黙って古い 1 枚を消さない**という
+     * 決めは変えず、人が選んだ 1 枚だけを入れ替える。
+     */
+    replacesId: Uuid.nullable().default(null),
     storeId: Uuid,
   })
   .refine((value) => value.body.trim() !== '' || value.handwritingSvg !== null, {
@@ -2236,6 +2244,32 @@ export type ReservationChangeHistory = z.infer<typeof ReservationChangeHistory>
  * `recording` は **P7（`010-recording`）が埋めるまで常に null** なので、いまは null しか
  * 受けない形にしておく。器だけ先に広げると「まだ無い」と「空だった」が同じ形になる。
  */
+/*
+ * 録音の語は**受付履歴より前**に置く。受付履歴の 1 件がその録音を埋め込むので、
+ * うしろに置くと import 時に未定義を読むことになる（`const` は巻き上がらない）。
+ */
+/**
+ * 録音の状態。`recording`（録っている）→ `uploading`（送っている）→ `stored`（保管庫にある）
+ * の 3 段に、`failed`（端末に実体が残っている）と `deleted`（実体を消したあとの行）を足した 5 値。
+ * 知らない語を通すと、掃除の Cron が拾えない状態の行が黙って増える。
+ */
+export const RecordingState = z.enum(['recording', 'uploading', 'stored', 'failed', 'deleted'])
+export type RecordingState = z.infer<typeof RecordingState>
+
+/** 録音の長さ。上限 21,600 秒 = 6 時間（1 受付の録音がここに届くことはない）。 */
+const DurationSeconds = z.number().int().min(0).max(21_600)
+
+/**
+ * 予約詳細・受付履歴に埋め込む録音。「● 録音を聞く　03:12」を描くのに要るのは
+ * 長さだけなので、埋め込み側に R2 の手がかりを渡さない。
+ */
+export const RecordingSummary = z.strictObject({
+  id: Uuid,
+  state: RecordingState,
+  durationSeconds: DurationSeconds.nullable().default(null),
+})
+export type RecordingSummary = z.infer<typeof RecordingSummary>
+
 export const ReceptionHistoryDetail = z.strictObject({
   entryId: Uuid,
   sessionId: Uuid.nullable().default(null),
@@ -2243,7 +2277,14 @@ export const ReceptionHistoryDetail = z.strictObject({
   receivedBy: z.string().trim().min(1).max(40).nullable().default(null),
   receivedAt: IsoDateTime,
   changes: ReservationChangeHistory.array().default([]),
-  recording: z.null().default(null),
+  /*
+   * その受付の録音。**`stored` の 1 本だけ**を載せる。
+   * 以前は `z.null()` で型ごと固定していたので、録音が保存されていても
+   * この面に「受付のときの録音」が一度も出なかった
+   * （実装不足の洗い出し recording-01）。送信の途中や失敗した録音は載せない
+   * —— 押しても鳴らないボタンを作らない（AC-REC-07）。
+   */
+  recording: RecordingSummary.nullable().default(null),
 })
 export type ReceptionHistoryDetail = z.infer<typeof ReceptionHistoryDetail>
 
@@ -2397,23 +2438,12 @@ export const RecordingCode = z.string().regex(/^EY-R-\d{4,5}$/)
 export type RecordingCode = z.infer<typeof RecordingCode>
 
 /**
- * 録音の状態。`recording`（録っている）→ `uploading`（送っている）→ `stored`（保管庫にある）
- * の 3 段に、`failed`（端末に実体が残っている）と `deleted`（実体を消したあとの行）を足した 5 値。
- * 知らない語を通すと、掃除の Cron が拾えない状態の行が黙って増える。
- */
-export const RecordingState = z.enum(['recording', 'uploading', 'stored', 'failed', 'deleted'])
-export type RecordingState = z.infer<typeof RecordingState>
-
-/**
  * 録音の形式。**既定は `audio/mp4`**（AAC 32kbps モノラル）で、iPadOS の Safari の
  * MediaRecorder が確実に出せる形式である（60 分でも約 14MB）。`audio/webm` は取れない
  * 端末があるので既定にしない。許可リストの外は 400 にして、再生側の分岐を増やさない。
  */
 export const RecordingContentType = z.enum(['audio/mp4', 'audio/webm', 'audio/mpeg'])
 export type RecordingContentType = z.infer<typeof RecordingContentType>
-
-/** 録音の長さ。上限 21,600 秒 = 6 時間（1 受付の録音がここに届くことはない）。 */
-const DurationSeconds = z.number().int().min(0).max(21_600)
 
 /**
  * 録音のバイト数。上限 104,857,600 = 100MB は R2 の 1 オブジェクトの上限ではなく
@@ -2472,23 +2502,20 @@ export const Recording = z.strictObject({
 })
 export type Recording = z.infer<typeof Recording>
 
-/**
- * 予約詳細・受付履歴に埋め込む録音。「● 録音を聞く　03:12」を描くのに要るのは
- * 長さだけなので、埋め込み側に R2 の手がかりを渡さない。
- */
-export const RecordingSummary = z.strictObject({
-  id: Uuid,
-  state: RecordingState,
-  durationSeconds: DurationSeconds.nullable().default(null),
-})
-export type RecordingSummary = z.infer<typeof RecordingSummary>
-
 /** 録音の一覧（`GET /api/staff/recordings`）。`OFFSET` を使わず `cursor` で続きを取る。 */
 export const RecordingListQuery = z.strictObject({
   storeId: Uuid.optional(),
   state: QueryWordList(RecordingState, 5),
   from: LocalDate.optional(),
   to: LocalDate.optional(),
+  /*
+   * ご予約 1 件・受付 1 件にぶら下がる録音を引く。
+   * この 2 つが無かったころ、台帳の詳細・予約検索・受付履歴のどこからも
+   * 「録音を聞く」に辿り着けなかった —— API は動いているのに、画面が
+   * その 1 本を特定する手段を持っていなかった（実装不足の洗い出し recording-03 / 02）。
+   */
+  reservationId: Uuid.optional(),
+  receptionSessionId: Uuid.optional(),
   limit: Limit,
   cursor: Cursor.optional(),
 })

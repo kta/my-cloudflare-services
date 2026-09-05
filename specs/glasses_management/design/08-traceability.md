@@ -58,7 +58,7 @@
 |---|---|---|---|---|
 | AC-FOUND-01 | 業務画面の器が立つ | HOME | `e2e/foundation.spec.ts` | 実装済 |
 | AC-FOUND-02 | サイドバーをたたむ・ひらく | HOME | `e2e/foundation.spec.ts` | 実装済 |
-| AC-FOUND-03 | 店舗が 0 件のときの文 | HOME | `e2e/foundation.spec.ts` | 実装済 |
+| AC-FOUND-03 | 店舗が 0 件のときの面（はじめの設定へ） | HOME | `e2e/foundation.spec.ts` | 実装済 |
 | AC-FOUND-04 | 業務を終えて資格情報を消す | HOME-PERSONAL | `e2e/foundation.spec.ts` | 実装済 |
 | AC-FOUND-05 | ヘルスは認証なしで ok | —（API） | `e2e/foundation.spec.ts` | 実装済 |
 

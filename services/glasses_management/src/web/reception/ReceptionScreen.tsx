@@ -84,6 +84,7 @@ export function ReceptionScreen({
   const [linking, setLinking] = useState<VisitBoardRow | null>(null)
   const [reservation, setReservation] = useState<ReservationDetail | null>(null)
   const [customer, setCustomer] = useState<CustomerDetail | null>(null)
+  const [staffList, setStaffList] = useState<readonly StaffMember[]>([])
   const [staffNames, setStaffNames] = useState<Map<string, string>>(() => new Map())
 
   const load = useCallback(async () => {
@@ -139,6 +140,7 @@ export function ReceptionScreen({
         if (!live || !res.ok) return
         const rows: StaffMember[] = await res.json()
         setStaffNames(new Map(rows.map((row) => [row.id, row.displayName])))
+        setStaffList(rows.filter((row) => row.isActive))
       })
       .catch(() => undefined)
     return () => {
@@ -174,6 +176,45 @@ export function ReceptionScreen({
     }
   }, [checkinId])
 
+  /** 担当を選んで（あるいは決めずに）工程を始める。 */
+  function beginStage(
+    row: VisitBoardRow,
+    stage: VisitBoardCell['stage'],
+    staffId: string | undefined,
+  ) {
+    setStarting(null)
+    const back = previousStage(row, stage)
+    addVisitEvent(row, stage, undefined, staffId)
+      .then(() =>
+        setUndoable({
+          row,
+          back,
+          message: `${row.displayName}を「${STAGE_LABELS[stage as (typeof BOARD_STAGES)[number]] ?? stage}」へ進めました。`,
+        }),
+      )
+      .catch(() => setNotice('記録できませんでした。もう一度お試しください。'))
+  }
+
+  /**
+   * ご来店がなかったものとして残す。取り消しの経路（`009`）と同じ 1 本を使い、
+   * 理由に `no_show` を載せる —— 受付履歴の「結果」が「ご来店なし」になり、
+   * 取り消しと分けて数えられる（`008` の決め）。
+   */
+  async function markNoShow(reservationId: string, displayName: string) {
+    const found = await client.api.staff.reservations[':reservationId'].$get({
+      param: { reservationId },
+    })
+    if (!found.ok) throw new Error('read failed')
+    const detail: ReservationDetail = await found.json()
+    const done = await client.api.staff.reservations[':reservationId'].cancel.$post({
+      param: { reservationId },
+      json: { version: detail.version, reason: 'no_show' },
+    })
+    if (!done.ok) throw new Error('cancel failed')
+    setNotice(`${displayName}を「ご来店なし」として残しました。`)
+    setReload((count) => count + 1)
+  }
+
   /** 工程を 1 行足す。**追記だけ**なので、どの操作もこの 1 本を通る。 */
   /*
    * 直前に積んだ工程を、数秒だけ戻せるようにしておく（UX 監査 NEW-04）。
@@ -181,6 +222,18 @@ export function ReceptionScreen({
    * **戻す行を 1 本足して**打ち消す（`visit_events` は追記だけで、盤面は
    * 「いまの工程より右は記録があっても空に戻す」ので、前の工程を積み直せば戻る）。
    */
+  /*
+   * 工程を始めるとき、**誰が始めるのかを聞く**（AC-RECEP-12「担当と視力測定機 A を
+   * 選んで始める」）。聞かずに積んでいたころ、`visit_events.staff_id` は常に NULL で、
+   * 受付履歴にも分析にも「誰が対応したか」が 1 件も残らなかった
+   * （実装不足の洗い出し reception-04）。
+   * 設備は `VisitEventInput` に置き場所が無いので、ここでは担当だけを聞く。
+   */
+  const [starting, setStarting] = useState<{
+    row: VisitBoardRow
+    stage: VisitBoardCell['stage']
+  } | null>(null)
+
   const [undoable, setUndoable] = useState<{
     row: Pick<VisitBoardRow, 'subjectType' | 'subjectId'>
     back: 'received' | VisitBoardCell['stage']
@@ -211,6 +264,7 @@ export function ReceptionScreen({
       row: Pick<VisitBoardRow, 'subjectType' | 'subjectId'>,
       stage: 'received' | 'waiting' | 'left' | VisitBoardCell['stage'],
       note?: string,
+      staffId?: string,
     ) => {
       setBusy(true)
       setNotice(null)
@@ -222,6 +276,8 @@ export function ReceptionScreen({
             subjectId: row.subjectId,
             stage,
             ...(note === undefined ? {} : { note }),
+            // 誰が始めたか。聞かずに積むと `visit_events.staff_id` が NULL のままになる。
+            ...(staffId === undefined ? {} : { staffId }),
           },
         })
         if (res.status === 401) {
@@ -331,7 +387,13 @@ export function ReceptionScreen({
 
   return (
     /* 結びつけのパネルは盤面に重なる（`position: absolute` の受け皿がここに要る）。 */
-    <div className="relative flex h-full min-h-0 flex-col">
+    /*
+      画面の器は `<main>` で、名前を持つ。持たなかったころ、この面には読み上げの
+      ランドマークが 1 つも無く、画面を切り替えても「いまどこにいるか」を耳で
+      確かめる手がかりが無かった（実装不足の洗い出し foundation-01 / T-011）。
+      名前は左の柱の行き先と同じ語にする（2 通りの呼び方を覚えさせない）。
+    */
+    <main aria-label="来店受付" className="relative flex h-full min-h-0 flex-col">
       {/*
        * 一度読めたあとに取り直せなくなった状態（通信断）。盤面は残したまま、
        * **いつ時点の姿か**と**いま書けないこと**を文字で言う。60 秒ごとの取り直しが
@@ -358,6 +420,11 @@ export function ReceptionScreen({
         focusSubjectId={returnTo}
         onAdvance={(row, cell) => {
           if (offline) return
+          // 誰が始めるのかを先に聞く（担当が 1 人も居ないときは、そのまま積む）。
+          if (staffList.length > 0) {
+            setStarting({ row, stage: cell.stage })
+            return
+          }
           const back = previousStage(row, cell.stage)
           addVisitEvent(row, cell.stage)
             .then(() =>
@@ -378,6 +445,21 @@ export function ReceptionScreen({
             )
             .catch(() => setNotice('記録できませんでした。もう一度お試しください。'))
         }}
+        /*
+         * 「ご来店がなかった」は**盤面からも残せる**（`008` の決め:「気づくのは
+         * 受付の現場であるため」。UC-RECEP-11 / AC-RECEP-16）。渡していなかったころ、
+         * この操作は予約の取り消しの画面からしか届かず、盤を見ている人は
+         * いちど台帳へ回る必要があった（実装不足の洗い出し reception-01）。
+         * 取り消しは版を要るので、そのご予約をいちど読んでから送る。
+         * ウォークインには予定が無いので、この操作は出さない（`VisitBoard` が
+         * `row.subjectType` を見て出し分けるのではなく、ここで断る）。
+         */
+        onMarkNoShow={(row) => {
+          if (offline || row.subjectType !== 'reservation') return
+          markNoShow(row.subjectId, row.displayName).catch(() =>
+            setNotice('記録できませんでした。もう一度お試しください。'),
+          )
+        }}
         onOpenCheckin={(row) => {
           setReturnTo(null)
           setCheckinId(row.subjectId)
@@ -386,6 +468,56 @@ export function ReceptionScreen({
         isOffline={offline}
         {...(onOpenLedger === undefined ? {} : { onReceiveVisit: onOpenLedger })}
       />
+      {starting !== null && (
+        <div
+          role="dialog"
+          aria-label="この工程を始める担当"
+          className="absolute inset-x-0 bottom-0 z-20 border-t border-line-strong bg-surface px-5 py-4"
+        >
+          <p className="text-body font-semibold text-ink">
+            {`${starting.row.displayName}の「${STAGE_LABELS[starting.stage as (typeof BOARD_STAGES)[number]] ?? starting.stage}」を始めるのはどなたですか？`}
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {staffList.map((member) => (
+              <button
+                key={member.id}
+                type="button"
+                onClick={() => beginStage(starting.row, starting.stage, member.id)}
+                className={cn(
+                  'min-h-12 rounded-ctl border border-line-strong bg-surface px-4 text-body font-semibold text-ink',
+                  focusRing,
+                )}
+              >
+                {member.displayName}
+              </button>
+            ))}
+            {/*
+              決めずに始める道も残す。接客はもう始まっているので、名前を選べない
+              ことで工程そのものを止めない。
+            */}
+            <button
+              type="button"
+              onClick={() => beginStage(starting.row, starting.stage, undefined)}
+              className={cn(
+                'min-h-12 rounded-ctl border border-line bg-surface-2 px-4 text-body font-semibold text-ink-muted',
+                focusRing,
+              )}
+            >
+              担当はあとで決める
+            </button>
+            <button
+              type="button"
+              onClick={() => setStarting(null)}
+              className={cn(
+                'ml-auto min-h-12 rounded-ctl px-4 text-body font-semibold text-pine',
+                focusRing,
+              )}
+            >
+              やめる
+            </button>
+          </div>
+        </div>
+      )}
       {undoable !== null && (
         <UndoBar
           message={undoable.message}
@@ -412,7 +544,7 @@ export function ReceptionScreen({
           onClose={() => setLinking(null)}
         />
       )}
-    </div>
+    </main>
   )
 }
 

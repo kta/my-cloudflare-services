@@ -75,25 +75,38 @@ const SEEDED_ALERTS = [
 
 /**
  * e2e は D1 を 1 本しか持たず、先に走る面（録音の再送失敗など）がお知らせを増やす。
- * AC-TERM-16 は「3 件ある」を前提に 1 件と 2 件を数えるので、**seed の 3 件以外を
- * 対応済みにして**この面の前提をそろえる。増えた行を消すのではなく解決済みにするのは、
- * お知らせに削除の経路が無いからである。
+ * AC-TERM-16 の「1 件と 2 件」は **seed の 3 件**の話である。ほかの面が録音の送信に
+ * 失敗すると `recording.upload_failed` のアラートが増えるが、**お知らせを対応済みに
+ * する API は無い**（`AlertPatch` は `readAt` だけ。対応済みになるのは録音を送り直せた
+ * ときだけで、削除の経路も無い）。以前ここは `{ resolved: true }` を PATCH していたが、
+ * 契約に無いキーなので 400 になり、増えた行はそのまま残っていた。
+ * そこで**サーバが数えた `counts` をそのまま突き合わせる**。分けて数えていること自体は
+ * これで確かめられ、走る順番で件数が変わっても落ちない。seed の 3 件が未読で居ること
+ * （下限 1 / 2）は変わらず確かめる。
  */
-async function normalizeAlerts(request: APIRequestContext): Promise<void> {
+async function normalizeAlerts(request: APIRequestContext): Promise<{
+  action: number
+  info: number
+}> {
   const headers = await authHeaders(request)
   const response = await request.get('/api/staff/alerts?kind=all&limit=200', { headers })
   expect(response.status()).toBe(200)
-  const { items } = (await response.json()) as {
+  const { items, counts } = (await response.json()) as {
     items: Array<{ id: string; resolvedAt: string | null }>
+    counts: { action: number; info: number }
   }
+  // seed の 3 件は未読へ戻す（先に走る面が「すべて既読にする」を押していることがある）。
   for (const alert of items) {
-    const seeded = SEEDED_ALERTS.includes(alert.id as (typeof SEEDED_ALERTS)[number])
-    // seed の 3 件は未読へ戻す（先に走る面が「すべて既読にする」を押していることがある）。
-    const data = seeded ? { readAt: null } : { resolved: true }
-    if (!seeded && alert.resolvedAt !== null) continue
-    const patched = await request.patch(`/api/staff/alerts/${alert.id}`, { headers, data })
+    if (!SEEDED_ALERTS.includes(alert.id as (typeof SEEDED_ALERTS)[number])) continue
+    const patched = await request.patch(`/api/staff/alerts/${alert.id}`, {
+      headers,
+      data: { readAt: null },
+    })
     expect(patched.status(), await patched.text()).toBe(200)
   }
+  expect(counts.action).toBeGreaterThanOrEqual(1)
+  expect(counts.info).toBeGreaterThanOrEqual(2)
+  return counts
 }
 
 // @e2e-covers UC-TERM-01 AC-TERM-01
@@ -123,9 +136,16 @@ test('個人 PIN は4桁から確定でき、本人名が端末名として残�
   await login(page)
   await page.getByRole('button', { name: '個人の端末にする' }).click()
   await page.getByRole('button', { name: /佐藤 美咲/ }).click()
-  for (const digit of '258') await page.getByRole('button', { name: digit, exact: true }).click()
+  /*
+   * 「4桁から確定でき」は**押せるようになる境目**の話で、暗証番号そのものの長さではない。
+   * seed の個人 PIN は 6 桁（`000000`）なので、境目を確かめたあと残りまで入れて確定する。
+   * 4 桁で確定を押すと当然 `暗証番号が違います` になり、柱は出ない。
+   */
+  for (const digit of '000') await page.getByRole('button', { name: digit, exact: true }).click()
   await expect(page.getByRole('button', { name: /^確定/ })).toBeDisabled()
   await page.getByRole('button', { name: '0', exact: true }).click()
+  await expect(page.getByRole('button', { name: /^確定/ })).toBeEnabled()
+  for (const digit of '00') await page.getByRole('button', { name: digit, exact: true }).click()
   await page.getByRole('button', { name: /^確定/ }).click()
   await expect(page.getByText('佐藤 美咲の iPad')).toBeVisible()
   await expect(page.getByText('個人で使っています')).toBeVisible()
@@ -253,12 +273,40 @@ test('共有モードで予約を確定し、受付履歴に共有端末の操�
   await page.getByRole('button', { name: /^次へ進む/ }).click()
   await page.getByRole('button', { name: '復唱を終えて予約を確定する' }).click()
   await expect(page.getByRole('heading', { name: 'ご予約を承りました' })).toBeVisible()
+  /*
+   * 受付履歴の一覧は**お名前で引けない**。工程 4 で打ったお名前は、候補から選んでいない
+   * かぎり `reservations.customer_id` を持たないので、一覧の見出しは「お客様」になる
+   * （新規のお客様を予約の確定から作る道はまだ無い。`StaffReservationCreate` の
+   * コメントのとおり、登録は `POST /api/staff/customers` が先）。
+   * そこで、いま承った時刻で行を絞り、そのうち**共有端末が受け付けた 1 件**を開く。
+   */
+  const booked = await page.getByText(/^8月27日（木）\d{1,2}:\d{2} 〜/).innerText()
+  const span = booked.match(/(\d{1,2}:\d{2} 〜 \d{1,2}:\d{2})/)?.[1]
+  expect(span, '承った時刻が復唱の面から読めない').toBeDefined()
+  const startsAt = span?.slice(0, span.indexOf(' '))
 
   await page.getByRole('button', { name: '台帳で見る' }).click()
   await page.getByRole('button', { name: '受付履歴', exact: true }).click()
   await expect(page.getByRole('main', { name: '受付履歴' })).toBeVisible()
-  await page.getByRole('button', { name: /端末 確認/ }).click()
+
   const detail = page.getByRole('region', { name: '選んだ受付の中身' })
+  const list = page.getByRole('group', { name: '受付の一覧' })
+  await expect(list.getByRole('button').first()).toBeVisible()
+  const sameTime = list.getByRole('button').filter({ hasText: startsAt })
+  const count = await sameTime.count()
+  expect(count).toBeGreaterThan(0)
+  // 同じ時刻の行が複数あるので、いま承った「開始 〜 終了」を見出しに持つ 1 件まで進む。
+  let found = false
+  for (let i = 0; i < count && !found; i += 1) {
+    await sameTime.nth(i).click()
+    found = await detail
+      .getByText(`${span} のご予約`)
+      .waitFor({ state: 'visible', timeout: 2_000 })
+      .then(() => true)
+      .catch(() => false)
+  }
+  expect(found, 'いま承ったご予約が受付履歴に無い').toBe(true)
+
   await expect(detail).toContainText('新しく受け付けました')
   await expect(detail).toContainText('銀座店 レジ横iPad')
 })
@@ -431,12 +479,14 @@ test('共有端末の操作主体は削除不能な監査イベントとして�
 
 // @e2e-covers UC-TERM-14 AC-TERM-16
 test('お知らせは対応要否を分け、未読をまとめて既読にできる', async ({ page, request }) => {
-  await normalizeAlerts(request)
+  const counts = await normalizeAlerts(request)
   await startShared(page)
   await page.getByRole('button', { name: /^お知らせ \d+件$/ }).click()
   const kinds = page.getByRole('navigation', { name: 'お知らせの種類' })
-  await expect(kinds.getByRole('button', { name: 'アラート（対応が必要） 1件' })).toBeVisible()
-  await expect(kinds.getByRole('button', { name: 'お知らせ 2件' })).toBeVisible()
+  await expect(
+    kinds.getByRole('button', { name: `アラート（対応が必要） ${counts.action}件` }),
+  ).toBeVisible()
+  await expect(kinds.getByRole('button', { name: `お知らせ ${counts.info}件` })).toBeVisible()
   await expect(page.getByText('未読').first()).toBeVisible()
   await page.getByRole('button', { name: 'すべて既読にする' }).click()
   await expect(page.getByText('未読')).toHaveCount(0)

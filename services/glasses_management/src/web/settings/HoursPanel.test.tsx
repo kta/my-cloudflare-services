@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SettingsScreen } from './SettingsScreen'
@@ -86,6 +86,12 @@ beforeEach(() => {
       if (url.endsWith('/slot-rules'))
         return json(method === 'PUT' ? { ...slotRules, version: 5 } : slotRules)
       if (url.endsWith('/staff')) return json([])
+      // ご用件はいちばん短い所要（20分）を出す。「最後にお受けできる時刻」を下書きから引き直すのに要る。
+      if (url.includes('/purposes'))
+        return json([
+          { id: 'p1', name: '今のメガネを調整したい', durationMinutes: 20, isActive: true },
+          { id: 'p2', name: 'メガネを新しく作る', durationMinutes: 60, isActive: true },
+        ])
       return json({ error: 'not_found' }, 404)
     }),
   )
@@ -175,12 +181,50 @@ describe('営業時間', () => {
     const lines = within(group)
       .getAllByRole('listitem')
       .map((li) => li.textContent?.replace(/\s+/g, ''))
-    expect(lines).toEqual([
-      '火曜日お休み（定休日）',
-      '金曜日11:00–20:00',
-      '日曜日10:00–18:00',
-      '月・水・木・土曜日通常どおり',
-    ])
+    // 基準と違う曜日は**その場で直せる**（読むだけだったころ、金曜だけ 11:00 開店に
+    // したい店は設定の画面では変えられなかった。実装不足の洗い出し settings-03）。
+    expect(lines[0]).toContain('火曜日')
+    expect(lines[0]).toContain('お休み（定休日）')
+    expect(lines[3]).toBe('月・水・木・土曜日通常どおり')
+    expect(within(group).getByLabelText('金曜日の開店')).toHaveValue('11:00')
+    expect(within(group).getByLabelText('金曜日の閉店')).toHaveValue('20:00')
+    expect(within(group).getByLabelText('日曜日の開店')).toHaveValue('10:00')
+  })
+
+  it('曜日ごとの上書きを直して保存すると、その曜日だけが変わる', async () => {
+    await openHours()
+    const group = screen.getByRole('group', { name: '曜日ごとの上書き' })
+    fireEvent.change(within(group).getByLabelText('金曜日の開店'), {
+      target: { value: '12:00' },
+    })
+    await userEvent.click(screen.getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(screen.getByText('保存しました')).toBeInTheDocument())
+
+    const put = sent.find((call) => call.url.endsWith('/business-hours') && call.method === 'PUT')
+    expect(put, '営業時間の PUT が飛んでいない').toBeDefined()
+    const rows = (
+      (put as { body: unknown }).body as {
+        rows: { weekday: number; opensAt: string | null }[]
+      }
+    ).rows
+    expect(rows.find((row) => row.weekday === 5)?.opensAt).toBe('12:00')
+    // ほかの曜日は動かさない。
+    expect(rows.find((row) => row.weekday === 0)?.opensAt).toBe('10:00')
+  })
+
+  it('お休みと営業日を行き来できる（片道にしない）', async () => {
+    await openHours()
+    const group = screen.getByRole('group', { name: '曜日ごとの上書き' })
+    const tuesday = within(group).getAllByRole('listitem')[0]
+    expect(tuesday).toBeDefined()
+    await userEvent.click(
+      within(tuesday as HTMLElement).getByRole('button', { name: '営業日にする' }),
+    )
+    expect(within(group).getByLabelText('火曜日の開店')).toBeInTheDocument()
+    await userEvent.click(
+      within(tuesday as HTMLElement).getByRole('button', { name: 'お休みにする' }),
+    )
+    expect(within(group).queryByLabelText('火曜日の開店')).toBeNull()
   })
 
   it('予約の間隔は 片付け 10分・刻み 30分ごと・同じ時刻に受けられる件数 3件まで を出す', async () => {
@@ -230,5 +274,33 @@ describe('営業時間', () => {
     const puts = sent.filter((call) => call.method === 'PUT')
     expect(puts.map((call) => call.url.split('/').at(-1))).toEqual(['business-hours', 'slot-rules'])
     expect(puts.map((call) => (call.body as { version: number }).version)).toEqual([3, 4])
+  })
+})
+
+describe('最後にお受けできる時刻', () => {
+  /*
+   * 保存済みの値をそのまま出していたころ、閉店を直してもこの 1 行は動かず、
+   * 保存する前に何が起きるかを確かめる役に立たなかった
+   * （実装不足の洗い出し settings-02）。
+   */
+  it('閉店を早めると、その場で早まる（保存の前に確かめられる）', async () => {
+    await openHours()
+    expect(await screen.findByText('木曜日に最後にお受けできるのは 18:20 です。')).toBeVisible()
+
+    fireEvent.change(screen.getByLabelText('閉店'), { target: { value: '18:00' } })
+    // 18:00 − 片付け 10分 − いちばん短いご用件 20分 = 17:30。
+    expect(await screen.findByText('木曜日に最後にお受けできるのは 17:30 です。')).toBeVisible()
+  })
+
+  it('受付を止める帯を伸ばしても引き直す', async () => {
+    await openHours()
+    const ends = screen.getAllByLabelText('終了')
+    const last = ends[ends.length - 1]
+    expect(last).toBeDefined()
+    fireEvent.change(last as HTMLElement, { target: { value: '19:00' } })
+    // 閉店まで止めたので、その帯の前の窓から引き直す。
+    expect(
+      await screen.findByText(/木曜日に最後にお受けできるのは \d{1,2}:\d{2} です。/),
+    ).toBeVisible()
   })
 })

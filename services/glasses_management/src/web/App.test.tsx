@@ -172,6 +172,21 @@ describe('左サイドバー', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'トップ' })).toBeInTheDocument())
     expect(screen.getByRole('button', { name: 'トップ' })).toHaveAttribute('aria-current', 'page')
   })
+
+  it('トップ以外の面では柱に「トップ」を置かない（戻る道は上のバーの ⌂）', async () => {
+    /*
+     * 承認済みモックの柱は `HOME.png` にしかこの行を持たず、ほかの面
+     * （`LEDGER-STAFF.html` ほか）は「＋ 予約を取る」から始まる。全画面に置いていた
+     * ころ、行き先が 1 つ多く、押しても「いまいる場所」に見えない行が柱の頭に
+     * 居座っていた（実装不足の洗い出し foundation-03）。
+     */
+    await startWork()
+    const nav = await screen.findByRole('navigation', { name: '画面の切り替え' })
+    await userEvent.click(within(nav).getByRole('button', { name: '予約台帳' }))
+    expect(within(nav).queryByRole('button', { name: 'トップ' })).toBeNull()
+    // 戻る道は残っている。
+    expect(screen.getByRole('button', { name: 'トップへ' })).toBeInTheDocument()
+  })
 })
 
 describe('分析', () => {
@@ -240,20 +255,52 @@ describe('トップ', () => {
   })
 
   /*
-   * 「◯◯へ切り替える」のチップは、以前 `onClick` を持っていなかった。
-   * トップの 5 つの操作のうち 2 つが飾りになっていた（UX 監査 SHELL-07）。
+   * お店の切り替えは**上のバーの店名**も持つ。トップの行からしか切り替えられず、
+   * 台帳や受付を開いている最中はいちどトップへ戻る必要があった
+   * （UX 監査 SHELL-07 → 実装不足の洗い出し foundation-09）。
+   *
+   * トップの行（承認済みモック HOME.png の姿）は残っているので、切り替えの札は
+   * 画面に 2 か所出る。ここで確かめるのは上のバーのほうなので、**上のバーの中だけを
+   * 見る**（`within(banner)`）。素で `screen` を引くとトップの行に当たる。
    */
-  it('ほかのお店のチップを押すと、その店舗に切り替わる', async () => {
+  const banner = () => within(screen.getByRole('banner'))
+  async function openStoreMenu() {
+    await userEvent.click(banner().getByRole('button', { name: /お店を切り替える$/ }))
+  }
+
+  it('上のバーの店名から、ほかのお店へ切り替えられる', async () => {
     await startWork()
     await waitFor(() => expect(screen.getByText('新しい予約を取る')).toBeInTheDocument())
-    // いまは銀座店。丸の内店のチップだけが出ている。
-    expect(screen.getByRole('button', { name: 'EYE 丸の内店へ切り替える' })).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: 'EYE 丸の内店へ切り替える' }))
-    // 切り替わると、上のバーの店名が変わり、チップは銀座店のほうに入れ替わる。
+    // いまは銀座店。畳んでいるあいだ、ほかのお店の名前は出ていない。
+    expect(
+      banner().getByRole('button', { name: 'EYE 銀座店　お店を切り替える' }),
+    ).toBeInTheDocument()
+    expect(banner().queryByRole('button', { name: 'EYE 丸の内店へ切り替える' })).toBeNull()
+
+    await openStoreMenu()
+    await userEvent.click(banner().getByRole('button', { name: 'EYE 丸の内店へ切り替える' }))
+    // 切り替わると上のバーの店名が変わり、こんどは銀座店が切り替え先に並ぶ。
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'EYE 銀座店へ切り替える' })).toBeInTheDocument(),
+      expect(
+        banner().getByRole('button', { name: 'EYE 丸の内店　お店を切り替える' }),
+      ).toBeInTheDocument(),
     )
-    expect(screen.queryByRole('button', { name: 'EYE 丸の内店へ切り替える' })).toBeNull()
+    await openStoreMenu()
+    expect(banner().getByRole('button', { name: 'EYE 銀座店へ切り替える' })).toBeInTheDocument()
+    expect(banner().queryByRole('button', { name: 'EYE 丸の内店へ切り替える' })).toBeNull()
+  })
+
+  it('トップ以外の面からも切り替えられる（いちどトップへ戻らせない）', async () => {
+    await startWork()
+    const nav = await screen.findByRole('navigation', { name: '画面の切り替え' })
+    await userEvent.click(within(nav).getByRole('button', { name: '予約台帳' }))
+    await openStoreMenu()
+    await userEvent.click(banner().getByRole('button', { name: 'EYE 丸の内店へ切り替える' }))
+    await waitFor(() =>
+      expect(
+        banner().getByRole('button', { name: 'EYE 丸の内店　お店を切り替える' }),
+      ).toBeInTheDocument(),
+    )
   })
 
   it('切り替えても業務画面に留まる（暗証番号からやり直させない）', async () => {
@@ -265,9 +312,12 @@ describe('トップ', () => {
      */
     await startWork()
     await waitFor(() => expect(screen.getByText('新しい予約を取る')).toBeInTheDocument())
-    await userEvent.click(screen.getByRole('button', { name: 'EYE 丸の内店へ切り替える' }))
+    await openStoreMenu()
+    await userEvent.click(banner().getByRole('button', { name: 'EYE 丸の内店へ切り替える' }))
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'EYE 銀座店へ切り替える' })).toBeInTheDocument(),
+      expect(
+        banner().getByRole('button', { name: 'EYE 丸の内店　お店を切り替える' }),
+      ).toBeInTheDocument(),
     )
     // 左の柱も主操作もそのまま。入口の見出しは 1 つも出ない。
     expect(screen.getByRole('navigation', { name: '画面の切り替え' })).toBeInTheDocument()
@@ -487,7 +537,8 @@ describe('器の安定', () => {
     expect(screen.getByRole('button', { name: 'サイドバーをひらく' })).toBeInTheDocument()
     // 自分でひらいたら、その意思が残る。
     await userEvent.click(screen.getByRole('button', { name: 'サイドバーをひらく' }))
-    await userEvent.click(within(nav).getByRole('button', { name: 'トップ' }))
+    // トップへは上のバーの ⌂ で戻る（柱の「トップ」はトップにいるときだけ出る）。
+    await userEvent.click(screen.getByRole('button', { name: 'トップへ' }))
     await userEvent.click(within(nav).getByRole('button', { name: '予約台帳' }))
     expect(screen.getByRole('button', { name: 'サイドバーをたたむ' })).toBeInTheDocument()
   })

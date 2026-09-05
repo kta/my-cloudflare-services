@@ -424,3 +424,28 @@ describe('台帳の中に収める', () => {
     }
   })
 })
+
+describe('お客様のお名前', () => {
+  /*
+   * 承認済みモック LEDGER-DETAIL は時刻の下に
+   * `<h2>田中 花子 様 <span class="visits many">4回目</span></h2>` を置く。
+   * 描いていなかったころ、詳細を開いても**どなたのご予約か分からず**、
+   * 受け付ける前に台帳の帯へ目を戻す必要があった
+   * （実装不足の洗い出し ledger-01。AC-CUST-25）。
+   */
+  it('お名前と来店回数が時刻の下に出る', () => {
+    open({ detail: { ...DETAIL, customerName: '田中 花子', visitCount: 4 } })
+    expect(screen.getByText('田中 花子 様')).toBeVisible()
+    expect(screen.getByText('4回目')).toBeVisible()
+  })
+
+  it('はじめての方は「初めて」と出る（空欄にしない）', () => {
+    open({ detail: { ...DETAIL, customerName: '田中 花子', visitCount: 0 } })
+    expect(screen.getByText('初めて')).toBeVisible()
+  })
+
+  it('お名前が届いていないご予約では、その行ごと出さない', () => {
+    open({ detail: { ...DETAIL, customerName: null, visitCount: null } })
+    expect(screen.queryByText(/様$/)).toBeNull()
+  })
+})

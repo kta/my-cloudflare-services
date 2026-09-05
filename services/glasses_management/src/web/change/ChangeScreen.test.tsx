@@ -528,6 +528,58 @@ describe('版の競合の解き方', () => {
       startsAt: at('14:00'),
     })
   })
+
+  it('1 項目ずつ「相手の日時＋こちらの担当」を選ぶと、相手の時刻を土台に送る', async () => {
+    /*
+     * 以前は `picks.datetime` だけを読み、相手を選んだ瞬間に「相手を残す」へ落として
+     * いた。担当だけこちらを残したくても、その選択はどこにも届かない。押した内容と
+     * 保存される内容が食い違い、口頭で案内した担当と台帳がずれる
+     * （実装不足の洗い出し change-cancel-01）。
+     */
+    await openConflict()
+    patchAnswer = () => json({ ...DETAIL, version: 5 })
+    await userEvent.click(screen.getByRole('button', { name: '1項目ずつ選ぶ' }))
+    await userEvent.click(screen.getByRole('radio', { name: 'お日にちとお時間は 中村 彩 の内容' }))
+    await userEvent.click(screen.getByRole('radio', { name: '担当は あなたの内容' }))
+    await userEvent.click(screen.getByRole('radio', { name: '場所は 中村 彩 の内容' }))
+    await userEvent.click(screen.getByRole('button', { name: '選んだ内容で保存する' }))
+    await waitFor(() => expect(asked.filter((call) => call.method === 'PATCH')).toHaveLength(2))
+    // 相手が保存した 16:00 を土台にする（こちらの 14:00 では上書きしない）。
+    expect(asked.filter((call) => call.method === 'PATCH').at(-1)?.body).toMatchObject({
+      version: 4,
+      startsAt: at('16:00'),
+    })
+  })
+})
+
+describe('仮の押さえ', () => {
+  it('担当と場所も一緒に押さえる（別の端末で同じ担当の同時刻を取らせない）', async () => {
+    /*
+     * 載せていなかったころ、復唱している 7 分のあいだに別の端末が同じ担当の
+     * 同じ時刻へ別のご予約を移せてしまい、確定して初めて衝突した。
+     * AC-CHANGE-12 の「その端末では 14:00 が満席になって押せない」が成立しない
+     * （実装不足の洗い出し change-cancel-04）。
+     */
+    show()
+    await waitForRows()
+    await userEvent.click(screen.getAllByRole('button', { name: /田中 花子 様/ })[0] as HTMLElement)
+    await waitFor(() => expect(screen.getByText('EY-2608-0142')).toBeInTheDocument())
+    await userEvent.click(screen.getByRole('button', { name: '日時を変える' }))
+    await waitFor(() =>
+      expect(screen.getByRole('region', { name: 'いまのご予約' })).toBeInTheDocument(),
+    )
+    await userEvent.click(screen.getByRole('button', { name: '14:00　受付できます' }))
+    await waitFor(() =>
+      expect(asked.some((call) => call.url.pathname === '/api/staff/holds')).toBe(true),
+    )
+    const hold = asked.find((call) => call.url.pathname === '/api/staff/holds')
+    expect(hold?.body).toMatchObject({
+      startsAt: at('14:00'),
+      // いまのご予約の担当をそのまま押さえる（選び直していないので）。
+      staffId: DETAIL.assignments.find((row) => row.kind === 'staff')?.targetId ?? null,
+    })
+    expect(hold?.body).toHaveProperty('equipmentIds')
+  })
 })
 
 /*

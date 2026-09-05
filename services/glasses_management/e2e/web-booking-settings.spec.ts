@@ -490,7 +490,31 @@ test('台帳の「確認待ち」からその 1 件を確定すると、確認�
   request,
 }) => {
   const slot = await openSlot(request, 26)
+  /*
+   * **どのご予約が「いま入れた 1 件」かを、入れた直後に確定させる。**
+   * お客様に返る番号（`EY-W-YYMM-NNNN`）と業務側の予約番号（`EY-YYMM-NNNN`）は別物で
+   * 突き合わせられず、Web のご予約はお客様の行を持たないので一覧の見出しは「お客様」に
+   * なる。時刻も手がかりにならない —— この枠は 1 度に 3 件まで受けられるので、
+   * 並走する面が同じ時刻へもう 1 件入れることがある。
+   * そこで**入れる前後の id の差**を取る。
+   */
+  const idsOn = async (): Promise<Map<string, string>> => {
+    const res = await request.get('/api/staff/reservations', {
+      ...(await authed(request)),
+      params: { storeId: GINZA, from: slot.date, to: slot.date, limit: '50' },
+    })
+    expect(res.status()).toBe(200)
+    const items = ((await res.json()) as { items: { id: string; startsAt: string }[] }).items
+    return new Map(items.map((row) => [row.id, row.startsAt]))
+  }
+  const before = await idsOn()
   await bookAsCustomer(request, slot.startsAt)
+  const added = [...(await idsOn())].filter(
+    ([id, startsAt]) => !before.has(id) && startsAt === slot.startsAt,
+  )
+  expect(added.length, 'いま入れた Web 予約が台帳の一覧に無い').toBe(1)
+  const mineId = (added[0] as [string, string])[0]
+  const myRow = page.locator(`[data-reservation-id="${mineId}"]`)
 
   // 端末の時計をその日の朝へ据える。台帳はその暦日を開く。
   await page.clock.setFixedTime(new Date(`${slot.date}T01:00:00.000Z`))
@@ -504,10 +528,10 @@ test('台帳の「確認待ち」からその 1 件を確定すると、確認�
     .getByRole('button', { name: '予約リスト' })
     .click()
 
-  const pending = page.getByRole('button', { name: '確認待ち 1件' })
+  const pending = page.getByRole('button', { name: /^確認待ち \d+件$/ })
   await expect(pending).toBeVisible()
   await pending.click()
-  await expect(page.getByRole('button', { name: '内容を確認' })).toHaveCount(1)
+  await expect(myRow.getByRole('button', { name: '内容を確認' })).toHaveCount(1)
 
   /*
    * 「確定する」は担当を決めることである —— 台帳の「確認待ち」は「Web から入って担当が
@@ -518,22 +542,16 @@ test('台帳の「確認待ち」からその 1 件を確定すると、確認�
    * **お知らせ（ALERTS）の「Web予約がN件、確認待ちです」はまだ立たない** ——
    * `alerts` に `web_booking.pending` を積む経路が無いので、ここでは数えない。
    */
-  const listed = await request.get('/api/staff/reservations', {
-    ...(await authed(request)),
-    params: { storeId: GINZA, from: slot.date, to: slot.date, limit: '50' },
-  })
-  const items = ((await listed.json()) as { items: { id: string; startsAt: string }[] }).items
-  const mine = items.find((row) => row.startsAt === slot.startsAt)
-  const detail = await request.get(`/api/staff/reservations/${(mine as { id: string }).id}`, {
+  const detail = await request.get(`/api/staff/reservations/${mineId}`, {
     ...(await authed(request)),
   })
   const version = ((await detail.json()) as { version: number }).version
   const staffId = await freeStaffAt(request, {
     date: slot.date,
     startsAt: slot.startsAt,
-    reservationId: (mine as { id: string }).id,
+    reservationId: mineId,
   })
-  const assigned = await request.patch(`/api/staff/reservations/${(mine as { id: string }).id}`, {
+  const assigned = await request.patch(`/api/staff/reservations/${mineId}`, {
     ...(await authed(request)),
     data: { version, staffId },
   })
@@ -550,6 +568,7 @@ test('台帳の「確認待ち」からその 1 件を確定すると、確認�
     .getByRole('group', { name: '表示のかたち' })
     .getByRole('button', { name: '予約リスト' })
     .click()
-  await expect(page.getByRole('button', { name: '確認待ち 0件' })).toBeVisible()
-  await expect(page.getByRole('button', { name: '内容を確認' })).toHaveCount(0)
+  await page.getByRole('button', { name: /^確認待ち \d+件$/ }).click()
+  // 担当が決まったので、この 1 件は確認待ちの絞り込みから消える。
+  await expect(myRow).toHaveCount(0)
 })

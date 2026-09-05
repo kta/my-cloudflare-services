@@ -779,6 +779,86 @@ describe('メモ', () => {
       .first<{ count: number }>()
     expect(kept?.count).toBe(5)
   })
+
+  it('置き換える 1 枚を選べば、その 1 枚だけが入れ替わる', async () => {
+    /*
+     * 画面は「どれと置き換えますか」と尋ねて選ばせておきながら、その答えを送る先が
+     * 無く、押しても何も起きなかった（実装不足の洗い出し customers-02）。
+     * **黙って古い 1 枚を消さない**という決めはそのままで、人が選んだ 1 枚だけを消す。
+     */
+    const only = await insertCustomer(org, { name: '置換 花子', kana: 'おきかえ はなこ' })
+    const ids: string[] = []
+    for (let sheet = 0; sheet < 5; sheet++) {
+      const res = await SELF.fetch(`${BASE}/api/staff/customers/${only}/notes`, {
+        method: 'POST',
+        headers: authed(token),
+        body: JSON.stringify({ kind: 'memo', storeId, handwritingSvg: STROKE }),
+      })
+      expect(res.status).toBe(200)
+      ids.push(((await res.json()) as { id: string }).id)
+    }
+    const replaced = ids[0]
+    expect(replaced).toBeDefined()
+
+    const sixth = await SELF.fetch(`${BASE}/api/staff/customers/${only}/notes`, {
+      method: 'POST',
+      headers: authed(token),
+      body: JSON.stringify({
+        kind: 'memo',
+        storeId,
+        handwritingSvg: STROKE,
+        replacesId: replaced,
+      }),
+    })
+    expect(sixth.status).toBe(200)
+
+    // 枚数は 5 枚のまま。選ばれた 1 枚だけが消えている。
+    const kept = await env.DB.prepare(
+      'SELECT COUNT(*) AS count FROM customer_notes WHERE customer_id = ? AND handwriting_key IS NOT NULL',
+    )
+      .bind(only)
+      .first<{ count: number }>()
+    expect(kept?.count).toBe(5)
+    const gone = await env.DB.prepare('SELECT id FROM customer_notes WHERE id = ?')
+      .bind(replaced)
+      .first<{ id: string }>()
+    expect(gone).toBeNull()
+    // 選ばなかった 4 枚は残る。
+    for (const id of ids.slice(1)) {
+      const still = await env.DB.prepare('SELECT id FROM customer_notes WHERE id = ?')
+        .bind(id)
+        .first<{ id: string }>()
+      expect(still).not.toBeNull()
+    }
+  })
+
+  it('知らない 1 枚を置き換え先に指しても、何も消さない', async () => {
+    const only = await insertCustomer(org, { name: '知らぬ 太郎', kana: 'しらぬ たろう' })
+    const made = await SELF.fetch(`${BASE}/api/staff/customers/${only}/notes`, {
+      method: 'POST',
+      headers: authed(token),
+      body: JSON.stringify({ kind: 'memo', storeId, handwritingSvg: STROKE }),
+    })
+    expect(made.status).toBe(200)
+
+    const refused = await SELF.fetch(`${BASE}/api/staff/customers/${only}/notes`, {
+      method: 'POST',
+      headers: authed(token),
+      body: JSON.stringify({
+        kind: 'memo',
+        storeId,
+        handwritingSvg: STROKE,
+        replacesId: crypto.randomUUID(),
+      }),
+    })
+    expect(refused.status).toBe(404)
+    const kept = await env.DB.prepare(
+      'SELECT COUNT(*) AS count FROM customer_notes WHERE customer_id = ? AND handwriting_key IS NOT NULL',
+    )
+      .bind(only)
+      .first<{ count: number }>()
+    expect(kept?.count).toBe(1)
+  })
 })
 
 /* ───────────────────────────────────────────────────────────────────────────

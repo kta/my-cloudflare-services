@@ -181,6 +181,8 @@ export function BookingScreen({
   const [booking, setBooking] = useState(false)
   const [bookingFailed, setBookingFailed] = useState(false)
   const [booked, setBooked] = useState<ReservationDetail | null>(null)
+  /** 残せなかった手書きの枚数。確定の面で 1 行にして出す（黙って捨てない）。 */
+  const [handwritingLeft, setHandwritingLeft] = useState(0)
   const [conflict, setConflict] = useState<{
     takenAt: string
     alternatives: readonly AvailabilitySlot[]
@@ -521,6 +523,37 @@ export function BookingScreen({
       ? null
       : new Date(Date.parse(placedStartsAt) + durationMinutes * MS_PER_MINUTE).toISOString())
 
+  /*
+   * 工程 4 で書いた筆跡を、確定のあとにそのお客様のメモとして残す。
+   *
+   * 残していなかったころ、「手書きのまま残す」を押しても筆跡は画面に見えているだけで、
+   * 予約を確定した瞬間に失われていた。当日その予約を開いても手書きも記入者も時刻も
+   * 出てこず、口頭で伺ったご要望が伝わらない（実装不足の洗い出し booking-02）。
+   *
+   * **お客様が決まっていないと置き場所が無い。**筆跡は R2 の
+   * `notes/{org}/{customerId}/{noteId}.svg` に置くので、候補から選んでいない受付では
+   * 残せない。そのときは黙って捨てず、確定の面に 1 行で伝える。
+   * 送れなかった枚数も同じところに出す —— 残ったと思わせない。
+   */
+  async function keepHandwriting(customerId: string | null) {
+    if (notes.length === 0) return
+    if (customerId === null) {
+      setHandwritingLeft(notes.length)
+      return
+    }
+    let failed = 0
+    for (const note of notes) {
+      const saved = await client.api.staff.customers[':customerId'].notes
+        .$post({
+          param: { customerId },
+          json: { kind: 'memo', body: '', handwritingSvg: note.svg, storeId },
+        })
+        .catch(() => null)
+      if (saved === null || !saved.ok) failed += 1
+    }
+    setHandwritingLeft(failed)
+  }
+
   async function confirmBooking() {
     if (booking || placedStartsAt === null) return
     setBooking(true)
@@ -552,6 +585,8 @@ export function BookingScreen({
       if (res.ok) {
         setBooked(body as ReservationDetail)
         sessionStorage.removeItem(SESSION_KEY)
+        // 伺ったご要望の筆跡を、そのお客様のメモとして残す。
+        await keepHandwriting(draft.customerId)
         // 復唱が終わった。ここで録り終えて送る（送れなければ端末に控える）。
         recorder.stop()
         // ご予約そのものが枠を持つので、押さえは返す（同じ枠を二重に数えさせない）。
@@ -696,6 +731,7 @@ export function BookingScreen({
     setSlot(null)
     setHold(null)
     setNotes([])
+    setHandwritingLeft(0)
     setReported(null)
     setStep('datetime')
     setSessionId(null)
@@ -912,6 +948,7 @@ export function BookingScreen({
               equipmentNames,
             }}
             isOffline={isOffline}
+            handwritingLeft={handwritingLeft}
             onBookAgain={bookAgain}
             onOpenLedger={onOpenLedger ?? onExit}
           />

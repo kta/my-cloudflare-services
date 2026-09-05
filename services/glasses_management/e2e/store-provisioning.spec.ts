@@ -96,7 +96,9 @@ test('2 店舗目以降も同じ導線から増やせる', async ({ page, reques
   )
 
   await startAsAdmin(page, request, org)
-  await page.getByRole('button', { name: 'お店を追加する' }).first().click()
+  // お店を増やす道は**上のバーの店名**にある（トップの主操作の下に行を足さない）。
+  await page.getByRole('button', { name: /お店を切り替える$/ }).click()
+  await page.getByRole('button', { name: 'お店を追加する' }).click()
   await expect(page.getByRole('heading', { name: 'お店を追加します', level: 1 })).toBeVisible()
   // 2 店舗目の合い言葉には連番が付く。
   await expect(page.getByText(`/w/${org}-2`)).toBeVisible()

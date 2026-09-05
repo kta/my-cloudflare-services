@@ -14,6 +14,7 @@ import { cn, focusRing, focusRingOnPine } from '@app/ui'
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { client } from '../client'
 import { WalkinPanel } from '../reception/WalkinPanel'
+import { useReservationRecording } from '../recording/useReservationRecording'
 import { dateLabel, nowChipLabel, shiftDate } from './metrics'
 import { OfflineBanner } from './OfflineBanner'
 import { ReservationDetail, type ReservationDetailPhase } from './ReservationDetail'
@@ -129,6 +130,7 @@ export function LedgerScreen({
   const [autoRound, setAutoRound] = useState(0)
   // 開いているご予約。台帳の帯を押すと入り、閉じる 3 つの道のどれでも null に戻る。
   const [openId, setOpenId] = useState<string | null>(initialReservationId ?? null)
+  const recording = useReservationRecording(openId)
   const [detail, setDetail] = useState<ReservationDetailShape | null>(null)
   const [detailPhase, setDetailPhase] = useState<ReservationDetailPhase>('loading')
   const [anchor, setAnchor] = useState({ left: ARROW_LEFT_PX, top: 0, bandTop: 0 })
@@ -336,7 +338,13 @@ export function LedgerScreen({
       .filter((name) => name !== '') ?? []
 
   return (
-    <div className="flex h-full min-h-0 flex-1 flex-col">
+    /*
+      画面の器は `<main>` で、名前を持つ。持たなかったころ、この面には読み上げの
+      ランドマークが 1 つも無く、画面を切り替えても「いまどこにいるか」を耳で
+      確かめる手がかりが無かった（実装不足の洗い出し foundation-01 / T-011）。
+      名前は左の柱の行き先と同じ語にする（2 通りの呼び方を覚えさせない）。
+    */
+    <main aria-label="予約台帳" className="flex h-full min-h-0 flex-1 flex-col">
       {/* 上のバーへ差し込む口が無い器（テストや単体での確認）では、緑の帯を自分で出す。 */}
       {onBarCenter === undefined && (
         <div className="flex shrink-0 items-center bg-pine px-4 py-2 text-on-pine">
@@ -465,6 +473,8 @@ export function LedgerScreen({
             <ReservationDetail
               detail={detail}
               phase={detailPhase}
+              /* 保存済みの録音があれば「● 録音を聞く」を出す（UX 監査 recording-02）。 */
+              recording={recording}
               staffName={staffName}
               equipmentNames={equipmentNames}
               anchor={anchor}
@@ -477,7 +487,7 @@ export function LedgerScreen({
           )}
         </div>
       )}
-    </div>
+    </main>
   )
 }
 

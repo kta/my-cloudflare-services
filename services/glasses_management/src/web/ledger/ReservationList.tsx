@@ -269,7 +269,16 @@ export function ReservationList({
                   const action = actionOf(row)
                   const fact = factOf(row)
                   return (
-                    <tr key={row.reservationId} className="h-15.5 border-line border-b">
+                    /*
+                       行に予約 id を残す。並走するテストが同じ暦日・同じ時刻に別の
+                       ご予約を足すことがあり、時刻とお名前だけでは「この 1 件」を
+                       指せない（台帳の帯が `data-ledger-cell` を持っているのと同じ理由）。
+                    */
+                    <tr
+                      key={row.reservationId}
+                      data-reservation-id={row.reservationId}
+                      className="h-15.5 border-line border-b"
+                    >
                       {!isOffline && (
                         /* 次の操作と出どころの語を**横に**並べる。縦へ積むと 1 行が 90px 近くなり、
                            8 行目と末尾の「このあと …」が iPad の高さに収まらなくなる

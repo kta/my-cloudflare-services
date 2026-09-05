@@ -46,7 +46,8 @@ async function openAnalytics(page: Page, request: APIRequestContext): Promise<vo
   await page.getByRole('button', { name: '業務を始める' }).click()
   await completeSeededTerminalStart(page)
   expect((await storesResponse).status()).toBe(200)
-  await expect(page.getByRole('button', { name: 'EYE 丸の内店へ切り替える' })).toBeVisible()
+  // お店の切り替えは上のバーの店名が持つ（トップのチップは外した。foundation-09）。
+  await expect(page.getByRole('button', { name: /お店を切り替える$/ })).toBeVisible()
   const reportRequest = page.waitForRequest(
     (request) => request.url().includes('/api/staff/analytics') && request.method() === 'GET',
   )

@@ -2781,7 +2781,11 @@ async function readSessionLink(
  *
  * **同じ原因で連打しない。**同じ `code` + `target_id` の未解決行があれば作らない
  * （4 回目・5 回目の失敗でお知らせが増えると、対応の 1 件が数に埋もれる）。
- * 端末名は `terminals` 表ができる P10 まで `null` で、そのぶん本文の一句が落ちる。
+ *
+ * 端末名はその録音の受付が使っていた端末から引く。`null` で固定していたころ、
+ * 本文の一句が落ち、**どの iPad に実体が残っているのかが分からなかった** ——
+ * 直しに行く人はお店じゅうの端末を順に見ることになる
+ * （実装不足の洗い出し recording-05。P10 で `terminals` 表が入ったので引ける）。
  */
 async function raiseUploadFailedAlert(
   db: D1Database,
@@ -2803,11 +2807,20 @@ async function raiseUploadFailedAlert(
     .bind(input.organizationId, input.recordingId)
     .first<{ id: string }>()
   if (existing !== null) return
+  const terminal = await db
+    .prepare(
+      'SELECT t.name AS name FROM recordings r ' +
+        'JOIN reception_sessions s ON s.organization_id = r.organization_id AND s.id = r.reception_session_id ' +
+        'JOIN terminals t ON t.organization_id = s.organization_id AND t.id = s.terminal_id ' +
+        'WHERE r.organization_id = ? AND r.id = ? LIMIT 1',
+    )
+    .bind(input.organizationId, input.recordingId)
+    .first<{ name: string }>()
   const alert = uploadFailedAlert({
     code: input.code,
     customerName: input.customerName,
     hasReservation: input.hasReservation,
-    terminalName: null,
+    terminalName: terminal?.name ?? null,
   })
   await db
     .prepare(
@@ -6382,6 +6395,44 @@ const routes = app
 
       const detail = await reservationDetailOf(c.env, org, reservationId)
       if (detail === null) return c.json({ error: 'not_found' }, 404)
+
+      /*
+       * Web のご予約の日時が動いたら、確定のメールを新しい日時で送り直す。
+       *
+       * 変更・取消の型は `NotificationJob` に無く、足すのは別サービスの契約変更
+       * （＝人間の承認事項）なので、**日時だけを変えたときに `reservation.confirmed`
+       * を送り直す**という決めでこれを賄う。決めはあったのに配線が無く、変更の面が
+       * 「変更をメールでお知らせします」と言いながら 1 通も送っていなかった
+       * （実装不足の洗い出し change-cancel-02）。
+       * 鍵は「ご予約 id + 新しい日時」なので、同じ日時へ何度直しても 1 通に収まる。
+       */
+      if (startsAt !== null && startsAt !== reservation.startsAt) {
+        const web = await c.env.DB.prepare(
+          'SELECT w.contact_email AS contactEmail, w.public_code AS publicCode, ' +
+            's.name AS storeName, s.name_public AS storeNamePublic ' +
+            'FROM web_bookings w JOIN stores s ON s.organization_id = w.organization_id AND s.id = w.store_id ' +
+            "WHERE w.organization_id = ? AND w.reservation_id = ? AND w.status <> 'cancelled' LIMIT 1",
+        )
+          .bind(org, reservationId)
+          .first<{
+            contactEmail: string
+            publicCode: string
+            storeName: string
+            storeNamePublic: string | null
+          }>()
+        if (web !== null && web !== undefined && web.contactEmail !== '') {
+          await sendReservationMail(c.env, {
+            organizationId: org,
+            reservationId,
+            to: web.contactEmail,
+            managementCode: web.publicCode,
+            reservationNumber: web.publicCode,
+            // 店内名をお客様のメールに漏らさない。
+            storeName: web.storeNamePublic ?? web.storeName,
+            appointmentAt: startsAt,
+          }).catch(() => undefined)
+        }
+      }
       return c.json(detail)
     },
   )
@@ -7587,6 +7638,27 @@ const routes = app
       const noteId = crypto.randomUUID()
       let key: string | null = null
       if (input.handwritingSvg !== null) {
+        /*
+         * 置き換える 1 枚を人が選んでいれば、先にその 1 枚を退ける。
+         * **黙って古い 1 枚を消さない**という決めはそのままで、消すのは
+         * 画面で選ばれた 1 枚だけである（実装不足の洗い出し customers-02）。
+         * R2 の実体も一緒に片づける（行だけ消すと鍵の無い実体が残り続ける）。
+         */
+        if (input.replacesId !== null) {
+          const old = await c.env.DB.prepare(
+            'SELECT handwriting_key AS handwritingKey FROM customer_notes ' +
+              'WHERE organization_id = ? AND customer_id = ? AND id = ? AND handwriting_key IS NOT NULL',
+          )
+            .bind(org, customerId, input.replacesId)
+            .first<{ handwritingKey: string }>()
+          if (old === null || old === undefined) return c.json({ error: 'not_found' }, 404)
+          await c.env.RECORDINGS.delete(old.handwritingKey).catch(() => undefined)
+          await c.env.DB.prepare(
+            'DELETE FROM customer_notes WHERE organization_id = ? AND customer_id = ? AND id = ?',
+          )
+            .bind(org, customerId, input.replacesId)
+            .run()
+        }
         const sheets = await c.env.DB.prepare(
           'SELECT id, created_at AS createdAt FROM customer_notes ' +
             'WHERE organization_id = ? AND customer_id = ? AND handwriting_key IS NOT NULL ORDER BY created_at ASC',
@@ -8601,8 +8673,16 @@ const routes = app
       // 行の識別子は受付セッション → ご予約 → ウォークイン の順に決まる。
       entryId: row.sessionId ?? row.reservationId,
       sessionId: row.sessionId,
-      // 並びは「お着きになった順」。ウォークインは受付時刻、ご予約は予定時刻で並ぶ。
-      startedAt: row.arrivedAt ?? row.sessionStartedAt ?? row.startsAt,
+      /*
+       * 並びは「お着きになった順」。ウォークインは受付時刻、**ご予約は予定時刻**で並ぶ。
+       *
+       * ここに `sessionStartedAt` を挟んではいけない。挟むと、電話で承ったご予約が
+       * **受け付けた日**の側に並んで表示される —— 8月20日に承った 8月27日のご予約が
+       * 「8月20日」の見出しの下に出る。期間の絞り込みは `visitDate`（ご来店日）で
+       * かけているので、8月21日〜27日を選んだ一覧に 8月20日の見出しが混ざり、
+       * 選んだ期間の外の日付が並ぶ。受け付けた時刻は `receivedAt` が持っている。
+       */
+      startedAt: row.arrivedAt ?? row.startsAt,
       // 「中村 彩 が 8月20日（木）14:32 に電話で受け付け」の時刻。**絞り込みには使わない。**
       receivedAt: row.sessionStartedAt ?? row.arrivedAt ?? row.createdAt,
       visitDate: jstVisitDate(row.startsAt),
@@ -8748,6 +8828,31 @@ const routes = app
               .where(and(eq(staff.organizationId, org), eq(staff.id, session.actorId)))
           )[0]?.displayName ?? null)
 
+    /*
+     * その受付の録音。**`stored` の 1 本だけ**を載せる。以前はここを null で
+     * 固定していたので、録音が保管庫にあってもこの面に「受付のときの録音」が
+     * 一度も出なかった（実装不足の洗い出し recording-01）。送信の途中や
+     * 失敗した録音は載せない —— 押しても鳴らないボタンを作らない（AC-REC-07）。
+     */
+    const heardRow =
+      session === null
+        ? null
+        : await c.env.DB.prepare(
+            'SELECT id, state, duration_seconds AS durationSeconds FROM recordings ' +
+              "WHERE organization_id = ? AND reception_session_id = ? AND state = 'stored' " +
+              'ORDER BY created_at DESC LIMIT 1',
+          )
+            .bind(org, session.id)
+            .first<{ id: string; state: string; durationSeconds: number | null }>()
+    const heard =
+      heardRow === null || heardRow === undefined
+        ? null
+        : {
+            id: heardRow.id,
+            state: heardRow.state,
+            durationSeconds: heardRow.durationSeconds,
+          }
+
     return c.json(
       ReceptionHistoryDetail.parse({
         entryId,
@@ -8762,7 +8867,7 @@ const routes = app
             actorName: row.actorName,
           }))
           .filter((row) => row.what !== null),
-        recording: null,
+        recording: heard,
       }),
     )
   })
@@ -9211,6 +9316,15 @@ const routes = app
       if (query.to !== undefined) {
         clauses.push('created_at < ?')
         params.push(toInstant(query.to, MINUTES_PER_DAY))
+      }
+      // ご予約 1 件・受付 1 件にぶら下がる録音を引く（画面の「録音を聞く」がこれを使う）。
+      if (query.reservationId !== undefined) {
+        clauses.push('reservation_id = ?')
+        params.push(query.reservationId)
+      }
+      if (query.receptionSessionId !== undefined) {
+        clauses.push('reception_session_id = ?')
+        params.push(query.receptionSessionId)
       }
       const where = `organization_id = ? AND ${clauses.join(' AND ')}`
 

@@ -74,17 +74,18 @@ async function recordingTenant(permissions: string[] = ['recording.read', 'recor
 async function startSession(
   org: string,
   storeId: string,
-  input: { reservationId?: string | null; outcome?: string | null } = {},
+  input: { reservationId?: string | null; outcome?: string | null; terminalId?: string } = {},
 ): Promise<string> {
   const id = crypto.randomUUID()
   await env.DB.prepare(
-    'INSERT INTO reception_sessions (id, organization_id, store_id, reservation_id, terminal_id, actor_id, started_at, ended_at, outcome, draft_json, created_at) VALUES (?,?,?,?,NULL,NULL,?,NULL,?,NULL,?)',
+    'INSERT INTO reception_sessions (id, organization_id, store_id, reservation_id, terminal_id, actor_id, started_at, ended_at, outcome, draft_json, created_at) VALUES (?,?,?,?,?,NULL,?,NULL,?,NULL,?)',
   )
     .bind(
       id,
       org,
       storeId,
       input.reservationId ?? null,
+      input.terminalId ?? null,
       FIXED_NOW,
       input.outcome ?? null,
       FIXED_NOW,
@@ -676,6 +677,34 @@ describe('保存の失敗', () => {
     expect(String(items[0]?.body)).toContain(String(recording.code))
   })
 
+  it('お知らせに端末名が入る（どの iPad に実体が残っているかが分かる）', async () => {
+    /*
+     * `null` で固定していたころ、本文の一句が落ち、直しに行く人はお店じゅうの
+     * 端末を順に見ることになった（実装不足の洗い出し recording-05）。
+     */
+    const tenant = await recordingTenant()
+    const terminalId = crypto.randomUUID()
+    await env.DB.prepare(
+      'INSERT INTO terminals (id, organization_id, store_id, name, kind, place_note, device_label, pin_hash, auto_lock_seconds, last_seen_at, is_active, version, created_at) ' +
+        "VALUES (?,?,?,?,'shared',NULL,NULL,NULL,180,NULL,'1',1,?)",
+    )
+      .bind(terminalId, tenant.org, tenant.storeId, 'レジ横iPad', FIXED_NOW)
+      .run()
+    const sessionId = await startSession(tenant.org, tenant.storeId, { terminalId })
+    const recording = await startRecording(tenant, sessionId)
+    const call = callAs(tenant.token)
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await call('PATCH', `/api/staff/recordings/${recording.id}`, { state: 'failed' })
+      await call('POST', `/api/staff/recordings/${recording.id}/retry`)
+    }
+    await call('PATCH', `/api/staff/recordings/${recording.id}`, { state: 'failed' })
+
+    const listed = await call('GET', `/api/staff/alerts?storeId=${tenant.storeId}`)
+    const items = (listed.body as unknown as { items: Json[] }).items
+    expect(String(items[0]?.body)).toContain('レジ横iPad')
+  })
+
   it('再送が成功すると stored になり、同じ R2 キーを上書きする', async () => {
     const tenant = await recordingTenant()
     const sessionId = await startSession(tenant.org, tenant.storeId)
@@ -817,6 +846,76 @@ describe('保存の失敗', () => {
     const listed = await call('GET', `/api/staff/recordings?storeId=${tenant.storeId}`)
     expect(listed.status).toBe(200)
     expect(listed.body.items).toHaveLength(1)
+  })
+
+  it('ご予約 id で絞ると、その 1 件にぶら下がる録音だけが返る', async () => {
+    /*
+     * 絞り込みが無かったころ、画面はご予約 1 件の録音を特定できず、台帳の詳細・
+     * 予約を探す・受付履歴のどこにも「● 録音を聞く」が出せなかった
+     * （実装不足の洗い出し recording-03 / recording-02）。
+     */
+    const tenant = await recordingTenant()
+    const mine = await startSession(tenant.org, tenant.storeId)
+    const other = await startSession(tenant.org, tenant.storeId)
+    const wanted = await startRecording(tenant, mine)
+    const unrelated = await startRecording(tenant, other)
+    const reservationId = crypto.randomUUID()
+    await env.DB.prepare('UPDATE recordings SET reservation_id = ? WHERE id = ?')
+      .bind(reservationId, wanted.id)
+      .run()
+
+    const call = callAs(tenant.token)
+    const listed = await call(
+      'GET',
+      `/api/staff/recordings?storeId=${tenant.storeId}&reservationId=${reservationId}`,
+    )
+    expect(listed.status).toBe(200)
+    const found = listed.body.items as { id: string }[]
+    expect(found).toHaveLength(1)
+    expect(found[0]).toMatchObject({ id: wanted.id })
+    expect(listed.body.total).toBe(1)
+    // ほかのご予約の録音は混ざらない。
+    expect(found.map((row) => row.id)).not.toContain(unrelated.id)
+  })
+
+  it('受付履歴の 1 件に、その受付の保管済みの録音が載る', async () => {
+    /*
+     * 以前は契約ごと `recording: null` で固定していたので、録音が保管庫にあっても
+     * この面に「受付のときの録音」が一度も出なかった
+     * （実装不足の洗い出し recording-01）。
+     */
+    const tenant = await recordingTenant()
+    const sessionId = await startSession(tenant.org, tenant.storeId)
+    const recording = await startRecording(tenant, sessionId)
+    const call = callAs(tenant.token)
+
+    // 送っている途中は載せない（押しても鳴らないボタンを作らない。AC-REC-07）。
+    await call('PATCH', `/api/staff/recordings/${recording.id}`, { state: 'uploading' })
+    const midway = await call('GET', `/api/staff/reception-sessions/${sessionId}`)
+    expect(midway.status).toBe(200)
+    expect(midway.body.recording).toBeNull()
+
+    expect((await putContent(tenant.token, String(recording.id))).status).toBe(200)
+    const listed = await call('GET', `/api/staff/reception-sessions/${sessionId}`)
+    expect(listed.status).toBe(200)
+    expect(listed.body.recording).toMatchObject({ id: recording.id, state: 'stored' })
+  })
+
+  it('受付 id でも絞れる', async () => {
+    const tenant = await recordingTenant()
+    const mine = await startSession(tenant.org, tenant.storeId)
+    const other = await startSession(tenant.org, tenant.storeId)
+    const wanted = await startRecording(tenant, mine)
+    await startRecording(tenant, other)
+
+    const listed = await callAs(tenant.token)(
+      'GET',
+      `/api/staff/recordings?storeId=${tenant.storeId}&receptionSessionId=${mine}`,
+    )
+    expect(listed.status).toBe(200)
+    const only = listed.body.items as { id: string }[]
+    expect(only).toHaveLength(1)
+    expect(only[0]).toMatchObject({ id: wanted.id })
   })
 
   it('送り直しても最低保持期限は伸びない（消せない録音を作らない）', async () => {
