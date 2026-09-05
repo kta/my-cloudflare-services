@@ -118,6 +118,9 @@ const MANAGEMENT_ROUTES = [
   },
   // default-deny の証明: 存在しない /api/* もゲートを通らないと 404 にすら到達しない
   { name: 'GET /api/not-a-route(未知パス)', method: 'GET', path: '/api/not-a-route' },
+  // NOTE: GET /api/organizations/:id/stores はこの表に載せない。担当店舗の割り当てで
+  // 使うため運営限定ゲートの外に出してあり、**自社なら本部管理者も引ける**。
+  // 自社 200 / 他社 403 / 未認証 401 / 未知の会社 404 は organization-stores.test.ts が見る。
 ] as const
 
 async function call(

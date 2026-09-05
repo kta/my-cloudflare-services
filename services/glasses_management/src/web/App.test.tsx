@@ -305,7 +305,13 @@ describe('トップ', () => {
  * 「営業中 10:00–19:00」まで出ていた（UX 監査 SHELL-03）。
  * **入口で止めて、コードを直す道を示す。**
  */
-describe('知らないお店のコード', () => {
+/*
+ * お店が 0 件のコードは「打ち間違い」と「まだ 1 店舗も登録していない新しい会社」の
+ * 両方でありうる。入口で止めると後者は永久に入れないので、通したうえでトップに
+ * 「最初のお店を登録する」を出す（014-store-provisioning）。打ち間違いの人も、
+ * 空のトップと登録の面を見れば自分が別の会社に入ったと分かる。
+ */
+describe('お店が 0 件のコード', () => {
   function noStores() {
     mockFetch((url) =>
       url.includes('/api/auth/token')
@@ -320,28 +326,40 @@ describe('知らないお店のコード', () => {
     )
   }
 
-  it('お店が 1 つも見つからないコードでは、入口で止めて理由を言う', async () => {
+  it('入口では止めず、まだお店が無いことをトップで伝える', async () => {
     noStores()
     render(<App />)
     await userEvent.type(screen.getByLabelText('お店のコード'), 'nonexistent')
     await userEvent.click(screen.getByRole('button', { name: '業務を始める' }))
+
     await waitFor(() =>
-      expect(
-        screen.getByText(
-          'このコードのお店が見つかりませんでした。お店のコードをお確かめのうえ、もう一度お試しください。',
-        ),
-      ).toBeInTheDocument(),
+      expect(screen.getByText('お店がまだ登録されていません。')).toBeInTheDocument(),
     )
   })
 
-  it('止めたあとも入口に留まり、アプリ本体には入らない', async () => {
+  it('行き止まりにせず、最初のお店を登録する道を出す', async () => {
     noStores()
     render(<App />)
     await userEvent.type(screen.getByLabelText('お店のコード'), 'nonexistent')
     await userEvent.click(screen.getByRole('button', { name: '業務を始める' }))
-    await waitFor(() => expect(screen.getByLabelText('お店のコード')).toBeInTheDocument())
-    // 左サイドバーも、偽の営業時間も出さない。
-    expect(screen.queryByRole('navigation', { name: '画面の切り替え' })).toBeNull()
+
+    const open = await screen.findByRole('button', { name: '最初のお店を登録する' })
+    await userEvent.click(open)
+
+    expect(await screen.findByRole('dialog', { name: 'お店を登録する' })).toBeInTheDocument()
+    expect(screen.getByLabelText('お店の名前')).toBeInTheDocument()
+    expect(screen.getByLabelText('お客様向けページの合い言葉')).toBeInTheDocument()
+  })
+
+  it('お店が無い間は、偽の営業時間を出さない', async () => {
+    noStores()
+    render(<App />)
+    await userEvent.type(screen.getByLabelText('お店のコード'), 'nonexistent')
+    await userEvent.click(screen.getByRole('button', { name: '業務を始める' }))
+
+    await waitFor(() =>
+      expect(screen.getByText('お店がまだ登録されていません。')).toBeInTheDocument(),
+    )
     expect(screen.queryByText(/営業中/)).toBeNull()
   })
 })

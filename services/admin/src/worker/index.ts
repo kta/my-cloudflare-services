@@ -11,6 +11,7 @@ import {
   Plan,
   RefreshRequest,
   SetOwnPinRequest,
+  Store,
   UserAssignmentUpdate,
 } from '@app/contracts'
 import {
@@ -218,6 +219,9 @@ app.use(
       '/api/users',
       '/api/users/*',
       '/api/me/*',
+      // 担当店舗の割り当てで使う。運営限定ではなく、**自社なら本部管理者も引ける**
+      // （下のハンドラが JWT の org と突き合わせる）。014-store-provisioning
+      '/api/organizations/:id/stores',
     ],
     tenantAuth(),
     requireRole('admin'),
@@ -249,6 +253,12 @@ app.use('/api/users', tenantAuth(), requireRole('admin'), requireHeadOfficeAdmin
 app.use('/api/users/*', tenantAuth(), requireRole('admin'), requireHeadOfficeAdmin())
 // 個人 PIN(UC-EYE-151): 本人であればロールを問わない。対象は常に JWT の sub。
 app.use('/api/me/*', tenantAuth())
+/*
+ * 会社のお店の一覧（014-store-provisioning）は、担当店舗の割り当てで使う。
+ * 運営限定ゲートの外に出してあるので、認証とロールはここで必ず要求する。
+ * 他社を見られるのは運営だけ — その突き合わせはハンドラが行う。
+ */
+app.use('/api/organizations/:id/stores', tenantAuth(), requireRole('admin'))
 
 const routes = app
   .get('/api/health', (c) => c.json({ status: 'ok' as const }))
@@ -424,6 +434,59 @@ const routes = app
     const syncFailure = await syncOrganizationOrError(c, organization, row.syncRevision)
     if (syncFailure) return syncFailure
     return c.json({ ...organization, revision: row.syncRevision }, 200)
+  })
+  /**
+   * 会社のお店の一覧（`014-store-provisioning`）。
+   *
+   * admin は店舗を持たないので、ドメインへ service binding で尋ねて返す。担当店舗の
+   * 割り当てで店舗 id を手で打たせないためだけの読み取りであり、書き込みは持たない。
+   * ドメインが落ちている / 知らない形を返したときは 502 にし、**内部の様子は漏らさない**。
+   */
+  .get('/api/organizations/:id/stores', async (c) => {
+    const db = drizzle(c.env.DB)
+    const id = c.req.param('id')
+    const rows = await db.select().from(organizations).where(eq(organizations.id, id))
+    if (!rows[0]) return c.json({ error: 'not_found' }, 404)
+
+    /*
+     * 自社なら本部管理者が引ける。他社を見られるのは運営だけ。
+     * 運営限定ゲートの外に出したぶん、ここで必ず突き合わせる。
+     */
+    const callerOrg = c.get('auth').org
+    if (callerOrg !== id) {
+      const caller = await db
+        .select({ isOperator: organizations.isOperator })
+        .from(organizations)
+        .where(eq(organizations.id, callerOrg))
+      if (caller[0]?.isOperator !== '1') return c.json({ error: 'forbidden' }, 403)
+    }
+
+    const binding = c.env.GLASSES_MANAGEMENT
+    const internalKey = c.env.INTERNAL_KEY
+    if (!binding || !internalKey) {
+      console.error('store listing unavailable: binding or internal key is not configured')
+      return c.json({ error: 'domain_unavailable' }, 502)
+    }
+
+    try {
+      const response = await binding.fetch(
+        `https://glasses-management.internal/api/internal/stores?organizationId=${encodeURIComponent(id)}`,
+        { headers: { 'x-internal-key': internalKey } },
+      )
+      if (!response.ok) {
+        console.error('store listing rejected by domain', { status: response.status })
+        return c.json({ error: 'domain_unavailable' }, 502)
+      }
+      const parsed = Store.array().safeParse(await response.json())
+      if (!parsed.success) {
+        console.error('store listing returned an unexpected shape')
+        return c.json({ error: 'domain_unavailable' }, 502)
+      }
+      return c.json(parsed.data, 200)
+    } catch {
+      console.error('store listing unavailable: domain binding request failed')
+      return c.json({ error: 'domain_unavailable' }, 502)
+    }
   })
   // Invite a user (staff by default) to an org and return a manual-share link.
   .post(
