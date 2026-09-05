@@ -151,9 +151,11 @@ import {
   StaffSkillsInput,
   Store,
   StoreDetail,
+  StoreInput,
   StoreMembership,
   StorePatch,
   StorePermission,
+  StoreSlugTakenError,
   Terminal,
   TerminalInput,
   TerminalKind,
@@ -4225,5 +4227,71 @@ describe('P10 terminal and audit contracts', () => {
     expect(
       PinSetResult.parse({ staffId: UUID, updatedAt: '2026-08-27T02:08:00.000Z' }),
     ).not.toHaveProperty('pin')
+  })
+})
+
+/* ------------------------------------------------------------------------- *
+ * 014 店舗の登録（会社を作ってから使い始めるまで）
+ * ------------------------------------------------------------------------- */
+
+describe('StoreInput', () => {
+  it('店名と合い言葉だけで通り、任意の項目は空文字になる', () => {
+    const parsed = StoreInput.parse({ name: '銀座店', slug: 'ginza' })
+    expect(parsed).toEqual({
+      name: '銀座店',
+      slug: 'ginza',
+      phone: '',
+      address: '',
+      accessNote: '',
+    })
+  })
+
+  it('会社 id は受け取らない(JWT の org を使うため偽装させない)', () => {
+    expect(
+      StoreInput.safeParse({ name: '銀座店', slug: 'ginza', organizationId: 'other' }).success,
+    ).toBe(false)
+  })
+
+  it('合い言葉は小文字英数とハイフンだけ', () => {
+    expect(StoreInput.safeParse({ name: '銀座店', slug: 'Ginza' }).success).toBe(false)
+    expect(StoreInput.safeParse({ name: '銀座店', slug: 'ginza_main' }).success).toBe(false)
+    expect(StoreInput.safeParse({ name: '銀座店', slug: '銀座' }).success).toBe(false)
+    expect(StoreInput.safeParse({ name: '銀座店', slug: 'ginza-main' }).success).toBe(true)
+  })
+
+  it('合い言葉はハイフンで始まったり終わったりできない', () => {
+    expect(StoreInput.safeParse({ name: '銀座店', slug: '-ginza' }).success).toBe(false)
+    expect(StoreInput.safeParse({ name: '銀座店', slug: 'ginza-' }).success).toBe(false)
+    expect(StoreInput.safeParse({ name: '銀座店', slug: 'ginza--main' }).success).toBe(false)
+  })
+
+  it('合い言葉は 2 文字以上 40 文字以下', () => {
+    expect(StoreInput.safeParse({ name: '銀座店', slug: 'g' }).success).toBe(false)
+    expect(StoreInput.safeParse({ name: '銀座店', slug: 'g'.repeat(41) }).success).toBe(false)
+    expect(StoreInput.safeParse({ name: '銀座店', slug: 'g'.repeat(40) }).success).toBe(true)
+  })
+
+  it('店名は前後の空白を落とし、空にはできない', () => {
+    expect(StoreInput.parse({ name: '  銀座店  ', slug: 'ginza' }).name).toBe('銀座店')
+    expect(StoreInput.safeParse({ name: '   ', slug: 'ginza' }).success).toBe(false)
+  })
+
+  it('店名は 60 文字まで', () => {
+    expect(StoreInput.safeParse({ name: 'あ'.repeat(61), slug: 'ginza' }).success).toBe(false)
+    expect(StoreInput.safeParse({ name: 'あ'.repeat(60), slug: 'ginza' }).success).toBe(true)
+  })
+})
+
+describe('StoreSlugTakenError', () => {
+  it('どの会社が使っているかは持たない', () => {
+    const parsed = StoreSlugTakenError.parse({ error: 'store_slug_taken', slug: 'ginza' })
+    expect(parsed.slug).toBe('ginza')
+    expect(
+      StoreSlugTakenError.safeParse({
+        error: 'store_slug_taken',
+        slug: 'ginza',
+        organizationId: 'other',
+      }).success,
+    ).toBe(false)
   })
 })

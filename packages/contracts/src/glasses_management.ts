@@ -107,6 +107,35 @@ export const Store = z.strictObject({
 })
 export type Store = z.infer<typeof Store>
 
+/**
+ * 店舗の登録。**会社 id は受け取らない** — JWT の org を正本にし、本文からの
+ * 偽装で他社に店舗を作られる経路を作らない。任意の項目は空文字を既定にして、
+ * 登録の入口で聞くことを店名と合い言葉の 2 つに絞る。
+ */
+export const StoreInput = z.strictObject({
+  name: z.string().trim().min(1).max(60),
+  // お客様向け Web 予約の URL（`/w/:storeSlug`）に出る。**全組織横断で一意**。
+  slug: z
+    .string()
+    .min(2)
+    .max(40)
+    .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+  phone: z.string().trim().max(30).default(''),
+  address: z.string().trim().max(200).default(''),
+  accessNote: z.string().trim().max(200).default(''),
+})
+export type StoreInput = z.infer<typeof StoreInput>
+
+/**
+ * 合い言葉が既に使われている。**どの会社が使っているかは持たない** — 合い言葉は
+ * 全組織横断で一意なので、衝突の相手を明かすと他社の店舗の存在が漏れる。
+ */
+export const StoreSlugTakenError = z.strictObject({
+  error: z.literal('store_slug_taken'),
+  slug: z.string(),
+})
+export type StoreSlugTakenError = z.infer<typeof StoreSlugTakenError>
+
 /* ------------------------------------------------------------------------- *
  * 操作主体
  * ------------------------------------------------------------------------- */
