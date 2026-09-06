@@ -2747,6 +2747,14 @@ export type TerminalListQuery = z.infer<typeof TerminalListQuery>
 const terminalInputShape = {
   name: z.string().trim().min(1).max(60),
   kind: TerminalKind,
+  /*
+   * 責任者。**共有端末にも要る。**
+   *
+   * 権限は `store_memberships` を人で引くので、端末にも人が要る。共有端末で
+   * 記録される操作者が端末名であることとは別の話で、ここはどの権限で動くかだけを
+   * 決める（本人確認が要る操作は別途止まる）。個人端末ではその iPad の持ち主になる。
+   */
+  staffId: Uuid.nullable().default(null),
   placeNote: z.string().trim().max(40).default(''),
   deviceLabel: z.string().trim().max(30).default(''),
   autoLockSeconds: z.number().int().min(30).max(1800).default(120),
@@ -2760,6 +2768,7 @@ export type TerminalInput = z.infer<typeof TerminalInput>
 export const TerminalPatch = z.strictObject({
   name: terminalInputShape.name.optional(),
   kind: terminalInputShape.kind.optional(),
+  staffId: terminalInputShape.staffId.removeDefault().optional(),
   placeNote: terminalInputShape.placeNote.removeDefault().optional(),
   deviceLabel: terminalInputShape.deviceLabel.removeDefault().optional(),
   autoLockSeconds: terminalInputShape.autoLockSeconds.removeDefault().optional(),

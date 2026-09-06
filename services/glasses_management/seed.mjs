@@ -129,11 +129,17 @@ const GINZA = stores[0].id
  * 平文をSQLへ入れず、端末ごとに
  * stretchPin → pepper HMAC を行った hash だけを保存する。実運用のPINは設定画面で更新する。
  */
+/*
+ * 共有端末にも**責任者**を置く。権限は `store_memberships` を人で引くので、
+ * 端末にも人が要る。記録される操作者は端末名のままで、ここはどの権限で動くかだけを
+ * 決める（本人確認が要る操作は `requirePersonalMode` が別途止める）。
+ */
 const terminals = [
   {
     id: uid('c0100000', 0),
     name: '銀座店 レジ横iPad',
     kind: 'shared',
+    staffId: uid('c0010000', 5),
     placeNote: 'レジの右側　固定スタンド',
     deviceLabel: 'EYE-iPad-07',
   },
@@ -141,6 +147,7 @@ const terminals = [
     id: uid('c0100000', 1),
     name: '銀座店 受付iPad',
     kind: 'shared',
+    staffId: uid('c0010000', 5),
     placeNote: '入口の受付台',
     deviceLabel: 'EYE-iPad-07',
   },
@@ -148,6 +155,7 @@ const terminals = [
     id: uid('c0100000', 2),
     name: '銀座店 検査室iPad',
     kind: 'shared',
+    staffId: uid('c0010000', 5),
     placeNote: '検査室 1　測定機の脇',
     deviceLabel: 'EYE-iPad-07',
   },
@@ -244,7 +252,12 @@ const staffMembers = [
     kana: 'さとう みさき',
     job: null,
     role: 'staff',
-    adminUserId: null,
+    /*
+     * 個人端末の持ち主。業務トークンの `sub` になるので、admin の利用者が要る。
+     * **dev の admin 利用者は 1 人**（`dev:eye`）なので、seed ではそこへ寄せる。
+     * 本番では admin の同期が実在の利用者 id を配る。
+     */
+    adminUserId: 'dev:eye',
     skills: ['measure', 'processing', 'sales_reception'],
     week: ['12:00-19:00', '10:00-19:00', null, '10:00-19:00', '10:00-19:00', null, '10:00-19:00'],
     rest: '13:00-14:00',
@@ -294,7 +307,8 @@ const staffMembers = [
     kana: 'やまだ だいすけ',
     job: '店長',
     role: 'manager',
-    adminUserId: 'user-eye-yamada',
+    // 共有端末の責任者。dev では上と同じ admin 利用者を指す（理由は佐藤の欄）。
+    adminUserId: 'dev:eye',
     skills: ['sales_reception'],
     week: [null, '10:00-19:00', null, '10:00-19:00', null, null, '10:00-19:00'],
     rest: null,

@@ -4,11 +4,30 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SettingsScreen } from './SettingsScreen'
 
 const STORE_ID = '11111111-1111-4111-8111-111111111111'
+const MANAGER_ID = '44444444-4444-4444-8444-444444444444'
+/** 責任者の選択肢。端末は人の権限で動くので、この一覧が要る。 */
+const staffRows = [
+  {
+    id: MANAGER_ID,
+    displayName: '山田 大輔',
+    kana: 'やまだ だいすけ',
+    jobLabel: '店長',
+    role: 'manager',
+    isActive: true,
+    sortOrder: 0,
+    skills: [],
+    adminUserId: 'user-yamada',
+    hasPin: true,
+    maxParallelReservations: 1,
+    pinUpdatedAt: null,
+  },
+]
 const terminal = {
   id: '22222222-2222-4222-8222-222222222222',
   storeId: STORE_ID,
   name: '銀座店 レジ横iPad',
   kind: 'shared',
+  staffId: MANAGER_ID,
   placeNote: 'レジの右側',
   deviceLabel: 'EYE-iPad-07',
   autoLockSeconds: 120,
@@ -26,7 +45,12 @@ beforeEach(() => {
     'fetch',
     vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
       const url = String(input)
-      if (url.endsWith('/staff')) return new Response(JSON.stringify([]))
+      if (url.endsWith('/staff')) {
+        return new Response(JSON.stringify(staffRows), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
       if (url.includes('/api/staff/terminals')) {
         if (init.method === 'POST') {
           return new Response(
@@ -125,6 +149,8 @@ describe('設定 › 端末', () => {
     render(<SettingsScreen storeId={STORE_ID} initialSection="terminals" />)
     await userEvent.click(await screen.findByRole('button', { name: '端末を追加' }))
     await userEvent.type(screen.getByLabelText('端末名'), '銀座店 相談席iPad')
+    // 責任者がいないと入口の一覧に出ない端末になるので、保存の前に選ばせる。
+    await userEvent.selectOptions(screen.getByLabelText('責任者'), MANAGER_ID)
     await userEvent.type(screen.getByLabelText('新しい暗証番号'), '2580')
     await userEvent.click(screen.getByRole('button', { name: '保存' }))
 

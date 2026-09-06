@@ -4203,13 +4203,14 @@ const routes = app
       const actor = await operationActor(c, storeId, c.get('auth').sub)
       await c.env.DB.batch([
         c.env.DB.prepare(
-          'INSERT INTO terminals (id, organization_id, store_id, name, kind, place_note, device_label, pin_hash, auto_lock_seconds, last_seen_at, is_active, version, created_at) VALUES (?,?,?,?,?,?,?,?,?,NULL,?,1,?)',
+          'INSERT INTO terminals (id, organization_id, store_id, name, kind, staff_id, place_note, device_label, pin_hash, auto_lock_seconds, last_seen_at, is_active, version, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,NULL,?,1,?)',
         ).bind(
           id,
           org,
           storeId,
           input.name,
           input.kind,
+          input.staffId,
           input.placeNote,
           input.deviceLabel,
           pinHash,
@@ -4263,7 +4264,7 @@ const routes = app
       const terminalId = c.req.param('terminalId')
       const input = c.req.valid('json')
       const current = await c.env.DB.prepare(
-        'SELECT id, store_id AS storeId, name, kind, place_note AS placeNote, device_label AS deviceLabel, pin_hash AS pinHash, auto_lock_seconds AS autoLockSeconds, last_seen_at AS lastSeenAt, is_active AS isActive, version, created_at AS createdAt FROM terminals WHERE organization_id = ? AND id = ?',
+        'SELECT id, store_id AS storeId, name, kind, staff_id AS staffId, place_note AS placeNote, device_label AS deviceLabel, pin_hash AS pinHash, auto_lock_seconds AS autoLockSeconds, last_seen_at AS lastSeenAt, is_active AS isActive, version, created_at AS createdAt FROM terminals WHERE organization_id = ? AND id = ?',
       )
         .bind(org, terminalId)
         .first<{
@@ -4271,6 +4272,7 @@ const routes = app
           storeId: string
           name: string
           kind: 'shared' | 'personal'
+          staffId: string | null
           placeNote: string | null
           deviceLabel: string | null
           pinHash: string | null
@@ -4306,6 +4308,7 @@ const routes = app
       const next = {
         name: input.name ?? current.name,
         kind: input.kind ?? current.kind,
+        staffId: input.staffId === undefined ? (current.staffId ?? null) : input.staffId,
         placeNote: input.placeNote ?? current.placeNote ?? '',
         deviceLabel: input.deviceLabel ?? current.deviceLabel ?? '',
         autoLockSeconds: input.autoLockSeconds ?? current.autoLockSeconds,
@@ -4317,10 +4320,11 @@ const routes = app
         'EXISTS (SELECT 1 FROM terminals WHERE organization_id = ? AND id = ? AND version = ?)'
       const actor = await operationActor(c, current.storeId, sub)
       const update = c.env.DB.prepare(
-        'UPDATE terminals SET name = ?, kind = ?, place_note = ?, device_label = ?, pin_hash = ?, auto_lock_seconds = ?, is_active = ?, version = version + 1 WHERE organization_id = ? AND id = ? AND version = ?',
+        'UPDATE terminals SET name = ?, kind = ?, staff_id = ?, place_note = ?, device_label = ?, pin_hash = ?, auto_lock_seconds = ?, is_active = ?, version = version + 1 WHERE organization_id = ? AND id = ? AND version = ?',
       ).bind(
         next.name,
         next.kind,
+        next.staffId,
         next.placeNote,
         next.deviceLabel,
         nextPinHash,
@@ -9993,7 +9997,12 @@ const routes = app
       // 存在しない slug・別テナントの端末・無効な端末・割り当て待ちの個人端末を、
       // すべて同じ 404 に畳む。区別して返すと総当たりで存在が読み取れる。
       if (terminal === null) return c.json({ error: 'not_found' }, 404)
-      if (terminal.kind === 'personal' && terminal.staffId === null) {
+      /*
+       * 責任者が admin の利用者に結び付いていない端末は入口に出さないので、
+       * ここへ来ることも無い。来たなら設定が壊れているので、存在を漏らさない
+       * 同じ 404 に畳む（入れても権限が 1 つも無く、何もできない）。
+       */
+      if (terminal.staffId === null || terminal.adminUserId === null) {
         return c.json({ error: 'not_found' }, 404)
       }
 
@@ -10032,9 +10041,15 @@ const routes = app
         maxAge: DEVICE_TTL_SECONDS,
       })
 
+      /*
+       * `sub` は**責任者の admin 利用者 id**。権限は `store_memberships` を人で
+       * 引くので、端末にも人が要る。共有端末で「記録される操作者」が端末名で
+       * あることとは別の話で、ここはどの権限で動くかだけを決める
+       * （本人確認が要る操作は `requirePersonalMode` が別途止める）。
+       */
       const token = await signAccessToken(
         {
-          sub: result.session.staffId ?? `terminal:${terminalId}`,
+          sub: terminal.adminUserId,
           org: terminal.organizationId,
           email: TERMINAL_TOKEN_EMAIL,
           role: 'staff',
@@ -10115,9 +10130,10 @@ const routes = app
       maxAge: DEVICE_TTL_SECONDS,
     })
 
+    if (terminal.adminUserId === null) return c.json({ error: 'unauthorized' }, 401)
     const token = await signAccessToken(
       {
-        sub: `terminal:${row.terminalId}`,
+        sub: terminal.adminUserId,
         org: row.organizationId,
         email: TERMINAL_TOKEN_EMAIL,
         role: 'staff',

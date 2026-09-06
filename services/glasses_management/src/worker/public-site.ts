@@ -32,20 +32,24 @@ type SiteTerminalRow = {
 
 /**
  * 入口の一覧に出せる端末の条件。**押しても入れない行き先を出さない**ので、
- * ここで落とすものが 3 つある。
+ * ここで落とすものがある。
  *
  * - 無効な端末（`is_active='0'`）
- * - PIN 未設定の共有端末 —— 照合するものが無い
- * - 持ち主が決まっていない個人端末 —— 誰の PIN を照合するのか決まらない
- *   （店長が端末一覧から割り当てるまで、その端末は使えない状態である）
+ * - 暗証番号を照合できない端末
+ *   - 共有: 端末自身の `pin_hash` が要る
+ *   - 個人: 持ち主（`staff_id`）の `pin_hash` が要る
+ * - **責任者が admin の利用者に結び付いていない端末**（`staff.admin_user_id`）
+ *   —— 権限は `store_memberships` を人で引くので、結び付いていないと入れても
+ *   何もできない。入口に出しても行き止まりになる。
  */
 const SITE_TERMINALS_SQL = `SELECT t.id AS id, t.name AS name, t.place_note AS placeNote, t.kind AS kind
      FROM terminals t
-     LEFT JOIN staff s
+     JOIN staff s
        ON s.organization_id = t.organization_id AND s.id = t.staff_id AND s.is_active = '1'
     WHERE t.organization_id = ? AND t.store_id = ? AND t.is_active = '1'
+      AND s.admin_user_id IS NOT NULL
       AND ( (t.kind = 'shared'   AND t.pin_hash IS NOT NULL)
-         OR (t.kind = 'personal' AND t.staff_id IS NOT NULL AND s.pin_hash IS NOT NULL) )
+         OR (t.kind = 'personal' AND s.pin_hash IS NOT NULL) )
     ORDER BY t.created_at`
 
 export async function readPublicSite(db: D1Database, slug: string): Promise<PublicSite | null> {
@@ -89,12 +93,23 @@ export async function resolveSiteTerminal(
   storeId: string
   kind: 'shared' | 'personal'
   staffId: string | null
+  /**
+   * 責任者の admin 利用者 id。**業務トークンの `sub` になる。**
+   *
+   * 権限は `store_memberships` を人で引くので、端末にも人が要る。共有端末では
+   * 「記録される操作者」は端末名のままで、ここは**どの権限で動くか**だけを決める
+   * （本人確認が要る操作は `requirePersonalMode` が別途止める）。
+   */
+  adminUserId: string | null
 } | null> {
   return db
     .prepare(
-      `SELECT t.organization_id AS organizationId, t.store_id AS storeId, t.kind AS kind, t.staff_id AS staffId
+      `SELECT t.organization_id AS organizationId, t.store_id AS storeId, t.kind AS kind,
+              t.staff_id AS staffId, m.admin_user_id AS adminUserId
          FROM terminals t
          JOIN stores s ON s.id = t.store_id AND s.organization_id = t.organization_id
+         LEFT JOIN staff m
+           ON m.organization_id = t.organization_id AND m.id = t.staff_id AND m.is_active = '1'
         WHERE s.slug = ? AND t.id = ? AND t.is_active = '1' AND s.is_active = '1'`,
     )
     .bind(slug, terminalId)
@@ -103,5 +118,6 @@ export async function resolveSiteTerminal(
       storeId: string
       kind: 'shared' | 'personal'
       staffId: string | null
+      adminUserId: string | null
     }>()
 }

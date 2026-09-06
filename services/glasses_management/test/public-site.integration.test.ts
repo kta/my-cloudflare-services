@@ -24,6 +24,7 @@ async function insertTerminal(input: {
   storeId: string
   name: string
   kind: 'shared' | 'personal'
+  /** 責任者。共有でも要る（業務トークンの `sub` になる）。 */
   staffId?: string | null
   pin?: string | null
   isActive?: '0' | '1'
@@ -58,8 +59,11 @@ async function insertTerminal(input: {
 /** 個人端末の持ち主に PIN を持たせる（塩は staff id）。 */
 async function setStaffPin(org: string, staffId: string, pin: string): Promise<void> {
   const hash = await hashStretched(await stretchPin(pin, org, staffId, 1), PEPPER)
-  await env.DB.prepare('UPDATE staff SET pin_hash = ? WHERE organization_id = ? AND id = ?')
-    .bind(hash, org, staffId)
+  // admin の利用者にも結び付ける。業務トークンの `sub` はこれになる。
+  await env.DB.prepare(
+    'UPDATE staff SET pin_hash = ?, admin_user_id = ? WHERE organization_id = ? AND id = ?',
+  )
+    .bind(hash, `user-${staffId}`, org, staffId)
     .run()
 }
 
@@ -76,6 +80,7 @@ async function site() {
     storeId,
     name: '銀座店 レジ横iPad',
     kind: 'shared',
+    staffId,
     pin: '135790',
   })
   const personal = await insertTerminal({
@@ -91,6 +96,7 @@ async function site() {
     storeId,
     name: '暗証番号がまだの iPad',
     kind: 'shared',
+    staffId,
     pin: null,
   })
   const inactive = await insertTerminal({
@@ -98,6 +104,7 @@ async function site() {
     storeId,
     name: '使わなくなった iPad',
     kind: 'shared',
+    staffId,
     pin: '135790',
     isActive: '0',
   })
@@ -187,6 +194,8 @@ describe('POST /api/public/sites/:storeSlug/terminals/:terminalId/sessions', () 
     expect(claims.org).toBe(s.org)
     // 端末トークンだと名乗る。admin 側はこれを見て拒む。
     expect(claims.kind).toBe('terminal')
+    // 権限は store_memberships を人で引くので、`sub` は責任者の admin 利用者。
+    expect(claims.sub).toBe(`user-${s.staffId}`)
   })
 
   it('端末の資格情報を HttpOnly Cookie で返す', async () => {
