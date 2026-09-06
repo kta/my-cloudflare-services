@@ -999,6 +999,8 @@ const memberships = [
 const ANALYTICS_OTHER_ORG = 'org-analytics-other-seed'
 const ANALYTICS_OTHER_STORE = '44444444-4444-4444-8444-444444444444'
 const ANALYTICS_OTHER_TERMINAL = '44444444-4444-4444-8444-444444444445'
+/** 別組織の端末の責任者。端末は人の権限で動くので、その組織にも 1 人要る。 */
+const ANALYTICS_OTHER_STAFF = '44444444-4444-4444-8444-444444444446'
 const analyticsOtherPinHash = await hashStretched(
   await stretchPin('000000', ANALYTICS_OTHER_ORG, ANALYTICS_OTHER_TERMINAL),
   PEPPER,
@@ -1177,7 +1179,8 @@ const lines = [
   `INSERT OR IGNORE INTO stores (id, organization_id, name, slug, phone, address, access_note, is_active, created_at) VALUES (${q(ANALYTICS_OTHER_STORE)}, ${q(ANALYTICS_OTHER_ORG)}, '別組織店', 'analytics-other', '', '', '', '1', ${q(NOW)});`,
   // 別組織にも端末を 1 台置く。入口(/s/:storeSlug)は店舗と端末を前提にするので、
   // これが無いと「別の会社は自分のデータしか見えない」を実際の導線で確かめられない。
-  `INSERT OR IGNORE INTO terminals (id, organization_id, store_id, name, kind, staff_id, place_note, device_label, pin_hash, auto_lock_seconds, last_seen_at, is_active, version, created_at) VALUES (${q(ANALYTICS_OTHER_TERMINAL)}, ${q(ANALYTICS_OTHER_ORG)}, ${q(ANALYTICS_OTHER_STORE)}, '別組織店 レジ横iPad', 'shared', NULL, 'レジの右側', 'EYE-iPad-90', ${q(analyticsOtherPinHash)}, 120, NULL, '1', 1, ${q(NOW)});`,
+  `INSERT OR IGNORE INTO staff (id, organization_id, store_id, admin_user_id, display_name, kana, job_label, role, max_parallel_reservations, pin_hash, pin_updated_at, is_active, sort_order, created_at, updated_at) VALUES (${q(ANALYTICS_OTHER_STAFF)}, ${q(ANALYTICS_OTHER_ORG)}, ${q(ANALYTICS_OTHER_STORE)}, ${q(`dev:${ANALYTICS_OTHER_ORG}`)}, '別組織 店長', 'べつそしき てんちょう', '店長', 'manager', 1, NULL, NULL, '1', 0, ${q(NOW)}, ${q(NOW)});`,
+  `INSERT OR IGNORE INTO terminals (id, organization_id, store_id, name, kind, staff_id, place_note, device_label, pin_hash, auto_lock_seconds, last_seen_at, is_active, version, created_at) VALUES (${q(ANALYTICS_OTHER_TERMINAL)}, ${q(ANALYTICS_OTHER_ORG)}, ${q(ANALYTICS_OTHER_STORE)}, '別組織店 レジ横iPad', 'shared', ${q(ANALYTICS_OTHER_STAFF)}, 'レジの右側', 'EYE-iPad-90', ${q(analyticsOtherPinHash)}, 120, NULL, '1', 1, ${q(NOW)});`,
   ...stores.map(
     (s) =>
       `INSERT OR IGNORE INTO stores (id, organization_id, name, slug, phone, address, access_note, is_active, created_at) VALUES (${q(s.id)}, ${q(ORG)}, ${q(s.name)}, ${q(s.slug)}, ${q(s.phone)}, ${q(s.address)}, ${q(s.accessNote)}, '1', ${q(NOW)});`,

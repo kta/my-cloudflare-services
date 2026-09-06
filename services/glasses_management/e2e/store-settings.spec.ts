@@ -563,24 +563,23 @@ test('スタッフの権限で保存すると、店長だけができると断�
     id: string
     displayName: string
   }[]
-  const nakamura = staff.find((member) => member.displayName === '中村 彩')
-  expect(nakamura).toBeDefined()
-  const versionOf = async () =>
+  /*
+   * **端末の責任者本人の権限を下げる。**
+   *
+   * 端末は責任者の権限で動く（`terminals.staff_id` → `staff.admin_user_id` → JWT の
+   * `sub`）。以前は別のスタッフを一時的に同じ利用者 id へ向けていたが、そうすると
+   * 同じ id を持つ staff が 2 行になり、どちらが操作者か決まらない。
+   */
+  const operator = staff.find((member) => member.displayName === '山田 大輔')
+  expect(operator).toBeDefined()
+  const _versionOf = async () =>
     (
       (await (await request.get(`/api/staff/stores/${GINZA}`, headers)).json()) as {
         settingsVersion: number
       }
     ).settingsVersion
 
-  // いま画面を見ているのが 中村 彩 だと分かるようにしてから、権限だけを下げる。
-  const patch = async (adminUserId: string | null) => {
-    const res = await request.patch(`/api/staff/stores/${GINZA}/staff/${nakamura?.id}`, {
-      ...headers,
-      data: { adminUserId, version: await versionOf() },
-    })
-    expect(res.status()).toBe(200)
-  }
-  await patch(VIEWER)
+  // 誰が見ているかは端末の責任者で決まっている。権限だけを下げる。
   await grant(request, STAFF_PERMISSIONS)
 
   try {
@@ -595,7 +594,9 @@ test('スタッフの権限で保存すると、店長だけができると断�
     await expect(page.getByRole('heading', { name: 'この操作は店長だけができます' })).toBeVisible()
     await expect(
       page.getByText(
-        '営業時間を変えられるのは 店長 だけです。中村 彩（スタッフ）の権限では保存できません。営業時間はまだ何も変わっていません。',
+        // 職位は「店長」でも、担当店舗の権限が無ければ保存できない。
+        // 肩書きではなく権限で断ることを、この文言が示している。
+        '営業時間を変えられるのは 店長 だけです。山田 大輔（店長）の権限では保存できません。営業時間はまだ何も変わっていません。',
       ),
     ).toBeVisible()
     await expect(page.getByText('下書きは残っています')).toBeVisible()
@@ -607,7 +608,6 @@ test('スタッフの権限で保存すると、店長だけができると断�
     await expect(page.getByRole('button', { name: /店長に依頼/ })).toHaveCount(0)
   } finally {
     await grant(request, MANAGER_PERMISSIONS)
-    await patch('user-eye-nakamura')
   }
 })
 

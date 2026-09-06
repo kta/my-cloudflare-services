@@ -1,6 +1,6 @@
 import type { APIRequestContext, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
-import { authHeadersFor, startSeededTerminal } from './support/auth'
+import { authHeadersFor, grantSeededOperators, startSeededTerminal } from './support/auth'
 import { completeSeededTerminalStart, SEEDED_SITE_PATH } from './support/terminal'
 
 /*
@@ -129,22 +129,6 @@ async function grantStore(request: APIRequestContext): Promise<void> {
       ],
       createdAt: '2026-08-01T00:00:00.000Z',
     },
-  })
-  expect(res.status()).toBe(200)
-}
-
-/**
- * 個人端末の「わたし」を作る。`staff.adminUserId` に業務端末の `sub` を書くと、
- * トップの右に「本日わたしが担当するご予約」が出る（seed は誰にも当てていない）。
- * **必ず元へ戻す。** ほかの面は seed のままの盤面で撮る決めである。
- */
-async function beMe(request: APIRequestContext, adminUserId: string | null): Promise<void> {
-  const headers = await authHeadersFor(request)
-  const store = await request.get(`/api/staff/stores/${GINZA}`, { headers })
-  const { settingsVersion } = (await store.json()) as { settingsVersion: number }
-  const res = await request.patch(`/api/staff/stores/${GINZA}/staff/${SATO}`, {
-    headers,
-    data: { adminUserId, version: settingsVersion },
   })
   expect(res.status()).toBe(200)
 }
@@ -873,36 +857,50 @@ test.describe('承認済みモックとの突き合わせ', () => {
 
   test('HOME-PERSONAL — トップ（個人端末）', async ({ page, request }) => {
     await grantStore(request)
-    await beMe(request, VIEWER)
-    try {
-      await page.route(/\/api\/staff\/alerts\?/, async (route) => {
-        const response = await route.fetch()
-        const body = (await response.json()) as {
-          counts: { all: number; action: number; info: number; resolved: number }
-        }
-        await route.fulfill({ response, json: { ...body, counts: { ...body.counts, all: 2 } } })
-      })
-      await pinTo1108(page)
-      await startWork(page, 'personal')
-      await expect(page.getByRole('region', { name: '本日わたしが担当するご予約' })).toBeVisible()
-      /*
-       * いま残っている差:
-       *   - お客様のお名前と来店回数（田中 花子 様／4回目）… `customers` は 007。行は
-       *     時刻・状態の札・ご用件の 2 段組みで、お名前の段が空いている。
-       *   - 左の主操作 2 枚が共有端末と同じ（モックは「わたしの予約を見る」等の個人向け）。
-       *   - 下辺の日付の帯・上のバーの「お知らせ 3」は HOME と同じ。
-       * 実測 4.7504%（2026-08-31 の初測）。**この値は下げるだけ。上げてはいけない。**
-       */
-      // 2026-09-05 の実測 194,558 / 3,868,560 ＝ 5.0292%（モックを撮り直したあと）。
-      await expect(page).toHaveScreenshot('HOME-PERSONAL.png', {
-        scale: 'device',
-        // 2026-09-04: 0.0476 → 0.0512。HOME と同じ理由（日付の帯を実装した）。
-        maxDiffPixelRatio: 0.0512,
-      })
-    } finally {
-      // seed の値へ戻す。null にすると個人端末が入口の一覧から消える（ledger.spec 参照）。
-      await beMe(request, 'dev:eye-sato')
-    }
+    /*
+     * 「わたし」は端末の責任者で決まる。個人端末（佐藤 美咲の iPad）で入れば
+     * 業務トークンの `sub` は持ち主になるので、担当店舗の権限だけを配る。
+     * 同じ利用者 id を 2 人に持たせると、どちらが操作者か決まらなくなる。
+     */
+    await grantSeededOperators(request, {
+      organizationId: ORG,
+      storeId: GINZA,
+      permissions: [
+        'store.read',
+        'store.manage',
+        'reservation.read',
+        'reservation.write',
+        'customer.read',
+        'customer.write',
+        'settings.read',
+        'settings.manage',
+      ],
+      membershipId: '0c0c0c0c-0c0c-4c0c-8c0c-0c0c0c0c0c0c',
+    })
+    await page.route(/\/api\/staff\/alerts\?/, async (route) => {
+      const response = await route.fetch()
+      const body = (await response.json()) as {
+        counts: { all: number; action: number; info: number; resolved: number }
+      }
+      await route.fulfill({ response, json: { ...body, counts: { ...body.counts, all: 2 } } })
+    })
+    await pinTo1108(page)
+    await startWork(page, 'personal')
+    await expect(page.getByRole('region', { name: '本日わたしが担当するご予約' })).toBeVisible()
+    /*
+     * いま残っている差:
+     *   - お客様のお名前と来店回数（田中 花子 様／4回目）… `customers` は 007。行は
+     *     時刻・状態の札・ご用件の 2 段組みで、お名前の段が空いている。
+     *   - 左の主操作 2 枚が共有端末と同じ（モックは「わたしの予約を見る」等の個人向け）。
+     *   - 下辺の日付の帯・上のバーの「お知らせ 3」は HOME と同じ。
+     * 実測 4.7504%（2026-08-31 の初測）。**この値は下げるだけ。上げてはいけない。**
+     */
+    // 2026-09-05 の実測 194,558 / 3,868,560 ＝ 5.0292%（モックを撮り直したあと）。
+    await expect(page).toHaveScreenshot('HOME-PERSONAL.png', {
+      scale: 'device',
+      // 2026-09-04: 0.0476 → 0.0512。HOME と同じ理由（日付の帯を実装した）。
+      maxDiffPixelRatio: 0.0512,
+    })
   })
 
   /* --- 予約の受付（BOOK-01〜06 / BOOK-CONFLICT） -------------------------- */
