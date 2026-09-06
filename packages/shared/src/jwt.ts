@@ -40,15 +40,22 @@ export async function signAccessToken(
 /**
  * access JWT を検証し、契約でパースして返す。失敗(署名不正・期限切れ・形不正)
  * は null。呼び出し側は null を 401 に写像する。
+ *
+ * **期限の判定は hono に任せず自分で行う。** hono の `verify` は実時刻を直接読むので、
+ * 「残り 1 秒」のような境界をテストから固定できない(署名してから検証するまでに秒が
+ * またぐと結果が変わる)。`now` を引数で受け、既定だけを実時刻にする。
+ * 境界は hono と同じで、`exp <= now` を失効とする(期限切れ側に倒す)。
  */
 export async function verifyAccessToken(
   token: string,
   secret: string,
+  now = Math.floor(Date.now() / 1000),
 ): Promise<AuthTokenPayload | null> {
   try {
-    const raw = await verify(token, secret, 'HS256')
+    const raw = await verify(token, secret, { alg: 'HS256', exp: false })
     const parsed = AuthTokenPayload.safeParse(raw)
-    return parsed.success ? parsed.data : null
+    if (!parsed.success) return null
+    return parsed.data.exp <= now ? null : parsed.data
   } catch {
     return null
   }
