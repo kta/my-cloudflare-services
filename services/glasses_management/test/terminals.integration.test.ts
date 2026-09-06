@@ -14,6 +14,14 @@ import {
 
 const PEPPER = 'dev-auth-pepper-change-me'
 
+/**
+ * 暗証番号はブラウザで伸ばして送るので、テストも同じ立場で伸ばしてから投げる。
+ * 回数を 1 に落とすのは速さのためで、保存するハッシュと送る値の両方が同じ 1 回を使う
+ * （workerd の PBKDF2 は 10 万回が上限なので、ここで既定の 60 万回は回せない）。
+ */
+const stretched = (pin: string, org: string, subjectId: string) =>
+  stretchPin(pin, org, subjectId, 1)
+
 async function credentialHash(token: string): Promise<string> {
   const digest = new Uint8Array(
     await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token)),
@@ -72,7 +80,7 @@ async function startShared(tenant: Awaited<ReturnType<typeof terminalTenant>>) {
     tenant.token,
     'POST',
     `/api/staff/terminals/${tenant.terminalId}/sessions`,
-    { mode: 'shared', pin: '2580' },
+    { mode: 'shared', stretchedPin: await stretched('2580', tenant.org, tenant.terminalId) },
   )
   expect(started.status).toBe(200)
   return started.body as {
@@ -112,7 +120,7 @@ describe('端末と業務セッション', () => {
       tenant.token,
       'POST',
       `/api/staff/terminals/${tenant.terminalId}/sessions`,
-      { mode: 'shared', pin: '2580' },
+      { mode: 'shared', stretchedPin: await stretched('2580', tenant.org, tenant.terminalId) },
     )
     expect(result.status).toBe(200)
     expect(result.body).toMatchObject({
@@ -267,7 +275,7 @@ describe('端末と業務セッション', () => {
       tenant.token,
       'POST',
       `/api/staff/terminals/${tenant.terminalId}/sessions`,
-      { mode: 'personal', staffId, pin: '2580' },
+      { mode: 'personal', staffId, stretchedPin: await stretched('2580', tenant.org, staffId) },
     )
     expect(personal.status).toBe(200)
     const audit = await env.DB.prepare(
@@ -282,8 +290,14 @@ describe('端末と業務セッション', () => {
     const tenant = await terminalTenant()
     const path = `/api/staff/terminals/${tenant.terminalId}/sessions`
     const [first, second] = await Promise.all([
-      call(tenant.token, 'POST', path, { mode: 'shared', pin: '2580' }),
-      call(tenant.token, 'POST', path, { mode: 'shared', pin: '2580' }),
+      call(tenant.token, 'POST', path, {
+        mode: 'shared',
+        stretchedPin: await stretched('2580', tenant.org, tenant.terminalId),
+      }),
+      call(tenant.token, 'POST', path, {
+        mode: 'shared',
+        stretchedPin: await stretched('2580', tenant.org, tenant.terminalId),
+      }),
     ])
     expect([first.status, second.status]).toEqual([200, 200])
     const live = await env.DB.prepare(
@@ -322,7 +336,7 @@ describe('端末と業務セッション', () => {
       tenant.token,
       'POST',
       `/api/staff/terminals/${tenant.terminalId}/elevate`,
-      { staffId, pin: '2580', reason: 'recording' },
+      { staffId, stretchedPin: await stretched('2580', tenant.org, staffId), reason: 'recording' },
       sessionHeaders(tenant.terminalId, shared.sessionToken),
     )
     expect(elevated.status).toBe(200)
@@ -335,7 +349,7 @@ describe('端末と業務セッション', () => {
       tenant.token,
       'POST',
       `/api/staff/terminals/${tenant.terminalId}/elevate`,
-      { staffId, pin: '2580', reason: 'recording' },
+      { staffId, stretchedPin: await stretched('2580', tenant.org, staffId), reason: 'recording' },
       sessionHeaders(tenant.terminalId, shared.sessionToken),
     )
     expect(stale.status).toBe(403)
@@ -396,13 +410,22 @@ describe('端末と業務セッション', () => {
     const tenant = await terminalTenant()
     const path = `/api/staff/terminals/${tenant.terminalId}/sessions`
     expect(
-      (await call(tenant.token, 'POST', path, { mode: 'shared', pin: '1111' })).body,
+      (
+        await call(tenant.token, 'POST', path, {
+          mode: 'shared',
+          stretchedPin: await stretched('1111', tenant.org, tenant.terminalId),
+        })
+      ).body,
     ).toMatchObject({
       error: 'pin_invalid',
       remainingAttempts: 2,
     })
-    await call(tenant.token, 'POST', path, { mode: 'shared', pin: '1111' })
-    const third = await call(tenant.token, 'POST', path, { mode: 'shared', pin: '1111' })
+    const wrong = {
+      mode: 'shared' as const,
+      stretchedPin: await stretched('1111', tenant.org, tenant.terminalId),
+    }
+    await call(tenant.token, 'POST', path, wrong)
+    const third = await call(tenant.token, 'POST', path, wrong)
     expect(third.status).toBe(429)
     expect(third.body).toEqual({ error: 'pin_locked', retryAfterSeconds: 30, remainingAttempts: 0 })
     const audits = await env.DB.prepare(
@@ -422,7 +445,7 @@ describe('端末と業務セッション', () => {
       attacker.token,
       'POST',
       `/api/staff/terminals/${owner.terminalId}/sessions`,
-      { mode: 'shared', pin: '2580' },
+      { mode: 'shared', stretchedPin: await stretched('2580', owner.org, owner.terminalId) },
     )
     expect(result.status).toBe(404)
   })
@@ -566,7 +589,11 @@ describe('端末と業務セッション', () => {
           tenant.token,
           'POST',
           `/api/staff/terminals/${tenant.terminalId}/elevate`,
-          { staffId, pin: '2580', reason: 'settings' },
+          {
+            staffId,
+            stretchedPin: await stretched('2580', tenant.org, staffId),
+            reason: 'settings',
+          },
           sessionHeaders(tenant.terminalId, sessions[1].token),
         )
       ).status,
@@ -643,7 +670,7 @@ describe('端末と業務セッション', () => {
       ),
       call(tenant.token, 'POST', `/api/staff/terminals/${tenant.terminalId}/sessions`, {
         mode: 'shared',
-        pin: '2580',
+        stretchedPin: await stretched('2580', tenant.org, tenant.terminalId),
       }),
     ])
     expect(patched.status).toBe(200)
@@ -698,6 +725,7 @@ describe('端末と業務セッション', () => {
       'POST',
       `/api/staff/terminals?storeId=${tenant.storeId}`,
       {
+        id: crypto.randomUUID(),
         name: '検査用iPad',
         kind: 'shared',
         placeNote: '',
@@ -747,13 +775,14 @@ describe('端末と業務セッション', () => {
       .run()
 
     const path = `/api/staff/stores/${tenant.storeId}/staff/${staffId}/pin`
+    // 平文の暗証番号は契約に無い。送っても 400 で断られる。
     expect(
       (
         await call(
           tenant.token,
           'PUT',
           path,
-          { pin: '1234' },
+          { pin: '2580' },
           sessionHeaders(tenant.terminalId, 'p'.repeat(64)),
         )
       ).status,
@@ -762,7 +791,7 @@ describe('端末と業務セッション', () => {
       tenant.token,
       'PUT',
       path,
-      { pin: '2580' },
+      { stretchedPin: await stretched('2580', tenant.org, staffId) },
       sessionHeaders(tenant.terminalId, 'p'.repeat(64)),
     )
     expect(updated.status).toBe(200)

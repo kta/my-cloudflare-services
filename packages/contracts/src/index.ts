@@ -201,6 +201,7 @@ export {
   StorePatch,
   StorePermission,
   StoreSlugTakenError,
+  StretchedPin,
   Terminal,
   TerminalInput,
   TerminalKind,

@@ -7,7 +7,7 @@ import type {
   Terminal,
   TerminalSession,
 } from '@app/contracts'
-import { auth, toJstDateString } from '@app/shared'
+import { auth, stretchPin, toJstDateString } from '@app/shared'
 import { Button, Field, focusRing, focusRingOnPine, Notice, TextInput } from '@app/ui'
 import { type FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { AlertScreen } from './alerts/AlertScreen'
@@ -571,13 +571,22 @@ function Workspace({
 
   async function startTerminalSession(pin: string) {
     if (!selectedTerminal || !terminalMode) return
+    /*
+     * **暗証番号はここで伸ばす。平文はネットワークに出さない。**
+     * salt は個人モードならスタッフ id、共有モードなら端末 id
+     * （`packages/shared` の `stretchPin` と seed が同じ組み立てをする）。
+     * サーバ側で 60 万回を回すと workerd の PBKDF2 上限（10 万回）に当たる。
+     */
+    const subjectId = terminalMode === 'personal' ? selectedStaff?.id : selectedTerminal.id
+    if (subjectId === undefined) return
+    const stretchedPin = await stretchPin(pin, org, subjectId)
     const response = await auth.authFetch(`/api/staff/terminals/${selectedTerminal.id}/sessions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(
         terminalMode === 'personal'
-          ? { mode: 'personal', staffId: selectedStaff?.id, pin }
-          : { mode: 'shared', pin },
+          ? { mode: 'personal', staffId: selectedStaff?.id, stretchedPin }
+          : { mode: 'shared', stretchedPin },
       ),
     })
     if (response.status === 401 || response.status === 429) {
@@ -714,7 +723,7 @@ function Workspace({
               headers: { 'content-type': 'application/json' },
               body: JSON.stringify({
                 staffId,
-                pin,
+                stretchedPin: await stretchPin(pin, org, staffId),
                 reason: personalModeSubject.includes('録音') ? 'recording' : 'attention',
               }),
             },

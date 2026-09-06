@@ -163,7 +163,6 @@ import {
   requireActiveOrg,
   signAccessToken,
   stagingGate,
-  stretchPin,
   tenantAuth,
   toJstDateString,
   verifyStretched,
@@ -272,13 +271,7 @@ import {
   shortLivedKey,
   verifyManagementCode,
 } from './domain/management-code'
-import {
-  isPinLocked,
-  isWeakPin,
-  nextFailureState,
-  parsePinFailure,
-  pinFailureKey,
-} from './domain/pin'
+import { isPinLocked, nextFailureState, parsePinFailure, pinFailureKey } from './domain/pin'
 import { issueTicket, verifyTicket } from './domain/playback'
 import { buildHistoryList, type ReceptionHistoryRow } from './domain/reception-history'
 import { nextRecordingCode, nextState, r2KeyFor, uploadFailedAlert } from './domain/recording'
@@ -4207,12 +4200,9 @@ const routes = app
         )
       }
 
-      const stretched = await stretchPin(
-        input.pin,
-        org,
-        staffId ?? terminalId,
-        c.env.TEST_NOW === undefined ? undefined : 1,
-      )
+      // 伸ばすのはブラウザ(salt = app:pin:<org>:<staffId ?? terminalId>)。
+      // workerd の PBKDF2 は 10 万回が上限なので、ここで 60 万回は回せない。
+      const stretched = input.stretchedPin
       const verified =
         storedHash !== null && (await verifyStretched(stretched, c.env.AUTH_PEPPER, storedHash))
       if (!verified) {
@@ -4336,18 +4326,20 @@ const routes = app
         return c.json({ error: 'not_found' }, 404)
       }
       const input = c.req.valid('json')
-      if (input.pin !== undefined && isWeakPin(input.pin)) {
-        return c.json({ error: 'weak_pin' }, 400)
-      }
-      const id = crypto.randomUUID()
+      // id はブラウザが決める(暗証番号の salt に端末 id が入るため)。同じ id が
+      // すでに在るなら作り直しではなく取り違えなので、上書きせずに断る。
+      const id = input.id
+      const duplicate = await c.env.DB.prepare(
+        'SELECT id FROM terminals WHERE organization_id = ? AND id = ?',
+      )
+        .bind(org, id)
+        .first()
+      if (duplicate !== null) return c.json({ error: 'conflict' }, 409)
       const nowIso = new Date(c.env.TEST_NOW ?? Date.now()).toISOString()
       const pinHash =
-        input.pin === undefined
+        input.stretchedPin === undefined
           ? null
-          : await hashStretched(
-              await stretchPin(input.pin, org, id, c.env.TEST_NOW === undefined ? undefined : 1),
-              c.env.AUTH_PEPPER,
-            )
+          : await hashStretched(input.stretchedPin, c.env.AUTH_PEPPER)
       const correlationId = crypto.randomUUID()
       const actor = await operationActor(c, storeId, c.get('auth').sub)
       await c.env.DB.batch([
@@ -4437,21 +4429,10 @@ const routes = app
       ) {
         return c.json({ error: 'forbidden' }, 403)
       }
-      if (input.pin !== undefined && isWeakPin(input.pin)) {
-        return c.json({ error: 'weak_pin' }, 400)
-      }
       const nextPinHash =
-        input.pin === undefined
+        input.stretchedPin === undefined
           ? current.pinHash
-          : await hashStretched(
-              await stretchPin(
-                input.pin,
-                org,
-                terminalId,
-                c.env.TEST_NOW === undefined ? undefined : 1,
-              ),
-              c.env.AUTH_PEPPER,
-            )
+          : await hashStretched(input.stretchedPin, c.env.AUTH_PEPPER)
       const next = {
         name: input.name ?? current.name,
         kind: input.kind ?? current.kind,
@@ -4635,12 +4616,7 @@ const routes = app
         429,
       )
     }
-    const stretched = await stretchPin(
-      input.pin,
-      org,
-      input.staffId,
-      c.env.TEST_NOW === undefined ? undefined : 1,
-    )
+    const stretched = input.stretchedPin
     if (
       member.pinHash === null ||
       !(await verifyStretched(stretched, c.env.AUTH_PEPPER, member.pinHash))
@@ -5191,13 +5167,8 @@ const routes = app
         .bind(org, storeId, staffId)
         .first()
       if (member === null) return c.json({ error: 'not_found' }, 404)
-      if (isWeakPin(input.pin)) return c.json({ error: 'weak_pin' }, 400)
-
       const nowIso = new Date(c.env.TEST_NOW ?? Date.now()).toISOString()
-      const pinHash = await hashStretched(
-        await stretchPin(input.pin, org, staffId, c.env.TEST_NOW === undefined ? undefined : 1),
-        c.env.AUTH_PEPPER,
-      )
+      const pinHash = await hashStretched(input.stretchedPin, c.env.AUTH_PEPPER)
       const actor = await operationActor(c, storeId, c.get('auth').sub)
       await c.env.DB.batch([
         c.env.DB.prepare(

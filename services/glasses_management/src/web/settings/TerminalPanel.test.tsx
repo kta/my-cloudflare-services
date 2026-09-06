@@ -22,6 +22,8 @@ const terminal = {
 
 beforeEach(() => {
   sessionStorage.setItem('eye.active-terminal-id', terminal.id)
+  // 暗証番号はブラウザで伸ばす。salt に組織 id が入るので、業務中の組織が要る。
+  sessionStorage.setItem('app.auth.org', 'eye')
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
@@ -60,6 +62,8 @@ afterEach(() => {
 describe('設定 › 端末', () => {
   it('headerless保存では選択中terminal idを資格headerとして捏造しない', async () => {
     sessionStorage.clear()
+    // 端末の資格情報だけを消す。業務中の組織は暗証番号を伸ばす salt に要る。
+    sessionStorage.setItem('app.auth.org', 'eye')
     render(<SettingsScreen storeId={STORE_ID} initialSection="terminals" />)
     await userEvent.selectOptions(await screen.findByLabelText('自動で伏せるまで'), '300')
     await userEvent.click(screen.getByRole('button', { name: '保存' }))

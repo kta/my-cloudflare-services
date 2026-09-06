@@ -1,3 +1,4 @@
+import { stretchPin } from '@app/shared'
 import type { APIRequestContext, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
 import type { SeededTerminalSession } from './support/terminal'
@@ -314,6 +315,8 @@ async function authed(
 const RECEPTION_IPAD = 'c0100000-0000-4000-8000-000000000001'
 const SATO_MISAKI = 'c0010000-0000-4000-8000-000000000000'
 const SEED_PIN = '000000'
+/** 暗証番号はブラウザで伸ばして送る（画面がしているのと同じことを、ここでもする）。 */
+const stretchedSeedPin = (subjectId: string) => stretchPin(SEED_PIN, ORG, subjectId)
 
 /**
  * 録音の保全は個人モードを求める（AC-TERM-10）。ヘッダーを持たない呼び出しは、
@@ -327,7 +330,7 @@ async function personalMode(
   const auth = await authed(request)
   const started = await request.post(`/api/staff/terminals/${RECEPTION_IPAD}/sessions`, {
     ...auth,
-    data: { mode: 'shared', pin: SEED_PIN },
+    data: { mode: 'shared', stretchedPin: await stretchedSeedPin(RECEPTION_IPAD) },
   })
   expect(started.status(), await started.text()).toBe(200)
   const shared = (await started.json()) as { sessionToken: string }
@@ -337,7 +340,11 @@ async function personalMode(
       'x-terminal-id': RECEPTION_IPAD,
       'x-terminal-session': shared.sessionToken,
     },
-    data: { staffId: SATO_MISAKI, pin: SEED_PIN, reason: 'recording' },
+    data: {
+      staffId: SATO_MISAKI,
+      stretchedPin: await stretchedSeedPin(SATO_MISAKI),
+      reason: 'recording',
+    },
   })
   expect(elevated.status(), await elevated.text()).toBe(200)
   const personal = (await elevated.json()) as { sessionToken: string }

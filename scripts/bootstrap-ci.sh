@@ -134,7 +134,9 @@ if [ -n "$revealed" ]; then
   echo "⚠️  次の値は GitHub から二度と読めない。安全な場所に保存すること:"
   printf '%b\n' "$revealed"
   echo
-  echo "   staging に入るとき:"
-  echo "     https://admin-staging.<subdomain>.workers.dev/?gate=<WORKER_STAGING_ACCESS_TOKEN>"
+  echo "   staging に入るとき（gate は **API のパス**に付ける。SPA の静的アセットは"
+  echo "   Worker より先に返るので、/?gate=... ではゲートを通らず cookie が付かない）:"
+  echo "     https://admin-staging.<subdomain>.workers.dev/api/auth/me?gate=<WORKER_STAGING_ACCESS_TOKEN>"
+  echo "     302 が返り staging_gate cookie（30日）が付いたら、あとは / を開く"
   echo "     admin@example.com / <WORKER_STAGING_ADMIN_PASSWORD> でログイン"
 fi

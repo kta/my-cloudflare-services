@@ -61,6 +61,9 @@ const tokens: Record<Exclude<ActorName, 'none'>, string> = {
 }
 
 /** 表が叩く実在の行。設定の書き込みが 200 になる形を用意しておく。 */
+/** 形だけ正しい「伸ばした暗証番号」。この表が見るのは権限であって照合結果ではない。 */
+const STRETCHED_PIN = `${'A'.repeat(43)}=`
+
 const fixture = {
   storeId: '',
   staffId: '',
@@ -1500,7 +1503,7 @@ const TABLE: Row[] = [
     name: '存在しない端末では業務セッションを始められない',
     method: 'POST',
     path: () => `/api/staff/terminals/${crypto.randomUUID()}/sessions`,
-    body: () => ({ mode: 'shared', pin: '2580' }),
+    body: () => ({ mode: 'shared', stretchedPin: STRETCHED_PIN }),
     expected: AUTHENTICATED_MISSING,
   },
   {
@@ -1512,7 +1515,8 @@ const TABLE: Row[] = [
       kind: 'shared',
       placeNote: 'レジ横',
       deviceLabel: 'TEST-iPad',
-      pin: '2580',
+      id: crypto.randomUUID(),
+      stretchedPin: STRETCHED_PIN,
       autoLockSeconds: 120,
       isActive: true,
     }),
@@ -1535,14 +1539,14 @@ const TABLE: Row[] = [
     name: '資格情報の無い端末は個人モードへ昇格できない',
     method: 'POST',
     path: () => `/api/staff/terminals/${crypto.randomUUID()}/elevate`,
-    body: () => ({ staffId: fixture.staffId, pin: '2580', reason: 'recording' }),
+    body: () => ({ staffId: fixture.staffId, stretchedPin: STRETCHED_PIN, reason: 'recording' }),
     expected: TERMINAL_MANAGE_WITHOUT_PERSONAL,
   },
   {
     name: 'スタッフPIN再設定は設定権限だけでなく個人モードも要求する',
     method: 'PUT',
     path: () => `/api/staff/stores/${fixture.storeId}/staff/${fixture.staffId}/pin`,
-    body: () => ({ pin: '2580' }),
+    body: () => ({ stretchedPin: STRETCHED_PIN }),
     expected: TERMINAL_MANAGE_WITHOUT_PERSONAL,
   },
   {

@@ -2678,6 +2678,20 @@ export type AlertReadAllResult = z.infer<typeof AlertReadAllResult>
 export const Pin = z.string().regex(/^\d{4,6}$/, '暗証番号は4〜6桁の数字にする')
 export type Pin = z.infer<typeof Pin>
 
+/**
+ * 暗証番号をクライアントで伸ばした値（base64・32 バイト）。**平文の PIN は API に出ない。**
+ *
+ * パスワードと同じ二段階（`packages/shared/src/password.ts`）を PIN にも適用する。
+ * ブラウザが `stretchPin(pin, org, staffId ?? terminalId)` を計算して送り、Worker は
+ * pepper HMAC 1 回だけを行う。**workerd の PBKDF2 は 10 万回が上限**で、サーバ側で
+ * 60 万回を回すと `NotSupportedError` になるため、この分担でなければ実機で動かない。
+ *
+ * `Pin`（4〜6 桁）は入力欄の検証としてブラウザ側に残る。ゾロ目・連番の拒否も
+ * 平文を見られる側、すなわちブラウザの責務になる（`isWeakPin`）。
+ */
+export const StretchedPin = z.string().regex(/^[A-Za-z0-9+/]{43}=$/, '暗証番号の形式が違う')
+export type StretchedPin = z.infer<typeof StretchedPin>
+
 export const TerminalKind = z.enum(['shared', 'personal'])
 export type TerminalKind = z.infer<typeof TerminalKind>
 
@@ -2712,10 +2726,16 @@ const terminalInputShape = {
   deviceLabel: z.string().trim().max(30).default(''),
   autoLockSeconds: z.number().int().min(30).max(1800).default(120),
   isActive: z.boolean().default(true),
-  pin: Pin.optional(),
+  stretchedPin: StretchedPin.optional(),
 }
 
-export const TerminalInput = z.strictObject(terminalInputShape)
+/**
+ * 端末の新規作成。`id` はブラウザが `crypto.randomUUID()` で決める。
+ * 暗証番号の salt に端末 id が入る（`app:pin:<org>:<terminalId>`）ので、
+ * 伸ばす側が id を知っている必要がある。サーバはこの id をそのまま使い、
+ * すでに在る id なら 409 で断る。
+ */
+export const TerminalInput = z.strictObject({ id: Uuid, ...terminalInputShape })
 export type TerminalInput = z.infer<typeof TerminalInput>
 
 export const TerminalPatch = z.strictObject({
@@ -2725,14 +2745,14 @@ export const TerminalPatch = z.strictObject({
   deviceLabel: terminalInputShape.deviceLabel.removeDefault().optional(),
   autoLockSeconds: terminalInputShape.autoLockSeconds.removeDefault().optional(),
   isActive: terminalInputShape.isActive.removeDefault().optional(),
-  pin: Pin.optional(),
+  stretchedPin: StretchedPin.optional(),
   version: Version,
 })
 export type TerminalPatch = z.infer<typeof TerminalPatch>
 
 export const TerminalSessionStart = z.discriminatedUnion('mode', [
-  z.strictObject({ mode: z.literal('personal'), staffId: Uuid, pin: Pin }),
-  z.strictObject({ mode: z.literal('shared'), pin: Pin }),
+  z.strictObject({ mode: z.literal('personal'), staffId: Uuid, stretchedPin: StretchedPin }),
+  z.strictObject({ mode: z.literal('shared'), stretchedPin: StretchedPin }),
 ])
 export type TerminalSessionStart = z.infer<typeof TerminalSessionStart>
 
@@ -2753,7 +2773,7 @@ export type TerminalSession = z.infer<typeof TerminalSession>
 
 export const ReauthInput = z.strictObject({
   staffId: Uuid,
-  pin: Pin,
+  stretchedPin: StretchedPin,
   reason: z.enum(['recording', 'attention', 'settings', 'customer_merge']),
 })
 export type ReauthInput = z.infer<typeof ReauthInput>
@@ -2771,7 +2791,7 @@ export const PinLockedError = z.strictObject({
 })
 export type PinLockedError = z.infer<typeof PinLockedError>
 
-export const StaffPinInput = z.strictObject({ pin: Pin })
+export const StaffPinInput = z.strictObject({ stretchedPin: StretchedPin })
 export type StaffPinInput = z.infer<typeof StaffPinInput>
 
 export const PinSetResult = z.strictObject({ staffId: Uuid, updatedAt: IsoDateTime })
