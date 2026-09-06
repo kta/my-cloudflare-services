@@ -1,4 +1,9 @@
-import { type Terminal, Terminal as TerminalSchema } from '@app/contracts'
+import {
+  type StaffMember,
+  StaffMember as StaffMemberSchema,
+  type Terminal,
+  Terminal as TerminalSchema,
+} from '@app/contracts'
 import { cn, focusRing } from '@app/ui'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { domainFetch } from '../client'
@@ -8,6 +13,8 @@ type Draft = {
   name: string
   placeNote: string
   kind: 'personal' | 'shared'
+  /** 責任者。共有端末にも要る（この人の権限で動く）。 */
+  staffId: string | null
   autoLockSeconds: number
   pin: string
 }
@@ -16,6 +23,7 @@ const toDraft = (terminal: Terminal): Draft => ({
   name: terminal.name,
   placeNote: terminal.placeNote ?? '',
   kind: terminal.kind,
+  staffId: terminal.staffId,
   autoLockSeconds: terminal.autoLockSeconds,
   pin: '',
 })
@@ -24,18 +32,38 @@ const newDraft = (): Draft => ({
   name: '',
   placeNote: '',
   kind: 'shared',
+  staffId: null,
   autoLockSeconds: 120,
   pin: '',
 })
 
 export function TerminalPanel({ storeId, onDraftChange }: SettingsPanelProps) {
   const [terminals, setTerminals] = useState<Terminal[]>([])
+  const [staff, setStaff] = useState<StaffMember[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [creating, setCreating] = useState(false)
   const [loaded, setLoaded] = useState(false)
   const [failed, setFailed] = useState(false)
   const selected = terminals.find((terminal) => terminal.id === selectedId) ?? null
+
+  // 責任者の選択肢。端末は人の権限で動くので、この一覧が空だと端末を作れない。
+  useEffect(() => {
+    let live = true
+    domainFetch(`/api/staff/stores/${encodeURIComponent(storeId)}/staff`)
+      .then(async (response) =>
+        response.ok ? StaffMemberSchema.array().parse(await response.json()) : [],
+      )
+      .then((rows) => {
+        if (live) setStaff(rows.filter((member) => member.isActive))
+      })
+      .catch(() => {
+        if (live) setStaff([])
+      })
+    return () => {
+      live = false
+    }
+  }, [storeId])
 
   useEffect(() => {
     let live = true
@@ -72,11 +100,16 @@ export function TerminalPanel({ storeId, onDraftChange }: SettingsPanelProps) {
       lines.push(
         `使い方：${selected.kind === 'shared' ? '共有' : '個人'} → ${draft.kind === 'shared' ? '共有' : '個人'}`,
       )
+    if (draft.staffId !== selected.staffId) {
+      const before = staff.find((member) => member.id === selected.staffId)?.displayName
+      const after = staff.find((member) => member.id === draft.staffId)?.displayName
+      lines.push(`責任者：${before ?? '未設定'} → ${after ?? '未設定'}`)
+    }
     if (draft.autoLockSeconds !== selected.autoLockSeconds)
       lines.push(`自動で伏せるまで：${selected.autoLockSeconds}秒 → ${draft.autoLockSeconds}秒`)
     if (draft.pin !== '') lines.push('暗証番号：新しい番号へ作り直す')
     return lines
-  }, [creating, draft, selected])
+  }, [creating, draft, selected, staff])
 
   const blocked =
     draft === null
@@ -87,7 +120,13 @@ export function TerminalPanel({ storeId, onDraftChange }: SettingsPanelProps) {
           ? '暗証番号は4〜6桁の数字にしてください。'
           : creating && draft.kind === 'shared' && draft.pin === ''
             ? '共有端末の最初の暗証番号を入力してください。'
-            : null
+            : /*
+               * 責任者がいないと、その端末は入口の一覧に出ない（入れても権限が
+               * 1 つも無く、行き止まりになる）。**保存の前に止める。**
+               */
+              draft.staffId === null
+              ? '責任者を選んでください。この人の権限でこの端末が動きます。'
+              : null
 
   const save = useCallback(async (): Promise<SaveOutcome> => {
     if (!draft || (!creating && !selected)) return 'failed'
@@ -104,6 +143,7 @@ export function TerminalPanel({ storeId, onDraftChange }: SettingsPanelProps) {
           name: draft.name.trim(),
           placeNote: draft.placeNote.trim(),
           kind: draft.kind,
+          staffId: draft.staffId,
           autoLockSeconds: draft.autoLockSeconds,
           ...(draft.pin === '' ? {} : { pin: draft.pin }),
           ...(creating ? {} : { version: selected?.version }),
@@ -233,6 +273,34 @@ export function TerminalPanel({ storeId, onDraftChange }: SettingsPanelProps) {
               <option value="personal">個人の端末</option>
             </select>
           </label>
+          <div className="grid gap-2">
+            <label className="grid gap-2 text-body font-semibold">
+              {draft.kind === 'personal' ? 'この端末を持つ人' : '責任者'}
+              <select
+                value={draft.staffId ?? ''}
+                onChange={(event) =>
+                  setDraft({
+                    ...draft,
+                    staffId: event.target.value === '' ? null : event.target.value,
+                  })
+                }
+                className={`min-h-12 rounded-ctl border border-line bg-surface px-3 font-normal ${focusRing}`}
+              >
+                <option value="">選んでください</option>
+                {staff.map((member) => (
+                  <option key={member.id} value={member.id}>
+                    {member.displayName}
+                    {member.jobLabel === null ? '' : `（${member.jobLabel}）`}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p className="text-note text-ink-muted">
+              {draft.kind === 'personal'
+                ? 'この人の暗証番号でこの端末の業務が始まります。'
+                : 'この人の権限でこの端末が動きます。記録に残る操作者は置き場所の名前のままです。'}
+            </p>
+          </div>
           <label className="grid gap-2 text-body font-semibold">
             自動で伏せるまで
             <select

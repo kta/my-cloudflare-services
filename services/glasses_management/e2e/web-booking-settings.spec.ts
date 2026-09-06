@@ -1,6 +1,7 @@
 import type { APIRequestContext, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
-import { completeSeededTerminalStart } from './support/terminal'
+import { authHeadersFor } from './support/auth'
+import { completeSeededTerminalStart, SEEDED_SITE_PATH } from './support/terminal'
 
 /**
  * お客様向け Web 予約（011-web-booking）のうち、**お店側**の 8 本。
@@ -42,11 +43,8 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000
 /* --- 前提 ------------------------------------------------------------------ */
 
 async function authed(request: APIRequestContext): Promise<{ headers: Record<string, string> }> {
-  const res = await request.post('/api/auth/token', {
-    data: { organizationId: ORG, role: 'staff' },
-  })
-  expect(res.status()).toBe(200)
-  return { headers: { authorization: `Bearer ${((await res.json()) as { token: string }).token}` } }
+  // 実際の入口と同じ道で取る（dev グラントは撤去した）。
+  return { headers: await authHeadersFor(request) }
 }
 
 async function grant(request: APIRequestContext, permissions: readonly string[]): Promise<void> {
@@ -208,9 +206,7 @@ async function freeStaffAt(
 /* --- 画面を開く ------------------------------------------------------------ */
 
 async function startWork(page: Page): Promise<void> {
-  await page.goto('/')
-  await page.getByLabel('お店のコード').fill(ORG)
-  await page.getByRole('button', { name: '業務を始める' }).click()
+  await page.goto(SEEDED_SITE_PATH)
   await completeSeededTerminalStart(page)
   await expect(page.locator('header').first()).toContainText('EYE 銀座店')
 }

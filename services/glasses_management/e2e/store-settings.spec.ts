@@ -1,6 +1,7 @@
 import type { APIRequestContext, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
-import { completeSeededTerminalStart } from './support/terminal'
+import { startSeededTerminal } from './support/auth'
+import { completeSeededTerminalStart, SEEDED_SITE_PATH } from './support/terminal'
 
 /**
  * 店舗の受付条件（004-store-settings）の受け入れ基準を、実ブラウザと実 Worker で確かめる。
@@ -46,11 +47,8 @@ const WEEKDAY_NAMES = ['日', '月', '火', '水', '木', '金', '土']
 /* --- 前提データ ---------------------------------------------------------- */
 
 async function tokenFor(request: APIRequestContext): Promise<string> {
-  const res = await request.post('/api/auth/token', {
-    data: { organizationId: ORG, role: 'staff' },
-  })
-  expect(res.status()).toBe(200)
-  return ((await res.json()) as { token: string }).token
+  // 実際の入口と同じ道で取る（dev グラントは撤去した）。
+  return (await startSeededTerminal(request)).token
 }
 
 /** JWT を載せた要求の頭。API を直に叩くのは前提づくりと突き合わせだけに使う。 */
@@ -82,9 +80,7 @@ test.beforeEach(async ({ request }) => {
 /* --- 画面を開く ---------------------------------------------------------- */
 
 async function startWork(page: Page): Promise<void> {
-  await page.goto('/')
-  await page.getByLabel('お店のコード').fill(ORG)
-  await page.getByRole('button', { name: '業務を始める' }).click()
+  await page.goto(SEEDED_SITE_PATH)
   await completeSeededTerminalStart(page)
   await expect(page.locator('header').first()).toContainText('EYE 銀座店')
 }
@@ -567,24 +563,23 @@ test('スタッフの権限で保存すると、店長だけができると断�
     id: string
     displayName: string
   }[]
-  const nakamura = staff.find((member) => member.displayName === '中村 彩')
-  expect(nakamura).toBeDefined()
-  const versionOf = async () =>
+  /*
+   * **端末の責任者本人の権限を下げる。**
+   *
+   * 端末は責任者の権限で動く（`terminals.staff_id` → `staff.admin_user_id` → JWT の
+   * `sub`）。以前は別のスタッフを一時的に同じ利用者 id へ向けていたが、そうすると
+   * 同じ id を持つ staff が 2 行になり、どちらが操作者か決まらない。
+   */
+  const operator = staff.find((member) => member.displayName === '山田 大輔')
+  expect(operator).toBeDefined()
+  const _versionOf = async () =>
     (
       (await (await request.get(`/api/staff/stores/${GINZA}`, headers)).json()) as {
         settingsVersion: number
       }
     ).settingsVersion
 
-  // いま画面を見ているのが 中村 彩 だと分かるようにしてから、権限だけを下げる。
-  const patch = async (adminUserId: string | null) => {
-    const res = await request.patch(`/api/staff/stores/${GINZA}/staff/${nakamura?.id}`, {
-      ...headers,
-      data: { adminUserId, version: await versionOf() },
-    })
-    expect(res.status()).toBe(200)
-  }
-  await patch(VIEWER)
+  // 誰が見ているかは端末の責任者で決まっている。権限だけを下げる。
   await grant(request, STAFF_PERMISSIONS)
 
   try {
@@ -599,7 +594,9 @@ test('スタッフの権限で保存すると、店長だけができると断�
     await expect(page.getByRole('heading', { name: 'この操作は店長だけができます' })).toBeVisible()
     await expect(
       page.getByText(
-        '営業時間を変えられるのは 店長 だけです。中村 彩（スタッフ）の権限では保存できません。営業時間はまだ何も変わっていません。',
+        // 職位は「店長」でも、担当店舗の権限が無ければ保存できない。
+        // 肩書きではなく権限で断ることを、この文言が示している。
+        '営業時間を変えられるのは 店長 だけです。山田 大輔（店長）の権限では保存できません。営業時間はまだ何も変わっていません。',
       ),
     ).toBeVisible()
     await expect(page.getByText('下書きは残っています')).toBeVisible()
@@ -611,7 +608,6 @@ test('スタッフの権限で保存すると、店長だけができると断�
     await expect(page.getByRole('button', { name: /店長に依頼/ })).toHaveCount(0)
   } finally {
     await grant(request, MANAGER_PERMISSIONS)
-    await patch('user-eye-nakamura')
   }
 })
 

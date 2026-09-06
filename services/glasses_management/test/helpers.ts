@@ -3,6 +3,7 @@
  * 組織 id・店舗 slug は必ず `crypto.randomUUID()` から作って衝突させない。
  */
 import { env, SELF } from 'cloudflare:test'
+import { signAccessToken } from '@app/shared'
 import { STORE_TARGET_KEY, UNASSIGNED_TARGET_KEY } from '../src/worker/db/slot-locks'
 import { expandToSlotStarts } from '../src/worker/domain/availability'
 
@@ -17,14 +18,20 @@ export function authed(token: string) {
   return { ...JSON_HEADERS, authorization: `Bearer ${token}` }
 }
 
-/** dev グラントでテナントのトークンを取る（組織の同期行も同時に作られる）。 */
+/**
+ * テナントのトークンを直接発行し、組織の同期行も置く。
+ *
+ * 以前は dev グラント（`POST /api/auth/token`）で取っていたが、あの経路は
+ * 「知らない組織にもトークンを出したうえで組織行を作る」ので本番に置けず、撤去した。
+ * テストが欲しかったのは資格情報そのものなので、ここで署名する。
+ */
 export async function tokenFor(org: string, role: 'admin' | 'staff' = 'staff'): Promise<string> {
-  const res = await SELF.fetch(`${BASE}/api/auth/token`, {
-    method: 'POST',
-    headers: JSON_HEADERS,
-    body: JSON.stringify({ organizationId: org, role }),
-  })
-  return ((await res.json()) as { token: string }).token
+  await env.DB.prepare(
+    "INSERT OR IGNORE INTO organizations (id, name, plan, is_disabled, created_at, revision) VALUES (?,?,'free','0',?,'0')",
+  )
+    .bind(org, org, FIXED_NOW)
+    .run()
+  return signAccessToken({ sub: `dev:${org}`, org, email: `${role}@example.com`, role }, JWT_SECRET)
 }
 
 /** admin からの組織スナップショット配信を模す。 */

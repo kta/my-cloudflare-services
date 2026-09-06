@@ -66,6 +66,6 @@
       "triggers": { "crons": [] }
     }
   }
-  // secrets（INTERNAL_KEY / JWT_SECRET / AUTH_PEPPER / AUTH_DEV_GRANT）は vars に置かない。
+  // secrets（INTERNAL_KEY / JWT_SECRET / AUTH_PEPPER）は vars に置かない。
   // dev は .dev.vars、本番は `wrangler secret put`。docs/howto/deploy.md 参照。
 }

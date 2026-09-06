@@ -1,6 +1,7 @@
 import type { APIRequestContext, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
-import { completeSeededTerminalStart } from './support/terminal'
+import { authHeadersFor } from './support/auth'
+import { completeSeededTerminalStart, SEEDED_SITE_PATH } from './support/terminal'
 
 /**
  * 予約の検索・変更・取消（009-change-and-cancel）の受け入れ基準を、実ブラウザと実 Worker で
@@ -34,7 +35,7 @@ import { completeSeededTerminalStart } from './support/terminal'
  * EX-CONFLICT の 6 面はすべてブラウザから通しで操作している。
  */
 
-const ORG = 'eye'
+const _ORG = 'eye'
 /** seed.mjs が固定 id で入れる EYE 銀座店と、丸の内店（別店舗を見せない証明に使う）。 */
 const GINZA = '11111111-1111-4111-8111-111111111111'
 const MARUNOUCHI = '22222222-2222-4222-8222-222222222222'
@@ -122,12 +123,8 @@ const DAYS = {
 /* --- API を直に叩く（前提づくりと、まだ器に載っていない入口の代わり） ------- */
 
 async function authed(request: APIRequestContext): Promise<{ headers: Record<string, string> }> {
-  const res = await request.post('/api/auth/token', {
-    data: { organizationId: ORG, role: 'staff' },
-  })
-  expect(res.status()).toBe(200)
-  const { token } = (await res.json()) as { token: string }
-  return { headers: { authorization: `Bearer ${token}` } }
+  // 実際の入口と同じ道で取る（dev グラントは撤去した）。
+  return { headers: await authHeadersFor(request) }
 }
 
 type Detail = {
@@ -264,20 +261,13 @@ async function fillSlot(request: APIRequestContext, date: string, hhmm: string):
 
 async function startWork(page: Page, nowIso: string): Promise<void> {
   await page.clock.setFixedTime(new Date(nowIso))
-  await page.goto('/')
+  await page.goto(SEEDED_SITE_PATH)
   /*
-   * 業務の合図（`sessionStorage`）は同じ context のあいだ残るので、1 本の test が
-   * 2 度目に開いたときは業務開始の面が出ない。**出ないことを失敗にしない** —— どちらが
-   * 出たかを見てから進める。
+   * 業務の合図は同じ context のあいだ残るので、1 本の test が 2 度目に開いたときは
+   * 入口の面が出ない。**出ないことを失敗にしない** —— どちらが出たかを見てから進める
+   * （`completeSeededTerminalStart` がその分岐を持つ）。
    */
-  const code = page.getByLabel('お店のコード')
   const rail = page.getByRole('navigation', { name: '画面の切り替え' })
-  const placePick = page.getByRole('heading', { name: 'この端末はどこに置きますか？' })
-  await expect(code.or(rail).or(placePick).first()).toBeVisible()
-  if (await code.isVisible()) {
-    await code.fill(ORG)
-    await page.getByRole('button', { name: '業務を始める' }).click()
-  }
   await completeSeededTerminalStart(page)
   await rail.waitFor()
 }
@@ -1156,9 +1146,12 @@ test('変更したご予約の「そのあとの変更」に、変更前後が 1
   expect(lines).toHaveLength(2)
   expect(lines[1]?.what).toBe('ご来店時刻を 14:00 から 16:00 へ')
   /*
-   * 操作した人の名前（`actorName`）は、業務端末の `sub` に結んだ `staff` の行がある
-   * ときだけ入る。seed は誰にも当てていないので null である（個人端末の「わたし」を
-   * 作る経路は `mock-compare.spec.ts` の `beMe` が持つ）。
+   * 操作した人の名前（`actorName`）は、トークンの `sub` に結んだ `staff` の行から入る。
+   *
+   * この経路は API を直に叩いており、端末のヘッダーを送っていない。したがって
+   * 操作者は端末ではなく**トークンの持ち主**になる —— 端末は責任者（店長）の権限で
+   * 動くので、その人の名前が残る。画面からの操作は端末ヘッダーを送るので、
+   * 共有モードなら操作者は端末名になる（AC-TERM-08 がそちらを押さえている）。
    */
-  expect(lines[1]?.actorName).toBeNull()
+  expect(lines[1]?.actorName).toBe('山田 大輔')
 })

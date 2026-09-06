@@ -36,6 +36,28 @@ describe('access token', () => {
     expect(await verifyAccessToken(token, SECRET)).toBeNull()
   })
 
+  /*
+   * JWT_SECRET は admin と各ドメインサービスで共有され、`aud`/`iss` が無い。
+   * 発行者が 2 人になった時点で「誰のトークンか」を本文で名乗らせる必要がある。
+   * 省略時は 'user' として、この変更より前に出たトークンをそのまま通す。
+   */
+  it('omitting kind reads back as user (existing tokens stay valid)', async () => {
+    const token = await signAccessToken(claims, SECRET)
+    const payload = await verifyAccessToken(token, SECRET)
+    expect(payload?.kind).toBe('user')
+  })
+
+  it('round-trips kind: terminal', async () => {
+    const token = await signAccessToken({ ...claims, kind: 'terminal' }, SECRET)
+    const payload = await verifyAccessToken(token, SECRET)
+    expect(payload?.kind).toBe('terminal')
+  })
+
+  it('rejects an unknown kind', async () => {
+    const token = await signAccessToken({ ...claims, kind: 'robot' as never }, SECRET)
+    expect(await verifyAccessToken(token, SECRET)).toBeNull()
+  })
+
   it('rejects garbage', async () => {
     expect(await verifyAccessToken('not.a.jwt', SECRET)).toBeNull()
   })

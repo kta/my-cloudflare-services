@@ -1,5 +1,5 @@
 import { expect, type Page, test } from '@playwright/test'
-import { completeSeededTerminalStart } from './support/terminal'
+import { completeSeededTerminalStart, SEEDED_SITE_PATH } from './support/terminal'
 
 /**
  * **押しても何も起きないボタンを 1 つも置かない。**
@@ -13,7 +13,7 @@ import { completeSeededTerminalStart } from './support/terminal'
  * その `onClick` / `onPointerDown` を見れば、押して何かが起きるボタンかどうかが分かる。
  */
 
-const ORG = 'eye'
+const _ORG = 'eye'
 /** seed が予約を置いている暦日。台帳が最初に尋ねる日は端末の時計で決まる。 */
 const SEEDED_NOW = '2026-08-27T02:08:00.000Z'
 
@@ -46,9 +46,7 @@ async function deadControls(page: Page): Promise<string[]> {
 
 async function startWork(page: Page): Promise<void> {
   await page.clock.setFixedTime(new Date(SEEDED_NOW))
-  await page.goto('/')
-  await page.getByLabel('お店のコード').fill(ORG)
-  await page.getByRole('button', { name: '業務を始める' }).click()
+  await page.goto(SEEDED_SITE_PATH)
   await completeSeededTerminalStart(page, 'shared')
 }
 

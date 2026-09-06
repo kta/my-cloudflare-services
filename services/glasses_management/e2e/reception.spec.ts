@@ -1,6 +1,7 @@
 import type { APIRequestContext, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
-import { completeSeededTerminalStart } from './support/terminal'
+import { authHeadersFor } from './support/auth'
+import { completeSeededTerminalStart, SEEDED_SITE_PATH } from './support/terminal'
 
 /**
  * 来店受付とウォークイン（008-reception-and-walkin）の受け入れ基準を、実ブラウザと
@@ -114,12 +115,8 @@ const SEED_STARTS_AT = atJst(SEED_DAY, '11:00')
 /* --- API を直に叩く（前提づくりと、まだ器に載っていない入口の代わり） ------- */
 
 async function authed(request: APIRequestContext): Promise<{ headers: Record<string, string> }> {
-  const res = await request.post('/api/auth/token', {
-    data: { organizationId: ORG, role: 'staff' },
-  })
-  expect(res.status()).toBe(200)
-  const { token } = (await res.json()) as { token: string }
-  return { headers: { authorization: `Bearer ${token}` } }
+  // 実際の入口と同じ道で取る（dev グラントは撤去した）。
+  return { headers: await authHeadersFor(request) }
 }
 
 type CalendarExceptionSnapshot = {
@@ -520,9 +517,7 @@ async function readHistory(
 /* --- 画面を開く ----------------------------------------------------------- */
 
 async function startWork(page: Page): Promise<void> {
-  await page.goto('/')
-  await page.getByLabel('お店のコード').fill(ORG)
-  await page.getByRole('button', { name: '業務を始める' }).click()
+  await page.goto(SEEDED_SITE_PATH)
   await completeSeededTerminalStart(page)
   await expect(page.locator('header').first()).toContainText('EYE 銀座店')
 }

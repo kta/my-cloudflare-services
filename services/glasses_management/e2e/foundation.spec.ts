@@ -1,26 +1,25 @@
 import { expect, test } from '@playwright/test'
-import { completeSeededTerminalStart } from './support/terminal'
+import { signedTokenFor, syncOrganization } from './support/auth'
+import { completeSeededTerminalStart, SEEDED_SITE_PATH } from './support/terminal'
 
 /**
  * 土台の受け入れ基準（AC-FOUND-01..05）を、実際のブラウザと実 Worker で確かめる。
  * `vite preview` が実 workerd を動かすので、/api も本物である。
  */
 
-const ORG = 'eye'
+const _ORG = 'eye'
 
-/** お店のコードから、共有端末で業務画面まで入る。 */
+/** 置き場所の住所から、共有端末で業務画面まで入る。 */
 async function startWork(
   page: import('@playwright/test').Page,
   mode: 'shared' | 'personal' = 'shared',
 ) {
-  await page.goto('/')
-  await page.getByLabel('お店のコード').fill(ORG)
-  await page.getByRole('button', { name: '業務を始める' }).click()
+  await page.goto(SEEDED_SITE_PATH)
   await completeSeededTerminalStart(page, mode)
 }
 
 // @e2e-covers AC-FOUND-01
-test('お店のコードを入れて業務を始めると、上のバーに店名と営業状態が出る', async ({ page }) => {
+test('置き場所と暗証番号で業務を始めると、上のバーに店名と営業状態が出る', async ({ page }) => {
   await startWork(page)
   const bar = page.locator('header').first()
   await expect(bar).toContainText('EYE 銀座店')
@@ -55,12 +54,24 @@ test('サイドバーはつまみで細い柱にたため、もう一度押す�
  * 登録していない新しい会社が永久に入れない（014-store-provisioning）。
  * 通したうえで、最初のお店を登録する面を立てる。
  */
+/*
+ * 入口（`/s/:storeSlug`）は店舗と端末があって初めて開く。店舗が 1 つも無い会社は
+ * そこを通れないので、会社の管理者として業務画面に入ったところから確かめる
+ * （実運用では admin の `/api/auth/login` が本人のロールを載せて返す）。
+ */
 // @e2e-covers AC-FOUND-03
-test('店舗が見つからないコードでは、器へ入れず登録の面を立てる', async ({ page }) => {
-  const code = 'e2e-foundation-unknown'
+test('店舗が 1 つも無い会社は、器へ入れず登録の面を立てる', async ({ page, request }) => {
+  const code = `e2efound${crypto.randomUUID().replace(/-/g, '').slice(0, 8)}`
+  await syncOrganization(request, code)
+  const token = await signedTokenFor(code, 'admin')
+  await page.addInitScript(
+    ([t, o]) => {
+      sessionStorage.setItem('app.auth.token', t as string)
+      sessionStorage.setItem('app.auth.org', o as string)
+    },
+    [token, code],
+  )
   await page.goto('/')
-  await page.getByLabel('お店のコード').fill(code)
-  await page.getByRole('button', { name: '業務を始める' }).click()
 
   await expect(
     page.getByRole('heading', { name: '最初のお店を登録します', level: 1 }),
@@ -78,11 +89,9 @@ test('業務を終えると業務開始の画面へ戻る', async ({ page }) => 
   // 「業務を終える」を上のバーに持つのは個人端末（AC-FOUND-04）。
   await startWork(page, 'personal')
   await page.getByRole('button', { name: '業務を終える' }).click()
-  // 端末の設定はそのまま残り、業務開始の画面（スタッフ選び）へ戻る。
-  await expect(
-    page.getByRole('heading', { name: '業務を始めるスタッフを選んでください' }),
-  ).toBeVisible()
-  await expect(page.locator('header').first()).toContainText('業務を始める')
+  // 入口（置き場所を選ぶ面）へ戻る。資格情報は捨てられている。
+  await expect(page.getByRole('heading', { name: 'EYE 銀座店' })).toBeVisible()
+  await expect(page.getByRole('button', { name: /銀座店 レジ横iPad/ })).toBeVisible()
   // 業務画面の器は畳まれている。
   await expect(page.getByRole('navigation', { name: '画面の切り替え' })).toHaveCount(0)
 })

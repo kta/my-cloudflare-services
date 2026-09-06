@@ -1,6 +1,7 @@
 import type { APIRequestContext, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
-import { completeSeededTerminalStart } from './support/terminal'
+import { authHeadersFor, grantSeededOperators, startSeededTerminal } from './support/auth'
+import { completeSeededTerminalStart, SEEDED_SITE_PATH } from './support/terminal'
 
 /*
  * 実装した画面を、承認済みモックの基準画像（docs/frontend/mockups/eye/reference/<画面ID>.png）と
@@ -132,26 +133,6 @@ async function grantStore(request: APIRequestContext): Promise<void> {
   expect(res.status()).toBe(200)
 }
 
-/**
- * 個人端末の「わたし」を作る。`staff.adminUserId` に業務端末の `sub` を書くと、
- * トップの右に「本日わたしが担当するご予約」が出る（seed は誰にも当てていない）。
- * **必ず元へ戻す。** ほかの面は seed のままの盤面で撮る決めである。
- */
-async function beMe(request: APIRequestContext, adminUserId: string | null): Promise<void> {
-  const token = await request.post('/api/auth/token', {
-    data: { organizationId: ORG, role: 'staff' },
-  })
-  const { token: bearer } = (await token.json()) as { token: string }
-  const headers = { authorization: `Bearer ${bearer}` }
-  const store = await request.get(`/api/staff/stores/${GINZA}`, { headers })
-  const { settingsVersion } = (await store.json()) as { settingsVersion: number }
-  const res = await request.patch(`/api/staff/stores/${GINZA}/staff/${SATO}`, {
-    headers,
-    data: { adminUserId, version: settingsVersion },
-  })
-  expect(res.status()).toBe(200)
-}
-
 async function startWork(page: Page, mode: 'shared' | 'personal' = 'shared'): Promise<void> {
   const membership = await page.request.post('/api/internal/store-memberships/sync', {
     headers: { 'x-internal-key': 'dev-internal-key' },
@@ -178,9 +159,7 @@ async function startWork(page: Page, mode: 'shared' | 'personal' = 'shared'): Pr
     },
   })
   expect(membership.status()).toBe(200)
-  await page.goto('/')
-  await page.getByLabel('お店のコード').fill(ORG)
-  await page.getByRole('button', { name: '業務を始める' }).click()
+  await page.goto(SEEDED_SITE_PATH)
   await completeSeededTerminalStart(page, mode)
   await page.getByRole('navigation', { name: '画面の切り替え' }).waitFor()
 }
@@ -502,11 +481,8 @@ async function stubBoard(
 
 /** 業務トークン 1 本。seed の実データを id で引くために使う。 */
 async function bearer(request: APIRequestContext): Promise<string> {
-  const res = await request.post('/api/auth/token', {
-    data: { organizationId: ORG, role: 'staff' },
-  })
-  const { token } = (await res.json()) as { token: string }
-  return token
+  // 実際の入口と同じ道で取る（dev グラントは撤去した）。
+  return (await startSeededTerminal(request)).token
 }
 
 /** seed の 8月27日 11:00 のご予約（田中 花子 様）。受け付ける面はこの 1 件を開く。 */
@@ -881,35 +857,50 @@ test.describe('承認済みモックとの突き合わせ', () => {
 
   test('HOME-PERSONAL — トップ（個人端末）', async ({ page, request }) => {
     await grantStore(request)
-    await beMe(request, VIEWER)
-    try {
-      await page.route(/\/api\/staff\/alerts\?/, async (route) => {
-        const response = await route.fetch()
-        const body = (await response.json()) as {
-          counts: { all: number; action: number; info: number; resolved: number }
-        }
-        await route.fulfill({ response, json: { ...body, counts: { ...body.counts, all: 2 } } })
-      })
-      await pinTo1108(page)
-      await startWork(page, 'personal')
-      await expect(page.getByRole('region', { name: '本日わたしが担当するご予約' })).toBeVisible()
-      /*
-       * いま残っている差:
-       *   - お客様のお名前と来店回数（田中 花子 様／4回目）… `customers` は 007。行は
-       *     時刻・状態の札・ご用件の 2 段組みで、お名前の段が空いている。
-       *   - 左の主操作 2 枚が共有端末と同じ（モックは「わたしの予約を見る」等の個人向け）。
-       *   - 下辺の日付の帯・上のバーの「お知らせ 3」は HOME と同じ。
-       * 実測 4.7504%（2026-08-31 の初測）。**この値は下げるだけ。上げてはいけない。**
-       */
-      // 2026-09-05 の実測 194,558 / 3,868,560 ＝ 5.0292%（モックを撮り直したあと）。
-      await expect(page).toHaveScreenshot('HOME-PERSONAL.png', {
-        scale: 'device',
-        // 2026-09-04: 0.0476 → 0.0512。HOME と同じ理由（日付の帯を実装した）。
-        maxDiffPixelRatio: 0.0512,
-      })
-    } finally {
-      await beMe(request, null)
-    }
+    /*
+     * 「わたし」は端末の責任者で決まる。個人端末（佐藤 美咲の iPad）で入れば
+     * 業務トークンの `sub` は持ち主になるので、担当店舗の権限だけを配る。
+     * 同じ利用者 id を 2 人に持たせると、どちらが操作者か決まらなくなる。
+     */
+    await grantSeededOperators(request, {
+      organizationId: ORG,
+      storeId: GINZA,
+      permissions: [
+        'store.read',
+        'store.manage',
+        'reservation.read',
+        'reservation.write',
+        'customer.read',
+        'customer.write',
+        'settings.read',
+        'settings.manage',
+      ],
+      membershipId: '0c0c0c0c-0c0c-4c0c-8c0c-0c0c0c0c0c0c',
+    })
+    await page.route(/\/api\/staff\/alerts\?/, async (route) => {
+      const response = await route.fetch()
+      const body = (await response.json()) as {
+        counts: { all: number; action: number; info: number; resolved: number }
+      }
+      await route.fulfill({ response, json: { ...body, counts: { ...body.counts, all: 2 } } })
+    })
+    await pinTo1108(page)
+    await startWork(page, 'personal')
+    await expect(page.getByRole('region', { name: '本日わたしが担当するご予約' })).toBeVisible()
+    /*
+     * いま残っている差:
+     *   - お客様のお名前と来店回数（田中 花子 様／4回目）… `customers` は 007。行は
+     *     時刻・状態の札・ご用件の 2 段組みで、お名前の段が空いている。
+     *   - 左の主操作 2 枚が共有端末と同じ（モックは「わたしの予約を見る」等の個人向け）。
+     *   - 下辺の日付の帯・上のバーの「お知らせ 3」は HOME と同じ。
+     * 実測 4.7504%（2026-08-31 の初測）。**この値は下げるだけ。上げてはいけない。**
+     */
+    // 2026-09-05 の実測 194,558 / 3,868,560 ＝ 5.0292%（モックを撮り直したあと）。
+    await expect(page).toHaveScreenshot('HOME-PERSONAL.png', {
+      scale: 'device',
+      // 2026-09-04: 0.0476 → 0.0512。HOME と同じ理由（日付の帯を実装した）。
+      maxDiffPixelRatio: 0.0512,
+    })
   })
 
   /* --- 予約の受付（BOOK-01〜06 / BOOK-CONFLICT） -------------------------- */
@@ -1318,12 +1309,8 @@ test.describe('承認済みモックとの突き合わせ', () => {
     // ほかの端末が同じ担当の同じ時刻を先に取る。
     const holding = await page.getByRole('complementary', { name: '確保する内容' }).innerText()
     const staffId = holding.includes('佐藤 美咲') ? SATO : null
-    const token = await request.post('/api/auth/token', {
-      data: { organizationId: ORG, role: 'staff' },
-    })
-    const { token: bearer } = (await token.json()) as { token: string }
     const taken = await request.post('/api/staff/reservations', {
-      headers: { authorization: `Bearer ${bearer}` },
+      headers: await authHeadersFor(request),
       data: {
         storeId: GINZA,
         startsAt: new Date(Date.parse('2026-09-02T14:00:00.000+09:00')).toISOString(),

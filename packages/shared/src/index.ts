@@ -4,6 +4,7 @@ export {
   type AuthVariables,
   type OrgResolver,
   type OrgRow,
+  rejectTerminalToken,
   requireActiveOrg,
   requirePlan,
   requireRole,

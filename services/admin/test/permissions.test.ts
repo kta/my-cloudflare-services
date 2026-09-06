@@ -329,3 +329,52 @@ describe('staging ゲート', () => {
     expect(res.status).toBe(200)
   })
 })
+
+/**
+ * 端末トークンを admin へ持ち込ませない。
+ *
+ * `JWT_SECRET` は admin と各ドメインサービスで共有され、`aud`/`iss` が無い
+ * (`packages/shared/src/jwt.ts` の注記)。glasses_management が発行する端末
+ * トークンは、**署名としては admin でも正しい**。したがって本文の `kind` で断る。
+ *
+ * 運営限定ゲートの外にある `/api/users`・`/api/me/*`・
+ * `/api/organizations/:id/stores` を必ず含める —— そこが素通りすると、
+ * 店頭の iPad から社員名簿が引ける。未知パスも入れて default-deny を証明する。
+ */
+describe('端末トークンの拒否', () => {
+  const PATHS = [
+    '/api/organizations',
+    '/api/users',
+    '/api/me/pin',
+    '/api/organizations/o1/stores',
+    '/api/no/such/path',
+  ] as const
+
+  for (const path of PATHS) {
+    it(`kind=terminal は ${path} で 403 になる`, async () => {
+      const token = await signAccessToken(
+        {
+          sub: 'terminal:t1',
+          org: 'operator-org',
+          email: 'terminal@terminal.invalid',
+          role: 'admin',
+          kind: 'terminal',
+        },
+        JWT_SECRET,
+      )
+      const res = await SELF.fetch(`${BASE}${path}`, {
+        headers: { authorization: `Bearer ${token}` },
+      })
+      expect(res.status).toBe(403)
+      expect(await res.json()).toEqual({ error: 'terminal_token_rejected' })
+    })
+  }
+
+  it('kind を持たない既存のトークンはこれまでどおり通る', async () => {
+    const token = await devToken('admin', 'operator-org')
+    const res = await SELF.fetch(`${BASE}/api/organizations`, {
+      headers: { authorization: `Bearer ${token}` },
+    })
+    expect(res.status).toBe(200)
+  })
+})

@@ -129,11 +129,17 @@ const GINZA = stores[0].id
  * 平文をSQLへ入れず、端末ごとに
  * stretchPin → pepper HMAC を行った hash だけを保存する。実運用のPINは設定画面で更新する。
  */
+/*
+ * 共有端末にも**責任者**を置く。権限は `store_memberships` を人で引くので、
+ * 端末にも人が要る。記録される操作者は端末名のままで、ここはどの権限で動くかだけを
+ * 決める（本人確認が要る操作は `requirePersonalMode` が別途止める）。
+ */
 const terminals = [
   {
     id: uid('c0100000', 0),
     name: '銀座店 レジ横iPad',
     kind: 'shared',
+    staffId: uid('c0010000', 5),
     placeNote: 'レジの右側　固定スタンド',
     deviceLabel: 'EYE-iPad-07',
   },
@@ -141,6 +147,7 @@ const terminals = [
     id: uid('c0100000', 1),
     name: '銀座店 受付iPad',
     kind: 'shared',
+    staffId: uid('c0010000', 5),
     placeNote: '入口の受付台',
     deviceLabel: 'EYE-iPad-07',
   },
@@ -148,14 +155,34 @@ const terminals = [
     id: uid('c0100000', 2),
     name: '銀座店 検査室iPad',
     kind: 'shared',
+    staffId: uid('c0010000', 5),
     placeNote: '検査室 1　測定機の脇',
     deviceLabel: 'EYE-iPad-07',
+  },
+  /*
+   * 個人端末は 1 人に紐づく（`terminals.staff_id`）。未認証の入口では
+   * スタッフ一覧を出せないので、「端末を選ぶ → その人の PIN」で暗証番号を
+   * 1 回に収める。照合するのは佐藤 美咲の `staff.pin_hash` なので、
+   * この行は自分の pin_hash を持たない。
+   */
+  {
+    id: uid('c0100000', 3),
+    name: '佐藤 美咲の iPad',
+    kind: 'personal',
+    staffId: uid('c0010000', 0),
+    placeNote: '本人が持ち歩く',
+    deviceLabel: 'EYE-iPad-11',
   },
 ]
 const terminalSeedRows = await Promise.all(
   terminals.map(async (terminal) => ({
     ...terminal,
-    pinHash: await hashStretched(await stretchPin('000000', ORG, terminal.id), PEPPER),
+    staffId: terminal.staffId ?? null,
+    // 個人端末は持ち主の staff.pin_hash で照合するので、端末側は PIN を持たない。
+    pinHash:
+      terminal.kind === 'personal'
+        ? null
+        : await hashStretched(await stretchPin('000000', ORG, terminal.id), PEPPER),
   })),
 )
 
@@ -225,7 +252,14 @@ const staffMembers = [
     kana: 'さとう みさき',
     job: null,
     role: 'staff',
-    adminUserId: null,
+    /*
+     * 個人端末の持ち主。業務トークンの `sub` になるので、admin の利用者が要る。
+     *
+     * **店長（`dev:eye`）とは別の id にする。** 同じにすると、`sub` から staff を
+     * 引く問い合わせ（`operationActor`）が 2 行に当たり、どちらが操作者になるかが
+     * 決まらない。記録に残る「誰が」が実行のたびに変わってしまう。
+     */
+    adminUserId: 'dev:eye-sato',
     skills: ['measure', 'processing', 'sales_reception'],
     week: ['12:00-19:00', '10:00-19:00', null, '10:00-19:00', '10:00-19:00', null, '10:00-19:00'],
     rest: '13:00-14:00',
@@ -275,7 +309,8 @@ const staffMembers = [
     kana: 'やまだ だいすけ',
     job: '店長',
     role: 'manager',
-    adminUserId: 'user-eye-yamada',
+    // 共有端末の責任者。dev では上と同じ admin 利用者を指す（理由は佐藤の欄）。
+    adminUserId: 'dev:eye',
     skills: ['sales_reception'],
     week: [null, '10:00-19:00', null, '10:00-19:00', null, null, '10:00-19:00'],
     rest: null,
@@ -963,6 +998,13 @@ const memberships = [
 /* --- 分析（P9 E2E 固定集計） ---------------------------------------------- */
 const ANALYTICS_OTHER_ORG = 'org-analytics-other-seed'
 const ANALYTICS_OTHER_STORE = '44444444-4444-4444-8444-444444444444'
+const ANALYTICS_OTHER_TERMINAL = '44444444-4444-4444-8444-444444444445'
+/** 別組織の端末の責任者。端末は人の権限で動くので、その組織にも 1 人要る。 */
+const ANALYTICS_OTHER_STAFF = '44444444-4444-4444-8444-444444444446'
+const analyticsOtherPinHash = await hashStretched(
+  await stretchPin('000000', ANALYTICS_OTHER_ORG, ANALYTICS_OTHER_TERMINAL),
+  PEPPER,
+)
 const analyticsRows = []
 const analyticsRow = (storeId, date, metric, dimension, key, label, value) => {
   analyticsRows.push({ storeId, date, metric, dimension, key, label, value })
@@ -1135,6 +1177,10 @@ const lines = [
   `INSERT OR IGNORE INTO organizations (id, name, plan, is_disabled, created_at, revision) VALUES (${q(ORG)}, 'EYE', 'contracted', '0', ${q(NOW)}, '1');`,
   `INSERT OR IGNORE INTO organizations (id, name, plan, is_disabled, created_at, revision) VALUES (${q(ANALYTICS_OTHER_ORG)}, '別組織', 'contracted', '0', ${q(NOW)}, '1');`,
   `INSERT OR IGNORE INTO stores (id, organization_id, name, slug, phone, address, access_note, is_active, created_at) VALUES (${q(ANALYTICS_OTHER_STORE)}, ${q(ANALYTICS_OTHER_ORG)}, '別組織店', 'analytics-other', '', '', '', '1', ${q(NOW)});`,
+  // 別組織にも端末を 1 台置く。入口(/s/:storeSlug)は店舗と端末を前提にするので、
+  // これが無いと「別の会社は自分のデータしか見えない」を実際の導線で確かめられない。
+  `INSERT OR IGNORE INTO staff (id, organization_id, store_id, admin_user_id, display_name, kana, job_label, role, max_parallel_reservations, pin_hash, pin_updated_at, is_active, sort_order, created_at, updated_at) VALUES (${q(ANALYTICS_OTHER_STAFF)}, ${q(ANALYTICS_OTHER_ORG)}, ${q(ANALYTICS_OTHER_STORE)}, ${q(`dev:${ANALYTICS_OTHER_ORG}`)}, '別組織 店長', 'べつそしき てんちょう', '店長', 'manager', 1, NULL, NULL, '1', 0, ${q(NOW)}, ${q(NOW)});`,
+  `INSERT OR IGNORE INTO terminals (id, organization_id, store_id, name, kind, staff_id, place_note, device_label, pin_hash, auto_lock_seconds, last_seen_at, is_active, version, created_at) VALUES (${q(ANALYTICS_OTHER_TERMINAL)}, ${q(ANALYTICS_OTHER_ORG)}, ${q(ANALYTICS_OTHER_STORE)}, '別組織店 レジ横iPad', 'shared', ${q(ANALYTICS_OTHER_STAFF)}, 'レジの右側', 'EYE-iPad-90', ${q(analyticsOtherPinHash)}, 120, NULL, '1', 1, ${q(NOW)});`,
   ...stores.map(
     (s) =>
       `INSERT OR IGNORE INTO stores (id, organization_id, name, slug, phone, address, access_note, is_active, created_at) VALUES (${q(s.id)}, ${q(ORG)}, ${q(s.name)}, ${q(s.slug)}, ${q(s.phone)}, ${q(s.address)}, ${q(s.accessNote)}, '1', ${q(NOW)});`,
@@ -1143,7 +1189,7 @@ const lines = [
   // ここには状態列や平文PINを置かない。
   ...terminalSeedRows.map(
     (terminal) =>
-      `INSERT OR IGNORE INTO terminals (id, organization_id, store_id, name, kind, place_note, device_label, pin_hash, auto_lock_seconds, last_seen_at, is_active, version, created_at) VALUES (${q(terminal.id)}, ${q(ORG)}, ${q(GINZA)}, ${q(terminal.name)}, ${q(terminal.kind)}, ${q(terminal.placeNote)}, ${q(terminal.deviceLabel)}, ${q(terminal.pinHash)}, 120, NULL, '1', 1, ${q(NOW)});`,
+      `INSERT OR IGNORE INTO terminals (id, organization_id, store_id, name, kind, staff_id, place_note, device_label, pin_hash, auto_lock_seconds, last_seen_at, is_active, version, created_at) VALUES (${q(terminal.id)}, ${q(ORG)}, ${q(GINZA)}, ${q(terminal.name)}, ${q(terminal.kind)}, ${terminal.staffId === null ? 'NULL' : q(terminal.staffId)}, ${q(terminal.placeNote)}, ${q(terminal.deviceLabel)}, ${terminal.pinHash === null ? 'NULL' : q(terminal.pinHash)}, 120, NULL, '1', 1, ${q(NOW)});`,
   ),
   ...storeInfo.flatMap((info) =>
     Object.entries(info)
@@ -1377,7 +1423,7 @@ console.log(
     `田中 花子 様の度数 ${prescriptionSeeds.length} 件・メガネ ${glassesSeeds.length} 本・` +
     `接客のメモ ${noteSeeds.length} 件・過去のご予約 ${pastVisitRows.length} 件`,
 )
-console.log('   業務開始の画面では、お店のコードに eye を入れる。暗証番号は 000000。')
+console.log('   業務は /s/ginza を開いて置き場所を選び、暗証番号 000000 で始める。')
 /*
  * 台帳の中身は承認済みモックが描いている瞬間（2026年8月27日）に固定してある。
  * e2e が丸ごとこの日付に依存しているので動かせない。**実時間が進むほど「今日」は

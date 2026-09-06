@@ -2,8 +2,7 @@ import { render } from '@testing-library/react'
 import type { ReactElement } from 'react'
 import { describe, expect, it } from 'vitest'
 import { PinEntry } from '../login/PinEntry'
-import { PlacePick } from '../login/PlacePick'
-import { DeviceMode } from '../start/DeviceMode'
+import { SiteEntry } from '../site/SiteEntry'
 
 /*
  * `packages/ui` の `cn()` は tailwind-merge を持たない単純な結合である。
@@ -46,12 +45,13 @@ function conflictsIn(ui: ReactElement): string[] {
   return [...new Set(found)]
 }
 
-const PLACES = [
+const _PLACES = [
   {
     id: 't1',
     storeId: 's1',
     name: '銀座店 レジ横iPad',
     kind: 'shared' as const,
+    staffId: null,
     placeNote: 'レジの右側',
     deviceLabel: 'EYE-iPad-07',
     autoLockSeconds: 120,
@@ -65,18 +65,8 @@ const PLACES = [
 ]
 
 describe('打ち消しに頼ったクラスを置かない', () => {
-  it('端末の使い方を決める面', () => {
-    expect(
-      conflictsIn(
-        <DeviceMode deviceLabel="EYE-iPad-07" onPersonal={() => {}} onShared={() => {}} />,
-      ),
-    ).toEqual([])
-  })
-
-  it('置き場所を選ぶ面（選択中のカードの塗りが消えていた）', () => {
-    expect(
-      conflictsIn(<PlacePick terminals={PLACES} onSelect={() => {}} onChangeMode={() => {}} />),
-    ).toEqual([])
+  it('業務端末の入口（置き場所のカードの塗りが消えていた）', () => {
+    expect(conflictsIn(<SiteEntry slug="ginza" onStarted={() => {}} />)).toEqual([])
   })
 
   it('暗証番号の面（「確定」のラベルが消えていた）', () => {

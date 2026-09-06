@@ -1286,6 +1286,15 @@ export const terminals = sqliteTable(
     storeId: text('store_id').notNull(),
     name: text('name').notNull(),
     kind: text('kind').notNull(), // 'shared' | 'personal'
+    /*
+     * 個人端末の持ち主。共有端末では NULL。
+     *
+     * 未認証の入口（`/s/:slug`）ではスタッフ一覧を出せない（氏名も勤務も伏せる）
+     * ので、「端末を選ぶ → その人の PIN」で暗証番号を 1 回に収める。端末が人を
+     * 指すのはそのためである。`kind='personal'` かつ NULL のものは割り当て待ちで、
+     * 入口の一覧には出さない（押しても入れない行き先を出さない）。
+     */
+    staffId: text('staff_id'),
     placeNote: text('place_note'),
     deviceLabel: text('device_label'),
     pinHash: text('pin_hash'),
@@ -1298,6 +1307,38 @@ export const terminals = sqliteTable(
   (t) => [
     // LOGIN-SHARED の置き場所一覧を、店舗内の作成順で読む。
     index('terminals_org_store_created_idx').on(t.organizationId, t.storeId, t.createdAt),
+  ],
+)
+
+/**
+ * 端末そのものの資格情報。**業務セッションとは別の寿命**を持つ。
+ *
+ * 業務セッション（`terminal_sessions`）は共有なら業務日、個人なら
+ * `auto_lock_seconds` で切れる。いっぽうこちらは 30 日で、使うたびに
+ * ローテーションする。分けるのは「画面を伏せる・業務を終える」と
+ * 「この iPad が誰のものか」が別の話だからである。
+ *
+ * 平文は HttpOnly Cookie にしか出さない。ここには SHA-256 のハッシュだけを置く。
+ * 失効は行を消さず `revoked_at` に記録する（盗まれた資格情報の再利用を
+ * あとから追えるようにするため）。
+ */
+export const terminalDevices = sqliteTable(
+  'terminal_devices',
+  {
+    id: text('id').primaryKey(),
+    organizationId: text('organization_id').notNull(),
+    terminalId: text('terminal_id').notNull(),
+    credentialHash: text('credential_hash').notNull(),
+    expiresAt: text('expires_at').notNull(),
+    lastUsedAt: text('last_used_at'),
+    revokedAt: text('revoked_at'),
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => [
+    // Cookie の平文からハッシュを引いて 1 行を出す、唯一の読み筋。
+    uniqueIndex('terminal_devices_hash_idx').on(t.credentialHash),
+    // 端末を無効化するとき、その端末の生きている資格情報をまとめて落とす。
+    index('terminal_devices_org_terminal_idx').on(t.organizationId, t.terminalId),
   ],
 )
 

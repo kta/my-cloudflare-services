@@ -1,6 +1,7 @@
 import type { APIRequestContext, Locator, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
-import { completeSeededTerminalStart } from './support/terminal'
+import { authHeadersFor } from './support/auth'
+import { completeSeededTerminalStart, SEEDED_SITE_PATH } from './support/terminal'
 
 /**
  * 空き枠と予約台帳（005-availability-and-ledger）の受け入れ基準を、実ブラウザと
@@ -41,11 +42,10 @@ const ORG = 'eye'
 /** seed.mjs が固定 id で入れる EYE 銀座店。 */
 const GINZA = '11111111-1111-4111-8111-111111111111'
 /** dev グラントが載せる `sub`。 */
-const VIEWER = `dev:${ORG}`
 /** `.dev.vars` の dev 値。preview も同じ値を読む（本番は wrangler secret）。 */
 const INTERNAL_KEY = 'dev-internal-key'
 /** 担当店舗の行 id。store-settings の e2e と同じ id を配り直す。 */
-const MEMBERSHIP_ID = '0f0f0f0f-0f0f-4f0f-8f0f-0f0f0f0f0f0f'
+const _MEMBERSHIP_ID = '0f0f0f0f-0f0f-4f0f-8f0f-0f0f0f0f0f0f'
 const MANAGER_PERMISSIONS = [
   'store.read',
   'store.manage',
@@ -59,7 +59,7 @@ const MANAGER_PERMISSIONS = [
 
 /** seed の id は `${区分}-0000-4000-8000-${連番}`（`seed.mjs` の `uid`）。 */
 const uid = (group: string, n: number) => `${group}-0000-4000-8000-${String(n).padStart(12, '0')}`
-const SATO = uid('c0010000', 0)
+const _SATO = uid('c0010000', 0)
 const TAKAHASHI = uid('c0010000', 1)
 const PURPOSE_ADJUST = uid('e0010000', 1)
 
@@ -138,16 +138,20 @@ async function startWork(
 ): Promise<void> {
   await pinDeviceClock(page, at)
   await pinServerNow(page)
-  await page.goto('/')
-  await page.getByLabel('お店のコード').fill(ORG)
-  await page.getByRole('button', { name: '業務を始める' }).click()
+  await page.goto(SEEDED_SITE_PATH)
   await completeSeededTerminalStart(page, mode)
   await expect(page.locator('header').first()).toContainText('EYE 銀座店')
 }
 
-/** 同じ端末で画面を開き直す。すでに業務を始めているので名乗り直さない。 */
+/*
+ * 同じ端末で画面を開き直す。
+ *
+ * **入口の住所を開く。** 業務トークンはメモリに持つので、読み込み直すと消える
+ * （残った古いトークンで動かないための決め）。`/` を開くと「置き場所の住所を
+ * 開いてください」の案内になるだけで、業務画面へは戻らない。
+ */
 async function reopen(page: Page, mode: 'shared' | 'personal' = 'shared'): Promise<void> {
-  await page.goto('/')
+  await page.goto(SEEDED_SITE_PATH)
   await completeSeededTerminalStart(page, mode)
   await expect(page.locator('header').first()).toContainText('EYE 銀座店')
 }
@@ -188,12 +192,8 @@ const band = (page: Page, name: string) => page.getByRole('gridcell', { name, ex
 /* --- API を直に叩く（前提づくりと空き枠の確認） --------------------------- */
 
 async function authed(request: APIRequestContext): Promise<{ headers: Record<string, string> }> {
-  const res = await request.post('/api/auth/token', {
-    data: { organizationId: ORG, role: 'staff' },
-  })
-  expect(res.status()).toBe(200)
-  const { token } = (await res.json()) as { token: string }
-  return { headers: { authorization: `Bearer ${token}` } }
+  // 実際の入口と同じ道で取る（dev グラントは撤去した）。
+  return { headers: await authHeadersFor(request) }
 }
 
 type Slot = {
@@ -825,27 +825,31 @@ test('トップに本日わたしが担当するご予約が時間順に並び�
   request,
 }) => {
   const headers = await authed(request)
-  const versionOf = async () =>
+  const _versionOf = async () =>
     (
       (await (await request.get(`/api/staff/stores/${GINZA}`, headers)).json()) as {
         settingsVersion: number
       }
     ).settingsVersion
-  const beMe = async (adminUserId: string | null) => {
-    const res = await request.patch(`/api/staff/stores/${GINZA}/staff/${SATO}`, {
-      ...headers,
-      data: { adminUserId, version: await versionOf() },
-    })
-    expect(res.status()).toBe(200)
-  }
+  /*
+   * **「わたし」は端末の責任者で決まる。**
+   *
+   * 個人端末（佐藤 美咲の iPad）で入ると、業務トークンの `sub` は持ち主の
+   * `admin_user_id` になる。以前は佐藤を一時的に viewer の利用者 id へ向けていたが、
+   * そうすると同じ id を持つ staff が 2 行になり、どちらが操作者か決まらない。
+   * 担当店舗の権限だけを持ち主ぶん配ればよい。
+   */
+  const SATO_ADMIN_USER_ID = 'dev:eye-sato'
   const membership = async () => {
     const res = await request.post('/api/internal/store-memberships/sync', {
       headers: { 'x-internal-key': INTERNAL_KEY },
       data: {
-        id: MEMBERSHIP_ID,
+        // 端末の持ち主ぶんの行。ほかの面が使う MEMBERSHIP_ID とは別にする
+        // （同じ id で上書きすると、片方の権限が消える）。
+        id: '0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a',
         organizationId: ORG,
         storeId: GINZA,
-        userId: VIEWER,
+        userId: SATO_ADMIN_USER_ID,
         permissions: MANAGER_PERMISSIONS,
         createdAt: '2026-08-01T00:00:00.000Z',
       },
@@ -854,8 +858,7 @@ test('トップに本日わたしが担当するご予約が時間順に並び�
   }
 
   await membership()
-  await beMe(VIEWER)
-  try {
+  {
     // 佐藤 美咲が勤務していて担当予約が0件の土曜も、行き止まりにしない。
     await startWork(page, '2026-08-29T02:08:00.000Z', 'personal')
     await expect(page.getByText('本日ご担当のご予約はありません。')).toBeVisible()
@@ -877,8 +880,6 @@ test('トップに本日わたしが担当するご予約が時間順に並び�
     // 1 行を押すと、台帳のその帯の詳細が開く。
     await rows.first().getByRole('button').click()
     await expect(page.getByRole('dialog', { name: '予約の詳細' })).toContainText('11:00–12:00')
-  } finally {
-    await beMe(null)
   }
 })
 

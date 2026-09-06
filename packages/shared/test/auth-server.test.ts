@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { describe, expect, it } from 'vitest'
 import {
   type AuthVariables,
+  rejectTerminalToken,
   requireActiveOrg,
   requirePlan,
   requireRole,
@@ -154,5 +155,40 @@ describe('requirePlan', () => {
     )
     expect(res.status).toBe(403)
     expect(await res.json()).toEqual({ error: 'plan_required' })
+  })
+})
+
+/**
+ * 端末トークンの門。人の認証だけを扱うサービス(admin)がこれを掛ける。
+ * ロールは見ない —— 端末が admin ロールを名乗っていても断る、が要点である。
+ */
+describe('rejectTerminalToken', () => {
+  const app = new Hono<Env>()
+  app.use('/p', tenantAuth(), rejectTerminalToken())
+  app.get('/p', (c) => c.json({ ok: true }))
+  const env = { JWT_SECRET: SECRET }
+
+  it('kind=terminal は admin ロールでも 403', async () => {
+    const t = await signAccessToken(
+      { sub: 'terminal:t1', org: 'o1', email: 'a@b.com', role: 'admin', kind: 'terminal' },
+      SECRET,
+    )
+    const res = await app.request('/p', { headers: bearer(t) }, env)
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ error: 'terminal_token_rejected' })
+  })
+
+  it('kind=user は通る', async () => {
+    const res = await app.request('/p', { headers: bearer(await token('staff')) }, env)
+    expect(res.status).toBe(200)
+  })
+
+  it('kind を持たない既存のトークンも通る', async () => {
+    const t = await signAccessToken(
+      { sub: 'u1', org: 'o1', email: 'a@b.com', role: 'staff' },
+      SECRET,
+    )
+    const res = await app.request('/p', { headers: bearer(t) }, env)
+    expect(res.status).toBe(200)
   })
 })

@@ -35,6 +35,7 @@ import {
   storeSettingsRevision,
   storeSlotRules,
   stores,
+  terminalDevices,
   terminalSessions,
   terminals,
   visitEvents,
@@ -1256,6 +1257,17 @@ describe('terminals', () => {
     expect(version?.columnType).toBe('SQLiteInteger')
   })
 
+  /*
+   * 個人端末の持ち主。未認証の入口(/s/:slug)ではスタッフ一覧を出せないので、
+   * 「端末を選ぶ → その人の PIN」で 1 回に収めるために端末側が人を指す。
+   * NULL 可なのは共有端末があるため。personal で NULL のものは一覧に出さない。
+   */
+  it('個人端末の持ち主を指す staff_id を持つ（NULL 可）', () => {
+    const staffId = table.columns.find((column) => column.name === 'staff_id')
+    expect(staffId).toBeDefined()
+    expect(staffId?.notNull).toBe(false)
+  })
+
   it('PIN hash と自動ロック秒数を持ち、外部キーを宣言しない', () => {
     expect(table.columns.find((column) => column.name === 'pin_hash')?.notNull).toBe(false)
     expect(table.columns.find((column) => column.name === 'auto_lock_seconds')?.notNull).toBe(true)
@@ -1294,6 +1306,32 @@ describe('terminal_sessions', () => {
   })
 
   it('外部キーを宣言しない', () => {
+    expect(table.foreignKeys).toHaveLength(0)
+  })
+})
+
+/**
+ * 端末そのものの資格情報。業務セッション(terminal_sessions)とは寿命が違う。
+ * 平文は Cookie にしか出さず、ここにはハッシュだけを置く。
+ */
+describe('terminalDevices', () => {
+  const table = getTableConfig(terminalDevices)
+
+  it('Cookie の平文から 1 行を引くので、ハッシュに一意 index を張る', () => {
+    expect(columnsOf(table, 'terminal_devices_hash_idx')).toEqual(['credential_hash'])
+    expect(isUnique(table, 'terminal_devices_hash_idx')).toBe(true)
+  })
+
+  it('端末の無効化でまとめて落とせるよう、組織・端末で引ける', () => {
+    expect(columnsOf(table, 'terminal_devices_org_terminal_idx')).toEqual([
+      'organization_id',
+      'terminal_id',
+    ])
+  })
+
+  it('期限と失効を持ち、外部キーを宣言しない', () => {
+    expect(table.columns.find((column) => column.name === 'expires_at')?.notNull).toBe(true)
+    expect(table.columns.find((column) => column.name === 'revoked_at')?.notNull).toBe(false)
     expect(table.foreignKeys).toHaveLength(0)
   })
 })
