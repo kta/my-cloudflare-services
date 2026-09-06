@@ -2,10 +2,8 @@ import type { StaffMember, Terminal } from '@app/contracts'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { PinEntry } from './PinEntry'
-import { PlacePick } from './PlacePick'
-import { StaffPick } from './StaffPick'
 
-const staff = (id: string, name: string): StaffMember => ({
+const _staff = (id: string, name: string): StaffMember => ({
   id,
   displayName: name,
   kana: null,
@@ -20,7 +18,7 @@ const staff = (id: string, name: string): StaffMember => ({
   pinUpdatedAt: null,
 })
 
-const terminal = (id: string, name: string, online = true): Terminal => ({
+const _terminal = (id: string, name: string, online = true): Terminal => ({
   id,
   storeId: '11111111-1111-4111-8111-111111111111',
   name,
@@ -35,57 +33,6 @@ const terminal = (id: string, name: string, online = true): Terminal => ({
   isOnline: online,
   version: 1,
   createdAt: '2026-08-27T02:08:00.000Z',
-})
-
-describe('スタッフを選ぶ', () => {
-  it('休みを文字で示して押せず、勤務中だけ選べる', () => {
-    const onSelect = vi.fn()
-    render(
-      <StaffPick
-        staff={[staff('a', '佐藤 美咲'), staff('b', '山田 大輔（店長）')]}
-        offIds={new Set(['b'])}
-        onSelect={onSelect}
-        onShared={vi.fn()}
-      />,
-    )
-    expect(
-      screen.getByRole('heading', { name: '業務を始めるスタッフを選んでください' }),
-    ).toBeTruthy()
-    expect(screen.getByRole('button', { name: /山田 大輔/ })).toBeDisabled()
-    expect(screen.getByText(/本日休み/, { selector: 'span' })).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: /佐藤 美咲/ }))
-    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ displayName: '佐藤 美咲' }))
-  })
-
-  it('0人でも共有端末へ進めて行き止まりにしない', () => {
-    render(<StaffPick staff={[]} offIds={new Set()} onSelect={vi.fn()} onShared={vi.fn()} />)
-    expect(screen.getByText('業務を始められるスタッフがいません')).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'みんなで使う端末にする' })).toBeTruthy()
-  })
-})
-
-describe('置き場所を選ぶ', () => {
-  it('接続状態を文字で出し、通信断や業務中も選べる', () => {
-    const onSelect = vi.fn()
-    render(
-      <PlacePick
-        terminals={[
-          terminal('a', '銀座店 レジ横iPad'),
-          { ...terminal('b', '銀座店 受付iPad'), activeStaffName: '高橋 健' },
-          terminal('c', '銀座店 検査室iPad', false),
-        ]}
-        onSelect={onSelect}
-        onChangeMode={vi.fn()}
-      />,
-    )
-    expect(screen.getByText('まだ誰も使っていません')).toBeTruthy()
-    expect(screen.getAllByText(/業務中/).length).toBeGreaterThan(0)
-    expect(screen.getAllByText('つながっていません').length).toBeGreaterThan(0)
-    fireEvent.click(screen.getByRole('button', { name: /銀座店 検査室iPad/ }))
-    expect(onSelect).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole('button', { name: 'この置き場所で始める' }))
-    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ name: '銀座店 検査室iPad' }))
-  })
 })
 
 describe('暗証番号', () => {

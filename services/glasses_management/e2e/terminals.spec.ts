@@ -105,33 +105,40 @@ async function normalizeAlerts(request: APIRequestContext): Promise<{
   return counts
 }
 
+/** 設定の端末の面を開く。使い方と責任者はここで決める。 */
+async function openTerminalSettings(page: Page): Promise<void> {
+  await page.getByRole('button', { name: '設定', exact: true }).click()
+  await page
+    .getByRole('navigation', { name: '設定の項目' })
+    .getByRole('button', { name: '端末' })
+    .click()
+}
+
 // @e2e-covers UC-TERM-01 AC-TERM-01
-test('未設定の iPad は個人と共有の違いを3項目ずつ読める', async ({ page }) => {
-  await login(page)
-  await expect(
-    page.getByRole('heading', { name: 'この iPad の使い方を決めてください' }),
-  ).toBeVisible()
-  for (const label of ['記録される名前', 'お客様の情報', '暗証番号']) {
-    await expect(page.getByText(label, { exact: true })).toHaveCount(2)
-  }
+test('端末の使い方と責任者は設定で決める', async ({ page }) => {
+  await startShared(page)
+  await openTerminalSettings(page)
+  await expect(page.getByLabel('使い方')).toBeVisible()
+  await expect(page.getByLabel('責任者')).toBeVisible()
+  await expect(page.getByText(/この人の権限でこの端末が動きます/)).toBeVisible()
 })
 
 // @e2e-covers UC-TERM-02 AC-TERM-02
-test('個人端末では勤務中のスタッフだけを選べる', async ({ page }) => {
-  await login(page)
-  await page.getByRole('button', { name: '個人の端末にする' }).click()
-  await expect(
-    page.getByRole('heading', { name: '業務を始めるスタッフを選んでください' }),
-  ).toBeVisible()
-  await expect(page.getByRole('button', { name: /山田 大輔.*本日休み/ })).toBeDisabled()
-  await expect(page.getByRole('button', { name: /佐藤 美咲/ })).toBeEnabled()
+test('個人の端末には持ち主を割り当て、差分に出る', async ({ page }) => {
+  await startShared(page)
+  await openTerminalSettings(page)
+  await page.getByLabel('使い方').selectOption('personal')
+  await expect(page.getByLabel('この端末を持つ人')).toBeVisible()
+  await expect(page.getByText(/この人の暗証番号でこの端末の業務が始まります/)).toBeVisible()
+  await page.getByLabel('この端末を持つ人').selectOption({ label: '佐藤 美咲' })
+  await expect(page.getByText(/責任者：山田 大輔 → 佐藤 美咲/)).toBeVisible()
 })
 
 // @e2e-covers UC-TERM-03 AC-TERM-03
 test('個人 PIN は4桁から確定でき、本人名が端末名として残る', async ({ page }) => {
   await login(page)
-  await page.getByRole('button', { name: '個人の端末にする' }).click()
-  await page.getByRole('button', { name: /佐藤 美咲/ }).click()
+  await page.getByRole('button', { name: /佐藤 美咲の iPad/ }).click()
+  await page.getByRole('button', { name: 'この置き場所で始める' }).click()
   /*
    * 「4桁から確定でき」は**押せるようになる境目**の話で、暗証番号そのものの長さではない。
    * seed の個人 PIN は 6 桁（`000000`）なので、境目を確かめたあと残りまで入れて確定する。
@@ -148,10 +155,10 @@ test('個人 PIN は4桁から確定でき、本人名が端末名として残�
 })
 
 // @e2e-covers UC-TERM-05 AC-TERM-04
-test('共有端末は置き場所と接続状態を選んでから PIN へ進む', async ({ page }) => {
+test('共有端末は置き場所を選んでから暗証番号へ進む', async ({ page }) => {
   await login(page)
-  await page.getByRole('button', { name: 'みんなで使う端末にする' }).click()
-  await expect(page.getByText('つながっていません').first()).toBeVisible()
+  // 置き場所の名前と置き場所のメモまで。在席も接続も出さない（AC-TERM-23）。
+  await expect(page.getByText('レジの右側　固定スタンド')).toBeVisible()
   await page.getByRole('button', { name: /銀座店 レジ横iPad/ }).click()
   await page.getByRole('button', { name: 'この置き場所で始める' }).click()
   await expect(page.getByText('個人を選ばずにできる')).toBeVisible()
@@ -175,12 +182,13 @@ test('375px・200%相当でも開始画面は横にあふれず、キーボー�
       }),
     )
     .toBe(true)
-  const personal = page.getByRole('button', { name: '個人の端末にする' })
-  await personal.focus()
-  await expect(personal).toBeFocused()
+  const place = page.getByRole('button', { name: /銀座店 レジ横iPad/ })
+  await place.focus()
+  await expect(place).toBeFocused()
   await page.keyboard.press('Enter')
+  await page.getByRole('button', { name: 'この置き場所で始める' }).click()
   await expect(
-    page.getByRole('heading', { name: '業務を始めるスタッフを選んでください' }),
+    page.getByRole('heading', { name: '4〜6桁の暗証番号を入力してください' }),
   ).toBeVisible()
 })
 
@@ -193,7 +201,7 @@ test('共有 PIN で始めると置き場所の名前が左柱に残る', async 
 
 // @e2e-covers UC-TERM-04 AC-TERM-06
 test('PIN の1回目の誤りは入力を空にして残り2回と直し方を示す', async ({ page }) => {
-  await page.route(/\/api\/staff\/terminals\/[^/]+\/sessions$/, async (route) => {
+  await page.route(/\/api\/public\/sites\/[^/]+\/terminals\/[^/]+\/sessions$/, async (route) => {
     await route.fulfill({
       status: 401,
       contentType: 'application/json',
@@ -201,7 +209,7 @@ test('PIN の1回目の誤りは入力を空にして残り2回と直し方を�
     })
   })
   await login(page)
-  await page.getByRole('button', { name: 'みんなで使う端末にする' }).click()
+  await page.getByRole('button', { name: /銀座店 レジ横iPad/ }).click()
   await page.getByRole('button', { name: 'この置き場所で始める' }).click()
   await enterPin(page, '1111')
   await expect(page.getByText('暗証番号が違います。あと2回お試しいただけます')).toBeVisible()
@@ -212,7 +220,7 @@ test('PIN の1回目の誤りは入力を空にして残り2回と直し方を�
 // @e2e-covers AC-TERM-07
 test('PIN を3回続けて誤ると30秒の待機中は確定できない', async ({ page }) => {
   let attempts = 0
-  await page.route(/\/api\/staff\/terminals\/[^/]+\/sessions$/, async (route) => {
+  await page.route(/\/api\/public\/sites\/[^/]+\/terminals\/[^/]+\/sessions$/, async (route) => {
     attempts += 1
     const locked = attempts === 3
     await route.fulfill({
@@ -226,7 +234,7 @@ test('PIN を3回続けて誤ると30秒の待機中は確定できない', asyn
     })
   })
   await login(page)
-  await page.getByRole('button', { name: 'みんなで使う端末にする' }).click()
+  await page.getByRole('button', { name: /銀座店 レジ横iPad/ }).click()
   await page.getByRole('button', { name: 'この置き場所で始める' }).click()
   for (let attempt = 0; attempt < 3; attempt += 1) await enterPin(page, '1111')
   await expect(page.getByText('30秒お待ちください')).toBeVisible()
@@ -539,7 +547,7 @@ test('お知らせ件数は数字だけでなく入口の名前として読み�
 // @e2e-covers AC-TERM-19
 test('3桁の PIN は確定できない理由も読み上げ名に入る', async ({ page }) => {
   await login(page)
-  await page.getByRole('button', { name: 'みんなで使う端末にする' }).click()
+  await page.getByRole('button', { name: /銀座店 レジ横iPad/ }).click()
   await page.getByRole('button', { name: 'この置き場所で始める' }).click()
   for (const digit of '258') await page.getByRole('button', { name: digit, exact: true }).click()
   const confirm = page.getByRole('button', { name: '確定', exact: true })
@@ -561,14 +569,20 @@ test('共有端末の業務入力には前の利用者を残さない指定が�
 })
 
 // @e2e-covers AC-TERM-21
-test('共有端末の置き場所選択から使い方を決め直せる', async ({ page }) => {
+test('暗証番号の面から置き場所を選び直せる', async ({ page }) => {
   await login(page)
-  await page.getByRole('button', { name: 'みんなで使う端末にする' }).click()
-  await page.getByRole('button', { name: '使い方を変える' }).click()
+  await page.getByRole('button', { name: /銀座店 レジ横iPad/ }).click()
+  await page.getByRole('button', { name: 'この置き場所で始める' }).click()
   await expect(
-    page.getByRole('heading', { name: 'この iPad の使い方を決めてください' }),
+    page.getByRole('heading', { name: '4〜6桁の暗証番号を入力してください' }),
   ).toBeVisible()
-  await expect(page.getByRole('button', { name: '個人の端末にする' })).toBeVisible()
+  await page.getByRole('button', { name: '1', exact: true }).click()
+  await page.getByRole('button', { name: 'やめる' }).click()
+  await expect(page.getByRole('heading', { name: 'EYE 銀座店' })).toBeVisible()
+  // 入れかけた番号は残らない（別の置き場所へ持ち越さない）。
+  await page.getByRole('button', { name: /銀座店 受付iPad/ }).click()
+  await page.getByRole('button', { name: 'この置き場所で始める' }).click()
+  await expect(page.getByRole('button', { name: /^確定/ })).toBeDisabled()
 })
 
 // @e2e-covers UC-TERM-16
@@ -591,9 +605,8 @@ test('端末設定で保存した使い方は、業務終了後の次の開始�
       name: '業務を終える',
     })
     .click()
-  await expect(
-    page.getByRole('heading', { name: '業務を始めるスタッフを選んでください' }),
-  ).toBeVisible()
+  // 業務を終えたら入口へ戻る（置き場所を選ぶ面）。
+  await expect(page.getByRole('heading', { name: 'EYE 銀座店' })).toBeVisible()
 })
 
 // @e2e-covers UC-TERM-15 AC-TERM-22

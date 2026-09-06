@@ -68,38 +68,23 @@ async function login(page: Page): Promise<void> {
 
 async function sharedPin(page: Page): Promise<void> {
   await login(page)
-  await page.getByRole('button', { name: 'みんなで使う端末にする' }).click()
   await page.getByRole('button', { name: /銀座店 レジ横iPad/ }).click()
   await page.getByRole('button', { name: 'この置き場所で始める' }).click()
 }
 
 test.describe('端末 mock との突き合わせ', () => {
-  test('START-DEVICE-MODE', async ({ page }) => {
-    await login(page)
-    await expect(
-      page.getByRole('heading', { name: 'この iPad の使い方を決めてください' }),
-    ).toBeVisible()
-    await matchesMock(page, 'START-DEVICE-MODE.png')
-  })
-
-  test('LOGIN-STAFF', async ({ page }) => {
-    await login(page)
-    await page.getByRole('button', { name: '個人の端末にする' }).click()
-    await matchesMock(page, 'LOGIN-STAFF.png')
-  })
-
-  test('LOGIN-STAFF-PIN', async ({ page }) => {
-    await login(page)
-    await page.getByRole('button', { name: '個人の端末にする' }).click()
-    await page.getByRole('button', { name: /佐藤 美咲/ }).click()
-    await matchesMock(page, 'LOGIN-STAFF-PIN.png')
-  })
-
-  test('LOGIN-SHARED', async ({ page }) => {
-    await login(page)
-    await page.getByRole('button', { name: 'みんなで使う端末にする' }).click()
-    await matchesMock(page, 'LOGIN-SHARED.png')
-  })
+  /*
+   * 旧入口の 4 面（START-DEVICE-MODE / LOGIN-STAFF / LOGIN-STAFF-PIN / LOGIN-SHARED）は
+   * **引退させた**。入口が `/s/:storeSlug` へ移り、端末の使い方も持ち主も設定で決めるように
+   * なったので、突き合わせる画面そのものが存在しない。承認済みモックも同時に外している
+   * （`docs/frontend/mockups/eye/README.md` に経緯を残した）。
+   */
+  /*
+   * 新しい入口（`/s/:storeSlug`）の突き合わせはここに足さない。承認済みモックは
+   * デザインの承認物であり、実装側で描き起こすものではないためである。入口の中身は
+   * AC-TERM-04（置き場所を選ぶ）と AC-TERM-23（未認証で何が読めるか）の e2e、
+   * および `src/web/test/screen-contracts.test.tsx` が押さえている。
+   */
 
   test('LOGIN-SHARED-PIN', async ({ page }) => {
     await sharedPin(page)
@@ -107,7 +92,7 @@ test.describe('端末 mock との突き合わせ', () => {
   })
 
   test('LOGIN-PIN-ERROR', async ({ page }) => {
-    await page.route(/\/api\/staff\/terminals\/[^/]+\/sessions$/, async (route) => {
+    await page.route(/\/api\/public\/sites\/[^/]+\/terminals\/[^/]+\/sessions$/, async (route) => {
       await route.fulfill({
         status: 401,
         contentType: 'application/json',
@@ -115,8 +100,8 @@ test.describe('端末 mock との突き合わせ', () => {
       })
     })
     await login(page)
-    await page.getByRole('button', { name: '個人の端末にする' }).click()
-    await page.getByRole('button', { name: /佐藤 美咲/ }).click()
+    await page.getByRole('button', { name: /佐藤 美咲の iPad/ }).click()
+    await page.getByRole('button', { name: 'この置き場所で始める' }).click()
     for (const digit of '1111') await page.getByRole('button', { name: digit }).click()
     await page.getByRole('button', { name: '確定' }).click()
     await expect(page.getByText(/あと2回/)).toBeVisible()

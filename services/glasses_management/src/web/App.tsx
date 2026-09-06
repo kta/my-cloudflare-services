@@ -25,9 +25,6 @@ import { CustomerScreen } from './customers/CustomerScreen'
 import { MyReservations } from './home/MyReservations'
 import { WeekStrip } from './home/WeekStrip'
 import { LedgerScreen } from './ledger/LedgerScreen'
-import { PinEntry } from './login/PinEntry'
-import { PlacePick } from './login/PlacePick'
-import { StaffPick } from './login/StaffPick'
 import { PersonalMode } from './mode/PersonalMode'
 import { type HistoryFilters, ReceptionHistory } from './reception/ReceptionHistory'
 import { ReceptionScreen } from './reception/ReceptionScreen'
@@ -40,7 +37,6 @@ import { openStateLabel } from './shell/hours'
 import { LockVeil } from './shell/LockVeil'
 import { OfflineBand } from './shell/OfflineBand'
 import { useIdle } from './shell/useIdle'
-import { DeviceMode } from './start/DeviceMode'
 
 /*
  * P0（基盤）の画面。承認済みモック docs/frontend/mockups/eye/images/HOME.png の
@@ -171,7 +167,7 @@ function Workspace({
   const [terminalMode, setTerminalMode] = useState<'personal' | 'shared' | null>(
     initialSession?.mode ?? null,
   )
-  const [terminals, setTerminals] = useState<Terminal[]>([])
+  const [_terminals, setTerminals] = useState<Terminal[]>([])
   const [staffMembers, setStaffMembers] = useState<StaffMember[]>([])
   const [offIds, setOffIds] = useState<ReadonlySet<string>>(new Set())
   const [selectedTerminal, setSelectedTerminal] = useState<Terminal | null>(null)
@@ -183,7 +179,7 @@ function Workspace({
    */
   const sessionRef = useRef<TerminalSession | null>(null)
   sessionRef.current = terminalSession
-  const [pinFailure, setPinFailure] = useState<{
+  const [_pinFailure, setPinFailure] = useState<{
     remainingAttempts?: number
     retryAfterSeconds?: number
   }>({})
@@ -541,7 +537,7 @@ function Workspace({
     setTerminalSession({ ...terminalSession, mode: 'shared', staffId: null })
   }, [personalIdle.isMasked, terminalSession])
 
-  async function startTerminalSession(pin: string) {
+  async function _startTerminalSession(pin: string) {
     if (!selectedTerminal || !terminalMode) return
     const response = await auth.authFetch(`/api/staff/terminals/${selectedTerminal.id}/sessions`, {
       method: 'POST',
@@ -603,79 +599,13 @@ function Workspace({
       </p>
     )
   }
-  if (startPhase === 'device') {
-    return (
-      <DeviceMode
-        deviceLabel={terminals[0]?.deviceLabel || 'この iPad'}
-        onPersonal={() => {
-          localStorage.setItem(`eye.terminal-mode.${org}`, 'personal')
-          setTerminalMode('personal')
-          setStartPhase('staff')
-        }}
-        onShared={() => {
-          localStorage.setItem(`eye.terminal-mode.${org}`, 'shared')
-          setTerminalMode('shared')
-          setStartPhase('place')
-        }}
-      />
-    )
-  }
-  if (startPhase === 'staff') {
-    return (
-      <StaffPick
-        staff={staffMembers}
-        offIds={offIds}
-        onSelect={(member) => {
-          setSelectedStaff(member)
-          const terminal = terminals[0] ?? null
-          setSelectedTerminal(terminal)
-          if (terminal) sessionStorage.setItem(TERMINAL_ID_KEY, terminal.id)
-          setStartPhase('pin')
-        }}
-        onShared={() => {
-          localStorage.setItem(`eye.terminal-mode.${org}`, 'shared')
-          setTerminalMode('shared')
-          setStartPhase('place')
-        }}
-      />
-    )
-  }
-  if (startPhase === 'place') {
-    return (
-      <PlacePick
-        terminals={terminals}
-        onSelect={(terminal) => {
-          setSelectedTerminal(terminal)
-          sessionStorage.setItem(TERMINAL_ID_KEY, terminal.id)
-          setStartPhase('pin')
-        }}
-        onChangeMode={() => setStartPhase('device')}
-      />
-    )
-  }
-  if (startPhase === 'pin' && selectedTerminal) {
-    return (
-      <PinEntry
-        key={`${terminalMode}:${selectedStaff?.id ?? selectedTerminal.id}:${pinFailure.remainingAttempts ?? 'new'}`}
-        kind={terminalMode ?? 'shared'}
-        title={
-          terminalMode === 'personal'
-            ? (selectedStaff?.displayName ?? 'スタッフ')
-            : selectedTerminal.name
-        }
-        detail={
-          terminalMode === 'personal'
-            ? `${selectedStaff?.jobLabel ?? '担当'} ／ 本日の勤務`
-            : selectedTerminal.placeNote
-        }
-        {...pinFailure}
-        onSubmit={(pin) =>
-          startTerminalSession(pin).catch(() => setError('通信できませんでした。'))
-        }
-        onBack={() => setStartPhase(terminalMode === 'personal' ? 'staff' : 'place')}
-      />
-    )
-  }
+  /*
+   * 端末の使い方・置き場所・スタッフを**この面では聞かない**。
+   *
+   * 入口は `/s/:storeSlug` へ移った（`site/SiteEntry`）。ここに同じことを聞く面を
+   * 残すと、入口を通ったのにもう一度聞かれる。使い方の切り替えと責任者の割り当ては
+   * 設定の端末の面が持つ（AC-TERM-16）。
+   */
 
   if (personalModeSubject !== null && selectedTerminal !== null) {
     return (

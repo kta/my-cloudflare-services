@@ -316,12 +316,7 @@ import {
   validateHoursInput,
   warnBusinessHours,
 } from './domain/store-settings'
-import {
-  expiresAtFrom,
-  isOnline,
-  sessionAuthorizationAt,
-  sharedExpiresAtFrom,
-} from './domain/terminal-session'
+import { expiresAtFrom, isOnline, sessionAuthorizationAt } from './domain/terminal-session'
 import { type BoardSubjectRow, buildBoard, planBoardSteps } from './domain/visit-board'
 import { jstVisitDate, nextTicketNo, waitedMinutes } from './domain/walkin'
 import {

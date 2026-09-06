@@ -16,7 +16,7 @@ const newOrg = (): string => `eyex${crypto.randomUUID().replace(/-/g, '').slice(
 const newSlug = (): string => `s${crypto.randomUUID().replace(/-/g, '').slice(0, 10)}`
 
 async function tokenFor(
-  request: APIRequestContext,
+  _request: APIRequestContext,
   org: string,
   role: 'admin' | 'staff' = 'admin',
 ): Promise<string> {

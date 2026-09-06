@@ -41,7 +41,7 @@ declare const CompositionEvent: new (
   init?: { bubbles?: boolean; data?: string },
 ) => unknown
 
-const ORG = 'eye'
+const _ORG = 'eye'
 /** seed.mjs が固定 id で入れる EYE 銀座店。 */
 const GINZA = '11111111-1111-4111-8111-111111111111'
 

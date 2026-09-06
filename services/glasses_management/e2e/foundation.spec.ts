@@ -6,7 +6,7 @@ import { completeSeededTerminalStart, SEEDED_SITE_PATH } from './support/termina
  * `vite preview` が実 workerd を動かすので、/api も本物である。
  */
 
-const ORG = 'eye'
+const _ORG = 'eye'
 
 /** 置き場所の住所から、共有端末で業務画面まで入る。 */
 async function startWork(
@@ -74,11 +74,9 @@ test('業務を終えると業務開始の画面へ戻る', async ({ page }) => 
   // 「業務を終える」を上のバーに持つのは個人端末（AC-FOUND-04）。
   await startWork(page, 'personal')
   await page.getByRole('button', { name: '業務を終える' }).click()
-  // 端末の設定はそのまま残り、業務開始の画面（スタッフ選び）へ戻る。
-  await expect(
-    page.getByRole('heading', { name: '業務を始めるスタッフを選んでください' }),
-  ).toBeVisible()
-  await expect(page.locator('header').first()).toContainText('業務を始める')
+  // 入口（置き場所を選ぶ面）へ戻る。資格情報は捨てられている。
+  await expect(page.getByRole('heading', { name: 'EYE 銀座店' })).toBeVisible()
+  await expect(page.getByRole('button', { name: /銀座店 レジ横iPad/ })).toBeVisible()
   // 業務画面の器は畳まれている。
   await expect(page.getByRole('navigation', { name: '画面の切り替え' })).toHaveCount(0)
 })

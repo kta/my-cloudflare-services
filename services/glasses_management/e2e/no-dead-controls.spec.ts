@@ -13,7 +13,7 @@ import { completeSeededTerminalStart, SEEDED_SITE_PATH } from './support/termina
  * その `onClick` / `onPointerDown` を見れば、押して何かが起きるボタンかどうかが分かる。
  */
 
-const ORG = 'eye'
+const _ORG = 'eye'
 /** seed が予約を置いている暦日。台帳が最初に尋ねる日は端末の時計で決まる。 */
 const SEEDED_NOW = '2026-08-27T02:08:00.000Z'
 

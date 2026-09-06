@@ -1211,7 +1211,8 @@ test('端末セッションが失効しても未送信の録音は残る', async
   )
   expect(ended.status()).toBe(200)
   await page.reload()
-  await expect(page.getByRole('heading', { name: 'この端末はどこに置きますか？' })).toBeVisible()
+  // 業務が終わっているので、入口（置き場所を選ぶ面）が出ている。
+  await expect(page.getByRole('heading', { name: 'EYE 銀座店' })).toBeVisible()
   await page.clock.fastForward(400_000)
   expect((await page.evaluate(READ_OUTBOX)) as string[]).toHaveLength(1)
   expect(sent).toBe(0)

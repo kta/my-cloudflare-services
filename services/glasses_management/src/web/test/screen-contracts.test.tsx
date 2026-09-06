@@ -2,7 +2,6 @@ import { render } from '@testing-library/react'
 import type { ReactElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PinEntry } from '../login/PinEntry'
-import { PlacePick } from '../login/PlacePick'
 import { CalendarPanel } from '../settings/CalendarPanel'
 import { EquipmentPanel } from '../settings/EquipmentPanel'
 import { HoursPanel } from '../settings/HoursPanel'
@@ -10,7 +9,7 @@ import { PurposePanel } from '../settings/PurposePanel'
 import { StaffPanel } from '../settings/StaffPanel'
 import { StoreInfoPanel } from '../settings/StoreInfoPanel'
 import { WebPublishPanel } from '../settings/WebPublishPanel'
-import { DeviceMode } from '../start/DeviceMode'
+import { SiteEntry } from '../site/SiteEntry'
 
 /*
  * 画面をまたいで守りたい約束を、1 つの面でまとめて確かめる。
@@ -41,7 +40,7 @@ afterEach(() => {
   sessionStorage.clear()
 })
 
-const PLACES = [
+const _PLACES = [
   {
     id: 't1',
     storeId: 's1',
@@ -63,11 +62,7 @@ const PLACES = [
 const panelProps = { storeId: STORE_ID, now: NOW, onDraftChange: () => {} }
 
 const SCREENS: Array<[string, () => ReactElement]> = [
-  [
-    '端末の使い方',
-    () => <DeviceMode deviceLabel="EYE-iPad-07" onPersonal={() => {}} onShared={() => {}} />,
-  ],
-  ['置き場所', () => <PlacePick terminals={PLACES} onSelect={() => {}} onChangeMode={() => {}} />],
+  ['業務端末の入口', () => <SiteEntry slug="ginza" onStarted={() => {}} />],
   [
     '暗証番号',
     () => (
