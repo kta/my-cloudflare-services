@@ -19,9 +19,10 @@ describe('access token', () => {
   })
 
   it('sets exp to now + ttl', async () => {
-    const now = Math.floor(Date.now() / 1000)
+    // 時刻は注入する（実時刻を読むと、境界をまたいだ回だけ結果が変わる）。
+    const now = 1_800_000_000
     const token = await signAccessToken(claims, SECRET, ACCESS_TTL_SECONDS, now)
-    const payload = await verifyAccessToken(token, SECRET)
+    const payload = await verifyAccessToken(token, SECRET, now)
     expect(payload?.exp).toBe(now + ACCESS_TTL_SECONDS)
   })
 

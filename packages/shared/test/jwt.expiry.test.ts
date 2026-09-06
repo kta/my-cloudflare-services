@@ -17,9 +17,16 @@ import {
 const SECRET = 'test-secret-please-change'
 const claims = { sub: 'u1', org: 'o1', email: 'a@b.com', role: 'staff' as const }
 
-/** now(秒)を起点に「あと ttl 秒有効」なトークンを作る。 */
+/**
+ * 判定の基準時刻。**実時刻を読まない。**
+ * 実時刻で「あと 1 秒有効」を作ると、署名してから検証するまでに秒をまたいだ回でだけ
+ * 失効して落ちる（CI で実際に落ちた）。発行も検証も同じ `NOW` を起点にする。
+ */
+const NOW = 1_800_000_000
+
+/** `NOW` を起点に「あと ttl 秒有効」なトークンを作る。 */
 function tokenValidFor(ttl: number) {
-  return signAccessToken(claims, SECRET, ttl)
+  return signAccessToken(claims, SECRET, ttl, NOW)
 }
 
 describe('TTL 定数(変更は全セッションの寿命に効くので回帰させる)', () => {
@@ -31,18 +38,24 @@ describe('TTL 定数(変更は全セッションの寿命に効くので回帰�
 
 describe('期限の境界', () => {
   it('残り 1 秒のトークンは有効', async () => {
-    expect(await verifyAccessToken(await tokenValidFor(1), SECRET)).toMatchObject(claims)
+    expect(await verifyAccessToken(await tokenValidFor(1), SECRET, NOW)).toMatchObject(claims)
   })
 
   it('1 秒前に失効したトークンは無効(null)', async () => {
-    expect(await verifyAccessToken(await tokenValidFor(-1), SECRET)).toBeNull()
+    expect(await verifyAccessToken(await tokenValidFor(-1), SECRET, NOW)).toBeNull()
   })
 
   it('exp が現在時刻ちょうどのトークンは受け付けない(期限切れ側に倒す)', async () => {
-    const now = Math.floor(Date.now() / 1000)
-    // ttl=0 → exp == now。境界は「まだ有効」ではなく「失効」に倒れることを固定する。
-    const token = await signAccessToken(claims, SECRET, 0, now)
-    expect(await verifyAccessToken(token, SECRET)).toBeNull()
+    // ttl=0 → exp == NOW。境界は「まだ有効」ではなく「失効」に倒れることを固定する。
+    const token = await signAccessToken(claims, SECRET, 0, NOW)
+    expect(await verifyAccessToken(token, SECRET, NOW)).toBeNull()
+  })
+
+  it('検証の時刻は引数で決まる(実時刻を読まない)', async () => {
+    const token = await signAccessToken(claims, SECRET, 60, NOW)
+    // 発行の 1 分後ちょうどは失効、その 1 秒前はまだ有効。
+    expect(await verifyAccessToken(token, SECRET, NOW + 59)).toMatchObject(claims)
+    expect(await verifyAccessToken(token, SECRET, NOW + 60)).toBeNull()
   })
 
   it('exp は now + ttl(任意 TTL でも計算がずれない)', async () => {
@@ -59,8 +72,8 @@ describe('期限の境界', () => {
   })
 
   it('遠い未来のトークンも(署名が正しければ)有効 — 期限だけが唯一の時間ゲート', async () => {
-    const token = await signAccessToken(claims, SECRET, 10 * 365 * 24 * 60 * 60)
-    expect(await verifyAccessToken(token, SECRET)).toMatchObject(claims)
+    const token = await signAccessToken(claims, SECRET, 10 * 365 * 24 * 60 * 60, NOW)
+    expect(await verifyAccessToken(token, SECRET, NOW)).toMatchObject(claims)
   })
 })
 
@@ -83,11 +96,8 @@ describe('改ざん・アルゴリズム混同', () => {
   it('alg=none の無署名トークンは無効(alg 混同攻撃)', async () => {
     const b64 = (o: unknown) =>
       btoa(JSON.stringify(o)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-    const none = `${b64({ alg: 'none', typ: 'JWT' })}.${b64({
-      ...claims,
-      exp: Math.floor(Date.now() / 1000) + 600,
-    })}.`
-    expect(await verifyAccessToken(none, SECRET)).toBeNull()
+    const none = `${b64({ alg: 'none', typ: 'JWT' })}.${b64({ ...claims, exp: NOW + 600 })}.`
+    expect(await verifyAccessToken(none, SECRET, NOW)).toBeNull()
   })
 
   it('署名だけ差し替えたトークンは無効', async () => {
