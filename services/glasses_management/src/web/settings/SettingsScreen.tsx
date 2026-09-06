@@ -1,4 +1,5 @@
 import type { StaffMember, TerminalSession } from '@app/contracts'
+import { auth, stretchPin } from '@app/shared'
 import { cn, focusRing } from '@app/ui'
 import { type ComponentType, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { client, domainFetch, subjectFromToken, TERMINAL_ID_KEY } from '../client'
@@ -141,10 +142,17 @@ export function SettingsScreen({ storeId, now, initialSection, panels }: Setting
     const terminalId = sessionStorage.getItem(TERMINAL_ID_KEY)
     const pending = draft.current
     if (!terminalId || !pending) return false
+    // 暗証番号はブラウザで伸ばして送る（平文は出さない・workerd の PBKDF2 上限）。
+    const org = auth.getOrganization()
+    if (org === null) return false
     const response = await domainFetch(`/api/staff/terminals/${terminalId}/elevate`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ staffId, pin, reason: 'settings' }),
+      body: JSON.stringify({
+        staffId,
+        stretchedPin: await stretchPin(pin, org, staffId),
+        reason: 'settings',
+      }),
     })
     if (!response.ok) return false
     const session = (await response.json()) as TerminalSession

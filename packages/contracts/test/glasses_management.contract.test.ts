@@ -189,6 +189,8 @@ import { describe, expect, it } from 'vitest'
 
 const ORG = 'org-eye'
 const UUID = '11111111-2222-4333-8444-555555555555'
+/** ブラウザで伸ばした暗証番号（base64・32 バイト）の形。値そのものに意味は無い。 */
+const STRETCHED_PIN = `${'A'.repeat(43)}=`
 const UUID2 = '99999999-8888-4777-8666-555555555555'
 const NOW = '2026-08-27T02:08:00.000Z'
 
@@ -4145,24 +4147,35 @@ describe('P10 terminal and audit contracts', () => {
       storeId: UUID,
       includeInactive: false,
     })
-    expect(TerminalInput.parse({ name: '受付', kind: 'shared' })).toMatchObject({
+    expect(TerminalInput.parse({ id: UUID, name: '受付', kind: 'shared' })).toMatchObject({
       autoLockSeconds: 120,
       isActive: true,
     })
-    expect(() => TerminalInput.parse({ name: '受付', kind: 'shared', stale: true })).toThrow()
+    // 端末の id はブラウザが決める（暗証番号の salt に端末 id が入るため）。
+    expect(() => TerminalInput.parse({ name: '受付', kind: 'shared' })).toThrow()
+    expect(() =>
+      TerminalInput.parse({ id: UUID, name: '受付', kind: 'shared', stale: true }),
+    ).toThrow()
     expect(() => TerminalPatch.parse({ name: '受付' })).toThrow()
     expect(TerminalPatch.parse({ version: 1 })).toEqual({ version: 1 })
   })
 
   it('TerminalSessionStart is discriminated by mode', () => {
     expect(
-      TerminalSessionStart.parse({ mode: 'personal', staffId: UUID, pin: '2580' }).staffId,
+      TerminalSessionStart.parse({ mode: 'personal', staffId: UUID, stretchedPin: STRETCHED_PIN })
+        .staffId,
     ).toBe(UUID)
-    expect(TerminalSessionStart.parse({ mode: 'shared', pin: '2580' }).mode).toBe('shared')
-    expect(() => TerminalSessionStart.parse({ mode: 'personal', pin: '2580' })).toThrow()
+    expect(TerminalSessionStart.parse({ mode: 'shared', stretchedPin: STRETCHED_PIN }).mode).toBe(
+      'shared',
+    )
     expect(() =>
-      TerminalSessionStart.parse({ mode: 'shared', staffId: UUID, pin: '2580' }),
+      TerminalSessionStart.parse({ mode: 'personal', stretchedPin: STRETCHED_PIN }),
     ).toThrow()
+    expect(() =>
+      TerminalSessionStart.parse({ mode: 'shared', staffId: UUID, stretchedPin: STRETCHED_PIN }),
+    ).toThrow()
+    // 平文の暗証番号は契約に無い。サーバは伸ばした値しか受け取らない。
+    expect(() => TerminalSessionStart.parse({ mode: 'shared', pin: '2580' })).toThrow()
   })
 
   it('TerminalSession and reauthentication expose no PIN material', () => {
@@ -4185,10 +4198,12 @@ describe('P10 terminal and audit contracts', () => {
     ).toThrow()
     expect(() => TerminalSession.parse({ ...session, credentialHash: 'secret' })).toThrow()
     expect(JSON.stringify(session)).not.toContain('2580')
-    expect(ReauthInput.parse({ staffId: UUID, pin: '2580', reason: 'settings' }).reason).toBe(
-      'settings',
-    )
-    expect(() => ReauthInput.parse({ staffId: UUID, pin: '2580', reason: 'anything' })).toThrow()
+    expect(
+      ReauthInput.parse({ staffId: UUID, stretchedPin: STRETCHED_PIN, reason: 'settings' }).reason,
+    ).toBe('settings')
+    expect(() =>
+      ReauthInput.parse({ staffId: UUID, stretchedPin: STRETCHED_PIN, reason: 'anything' }),
+    ).toThrow()
   })
 
   it('PIN errors keep retry information bounded', () => {
@@ -4231,7 +4246,8 @@ describe('P10 terminal and audit contracts', () => {
     expect(() => AlertPatch.parse({ readAt: null, resolved: true })).toThrow()
     expect(() => AlertPatch.parse({})).toThrow()
     expect(AlertReadAllResult.parse({ updated: 0 }).updated).toBe(0)
-    expect(StaffPinInput.parse({ pin: '2580' }).pin).toBe('2580')
+    expect(StaffPinInput.parse({ stretchedPin: STRETCHED_PIN }).stretchedPin).toBe(STRETCHED_PIN)
+    expect(() => StaffPinInput.parse({ pin: '2580' })).toThrow()
     expect(
       PinSetResult.parse({ staffId: UUID, updatedAt: '2026-08-27T02:08:00.000Z' }),
     ).not.toHaveProperty('pin')

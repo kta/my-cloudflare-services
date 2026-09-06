@@ -17,7 +17,7 @@
     "db:migrate:local": "node ../../scripts/d1-migrate-manual.mjs --local",
     "db:migrate:remote": "node ../../scripts/d1-migrate-manual.mjs --remote",
     "db:seed:local": "node seed.mjs",
-    "test": "node --test test/seed-migration.test.mjs && vitest run --coverage",
+    "test": "node --test test/seed-migration.test.mjs test/no-server-side-stretching.test.mjs && vitest run --coverage",
     "test:web": "vitest run --config vitest.web.config.ts --coverage",
     "test:all": "pnpm run test && pnpm run test:web",
     "e2e": "playwright test"

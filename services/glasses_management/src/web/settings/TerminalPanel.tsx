@@ -1,6 +1,8 @@
 import { type Terminal, Terminal as TerminalSchema } from '@app/contracts'
+import { auth, stretchPin } from '@app/shared'
 import { cn, focusRing } from '@app/ui'
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { isWeakPin } from '../../worker/domain/pin'
 import { domainFetch } from '../client'
 import type { SaveOutcome, SettingsPanelProps } from './sections'
 
@@ -85,16 +87,31 @@ export function TerminalPanel({ storeId, onDraftChange }: SettingsPanelProps) {
         ? '端末名を入力してください。'
         : draft.pin !== '' && !/^\d{4,6}$/.test(draft.pin)
           ? '暗証番号は4〜6桁の数字にしてください。'
-          : creating && draft.kind === 'shared' && draft.pin === ''
-            ? '共有端末の最初の暗証番号を入力してください。'
-            : null
+          : /*
+             * ゾロ目・連番の拒否はここでしかできない。暗証番号はブラウザで伸ばして
+             * 送るので、サーバは平文を見られない（`worker/domain/pin.ts` の同じ関数を
+             * 画面でも使う）。
+             */
+            draft.pin !== '' && isWeakPin(draft.pin)
+            ? '同じ数字の並びや連番は使えません。'
+            : creating && draft.kind === 'shared' && draft.pin === ''
+              ? '共有端末の最初の暗証番号を入力してください。'
+              : null
 
   const save = useCallback(async (): Promise<SaveOutcome> => {
     if (!draft || (!creating && !selected)) return 'failed'
+    const org = auth.getOrganization()
+    if (org === null) return 'failed'
+    /*
+     * 新しい端末の id はここで決める。暗証番号の salt に端末 id が入るので、
+     * 伸ばす側が id を知っていなければならない（サーバは平文を見られない）。
+     */
+    const id = creating ? crypto.randomUUID() : (selected?.id ?? '')
+    const stretchedPin = draft.pin === '' ? undefined : await stretchPin(draft.pin, org, id)
     const response = await domainFetch(
       creating
         ? `/api/staff/terminals?storeId=${encodeURIComponent(storeId)}`
-        : `/api/staff/terminals/${selected?.id ?? ''}`,
+        : `/api/staff/terminals/${id}`,
       {
         method: creating ? 'POST' : 'PATCH',
         headers: {
@@ -105,8 +122,8 @@ export function TerminalPanel({ storeId, onDraftChange }: SettingsPanelProps) {
           placeNote: draft.placeNote.trim(),
           kind: draft.kind,
           autoLockSeconds: draft.autoLockSeconds,
-          ...(draft.pin === '' ? {} : { pin: draft.pin }),
-          ...(creating ? {} : { version: selected?.version }),
+          ...(stretchedPin === undefined ? {} : { stretchedPin }),
+          ...(creating ? { id } : { version: selected?.version }),
         }),
       },
     )

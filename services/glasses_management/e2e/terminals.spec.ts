@@ -232,7 +232,15 @@ test('PIN を3回続けて誤ると30秒の待機中は確定できない', asyn
   await login(page)
   await page.getByRole('button', { name: 'みんなで使う端末にする' }).click()
   await page.getByRole('button', { name: 'この置き場所で始める' }).click()
-  for (let attempt = 0; attempt < 3; attempt += 1) await enterPin(page, '1111')
+  /*
+   * 1 回ごとに結果を待ってから次を入れる。暗証番号はブラウザで伸ばしてから送るので
+   * 確定から応答までに一拍あり、待たずに次を押すと「確定」が押せないまま空振りする。
+   */
+  await enterPin(page, '1111')
+  await expect(page.getByText('暗証番号が違います。あと2回お試しいただけます')).toBeVisible()
+  await enterPin(page, '1111')
+  await expect(page.getByText('暗証番号が違います。あと1回お試しいただけます')).toBeVisible()
+  await enterPin(page, '1111')
   await expect(page.getByText('30秒お待ちください')).toBeVisible()
   await expect(page.getByRole('button', { name: /^確定/ })).toBeDisabled()
 })
