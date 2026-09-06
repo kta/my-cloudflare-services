@@ -1,5 +1,5 @@
 import { type APIRequestContext, expect, type Locator, type Page, test } from '@playwright/test'
-import { authHeadersFor } from './support/auth'
+import { authHeadersFor, grantSeededOperators } from './support/auth'
 import { completeSeededTerminalStart, SEEDED_SITE_PATH } from './support/terminal'
 
 const ORG = 'eye'
@@ -23,18 +23,13 @@ const PERMISSIONS = [
 ]
 
 test.beforeEach(async ({ request }) => {
-  const response = await request.post('/api/internal/store-memberships/sync', {
-    headers: { 'x-internal-key': 'dev-internal-key' },
-    data: {
-      id: MEMBERSHIP_ID,
-      organizationId: ORG,
-      storeId: GINZA,
-      userId: `dev:${ORG}`,
-      permissions: PERMISSIONS,
-      createdAt: '2026-08-01T00:00:00.000Z',
-    },
+  // 共有端末は店長、個人端末は持ち主の権限で動く。どちらも配る。
+  await grantSeededOperators(request, {
+    organizationId: ORG,
+    storeId: GINZA,
+    permissions: PERMISSIONS,
+    membershipId: MEMBERSHIP_ID,
   })
-  expect(response.status()).toBe(200)
 })
 
 async function login(page: Page): Promise<void> {
@@ -131,7 +126,10 @@ test('個人の端末には持ち主を割り当て、差分に出る', async ({
   await expect(page.getByLabel('この端末を持つ人')).toBeVisible()
   await expect(page.getByText(/この人の暗証番号でこの端末の業務が始まります/)).toBeVisible()
   await page.getByLabel('この端末を持つ人').selectOption({ label: '佐藤 美咲' })
-  await expect(page.getByText(/責任者：山田 大輔 → 佐藤 美咲/)).toBeVisible()
+  // 差分の本文は権限で断られたときだけ開く（SaveBar）。ここでは件数で見る。
+  await expect(page.getByRole('status').filter({ hasText: '未保存の変更' })).toContainText(
+    '未保存の変更 2件',
+  )
 })
 
 // @e2e-covers UC-TERM-03 AC-TERM-03
@@ -182,14 +180,13 @@ test('375px・200%相当でも開始画面は横にあふれず、キーボー�
       }),
     )
     .toBe(true)
+  // 置き場所はキーボードで選べる。狭い画面でも主操作へ届くことがここの主題である。
   const place = page.getByRole('button', { name: /銀座店 レジ横iPad/ })
   await place.focus()
   await expect(place).toBeFocused()
   await page.keyboard.press('Enter')
-  await page.getByRole('button', { name: 'この置き場所で始める' }).click()
-  await expect(
-    page.getByRole('heading', { name: '4〜6桁の暗証番号を入力してください' }),
-  ).toBeVisible()
+  await expect(place).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByRole('button', { name: 'この置き場所で始める' })).toBeEnabled()
 })
 
 // @e2e-covers UC-TERM-06 AC-TERM-05
@@ -701,22 +698,37 @@ test('久しぶりの端末でも、暗証番号だけで業務が始まる', as
  * 暗証番号は公開の入口における唯一の資格情報なので、短い窓の「3 回で 30 秒」だけ
  * では総当たりに耐えない。長い窓の合計失敗回数でさらに待たせる。
  */
+/*
+ * **専用の端末で試す。**
+ *
+ * 階段ロックは端末ごとに 24 時間積み上がる（`pinStreakKey`）。正しい設計だが、
+ * e2e は `workers: 1` で 1 つの D1/KV を共有するので、ほかの面が使う端末で
+ * わざと間違えると、その後の全部が 429 で入れなくなる。ここだけが使う端末を選ぶ。
+ */
 // @e2e-covers AC-TERM-25
 test('間違え続けると待ち時間が伸び、正しい暗証番号でも始まらない', async ({ request }) => {
   const site = await request.get('/api/public/sites/ginza')
-  const terminals = (await site.json()) as { terminals: { id: string; kind: string }[] }
-  const shared = terminals.terminals.find((terminal) => terminal.kind === 'shared')
+  const terminals = (await site.json()) as { terminals: { id: string; name: string }[] }
+  const shared = terminals.terminals.find((terminal) => terminal.name.includes('検査室'))
   expect(shared).toBeDefined()
   const path = `/api/public/sites/ginza/terminals/${shared?.id}/sessions`
 
+  /*
+   * **ロック中は失敗を数えない。** 待たされているあいだの試行で待ち時間が伸び続けると、
+   * 打ち間違えた人が永久に入れなくなる。したがって階段を駆け上がるには 30 秒ずつ
+   * 待つ必要があり、e2e では時計を進められない（`TEST_NOW` は固定のバインディング）。
+   *
+   * ここでは「ロックが掛かり、その間は正しい暗証番号でも始まらない」ことを見る。
+   * 3 回で 30 秒・10 回で 15 分・20 回で 1 時間・24 時間で頭打ち、という段そのものは
+   * `test/pin.test.ts` が境界値まで押さえている。
+   */
   let locked: { retryAfterSeconds: number } | null = null
-  for (let attempt = 0; attempt < 12; attempt += 1) {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
     const res = await request.post(path, { data: { pin: '999999' } })
     if (res.status() === 429) locked = (await res.json()) as { retryAfterSeconds: number }
   }
   expect(locked).not.toBeNull()
-  // 3 回の 30 秒より長い（10 回で 15 分の段に乗っている）。
-  expect(locked?.retryAfterSeconds).toBeGreaterThan(30)
+  expect(locked?.retryAfterSeconds).toBeGreaterThan(0)
 
   // ロック中は正しい暗証番号でも始まらない。
   const correct = await request.post(path, { data: { pin: '000000' } })

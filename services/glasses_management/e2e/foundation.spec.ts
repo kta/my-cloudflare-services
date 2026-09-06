@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { signedTokenFor, syncOrganization } from './support/auth'
 import { completeSeededTerminalStart, SEEDED_SITE_PATH } from './support/terminal'
 
 /**
@@ -53,10 +54,24 @@ test('サイドバーはつまみで細い柱にたため、もう一度押す�
  * 登録していない新しい会社が永久に入れない（014-store-provisioning）。
  * 通したうえで、最初のお店を登録する面を立てる。
  */
+/*
+ * 入口（`/s/:storeSlug`）は店舗と端末があって初めて開く。店舗が 1 つも無い会社は
+ * そこを通れないので、会社の管理者として業務画面に入ったところから確かめる
+ * （実運用では admin の `/api/auth/login` が本人のロールを載せて返す）。
+ */
 // @e2e-covers AC-FOUND-03
-test('店舗が見つからないコードでは、器へ入れず登録の面を立てる', async ({ page }) => {
-  const code = 'e2e-foundation-unknown'
-  await page.goto(SEEDED_SITE_PATH)
+test('店舗が 1 つも無い会社は、器へ入れず登録の面を立てる', async ({ page, request }) => {
+  const code = `e2efound${crypto.randomUUID().replace(/-/g, '').slice(0, 8)}`
+  await syncOrganization(request, code)
+  const token = await signedTokenFor(code, 'admin')
+  await page.addInitScript(
+    ([t, o]) => {
+      sessionStorage.setItem('app.auth.token', t as string)
+      sessionStorage.setItem('app.auth.org', o as string)
+    },
+    [token, code],
+  )
+  await page.goto('/')
 
   await expect(
     page.getByRole('heading', { name: '最初のお店を登録します', level: 1 }),

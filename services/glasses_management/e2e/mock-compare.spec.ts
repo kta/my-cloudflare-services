@@ -900,7 +900,8 @@ test.describe('承認済みモックとの突き合わせ', () => {
         maxDiffPixelRatio: 0.0512,
       })
     } finally {
-      await beMe(request, null)
+      // seed の値へ戻す。null にすると個人端末が入口の一覧から消える（ledger.spec 参照）。
+      await beMe(request, 'dev:eye-sato')
     }
   })
 

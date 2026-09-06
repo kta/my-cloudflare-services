@@ -1,5 +1,42 @@
 import { expect, type Page } from '@playwright/test'
 
+/**
+ * 個人端末の持ち主（佐藤 美咲）の担当店舗の権限。
+ *
+ * 端末は責任者の権限で動くので、個人端末で入るとトークンの `sub` は持ち主になる。
+ * 共有端末（店長）ぶんしか配っていない面はそこで 403 になるため、個人モードで
+ * 入るときはここで配る。**店長の権限は与えない** —— 個人端末の持ち主は普通の
+ * スタッフであり、設定を変えられてはならない（AC-TERM-13）。
+ */
+const OWNER_USER_ID = 'dev:eye-sato'
+const OWNER_MEMBERSHIP_ID = '0b0b0b0b-0b0b-4b0b-8b0b-0b0b0b0b0b0b'
+const OWNER_PERMISSIONS = [
+  'store.read',
+  'reservation.read',
+  'reservation.write',
+  'customer.read',
+  'customer.write',
+  'recording.read',
+  'settings.read',
+  'audit.read',
+  'analytics.read',
+]
+
+async function grantOwner(page: Page, storeId: string): Promise<void> {
+  const res = await page.request.post('/api/internal/store-memberships/sync', {
+    headers: { 'x-internal-key': 'dev-internal-key' },
+    data: {
+      id: OWNER_MEMBERSHIP_ID,
+      organizationId: 'eye',
+      storeId,
+      userId: OWNER_USER_ID,
+      permissions: OWNER_PERMISSIONS,
+      createdAt: '2026-08-01T00:00:00.000Z',
+    },
+  })
+  expect(res.status()).toBe(200)
+}
+
 export type SeededTerminalSession = {
   id: string
   terminalId: string
@@ -31,6 +68,9 @@ export async function completeSeededTerminalStart(
 
   await navigation.or(placeHeading).waitFor()
   if (await navigation.isVisible()) return null
+
+  // seed の銀座店。個人端末の持ち主に権限を配ってから入る。
+  if (mode === 'personal') await grantOwner(page, '11111111-1111-4111-8111-111111111111')
 
   const place = mode === 'shared' ? site.place : /佐藤 美咲の iPad/
   await page.getByRole('button', { name: place }).click()

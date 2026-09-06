@@ -58,6 +58,7 @@ async function openOtherOrganizationAnalytics(
   page: Page,
   request: APIRequestContext,
 ): Promise<void> {
+  // 別組織は seed が置いているが、担当店舗の権限は毎回配り直す。
   const membership = await request.post('/api/internal/store-memberships/sync', {
     headers: { 'x-internal-key': INTERNAL_KEY },
     data: {

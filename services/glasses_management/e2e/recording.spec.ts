@@ -1,6 +1,6 @@
 import type { APIRequestContext, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
-import { authHeadersFor, signedHeadersFor } from './support/auth'
+import { authHeadersFor, signedHeadersFor, syncOrganization } from './support/auth'
 import type { SeededTerminalSession } from './support/terminal'
 import { completeSeededTerminalStart, SEEDED_SITE_PATH } from './support/terminal'
 
@@ -1089,6 +1089,8 @@ test('他組織の録音は再生も保全もできず、一覧にも出ない',
   const stored = await storedRecording(request, { booked: false })
 
   // 別の組織の資格情報。担当店舗は配ってあるので、断るのは権限ではなく組織の壁である。
+  // seed に無い会社なので、同期行を自分で置く（dev グラントが作っていた分）。
+  await syncOrganization(request, OTHER_ORG)
   const sync = await request.post('/api/internal/store-memberships/sync', {
     headers: { 'x-internal-key': INTERNAL_KEY },
     data: {

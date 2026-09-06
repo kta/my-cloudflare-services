@@ -254,10 +254,12 @@ const staffMembers = [
     role: 'staff',
     /*
      * 個人端末の持ち主。業務トークンの `sub` になるので、admin の利用者が要る。
-     * **dev の admin 利用者は 1 人**（`dev:eye`）なので、seed ではそこへ寄せる。
-     * 本番では admin の同期が実在の利用者 id を配る。
+     *
+     * **店長（`dev:eye`）とは別の id にする。** 同じにすると、`sub` から staff を
+     * 引く問い合わせ（`operationActor`）が 2 行に当たり、どちらが操作者になるかが
+     * 決まらない。記録に残る「誰が」が実行のたびに変わってしまう。
      */
-    adminUserId: 'dev:eye',
+    adminUserId: 'dev:eye-sato',
     skills: ['measure', 'processing', 'sales_reception'],
     week: ['12:00-19:00', '10:00-19:00', null, '10:00-19:00', '10:00-19:00', null, '10:00-19:00'],
     rest: '13:00-14:00',

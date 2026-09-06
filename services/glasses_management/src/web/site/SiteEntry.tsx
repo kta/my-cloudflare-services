@@ -107,6 +107,14 @@ export function SiteEntry({
   if (phase.at === 'pin') {
     return (
       <PinEntry
+        /*
+         * **誤るたびに入力を空にする**（AC-TERM-06）。`PinEntry` は入力を自分の
+         * state に持つので、key を変えて作り直す。残さないのは、次の人が
+         * 前の人の打ちかけを引き継がないようにするためでもある。
+         */
+        key={`${phase.terminal.id}:${pinError?.remainingAttempts ?? 'new'}:${
+          pinError?.retryAfterSeconds ?? 0
+        }`}
         kind={phase.terminal.kind}
         title={phase.terminal.name}
         detail={phase.terminal.placeNote ?? site.store.name}

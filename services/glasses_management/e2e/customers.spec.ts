@@ -1,6 +1,6 @@
 import type { APIRequestContext, Locator, Page } from '@playwright/test'
 import { expect, test } from '@playwright/test'
-import { authHeadersFor, signedHeadersFor } from './support/auth'
+import { authHeadersFor, signedHeadersFor, syncOrganization } from './support/auth'
 import { completeSeededTerminalStart, SEEDED_SITE_PATH } from './support/terminal'
 
 /**
@@ -766,6 +766,8 @@ test('店長でないと入口が出ず、直接叩いても拒まれる', async
 // @e2e-covers AC-CUST-17
 test('別の会社のお客様 ID は 404 として扱われる', async ({ request }) => {
   const other = 'org-eye-other'
+  // seed に無い会社なので、同期行を自分で置く（dev グラントが作っていた分）。
+  await syncOrganization(request, other)
   // その会社には seed の端末が無いので、公開の入口からは取れない。e2e 自身で署名する。
   const res = await request.get(`/api/staff/customers/${HANAKO}`, {
     headers: await signedHeadersFor(other),

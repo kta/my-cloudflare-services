@@ -826,6 +826,8 @@ test('トップに本日わたしが担当するご予約が時間順に並び�
         settingsVersion: number
       }
     ).settingsVersion
+  /** seed が佐藤 美咲に当てている admin の利用者（`seed.mjs`）。 */
+  const SEEDED_SATO_ADMIN_USER_ID = 'dev:eye-sato'
   const beMe = async (adminUserId: string | null) => {
     const res = await request.patch(`/api/staff/stores/${GINZA}/staff/${SATO}`, {
       ...headers,
@@ -873,7 +875,13 @@ test('トップに本日わたしが担当するご予約が時間順に並び�
     await rows.first().getByRole('button').click()
     await expect(page.getByRole('dialog', { name: '予約の詳細' })).toContainText('11:00–12:00')
   } finally {
-    await beMe(null)
+    /*
+     * **seed の値へ戻す。** null に戻すと、佐藤 美咲の iPad が業務端末の入口
+     * （`/s/:storeSlug`）の一覧から消える —— 端末は責任者の権限で動くので、
+     * admin の利用者に結び付いていない端末は入れても何もできず、出さない決めである。
+     * 以降の面が個人端末で入れなくなる。
+     */
+    await beMe(SEEDED_SATO_ADMIN_USER_ID)
   }
 })
 
