@@ -15,13 +15,37 @@ const INTERNAL_HEADERS = { 'x-internal-key': 'dev-internal-key' }
 const newOrg = (): string => `eyex${crypto.randomUUID().replace(/-/g, '').slice(0, 10)}`
 const newSlug = (): string => `s${crypto.randomUUID().replace(/-/g, '').slice(0, 10)}`
 
+/**
+ * 会社の同期行を置く。
+ *
+ * 以前は dev グラントが「知らない組織にもトークンを出したうえで `organizations` に
+ * 行を作る」ので、テストは何もしなくてよかった。その抜け道は撤去したので、
+ * **実運用と同じ経路**（admin からの同期）で行を作る。行が無いと業務 API は
+ * 503 `not_synced` を返す。
+ */
+async function syncOrganization(request: APIRequestContext, org: string): Promise<void> {
+  const res = await request.post('/api/internal/organizations/sync', {
+    headers: INTERNAL_HEADERS,
+    data: {
+      id: org,
+      name: org,
+      plan: 'free',
+      isDisabled: false,
+      createdAt: '2026-08-01T00:00:00.000Z',
+      revision: 0,
+    },
+  })
+  expect(res.status()).toBe(200)
+}
+
 async function tokenFor(
-  _request: APIRequestContext,
+  request: APIRequestContext,
   org: string,
   role: 'admin' | 'staff' = 'admin',
 ): Promise<string> {
   // 店舗をまだ 1 つも持たない会社を作るので、seed の端末からは取れない。
   // e2e 自身で署名する（サーバに credential 無しの経路は残さない）。
+  await syncOrganization(request, org)
   return signedTokenFor(org, role)
 }
 

@@ -9,7 +9,7 @@ import type {
 } from '@app/contracts'
 import { auth, toJstDateString } from '@app/shared'
 import { focusRing, focusRingOnPine, Notice } from '@app/ui'
-import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertScreen } from './alerts/AlertScreen'
 import { AnalyticsPane } from './analytics/AnalyticsPane'
 import { BookingScreen } from './booking/BookingScreen'
@@ -167,10 +167,9 @@ function Workspace({
   const [terminalMode, setTerminalMode] = useState<'personal' | 'shared' | null>(
     initialSession?.mode ?? null,
   )
-  const [_terminals, setTerminals] = useState<Terminal[]>([])
+  const [terminals, setTerminals] = useState<Terminal[]>([])
   const [staffMembers, setStaffMembers] = useState<StaffMember[]>([])
   const [offIds, setOffIds] = useState<ReadonlySet<string>>(new Set())
-  const [selectedTerminal, setSelectedTerminal] = useState<Terminal | null>(null)
   const [selectedStaff, setSelectedStaff] = useState<StaffMember | null>(null)
   const [terminalSession, setTerminalSession] = useState<TerminalSession | null>(initialSession)
   /*
@@ -179,6 +178,17 @@ function Workspace({
    */
   const sessionRef = useRef<TerminalSession | null>(null)
   sessionRef.current = terminalSession
+  /*
+   * いま業務をしている端末。
+   *
+   * 入口（`/s/:storeSlug`）が開いたセッションが端末 id を持つので、**そこから引く**。
+   * 以前は業務画面の中の置き場所選択が代入していたが、その面は入口へ移った。
+   * 端末の一覧はお店を切り替えるたびに読み直すので、`useMemo` で追従させる。
+   */
+  const selectedTerminal = useMemo(
+    () => terminals.find((terminal) => terminal.id === terminalSession?.terminalId) ?? null,
+    [terminals, terminalSession?.terminalId],
+  )
   const [_pinFailure, setPinFailure] = useState<{
     remainingAttempts?: number
     retryAfterSeconds?: number
@@ -346,9 +356,9 @@ function Workspace({
     const updated = (event: Event) => {
       const terminal = (event as CustomEvent<Terminal>).detail
       if (!terminal || typeof terminal.id !== 'string') return
+      // 一覧を差し替えれば `selectedTerminal` は追従する（一覧から引いているため）。
       setTerminals((rows) => rows.map((row) => (row.id === terminal.id ? terminal : row)))
       if (sessionStorage.getItem(TERMINAL_ID_KEY) !== terminal.id) return
-      setSelectedTerminal(terminal)
       setTerminalMode(terminal.kind)
       localStorage.setItem(`eye.terminal-mode.${org}`, terminal.kind)
     }
