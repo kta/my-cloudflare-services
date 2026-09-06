@@ -22,7 +22,6 @@ const STAGING_SECRETS = {
   WORKER_JWT_SECRET: 'j',
   WORKER_AUTH_PEPPER: 'p',
   WORKER_DOMAIN_AUTH_KEY: 'd',
-  WORKER_STAGING_ACCESS_TOKEN: 'g',
   WORKER_STAGING_ADMIN_PASSWORD: 'w',
 }
 
@@ -110,6 +109,26 @@ test('空文字の secret は未設定として扱う', () => {
   })
   assert.equal(r.ok, false)
   assert.match(r.errors.join('\n'), /WORKER_INTERNAL_KEY/)
+})
+
+test('staging はゲートトークンが無くても通る(ゲートは任意)', () => {
+  const r = checkPreflight({
+    ref: 'develop',
+    cloudflareEnv: 'staging',
+    environment: 'staging',
+    secrets: STAGING_SECRETS,
+  })
+  assert.equal(r.ok, true)
+})
+
+test('staging にゲートトークンを足しても通る(足せば stagingGate が効く)', () => {
+  const r = checkPreflight({
+    ref: 'develop',
+    cloudflareEnv: 'staging',
+    environment: 'staging',
+    secrets: { ...STAGING_SECRETS, WORKER_STAGING_ACCESS_TOKEN: 'g' },
+  })
+  assert.equal(r.ok, true)
 })
 
 test('production に staging 用 secret が混ざっていたら落ちる', () => {

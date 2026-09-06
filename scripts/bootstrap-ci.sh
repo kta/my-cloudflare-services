@@ -77,9 +77,9 @@ if [ -z "${WORKER_RESEND_API_KEY:-}" ] && [[ " $ENVS " == *" production "* ]]; t
 fi
 echo
 
-# staging を人が開くための 2 つだけは、生成した値を画面に出す。
-# GitHub からは二度と読めないので、これを控えないと staging に入れない。
-REVEAL="WORKER_STAGING_ACCESS_TOKEN WORKER_STAGING_ADMIN_PASSWORD"
+# staging を人が開くための値だけは、生成したものを画面に出す。
+# GitHub からは二度と読めないので、これを控えないと staging の admin に入れない。
+REVEAL="WORKER_STAGING_ADMIN_PASSWORD"
 revealed=""
 
 set_generated() { # <env> <name> <existing-list> <generator>
@@ -117,7 +117,11 @@ for env in $ENVS; do
   done
 
   if [ "$env" = "staging" ]; then
-    set_generated "$env" WORKER_STAGING_ACCESS_TOKEN   "$existing" gen_hex32
+    # ゲート(WORKER_STAGING_ACCESS_TOKEN)は**生成しない**。いまの staging は
+    # 「URL を開いてお店のコードを入れるだけで触れる」ことを優先している。
+    # 閉じたいときは自分で足す:
+    #   openssl rand -hex 32 | gh secret set WORKER_STAGING_ACCESS_TOKEN --env staging
+    # 足すと stagingGate が全リクエストにトークンを要求するようになる。
     set_generated "$env" WORKER_STAGING_ADMIN_PASSWORD "$existing" gen_hex16
   fi
 
@@ -134,9 +138,9 @@ if [ -n "$revealed" ]; then
   echo "⚠️  次の値は GitHub から二度と読めない。安全な場所に保存すること:"
   printf '%b\n' "$revealed"
   echo
-  echo "   staging に入るとき（gate は **API のパス**に付ける。SPA の静的アセットは"
-  echo "   Worker より先に返るので、/?gate=... ではゲートを通らず cookie が付かない）:"
-  echo "     https://admin-staging.<subdomain>.workers.dev/api/auth/me?gate=<WORKER_STAGING_ACCESS_TOKEN>"
-  echo "     302 が返り staging_gate cookie（30日）が付いたら、あとは / を開く"
-  echo "     admin@example.com / <WORKER_STAGING_ADMIN_PASSWORD> でログイン"
+  echo "   staging に入るとき（ゲートは無い。URL をそのまま開く）:"
+  echo "     https://glasses-management-staging.<subdomain>.workers.dev/ → お店のコードに eye"
+  echo "     https://admin-staging.<subdomain>.workers.dev/ →"
+  echo "       vars.STAGING_ADMIN_EMAIL（未設定なら admin@example.com）と"
+  echo "       <WORKER_STAGING_ADMIN_PASSWORD> でログイン"
 fi
