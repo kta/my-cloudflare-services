@@ -43,7 +43,7 @@ merge すると `.github/workflows/ci.yml` の `verify` が走り、緑なら `d
 | `WORKER_JWT_SECRET` | ✓ | ✓ | `JWT_SECRET`（発行側 admin と検証側で同一値） |
 | `WORKER_AUTH_PEPPER` | ✓ | ✓ | `AUTH_PEPPER` |
 | `WORKER_DOMAIN_AUTH_KEY` | ✓ | ✓ | admin の `DOMAIN_AUTH_KEY` / glasses_management の `ADMIN_DOMAIN_AUTH_KEY` |
-| `WORKER_STAGING_ACCESS_TOKEN` | **入れない** | ✓ | staging ゲート |
+| `WORKER_STAGING_ACCESS_TOKEN` | **入れない** | 任意 | staging ゲート。**既定では設定しない**（下記「staging に入る」） |
 | `WORKER_STAGING_ADMIN_PASSWORD` | **入れない** | ✓ | staging の seed |
 | `vars.STAGING_ADMIN_EMAIL`（secret ではなく variable） | — | 任意 | staging admin のログイン ID。未設定なら `admin@example.com` |
 | `WORKER_RESEND_API_KEY` | ✓ | **入れない** | notifier の送信手段 |
@@ -153,7 +153,7 @@ ENVS=staging make bootstrap/ci          # 対象を絞る
 DRY_RUN=1 ENVS=staging make bootstrap/ci  # 何も書かずに確認だけ
 ```
 
-`WORKER_STAGING_ACCESS_TOKEN` と `WORKER_STAGING_ADMIN_PASSWORD` は、生成時に**画面に表示される**。GitHub からは二度と読めないので、その場で安全な場所に保存すること。他の `WORKER_*` は人が知る必要がないので表示しない。
+`WORKER_STAGING_ADMIN_PASSWORD` は、生成時に**画面に表示される**。GitHub からは二度と読めないので、その場で安全な場所に保存すること。他の `WORKER_*` は人が知る必要がないので表示しない。
 
 #### 手順まとめ（コピペ用）
 
@@ -222,11 +222,38 @@ node scripts/check-binding-ids.mjs admin glasses_management notifier \
 
 ## staging に入る
 
-staging は `*.workers.dev` で公開されるため、URL を知っていれば誰でも叩ける。独自ドメインを持たず Cloudflare Access を掛けられないので、Worker の中でトークンを要求している。
+**ゲートは掛けていない。URL を開くだけで触れる。**
 
-ゲートは Worker の中にあり、Worker に届くのは `run_worker_first` の **`/api/*` だけ**である。
-つまり `/?gate=…` は静的アセットが返るだけで **Cookie は発行されない**。
-必ず `/api/` から始まるパスで通すこと。
+1. `https://glasses-management-staging.<subdomain>.workers.dev/` を開き、**お店のコードに `eye`**。
+   この入口は dev グラント（`/api/auth/token`）を通るので、staging では
+   `AUTH_DEV_GRANT=true` を同期している（production には入れない）。
+2. 端末モード → 置き場所 → **暗証番号 `000000`**（seed の値）。
+3. admin は `https://admin-staging.<subdomain>.workers.dev/` を開き、
+   `vars.STAGING_ADMIN_EMAIL`（未設定なら `admin@example.com`）と
+   `WORKER_STAGING_ADMIN_PASSWORD` でログインする。
+
+seed の台帳は **2026-08-27** に入っているので、当日を開くと空に見える。日付を戻すこと。
+
+admin の seed 行は id 固定の `INSERT OR IGNORE` である。**既にある環境で
+`STAGING_ADMIN_EMAIL` やパスワードを変えても反映されない**（seed がその旨を警告する）。
+変えるなら admin の画面か、`users` の行を消してから seed を流し直す
+（pepper を張り替えたときも同じ。古い pepper で作られたハッシュは残ったままになる）。
+
+### 閉じたくなったら（stagingGate）
+
+staging は `*.workers.dev` で公開されるため、URL を知っていれば誰でも叩ける。独自ドメインを
+持たず Cloudflare Access を掛けられないので、閉じる手段は Worker の中のゲートだけである。
+
+`WORKER_STAGING_ACCESS_TOKEN` を GitHub Environment `staging` に足すと有効になる。
+
+```sh
+openssl rand -hex 32 | gh secret set WORKER_STAGING_ACCESS_TOKEN --env staging
+```
+
+次のデプロイから `stagingGate` が全リクエストにトークンを要求する。通し方は
+**`/api/` から始まるパス**に `?gate=<token>` を付けること。ゲートは Worker の中にあり、
+Worker に届くのは `run_worker_first` の `/api/*` だけなので、`/?gate=…` は静的アセットが
+返るだけで **Cookie は発行されない**。
 
 ```
 # サービスごとに 1 回ずつ。302 が返り、HttpOnly Cookie（30 日）が付く。
@@ -234,27 +261,13 @@ https://admin-staging.<subdomain>.workers.dev/api/health?gate=<WORKER_STAGING_AC
 https://glasses-management-staging.<subdomain>.workers.dev/api/health?gate=<WORKER_STAGING_ACCESS_TOKEN>
 ```
 
-以後は同じブラウザならトークン無しで開ける。`/api/internal/*` は対象外で、これは service binding の正規経路を `x-internal-key` が守っているためである。
+以後は同じブラウザならトークン無しで開ける。`/api/internal/*` は対象外で、これは service
+binding の正規経路を `x-internal-key` が守っているためである。
 
-**守れているのは API だけ**である。SPA の HTML と JS は assets から直接返るので、URL を知っていれば誰でも取れる。伏せたいのはデータであって画面の骨組みではない、という割り切りの上に立っている。
+**守れるのは API だけ**である。SPA の HTML と JS は assets から直接返るので、URL を知って
+いれば誰でも取れる。伏せられるのはデータであって画面の骨組みではない。
 
 production には `STAGING_ACCESS_TOKEN` を設定しないので、このゲートは**分岐ごと死ぬ**。
-
-### staging で業務を始める
-
-1. 上の 2 つの `?gate=` URL を順に開く。
-2. `https://glasses-management-staging.<subdomain>.workers.dev/` を開き、**お店のコードに `eye`**。
-   この入口は今も dev グラント（`/api/auth/token`）を通るので、staging では
-   `AUTH_DEV_GRANT=true` を同期している（ゲートの裏なので許容。production には入れない）。
-3. 端末モード → 置き場所 → **暗証番号 `000000`**（seed の値）。
-4. admin は `vars.STAGING_ADMIN_EMAIL`（未設定なら `admin@example.com`）と
-   `WORKER_STAGING_ADMIN_PASSWORD` でログインする。
-
-seed の台帳は **2026-08-27** に入っているので、当日を開くと空に見える。日付を戻すこと。
-
-admin の seed 行は id 固定の `INSERT OR IGNORE` である。**既にある環境で
-`STAGING_ADMIN_EMAIL` を変えても反映されない**（seed がその旨を警告する）。
-変えるなら admin の画面か、D1 を直接 UPDATE する。
 
 ## ローカルから触るとき
 

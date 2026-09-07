@@ -25,7 +25,11 @@ const COMMON_REQUIRED = [
 
 const REQUIRED = {
   production: [...COMMON_REQUIRED, 'WORKER_RESEND_API_KEY'],
-  staging: [...COMMON_REQUIRED, 'WORKER_STAGING_ACCESS_TOKEN', 'WORKER_STAGING_ADMIN_PASSWORD'],
+  // staging のゲート(`WORKER_STAGING_ACCESS_TOKEN`)は**任意**である。設定すれば
+  // `stagingGate` が全リクエストにトークンを要求し、設定しなければ素通りする。
+  // いまの staging は「URL を開いてお店のコードを入れるだけで触れる」ことを優先して
+  // 設定していない。必要になったら GitHub Environment に足すだけで復活する。
+  staging: [...COMMON_REQUIRED, 'WORKER_STAGING_ADMIN_PASSWORD'],
 }
 
 /**

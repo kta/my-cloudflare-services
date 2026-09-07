@@ -79,7 +79,7 @@ Lefthook は開発中の早期フィードバック、CI `verify` は迂回で�
 - ドメインクエリのテナントスコープを外さない。認証フロー（`packages/shared` の auth）を無断で変えない。
 - secrets をコミットしない。`.dev.vars` は gitignore、本番は `wrangler secret put`。
 - **secrets は GitHub Environment が唯一の源泉**。手で `wrangler secret put` を叩かない。デプロイは `develop` → staging / `main` → production の merge で自動に走る。本番前チェックリストは [`docs/howto/deploy.md`](./docs/howto/deploy.md)。
-- staging は `*.workers.dev` 公開だがゲートトークン（`STAGING_ACCESS_TOKEN`）が要る。production はこの secret を持たないのでゲートは素通りする。example_service は雛形なので本番デプロイしない（CI の deploy matrix 対象外）。
+- staging は `*.workers.dev` で公開されており、**ゲートは掛けていない**（URL を開いてお店のコードを入れれば触れる。データは seed のみ）。閉じたいときは `WORKER_STAGING_ACCESS_TOKEN` を GitHub Environment `staging` に足すと `stagingGate` が効く。production はこの secret を持たないのでゲートは素通りする。example_service は雛形なので本番デプロイしない（CI の deploy matrix 対象外）。
 
 ## コミット / PR
 - **Conventional Commits**（commitlint + lefthook で強制。pre-commit=biome / pre-push=typecheck+test）。
